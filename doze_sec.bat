@@ -2290,11 +2290,12 @@ set "SUMFILE=%TEMP%\AuditSummary_%TIMESTAMP%.txt"
 set "SUMCODE=%TEMP%\AuditCode_%TIMESTAMP%.txt"
 
 :: ---- Write PS summary script ----------------------------------------
-:: Use PowerShell here-string to write the PS1 file, avoiding all batch
-:: escaping issues with quotes, parens, and pipes in complex PS code.
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -Command "$f='%PSRUN%'; $h=@'`n$sw='%SMART_WARN%'`n$scf='%SUMCODE%'`n'@; Set-Content $f $h -Encoding ASCII"
-:: Now append the bulk of the summary script using PowerShell Add-Content
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -Command "Add-Content '%PSRUN%' @'
+:: Write variable header using cmd echo (safe for batch expansion)
+echo $sw='%SMART_WARN%' > "%PSRUN%"
+echo $scf='%SUMCODE%' >> "%PSRUN%"
+:: Append the bulk of the summary script using PowerShell here-string
+:: (avoids all batch escaping issues with parens, pipes, exclamation marks)
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -Command "@'
 $r=@();$rc=@();$cr=0;$wa=0;$pa=0
 function ck($s,$m,$d=''){
   $plainIcon=switch($s){'CRIT'{'[!! CRITICAL !!]'}'WARN'{'[  WARNING   ]'}'PASS'{'[    OK      ]'}default{'[    INFO    ]'}}
@@ -2445,7 +2446,7 @@ Write-Host $bar -ForegroundColor White
 Write-Host ''
 
 if ($cr -gt 0) { 'CRIT' | Out-File $scf -Encoding ASCII } elseif ($wa -gt 0) { 'WARN' | Out-File $scf -Encoding ASCII } else { 'OK' | Out-File $scf -Encoding ASCII }
-'@ -Encoding ASCII"
+'@ | Add-Content '%PSRUN%' -Encoding ASCII"
 
 :: ---- Run PS, show on screen, append to report ----------------------
 :: PS stdout (plain text) goes to file; Write-Host (colored) goes to terminal
