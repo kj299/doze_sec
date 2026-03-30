@@ -194,11 +194,11 @@ if /i "%SCRIPT_DIR_TRIMMED%"=="%TMP%"  goto :err_tempdir
 for /f "usebackq" %%a in (`echo %TEMP%`) do set "TEMP_NORM=%%a"
 if /i "%SCRIPT_DIR_TRIMMED%"=="%TEMP_NORM%" goto :err_tempdir
 
-echo [INIT 1/14] Execution path: OK (not running from TEMP)
+echo %C_GREEN%[INIT 1/14]%C_RESET% Execution path: OK (not running from TEMP)
 goto :tempcheck_done
 :err_tempdir
 echo.
-echo  [EXIT 5] This script is running from the TEMP directory.
+echo  %C_RED%[EXIT 5]%C_RESET% This script is running from the TEMP directory.
 echo  This is not allowed. Move the script to a permanent location
 echo  such as your Desktop or C:\Tools\ and run it from there.
 echo.
@@ -296,7 +296,7 @@ if %errorlevel% neq 0 (
     set "EXIT_CODE=1"
     goto :end_script
 )
-echo [INIT 2/14] Administrator privileges: OK
+echo %C_GREEN%[INIT 2/14]%C_RESET% Administrator privileges: OK
 
 :: ---- Create report header (admin confirmed, report is safe to write) ----
 echo ====================================================================>> "%REPORT%"
@@ -318,7 +318,7 @@ echo.
 :: ====================================================================
 :: [INIT 3/14] WINDOWS AND IE VERSION DETECTION
 :: ====================================================================
-echo [INIT 3/14] Detecting Windows and IE version...
+echo %C_GREEN%[INIT 3/14]%C_RESET% Detecting Windows and IE version...
 echo ====================================================================>> "%REPORT%"
 echo  PRE-FLIGHT INITIALIZATION>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
