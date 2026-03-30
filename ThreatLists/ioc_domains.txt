@@ -1,0 +1,54 @@
+# SENTINEL-X CTI -- C2 Domain Patterns
+# Updated: 2026-03-29 | Source: MDDR 2024-2025, CISA, VirusTotal, Mandiant
+# Format: domain fragment per line (matched against DNS cache via findstr /i)
+# NOTE: These are PATTERN fragments, not full defanged IOCs
+#
+# === KNOWN C2 INFRASTRUCTURE PATTERNS ===
+update-service.cloud
+cdn-update.cloud
+secure-update.cloud
+windowsupdate.cc
+msupdate.top
+ms-update.cloud
+defender-update.cloud
+office-update.cloud
+onedrive-sync.cloud
+teams-update.cloud
+#
+# === COBALT STRIKE MALLEABLE C2 PATTERNS ===
+cdn-static.cloud
+cloudfront-api.cloud
+azureedge-cdn.cloud
+akamai-static.cloud
+#
+# === DGA / SUSPICIOUS TLD PATTERNS ===
+.top
+.xyz
+.club
+.buzz
+.surf
+.icu
+.cam
+.rest
+.monster
+#
+# === TUNNELING SERVICES (legitimate but abused) ===
+ngrok.io
+trycloudflare.com
+serveo.net
+localhost.run
+bore.digital
+localtunnel.me
+#
+# === DNS-OVER-HTTPS ABUSE ===
+doh.dns.sb
+cloudflare-dns.com/dns-query
+dns.google/resolve
+#
+# === SCATTERED SPIDER / SOCIAL ENG INFRA ===
+-okta.com
+-sso.com
+-login.com
+-helpdesk.com
+-vpn.com
+-mfa.com

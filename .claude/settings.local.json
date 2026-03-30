@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(awk 'NR>=2132 && NR<=2296' \"c:/Users/khali/OneDrive/Documents/src/doze_sec/doze_sec.bat\")"
+    ]
+  }
+}

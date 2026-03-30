@@ -1,0 +1,76 @@
+# SENTINEL-X CTI -- TTP Manifest (MITRE ATT&CK v14+)
+# Updated: 2026-03-29
+# Source: MDDR 2024-2025, CISA KEV, Mandiant M-Trends 2025, CrowdStrike Threat Report 2025
+# Format: TECHNIQUE_ID|TACTIC|NAME|ACTOR_GROUPS|DETECTION_IN_SCRIPT
+#
+# === INITIAL ACCESS ===
+T1190|Initial Access|Exploit Public-Facing Application|Volt Typhoon,Salt Typhoon,APT29|Sec 1 patch level
+T1566.001|Initial Access|Spearphishing Attachment|Midnight Blizzard,Lazarus,APT29|Sec 14 suspicious files
+T1566.002|Initial Access|Spearphishing Link|Scattered Spider,Midnight Blizzard|Sec 3 DNS cache
+T1078|Initial Access|Valid Accounts|All groups|Sec 2 user audit, Sec 16 events
+#
+# === EXECUTION ===
+T1059.001|Execution|PowerShell|All groups|Sec 11 PS security, Sec 16 Event 4104
+T1059.003|Execution|Windows Command Shell|Volt Typhoon,Scattered Spider|Sec 4 processes
+T1047|Execution|WMI|Volt Typhoon,APT29|Sec 17 WMI subscriptions
+T1053.005|Execution|Scheduled Task|Flax Typhoon,Volt Typhoon,LockBit|Sec 6 tasks, Sec 18 IOC sweep
+T1218.005|Execution|Mshta|Various|Sec 4 LOLBins, Sec 18 IOC sweep
+T1218.010|Execution|Regsvr32|Various|Sec 4 LOLBins, Sec 18 IOC sweep
+T1218.011|Execution|Rundll32|Volt Typhoon,APT29|Sec 4 LOLBins, Sec 18 IOC sweep
+#
+# === PERSISTENCE ===
+T1547.001|Persistence|Registry Run Keys|All groups|Sec 5 run keys, Sec 18 registry IOCs
+T1543.003|Persistence|Windows Service|DPRK,Scattered Spider|Sec 7 services, Sec 18 service IOCs
+T1546.008|Persistence|Accessibility Features|Linen Typhoon,Violet Typhoon|Sec 13 IFEO check
+T1546.015|Persistence|COM Hijacking|APT29,Midnight Blizzard|Sec 18 registry IOCs
+T1136.001|Persistence|Local Account|All groups|Sec 2 user audit, Sec 16 Event 4720
+#
+# === PRIVILEGE ESCALATION ===
+T1548.002|Priv Esc|UAC Bypass|Various|Sec 13 UAC config, Sec 18 registry IOCs
+T1068|Priv Esc|Exploitation for Privilege Escalation|All groups|Sec 1 patch level
+#
+# === DEFENSE EVASION ===
+T1562.001|Defense Evasion|Disable Security Tools|All ransomware,Scattered Spider|Sec 9 Defender, Sec 18 registry
+T1562.004|Defense Evasion|Disable Firewall|Various|Sec 8 firewall
+T1070.001|Defense Evasion|Clear Event Logs|All APT|Sec 16 Event 1102
+T1036|Defense Evasion|Masquerading|Volt Typhoon,Salt Typhoon|Sec 4 process paths
+T1197|Defense Evasion|BITS Jobs|Various|Sec 18 LOLBin patterns
+T1140|Defense Evasion|Deobfuscate/Decode Files|Various|Sec 18 certutil patterns
+T1211|Defense Evasion|BYOVD|BlackByte,Scattered Spider,Akira|Sec 18 file path IOCs
+#
+# === CREDENTIAL ACCESS ===
+T1003.001|Credential Access|LSASS Memory Dump|All APT,Ransomware|Sec 12 LSASS PPL
+T1003.003|Credential Access|NTDS.dit|APT29,Volt Typhoon|Sec 18 process IOCs
+T1558.003|Credential Access|Kerberoasting|Various|Sec 16 Event 4769
+T1557.001|Credential Access|LLMNR/NBT-NS Poisoning|Various|Sec 3 network
+T1110.003|Credential Access|Password Spraying|Forest Blizzard,Midnight Blizzard|Sec 16 Event 4625
+#
+# === DISCOVERY ===
+T1087|Discovery|Account Discovery|All groups|Sec 18 process IOCs (net user, nltest)
+T1082|Discovery|System Information Discovery|Volt Typhoon|Sec 4 processes
+T1016|Discovery|System Network Config|Volt Typhoon,Salt Typhoon|Sec 3 network
+#
+# === LATERAL MOVEMENT ===
+T1021.001|Lateral Movement|Remote Desktop|All groups|Sec 10 RDP config
+T1021.002|Lateral Movement|SMB/Admin Shares|All groups|Sec 10 SMB config
+T1021.006|Lateral Movement|WinRM|APT29,Volt Typhoon|Sec 10 WinRM status
+T1570|Lateral Movement|Lateral Tool Transfer|All groups|Sec 3 network shares
+#
+# === COLLECTION ===
+T1560|Collection|Archive Collected Data|All APT|Sec 18 process IOCs (7z, rar)
+#
+# === COMMAND AND CONTROL ===
+T1071.001|C2|Web Protocols|All groups|Sec 3 ESTABLISHED connections
+T1572|C2|Protocol Tunneling|Volt Typhoon|Sec 17 portproxy
+T1090.001|C2|Internal Proxy|Volt Typhoon,Salt Typhoon|Sec 17 portproxy
+T1105|C2|Ingress Tool Transfer|All groups|Sec 18 LOLBin certutil/bitsadmin
+T1219|C2|Remote Access Software|DPRK,Scattered Spider|Sec 4,17 RMM tools
+#
+# === EXFILTRATION ===
+T1567|Exfiltration|Exfil Over Web Service|All groups|Sec 18 process IOCs (rclone)
+T1048|Exfiltration|Exfil Over Alternative Protocol|APT29,Volt Typhoon|Sec 3 DNS cache
+#
+# === IMPACT ===
+T1486|Impact|Data Encrypted for Impact|All ransomware|Sec 18 process IOCs
+T1490|Impact|Inhibit System Recovery|All ransomware|Sec 18 LOLBin vssadmin/bcdedit
+T1489|Impact|Service Stop|Ransomware|Sec 18 LOLBin patterns

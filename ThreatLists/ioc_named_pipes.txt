@@ -1,0 +1,59 @@
+# SENTINEL-X CTI -- Malicious Named Pipes
+# Updated: 2026-03-29 | Source: MDDR 2024-2025, The DFIR Report, Red Canary
+# Format: pipe name pattern per line (matched via findstr /i)
+#
+# === COBALT STRIKE (most common C2 tool globally) ===
+postex_
+msagent_
+MSSE-
+metsvc
+status_
+postex_ssh_
+dce_
+win_svc
+ntsvcs_
+scerpc_
+#
+# === SLIVER C2 ===
+sliver
+sliverpivot
+#
+# === BRUTE RATEL ===
+brute
+b4_ratel
+#
+# === HAVOC C2 ===
+havoc_
+demon_
+#
+# === PSEXEC / LATERAL MOVEMENT ===
+psexecsvc
+PSEXESVC
+remcomsvc
+csexecsvc
+PAExec
+#
+# === MIMIKATZ / CREDENTIAL TOOLS ===
+mimikatz
+sekurlsa
+#
+# === IMPACKET ===
+RemCom_
+__wmi_
+atsvc
+svcctl
+epmapper_
+#
+# === RANSOMWARE SPECIFIC ===
+lockbit_pipe
+alphv_pipe
+conti_pipe
+blackbasta_
+#
+# === NIGHTHAWK C2 ===
+nighthawk_
+#
+# === MYTHIC C2 ===
+mythic_
+apollo_
+poseidon_

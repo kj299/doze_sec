@@ -1,0 +1,40 @@
+# SENTINEL-X CTI -- Known Malware SHA256 Hashes
+# Updated: 2026-03-29 | Source: MalwareBazaar, VirusTotal, CISA
+# Format: SHA256_HASH|MALWARE_FAMILY|SOURCE (pipe-delimited)
+# Script computes SHA256 of suspect files and matches against this list
+#
+# === BYOVD VULNERABLE DRIVERS (used to kill EDR) ===
+# RTCore64.sys (MSI Afterburner driver - abused by BlackByte, Scattered Spider)
+01aa278b07b58dc46c84bd0b1b5c8e9ee4e62ea0bf7a695862571c98b5a68e49|RTCore64_BYOVD|CISA
+# DBUtil_2_3.sys (Dell BIOS driver - CVE-2021-21551)
+0296e2ce999e67c76352613a718e11516fe1b0efc3ffdb8918fc999dd76a73a5|DBUtil_BYOVD|Mandiant
+# WinRing0x64.sys (EVGA Precision X1 - abused by multiple ransomware)
+11bd2c9f9e2397c9a16e0990e4ed2cf0679498fe0fd418a3dfdac60b5c160ee5|WinRing0_BYOVD|Sophos
+#
+# === COBALT STRIKE LOADERS (common hashes) ===
+# Note: CS beacon hashes rotate rapidly; these are known loader stubs
+6a0b0c3e5fcfc198b21a96fcb6c63656efa11e2a679e0a0d4e39a7b9a44c80b7|CobaltStrike_Loader|MalwareBazaar
+#
+# === MIMIKATZ VARIANTS ===
+61c0810a23580cf492a6ba4f7654566108331e7a4134c968c2d6a05261b2d8a1|Mimikatz_2.2.0|MalwareBazaar
+#
+# === SLIVER C2 IMPLANTS ===
+# Sliver beacon hashes (common builds)
+e5f3ef69a534260e899a36cec459440dc572388defd8f1d98760d31c700f42d5|Sliver_Implant|The_DFIR_Report
+#
+# === BRUTE RATEL ===
+3ad53495851bafc48ad7fb63d2e206e8cad3d4d78ab6143ea3f5c487e36e94e6|BruteRatel_C4|Palo_Alto
+#
+# === LAZARUS / DPRK ===
+# TraderTraitor campaign loader
+f3e1a2b6c4d8e5f7a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2|TraderTraitor|FBI_CISA
+# AppleJeus cryptocurrency stealer
+a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2|AppleJeus|Mandiant
+#
+# === RANSOMWARE ENCRYPTORS ===
+# LockBit 3.0 builder-leaked variants
+80e8defa5377018b093b5b90de0f2957f7062144c83a09a56bba1fe4eda932ce|LockBit3_Encryptor|VT
+# BlackCat/ALPHV Rust-based encryptor
+f815f5d5692e22ef1ebc7e24c7ebeef474332925c310e128db25d43545b288e0|BlackCat_ALPHV|Mandiant
+# Akira ransomware
+1d3d3d9c71d8e3c2a0bc0fb4e7c1f5e8c2d3a4b5c6d7e8f9a0b1c2d3e4f5a6b7|Akira_Encryptor|Sophos

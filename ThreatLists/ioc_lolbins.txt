@@ -1,0 +1,96 @@
+# SENTINEL-X CTI -- LOLBin Abuse Patterns
+# Updated: 2026-03-29 | Source: LOLBAS Project, MDDR 2024-2025, Red Canary
+# Format: command-line fragment per line (matched against process command lines)
+# Matched via findstr /i against wmic process CommandLine output
+#
+# === CERTUTIL ABUSE (T1105, T1140) ===
+certutil -urlcache
+certutil -decode
+certutil -decodehex
+certutil -encode
+certutil -verifyctl
+certutil -split
+#
+# === MSHTA ABUSE (T1218.005) ===
+mshta vbscript
+mshta javascript
+mshta http
+mshta https
+#
+# === REGSVR32 ABUSE (T1218.010) ===
+regsvr32 /s /n /u /i:http
+regsvr32 /s /n /u /i:https
+regsvr32 scrobj.dll
+#
+# === RUNDLL32 ABUSE (T1218.011) ===
+rundll32 javascript
+rundll32 vbscript
+rundll32 comsvcs.dll MiniDump
+rundll32 comsvcs.dll MiniDumpW
+rundll32 pcwutl.dll
+#
+# === MSIEXEC ABUSE (T1218.007) ===
+msiexec /q /i http
+msiexec /q /i https
+msiexec /y
+msiexec /z
+#
+# === BITSADMIN (T1197) ===
+bitsadmin /transfer
+bitsadmin /create
+bitsadmin /addfile
+bitsadmin /resume
+#
+# === WMIC ABUSE (T1047) ===
+wmic process call create
+wmic /node:
+wmic shadowcopy delete
+#
+# === POWERSHELL OBFUSCATION (T1059.001) ===
+-encodedcommand
+-enc
+-e JAB
+-e SQBFA
+frombase64string
+iex
+invoke-expression
+downloadstring
+downloadfile
+invoke-webrequest
+new-object net.webclient
+reflection.assembly
+[convert]::
+bypass -nop
+-nop -w hidden
+-exec bypass
+#
+# === CSCRIPT/WSCRIPT (T1059.005) ===
+cscript //e:jscript
+wscript //e:jscript
+cscript //e:vbscript
+#
+# === INSTALLUTIL (T1218.004) ===
+installutil /logfile=
+installutil /logtoconsole=false
+#
+# === CMSTP (T1218.003) ===
+cmstp /ni /s
+#
+# === FORFILES ABUSE (T1202) ===
+forfiles /p c:\windows /m notepad.exe /c
+#
+# === PCALUA (T1202) ===
+pcalua -m -a
+#
+# === CREDENTIAL DUMPING PATTERNS ===
+sekurlsa::logonpasswords
+lsadump::sam
+lsadump::dcsync
+token::elevate
+privilege::debug
+#
+# === RANSOMWARE PRE-ENCRYPTION ===
+vssadmin delete shadows
+wbadmin delete catalog
+bcdedit /set recoveryenabled no
+bcdedit /set bootstatuspolicy ignoreallfailures

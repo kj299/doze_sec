@@ -1,0 +1,89 @@
+# SENTINEL-X CTI -- Malicious Process Names
+# Updated: 2026-03-29 | Source: MDDR 2024-2025, CISA, Mandiant, CrowdStrike
+# Format: one process name per line (matched case-insensitive via findstr /i)
+# Lines starting with # are comments and ignored by findstr
+#
+# === RANSOMWARE TOOLING ===
+lockbit
+blackcat
+alphv
+akira_encryptor
+playcrypt
+rhysida
+medusa_locker
+blackbasta
+royal_ransom
+#
+# === CREDENTIAL THEFT ===
+mimikatz
+procdump64
+nanodump
+pypykatz
+secretsdump
+rubeus
+certify
+certipy
+sharpkatz
+masky
+gosecretsdump
+lazagne
+#
+# === C2 FRAMEWORKS ===
+cobaltstrike
+beacon
+sliver-client
+sliver-server
+havoc
+brute_ratel
+mythic
+poshc2
+merlin
+nighthawk
+#
+# === REMOTE ACCESS / IMPLANTS ===
+chisel
+ligolo
+ngrok
+cloudflared
+fast-reverse-proxy
+frpc
+frps
+plink
+ncat
+socat
+#
+# === RECON / ENUMERATION ===
+sharphound
+bloodhound
+adexplorer
+pingcastle
+seatbelt
+sharpup
+winpeas
+linpeas
+#
+# === LOLBin ABUSE (unusual process names) ===
+rclone
+wmiexec
+psexec
+smbexec
+atexec
+dcomexec
+#
+# === DPRK / LAZARUS ===
+TraderTraitor
+AppleJeus
+DreamJob
+BLINDINGCAN
+COPPERHEDGE
+#
+# === VOLT TYPHOON / SALT TYPHOON ===
+netsh.exe portproxy
+comsvcs.dll MiniDump
+#
+# === SCATTERED SPIDER ===
+ngrok
+Screenconnect.ClientService
+Splashtop.Streamer
+fleetdeck_agent
+level_agent

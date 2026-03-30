@@ -1,0 +1,37 @@
+# SENTINEL-X CTI -- Malicious Scheduled Task Names/Paths
+# Updated: 2026-03-29 | Source: MDDR 2024-2025, CISA, The DFIR Report
+# Format: task name or path fragment per line (matched via findstr /i)
+#
+# === FAKE WINDOWS UPDATE TASKS ===
+WindowsUpdateCheck
+Windows Security Update
+Microsoft Security Update
+WindowsDefenderUpdate
+SystemUpdateCheck
+WindowsMaintenanceTask
+#
+# === APT PERSISTENCE TASKS ===
+\Microsoft\Windows\NetTrace\GatherInfo
+\Microsoft\Windows\Ras\ManagerMobilityInfo
+\Microsoft\Windows\WDI\SrvSetupResults
+OneDriveSyncMaintenance
+GoogleUpdateCore
+ChromeUpdateTask
+AdobeFlashSync
+#
+# === VOLT TYPHOON STYLE (mimics system tasks) ===
+\Microsoft\Windows\WinSATMediaInfo
+\Microsoft\Windows\MemoryDiagnosticRunner
+\Microsoft\Windows\SystemRestore\SRCheck
+#
+# === RANSOMWARE PRE-STAGING ===
+vssadmin delete shadows
+bcdedit /set recoveryenabled
+wbadmin delete catalog
+#
+# === C2 CALLBACK TASKS ===
+\Temp\
+\AppData\
+\Downloads\
+\Users\Public\
+\ProgramData\update

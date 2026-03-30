@@ -1,0 +1,57 @@
+# SENTINEL-X CTI -- Malicious Service Names
+# Updated: 2026-03-29 | Source: MDDR 2024-2025, CISA, Mandiant
+# Format: service name per line (matched case-insensitive)
+#
+# === REMOTE ACCESS PERSISTENCE ===
+ScreenConnect Client
+AnyDeskMSI
+TeamViewerService
+RustDeskService
+SplashtopStreamer
+AteraAgent
+KaseyaAgent
+ConnectWiseControl
+BeyondTrustService
+level_agent
+fleetdeck
+#
+# === C2 IMPLANT SERVICES ===
+WinDefendUpdate
+WindowsSecurityUpdate
+SystemUpdateService
+msikiservice
+defenderupdate
+securityhealthservice2
+helpsvc_update
+wlogsvc
+#
+# === VOLT TYPHOON STYLE (blends with legit names) ===
+WinHttpAutoProxySvcEx
+W32TimeEx
+CryptSvcEx
+#
+# === LATERAL MOVEMENT ARTIFACTS ===
+PSEXESVC
+RemComSvc
+csexecsvc
+PAExec-
+wmiprvse_alt
+#
+# === BYOVD (Bring Your Own Vulnerable Driver) ===
+gdrv
+RTCore64
+dbutil_2_3
+HWiNFO
+WinRing0
+asio
+ene_io
+#
+# === RANSOMWARE SERVICES ===
+LockBitSvc
+vssadmin_shadow
+bcdedit_recovery
+#
+# === SCATTERED SPIDER / LAPSUS$ ===
+ngrok_service
+cloudflared_service
+tailscale_daemon

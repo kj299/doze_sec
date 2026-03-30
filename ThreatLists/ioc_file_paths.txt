@@ -1,0 +1,62 @@
+# SENTINEL-X CTI -- Known Malware Staging Paths
+# Updated: 2026-03-29 | Source: MDDR 2024-2025, The DFIR Report, Red Canary
+# Format: one path per line, supports %ENV% vars (expanded by script)
+# Lines starting with # are comments
+#
+# === COMMON STAGING LOCATIONS ===
+%TEMP%\svchost_update.exe
+%TEMP%\WindowsUpdate.exe
+%TEMP%\defender_update.exe
+%TEMP%\chrome_update.exe
+%TEMP%\OneDriveUpdater.exe
+%TEMP%\7z.sfx.exe
+%TEMP%\debug.bin
+%TEMP%\beacon.bin
+%TEMP%\payload.dll
+%TEMP%\loader.dll
+%TEMP%\inject.dll
+#
+# === APPDATA PERSISTENCE ===
+%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\update.vbs
+%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\updater.bat
+%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\runtime.lnk
+%LOCALAPPDATA%\Temp\svchost.exe
+%LOCALAPPDATA%\Microsoft\OneDrive\update.exe
+#
+# === PROGRAMDATA DROPS ===
+%PROGRAMDATA%\Microsoft\Windows\update.exe
+%PROGRAMDATA%\update_service.exe
+%PROGRAMDATA%\WindowsDefender\update.exe
+%PROGRAMDATA%\Package Cache\update.exe
+#
+# === PUBLIC USER DROPS ===
+C:\Users\Public\Downloads\payload.exe
+C:\Users\Public\Documents\update.exe
+C:\Users\Public\Libraries\runtime.dll
+C:\Users\Public\update.exe
+#
+# === BYOVD DRIVER DROPS ===
+%TEMP%\RTCore64.sys
+%TEMP%\dbutil_2_3.sys
+%TEMP%\gdrv.sys
+%TEMP%\WinRing0x64.sys
+%TEMP%\asio.sys
+%TEMP%\ene_io64.sys
+%TEMP%\HWiNFO.sys
+%WINDIR%\Temp\RTCore64.sys
+%WINDIR%\Temp\dbutil_2_3.sys
+#
+# === WEBSHELL PATHS ===
+%WINDIR%\Temp\cmd.aspx
+%WINDIR%\Temp\error.aspx
+C:\inetpub\wwwroot\aspnet_client\system_web\error.aspx
+C:\inetpub\wwwroot\aspnet_client\system_web\cmd.aspx
+#
+# === TUNNEL TOOL DROPS ===
+%TEMP%\chisel.exe
+%TEMP%\ngrok.exe
+%TEMP%\cloudflared.exe
+%TEMP%\frpc.exe
+%TEMP%\plink.exe
+%TEMP%\ligolo-agent.exe
+%APPDATA%\ngrok\ngrok.exe

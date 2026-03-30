@@ -1,0 +1,48 @@
+# SENTINEL-X CTI -- Suspicious Registry Keys/Values
+# Updated: 2026-03-29 | Source: MDDR 2024-2025, MITRE ATT&CK
+# Format: HIVE\KEY\PATH|ValueName (pipe-delimited, reg query each)
+# Lines starting with # are comments
+#
+# === PERSISTENCE: Run Keys (unusual entries) ===
+HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run|WindowsDefenderUpdate
+HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run|SecurityHealthService2
+HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run|SystemUpdate
+HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run|OneDriveUpdate
+HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run|WindowsUpdate
+HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run|ChromeUpdate
+HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run|AdobeUpdater
+#
+# === PERSISTENCE: Winlogon Hijack ===
+HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon|Taskman
+HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon|System
+#
+# === COM HIJACK (T1546.015) ===
+HKCU\SOFTWARE\Classes\CLSID\{b5f8350b-0548-48b1-a6ee-88bd00b4a5e7}|
+HKCU\SOFTWARE\Classes\CLSID\{BCDE0395-E52F-467C-8E3D-C4579291692E}|
+#
+# === DEFENSE EVASION: Disable Defender via Registry ===
+HKLM\SOFTWARE\Policies\Microsoft\Windows Defender|DisableAntiSpyware
+HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection|DisableRealtimeMonitoring
+HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection|DisableBehaviorMonitoring
+HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection|DisableIOAVProtection
+HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Spynet|SpynetReporting
+#
+# === UAC BYPASS ===
+HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System|EnableLUA
+HKCU\SOFTWARE\Classes\ms-settings\Shell\Open\command|
+HKCU\SOFTWARE\Classes\mscfile\Shell\Open\command|
+#
+# === CREDENTIAL ACCESS ===
+HKLM\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest|UseLogonCredential
+HKLM\SYSTEM\CurrentControlSet\Control\Lsa|DisableRestrictedAdmin
+#
+# === PORTPROXY (Volt Typhoon) ===
+HKLM\SYSTEM\CurrentControlSet\Services\PortProxy\v4tov4\tcp|
+#
+# === DISABLE SECURITY FEATURES ===
+HKLM\SYSTEM\CurrentControlSet\Control\Lsa|RunAsPPL
+HKLM\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging|EnableScriptBlockLogging
+HKLM\SYSTEM\CurrentControlSet\Services\EventLog\Security|MaxSize
+#
+# === NETWORK PROXY (MitM) ===
+HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings|AutoConfigURL
