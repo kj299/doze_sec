@@ -2290,170 +2290,131 @@ set "SUMFILE=%TEMP%\AuditSummary_%TIMESTAMP%.txt"
 set "SUMCODE=%TEMP%\AuditCode_%TIMESTAMP%.txt"
 
 :: ---- Write PS summary script ----------------------------------------
-:: Write variable header using cmd echo (safe for batch expansion)
+:: Uses echo >> PSRUN approach (proven reliable, avoids all batch/PS escaping issues)
 echo $sw='%SMART_WARN%' > "%PSRUN%"
+echo $isAdmin='1' >> "%PSRUN%"
 echo $scf='%SUMCODE%' >> "%PSRUN%"
-:: Append the bulk of the summary script using PowerShell here-string
-:: (avoids all batch escaping issues with parens, pipes, exclamation marks)
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -Command "@'
-$r=@();$rc=@();$cr=0;$wa=0;$pa=0
-function ck($s,$m,$d=''){
-  $plainIcon=switch($s){'CRIT'{'[!! CRITICAL !!]'}'WARN'{'[  WARNING   ]'}'PASS'{'[    OK      ]'}default{'[    INFO    ]'}}
-  $color=switch($s){'CRIT'{'Red'}'WARN'{'Yellow'}'PASS'{'Green'}default{'DarkGray'}}
-  $line='  '+$plainIcon+'  '+$m
-  $script:r+=$line
-  $script:rc+=@{text=$line;color=$color}
-  if($d){
-    $fixLine='                     Fix: '+$d
-    $script:r+=$fixLine
-    $script:rc+=@{text=$fixLine;color='Cyan'}
-  }
-  switch($s){'CRIT'{$script:cr++}'WARN'{$script:wa++}'PASS'{$script:pa++}}
-}
-function sec($t){
-  $hdr=('  --- '+$t+' ').PadRight(70,'-')
-  $script:r+='';$script:r+=$hdr
-  $script:rc+=@{text='';color='White'};$script:rc+=@{text=$hdr;color='White'}
-}
+echo $r=@();$cr=0;$wa=0;$pa=0;$inf=0 >> "%PSRUN%"
+echo function ck($s,$m,$d=''){$icon=if($s-eq 'CRIT'){'[^^!^^! CRITICAL ^^!^^!]'}elseif($s-eq 'WARN'){'[  WARNING   ]'}elseif($s-eq 'PASS'){'[    OK      ]'}else{'[    INFO    ]'};$script:r+='  '+$icon+'  '+$m;if($d){$script:r+='                     Fix: '+$d};switch($s){'CRIT'{$script:cr++}'WARN'{$script:wa++}'PASS'{$script:pa++}'INFO'{$script:inf++}}} >> "%PSRUN%"
+echo function sec($t){$script:r+='';$script:r+=('  --- '+$t+' ').PadRight(70,'-')} >> "%PSRUN%"
+echo. >> "%PSRUN%"
 
-sec 'ACTIVE COMPROMISE INDICATORS'
-$ev=Get-WinEvent -FilterHashtable @{LogName='Security';Id=1102} -MaxEvents 1 -EA SilentlyContinue;if($ev){ck 'CRIT' 'Security event log was CLEARED' ('At '+$ev.TimeCreated+' -- attacker erased evidence.')}else{ck 'PASS' 'Security event log has not been cleared'}
-$ev=Get-WinEvent -FilterHashtable @{LogName='System';Id=104} -MaxEvents 1 -EA SilentlyContinue;if($ev){ck 'CRIT' 'System event log was CLEARED' ('At '+$ev.TimeCreated)}else{ck 'PASS' 'System event log has not been cleared'}
-$ev=Get-WinEvent -FilterHashtable @{LogName='Security';Id=4720} -MaxEvents 5 -EA SilentlyContinue;if($ev){ck 'WARN' "New local accounts created: $(@($ev).Count) events" 'Review account names in Section 16'}else{ck 'PASS' 'No new local account creation events - 4720'}
-$ev=Get-WinEvent -FilterHashtable @{LogName='Security';Id=4732} -MaxEvents 5 -EA SilentlyContinue;if($ev){ck 'WARN' "Users added to Administrators: $(@($ev).Count) events" 'Review account names in Section 16'}else{ck 'PASS' 'No unexpected additions to Administrators group - 4732'}
-$pp=(netsh interface portproxy show all 2>$null)|Out-String;if($pp -match '\d+\.\d+'){ck 'CRIT' 'netsh portproxy tunnel rules are ACTIVE' 'Volt Typhoon C2 IOC. Remove: netsh interface portproxy reset. See Section 17.'}else{ck 'PASS' 'No netsh portproxy tunnel rules (Volt Typhoon check)'}
-try{$pipes=Get-ChildItem \\.\pipe\ -EA Stop|Where-Object{$_.Name -match 'postex_|msagent_|MSSE-|metsvc'};if($pipes){ck 'CRIT' ('Cobalt Strike named pipes detected: '+@($pipes).Count) ('Pipes: '+($pipes.Name -join ', ')+'. Active C2. See Section 17.')}else{ck 'PASS' 'No Cobalt Strike default named pipes detected'}}catch{ck 'INFO' 'Named pipe check unavailable (non-fatal)'}
-$subs=@(Get-WMIObject -Namespace root\subscription -Class __EventFilter -EA SilentlyContinue);if($subs.Count -gt 0){ck 'CRIT' ('WMI EventFilter subscriptions present: '+$subs.Count) 'Stealthy reboot-persistent implant. See Section 17.'}else{ck 'PASS' 'No WMI permanent EventFilter subscriptions'}
-$sus=@(Get-WmiObject Win32_Process -EA SilentlyContinue|Where-Object{$_.ExecutablePath -match '\\Temp\\|\\AppData\\|\\Downloads\\|\\Users\\Public\\'});if($sus.Count -gt 0){ck 'CRIT' ('Processes from suspicious paths: '+$sus.Count) ('Names: '+(($sus|Select-Object -Exp Name|Sort-Object -Unique) -join ', ')+'. See Section 4.')}else{ck 'PASS' 'No processes running from Temp / AppData / Downloads'}
+:: ===== ACTIVE COMPROMISE =============================================
+echo sec 'ACTIVE COMPROMISE INDICATORS' >> "%PSRUN%"
+echo $ev=Get-WinEvent -FilterHashtable @{LogName='Security';Id=1102} -MaxEvents 1 -EA SilentlyContinue;if($ev){ck 'CRIT' 'Security event log was CLEARED' ('At '+$ev.TimeCreated+' -- attacker erased evidence. Treat as active compromise.')}else{ck 'PASS' 'Security event log has not been cleared'} >> "%PSRUN%"
+echo $ev=Get-WinEvent -FilterHashtable @{LogName='System';Id=104} -MaxEvents 1 -EA SilentlyContinue;if($ev){ck 'CRIT' 'System event log was CLEARED' ('At '+$ev.TimeCreated)}else{ck 'PASS' 'System event log has not been cleared'} >> "%PSRUN%"
+echo $ev=Get-WinEvent -FilterHashtable @{LogName='Security';Id=4720} -MaxEvents 5 -EA SilentlyContinue;if($ev){ck 'WARN' "New local accounts created: $(@($ev).Count) events" 'Review account names in Section 16'}else{ck 'PASS' 'No new local account creation events - 4720'} >> "%PSRUN%"
+echo $ev=Get-WinEvent -FilterHashtable @{LogName='Security';Id=4732} -MaxEvents 5 -EA SilentlyContinue;if($ev){ck 'WARN' "Users added to Administrators: $(@($ev).Count) events" 'Review account names in Section 16'}else{ck 'PASS' 'No unexpected additions to Administrators group - 4732'} >> "%PSRUN%"
+echo $pp=(netsh interface portproxy show all 2^>$null)^|Out-String;if($pp -match '\d+\.\d+'){ck 'CRIT' 'netsh portproxy tunnel rules are ACTIVE' 'Volt Typhoon C2 IOC. Remove: netsh interface portproxy reset. See Section 17.'}else{ck 'PASS' 'No netsh portproxy tunnel rules - Volt Typhoon check'} >> "%PSRUN%"
+echo try{$pipes=Get-ChildItem \\.\pipe\ -EA Stop^|Where-Object{$_.Name -match 'postex_^|msagent_^|MSSE-^|metsvc'};if($pipes){ck 'CRIT' ('Cobalt Strike named pipes detected: '+@($pipes).Count) ('Pipes: '+($pipes.Name -join ', ')+'. Active C2. See Section 17.')}else{ck 'PASS' 'No Cobalt Strike default named pipes detected'}}catch{ck 'INFO' 'Named pipe check unavailable'} >> "%PSRUN%"
+echo $subs=@(Get-WMIObject -Namespace root\subscription -Class __EventFilter -EA SilentlyContinue);if($subs.Count -gt 0){ck 'CRIT' ('WMI EventFilter subscriptions present: '+$subs.Count) 'Stealthy reboot-persistent implant. See Section 17. Remove: Get-WMIObject -NS root\subscription -Class __EventFilter ^| Remove-WMIObject'}else{ck 'PASS' 'No WMI permanent EventFilter subscriptions'} >> "%PSRUN%"
+echo $sus=@(Get-WmiObject Win32_Process -EA SilentlyContinue^|Where-Object{$_.ExecutablePath -match '\\Temp\\^|\\AppData\\^|\\Downloads\\^|\\Users\\Public\\'});if($sus.Count -gt 0){ck 'CRIT' ('Processes from suspicious paths: '+$sus.Count) ('Names: '+(($sus^|Select-Object -Exp Name^|Sort-Object -Unique) -join ', ')+'. See Section 4.')}else{ck 'PASS' 'No processes running from Temp / AppData / Downloads'} >> "%PSRUN%"
+echo. >> "%PSRUN%"
 
-sec 'CREDENTIAL PROTECTION  (Section 12)'
-$v=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name RunAsPPL -EA SilentlyContinue).RunAsPPL;if($v -eq 1){ck 'PASS' 'LSASS PPL protection enabled (RunAsPPL=1)'}elseif($null -eq $v){ck 'WARN' 'LSASS PPL not configured' 'Add RunAsPPL=dword:1 to HKLM\SYSTEM\...\Lsa and reboot.'}else{ck 'CRIT' ('LSASS PPL DISABLED (RunAsPPL='+$v+')') 'Set RunAsPPL=1 in HKLM\SYSTEM\...\Lsa and reboot.'}
-$v=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' -Name UseLogonCredential -EA SilentlyContinue).UseLogonCredential;if($v -eq 1){ck 'CRIT' 'WDigest ENABLED -- plaintext passwords cached in RAM' 'Set UseLogonCredential=0 in HKLM\...\WDigest and reboot'}elseif($v -eq 0){ck 'PASS' 'WDigest disabled (UseLogonCredential=0)'}else{ck 'PASS' 'WDigest not set (default off on Win8.1+)'}
-$v=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name LmCompatibilityLevel -EA SilentlyContinue).LmCompatibilityLevel;if($v -ge 5){ck 'PASS' ('NTLM hardened: NTLMv2 only (Level='+$v+')')}elseif($v -ge 3){ck 'WARN' ('NTLM partially hardened (Level='+$v+')') 'Set LmCompatibilityLevel=5.'}else{ck 'WARN' ('NTLMv1 allowed (Level='+$v+')') 'Set LmCompatibilityLevel=5 in HKLM\...\Lsa.'}
+:: ===== CREDENTIAL PROTECTION =========================================
+echo sec 'CREDENTIAL PROTECTION  (Section 12)' >> "%PSRUN%"
+echo $v=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name RunAsPPL -EA SilentlyContinue).RunAsPPL;if($v -eq 1){ck 'PASS' 'LSASS PPL protection enabled (RunAsPPL=1)'}elseif($null -eq $v){ck 'WARN' 'LSASS PPL not configured' 'Add RunAsPPL=dword:1 to HKLM\SYSTEM\...\Lsa and reboot. Prevents Mimikatz credential dump.'}else{ck 'CRIT' ('LSASS PPL DISABLED (RunAsPPL='+$v+')') 'Set RunAsPPL=1 in HKLM\SYSTEM\...\Lsa and reboot. Mimikatz can dump all credentials.'} >> "%PSRUN%"
+echo $v=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' -Name UseLogonCredential -EA SilentlyContinue).UseLogonCredential;if($v -eq 1){ck 'CRIT' 'WDigest ENABLED -- plaintext passwords are cached in RAM' 'Set UseLogonCredential=0 in HKLM\...\WDigest and reboot immediately'}elseif($v -eq 0){ck 'PASS' 'WDigest disabled (UseLogonCredential=0)'}else{ck 'PASS' 'WDigest not set (default off on Win8.1+)'} >> "%PSRUN%"
+echo $v=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name LmCompatibilityLevel -EA SilentlyContinue).LmCompatibilityLevel;if($v -ge 5){ck 'PASS' ('NTLM hardened: NTLMv2 only (Level='+$v+')')}elseif($v -ge 3){ck 'WARN' ('NTLM partially hardened (Level='+$v+')') 'Set LmCompatibilityLevel=5. GPO: Network security: LAN Manager authentication level.'}else{ck 'WARN' ('NTLMv1 allowed (Level='+$v+')') 'Set LmCompatibilityLevel=5 in HKLM\...\Lsa. NTLMv1 is crackable and relayable.'} >> "%PSRUN%"
+echo. >> "%PSRUN%"
 
-sec 'WINDOWS DEFENDER  (Section 9)'
-$mp=Get-MpComputerStatus -EA SilentlyContinue
-if($mp){if($mp.RealTimeProtectionEnabled){ck 'PASS' 'Real-time protection enabled'}else{ck 'CRIT' 'Real-time protection DISABLED' 'Run: Set-MpPreference -DisableRealtimeMonitoring `$false'};if($mp.IsTamperProtected){ck 'PASS' 'Tamper protection enabled'}else{ck 'WARN' 'Tamper protection disabled' 'Enable via Windows Security > Virus settings'};$age=$mp.AntivirusSignatureAge;if($age -lt 3){ck 'PASS' "Signatures current ($age days old)"}elseif($age -lt 7){ck 'WARN' "Signatures aging: $age days old" 'Run: Update-MpSignature'}else{ck 'CRIT' "Signatures OUTDATED: $age days old" 'Run: Update-MpSignature or Windows Update now'}}else{ck 'INFO' 'Cannot query Defender - third-party AV or WMI issue'}
-$mpp=Get-MpPreference -EA SilentlyContinue;if($mpp){$ep=@($mpp.ExclusionPath|Where-Object{$_});$epr=@($mpp.ExclusionProcess|Where-Object{$_});if($ep.Count -gt 0){ck 'WARN' "Defender path exclusions configured: $($ep.Count) paths" 'Exclusions hide malware from Defender. Verify each is legitimate. See Section 9.'}else{ck 'PASS' 'No Defender path exclusions configured'};if($epr.Count -gt 0){ck 'WARN' "Defender process exclusions configured: $($epr.Count)" 'Verify each is legitimate. See Section 9.'}else{ck 'PASS' 'No Defender process exclusions configured'}}
+:: ===== WINDOWS DEFENDER ==============================================
+echo sec 'WINDOWS DEFENDER  (Section 9)' >> "%PSRUN%"
+echo $mp=Get-MpComputerStatus -EA SilentlyContinue >> "%PSRUN%"
+echo if($mp){if($mp.RealTimeProtectionEnabled){ck 'PASS' 'Real-time protection enabled'}else{ck 'CRIT' 'Real-time protection DISABLED' 'Run: Set-MpPreference -DisableRealtimeMonitoring $false'};if($mp.IsTamperProtected){ck 'PASS' 'Tamper protection enabled'}else{ck 'WARN' 'Tamper protection disabled' 'Enable via Windows Security ^> Virus and threat protection settings'};$age=$mp.AntivirusSignatureAge;if($age -lt 3){ck 'PASS' "Signatures current ($age days old)"}elseif($age -lt 7){ck 'WARN' "Signatures aging: $age days old" 'Run: Update-MpSignature'}else{ck 'CRIT' "Signatures OUTDATED: $age days old" 'Run: Update-MpSignature or Windows Update now'}}else{ck 'INFO' 'Cannot query Defender - third-party AV or WMI issue'} >> "%PSRUN%"
+echo $mpp=Get-MpPreference -EA SilentlyContinue;if($mpp){$ep=@($mpp.ExclusionPath^|Where-Object{$_});$epr=@($mpp.ExclusionProcess^|Where-Object{$_});if($ep.Count -gt 0){ck 'WARN' "Defender path exclusions configured: $($ep.Count) paths" 'Exclusions hide malware from Defender. Verify each is legitimate. See Section 9.'}else{ck 'PASS' 'No Defender path exclusions configured'};if($epr.Count -gt 0){ck 'WARN' "Defender process exclusions configured: $($epr.Count)" 'Verify each is legitimate. See Section 9.'}else{ck 'PASS' 'No Defender process exclusions configured'}} >> "%PSRUN%"
+echo. >> "%PSRUN%"
 
-sec 'ATTACK SURFACE  (Sections 8, 10, 11)'
-$fwOn=(netsh advfirewall show allprofiles 2>$null|Select-String 'State\s+ON').Count;if($fwOn -ge 3){ck 'PASS' 'All three firewall profiles enabled - Domain, Private, Public'}else{ck 'CRIT' "Firewall DISABLED on $(3-$fwOn) profiles" 'Fix: netsh advfirewall set allprofiles state on'}
-$s1=(Get-SmbServerConfiguration -EA SilentlyContinue).EnableSMB1Protocol;if($s1 -eq $false){ck 'PASS' 'SMBv1 disabled (EternalBlue not exploitable)'}elseif($s1 -eq $true){ck 'CRIT' 'SMBv1 ENABLED (EternalBlue CVE-2017-0144)' 'Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol'}else{ck 'INFO' 'SMBv1 state unavailable -- see Section 10'}
-$psv2=Get-WmiObject Win32_OptionalFeature -Filter "Name='MicrosoftWindowsPowerShellV2Root'" -EA SilentlyContinue;if($psv2 -and $psv2.InstallState -eq 1){ck 'WARN' 'PowerShell v2 ENABLED (AMSI downgrade possible)' 'Disable-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2Root'}elseif($psv2){ck 'PASS' 'PowerShell v2 disabled'}else{ck 'INFO' 'PSv2 state unavailable -- see Section 11'}
-$rdp=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -EA SilentlyContinue).fDenyTSConnections;if($rdp -eq 1){ck 'PASS' 'RDP is disabled'}else{$nla=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -EA SilentlyContinue).UserAuthentication;if($nla -eq 1){ck 'PASS' 'RDP enabled with NLA'}else{ck 'WARN' 'RDP enabled WITHOUT NLA' 'Set UserAuthentication=1 in HKLM\...\RDP-Tcp'}}
-$wmr=Get-Service WinRM -EA SilentlyContinue;if($wmr -and $wmr.Status -eq 'Running'){ck 'WARN' 'WinRM RUNNING (remote PS enabled)' 'Stop-Service WinRM; Set-Service WinRM -StartupType Disabled'}else{ck 'PASS' 'WinRM not running'}
+:: ===== ATTACK SURFACE ================================================
+echo sec 'ATTACK SURFACE  (Sections 8, 10, 11)' >> "%PSRUN%"
+echo $fwOn=(netsh advfirewall show allprofiles 2^>$null^|Select-String 'State\s+ON').Count;if($fwOn -ge 3){ck 'PASS' 'All three firewall profiles enabled - Domain, Private, Public'}else{ck 'CRIT' "Firewall DISABLED on $(3-$fwOn) profiles" 'Fix: netsh advfirewall set allprofiles state on'} >> "%PSRUN%"
+echo $s1=(Get-SmbServerConfiguration -EA SilentlyContinue).EnableSMB1Protocol;if($s1 -eq $false){ck 'PASS' 'SMBv1 disabled (EternalBlue not exploitable)'}elseif($s1 -eq $true){ck 'CRIT' 'SMBv1 ENABLED (EternalBlue CVE-2017-0144)' 'Run: Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart'}else{ck 'INFO' 'SMBv1 state unavailable -- see Section 10'} >> "%PSRUN%"
+echo $psv2=Get-WmiObject Win32_OptionalFeature -Filter 'Name=''MicrosoftWindowsPowerShellV2Root''' -EA SilentlyContinue;if($psv2 -and $psv2.InstallState -eq 1){ck 'WARN' 'PowerShell v2 ENABLED (AMSI downgrade possible)' 'Run: Disable-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2Root'}elseif($psv2){ck 'PASS' 'PowerShell v2 disabled'}else{ck 'INFO' 'PSv2 state unavailable -- see Section 11'} >> "%PSRUN%"
+echo $rdp=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -EA SilentlyContinue).fDenyTSConnections;if($rdp -eq 1){ck 'PASS' 'RDP is disabled'}else{$nla=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -EA SilentlyContinue).UserAuthentication;if($nla -eq 1){ck 'PASS' 'RDP enabled with NLA (Network Level Authentication)'}else{ck 'WARN' 'RDP enabled WITHOUT NLA' 'Set UserAuthentication=1 in HKLM\...\RDP-Tcp or via Group Policy'}} >> "%PSRUN%"
+echo $wmr=Get-Service WinRM -EA SilentlyContinue;if($wmr -and $wmr.Status -eq 'Running'){ck 'WARN' 'WinRM RUNNING (remote PowerShell enabled)' 'Disable: Stop-Service WinRM; Set-Service WinRM -StartupType Disabled'}else{ck 'PASS' 'WinRM not running'} >> "%PSRUN%"
+echo. >> "%PSRUN%"
 
-sec 'SYSTEM HARDENING  (Sections 11, 13)'
-$lua=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name EnableLUA -EA SilentlyContinue).EnableLUA;$cpb=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name ConsentPromptBehaviorAdmin -EA SilentlyContinue).ConsentPromptBehaviorAdmin;if($lua -eq 1 -and ($cpb -eq 2 -or $cpb -eq 5)){ck 'PASS' ('UAC on with prompt (EnableLUA=1, ConsentPrompt='+$cpb+')')}elseif($lua -eq 0){ck 'CRIT' 'UAC DISABLED -- all processes auto-elevate' 'Set EnableLUA=1 and reboot'}elseif($cpb -eq 0){ck 'WARN' 'UAC auto-elevates without prompting' 'Set ConsentPromptBehaviorAdmin=2'}else{ck 'WARN' ('UAC not fully hardened (EnableLUA='+$lua+', Consent='+$cpb+')') 'Recommend: EnableLUA=1, ConsentPromptBehaviorAdmin=2'}
-$ts=bcdedit /enum 2>$null|Select-String 'testsigning\s+yes';if($ts){ck 'WARN' 'Driver signature enforcement DISABLED' 'bcdedit /set testsigning off'}else{ck 'PASS' 'Driver signature enforcement active'}
-try{$bl=Get-BitLockerVolume -MountPoint $env:SystemDrive -EA Stop;if($bl.ProtectionStatus -eq 'On'){ck 'PASS' ('BitLocker ON for '+$env:SystemDrive+' ('+$bl.EncryptionMethod+')')}else{ck 'WARN' ('BitLocker OFF for '+$env:SystemDrive) 'Enable: manage-bde -on C:'}}catch{ck 'INFO' 'BitLocker status unavailable -- see Section 13'}
-$sbl=(Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' -Name EnableScriptBlockLogging -EA SilentlyContinue).EnableScriptBlockLogging;if($sbl -eq 1){ck 'PASS' 'PS Script Block Logging enabled (Event 4104)'}else{ck 'WARN' 'PS Script Block Logging NOT enabled' 'Set EnableScriptBlockLogging=1 via GPO'}
+:: ===== SYSTEM HARDENING ==============================================
+echo sec 'SYSTEM HARDENING  (Sections 11, 13)' >> "%PSRUN%"
+echo $lua=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name EnableLUA -EA SilentlyContinue).EnableLUA;$cpb=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name ConsentPromptBehaviorAdmin -EA SilentlyContinue).ConsentPromptBehaviorAdmin;if($lua -eq 1 -and ($cpb -eq 2 -or $cpb -eq 5)){ck 'PASS' ('UAC on with prompt (EnableLUA=1, ConsentPrompt='+$cpb+')')}elseif($lua -eq 0){ck 'CRIT' 'UAC DISABLED -- all processes auto-elevate silently' 'Set EnableLUA=1 in HKLM\...\Policies\System and reboot'}elseif($cpb -eq 0){ck 'WARN' 'UAC auto-elevates without prompting (ConsentPromptBehaviorAdmin=0)' 'Set ConsentPromptBehaviorAdmin=2 for secure desktop confirmation'}else{ck 'WARN' ('UAC not fully hardened (EnableLUA='+$lua+', ConsentPrompt='+$cpb+')') 'Recommend: EnableLUA=1, ConsentPromptBehaviorAdmin=2'} >> "%PSRUN%"
+echo $ts=bcdedit /enum 2^>$null^|Select-String 'testsigning\s+yes';if($ts){ck 'WARN' 'Driver signature enforcement DISABLED (testsigning=Yes)' 'Unsigned kernel drivers can load. Fix: bcdedit /set testsigning off'}else{ck 'PASS' 'Driver signature enforcement active'} >> "%PSRUN%"
+echo try{$bl=Get-BitLockerVolume -MountPoint $env:SystemDrive -EA Stop;if($bl.ProtectionStatus -eq 'On'){ck 'PASS' ('BitLocker ON for '+$env:SystemDrive+' ('+$bl.EncryptionMethod+')')}else{ck 'WARN' ('BitLocker OFF for '+$env:SystemDrive) 'Drive unencrypted -- data readable if drive removed. Enable: manage-bde -on C:'}}catch{ck 'INFO' 'BitLocker status unavailable -- see Section 13'} >> "%PSRUN%"
+echo $sbl=(Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' -Name EnableScriptBlockLogging -EA SilentlyContinue).EnableScriptBlockLogging;if($sbl -eq 1){ck 'PASS' 'PS Script Block Logging enabled (Event 4104 active)'}else{ck 'WARN' 'PS Script Block Logging NOT enabled' 'Set EnableScriptBlockLogging=1 in HKLM\...\ScriptBlockLogging via GPO'} >> "%PSRUN%"
+echo. >> "%PSRUN%"
 
-sec 'PERSISTENCE INTEGRITY  (Sections 5, 6, 7)'
-$ui=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name Userinit -EA SilentlyContinue).Userinit;if($ui -match '^C:\\Windows\\[Ss]ystem32\\userinit\.exe,?\s*$'){ck 'PASS' ('Winlogon Userinit clean: '+$ui.Trim())}else{ck 'CRIT' ('Winlogon Userinit MODIFIED: '+$ui) 'Expected: C:\Windows\system32\userinit.exe,'}
-$sh=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name Shell -EA SilentlyContinue).Shell;if($sh -match '^explorer\.exe$'){ck 'PASS' 'Winlogon Shell clean (explorer.exe)'}else{ck 'CRIT' ('Winlogon Shell MODIFIED: '+$sh) 'Expected: explorer.exe only'}
-$ai=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows' -Name AppInit_DLLs -EA SilentlyContinue).AppInit_DLLs;if([string]::IsNullOrWhiteSpace($ai)){ck 'PASS' 'AppInit_DLLs empty (no injected DLL)'}else{ck 'CRIT' ('AppInit_DLLs set: '+$ai) 'Clear AppInit_DLLs in HKLM\...\Windows immediately.'}
-$tsk=schtasks /query /fo CSV /v 2>$null|Select-String '\\Temp\\|\\AppData\\';if($tsk){ck 'WARN' "Tasks running from Temp/AppData: $(@($tsk).Count) matches" 'Strong IOC. Review Section 6.'}else{ck 'PASS' 'No scheduled tasks running from Temp or AppData'}
+:: ===== PERSISTENCE INTEGRITY =========================================
+echo sec 'PERSISTENCE INTEGRITY  (Sections 5, 6, 7)' >> "%PSRUN%"
+echo $ui=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name Userinit -EA SilentlyContinue).Userinit;if($ui -match '^C:\\Windows\\[Ss]ystem32\\userinit\.exe,?\s*$'){ck 'PASS' ('Winlogon Userinit clean: '+$ui.Trim())}else{ck 'CRIT' ('Winlogon Userinit MODIFIED: '+$ui) 'Expected: C:\Windows\system32\userinit.exe, -- malware hijacks this at every login'} >> "%PSRUN%"
+echo $sh=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name Shell -EA SilentlyContinue).Shell;if($sh -match '^explorer\.exe$'){ck 'PASS' 'Winlogon Shell clean (explorer.exe)'}else{ck 'CRIT' ('Winlogon Shell MODIFIED: '+$sh) 'Expected: explorer.exe only. Fix via regedit: HKLM\...\Winlogon\Shell'} >> "%PSRUN%"
+echo $ai=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows' -Name AppInit_DLLs -EA SilentlyContinue).AppInit_DLLs;if([string]::IsNullOrWhiteSpace($ai)){ck 'PASS' 'AppInit_DLLs empty (no injected DLL)'}else{ck 'CRIT' ('AppInit_DLLs set: '+$ai) 'DLL loads into every GUI process. Clear AppInit_DLLs in HKLM\...\Windows immediately.'} >> "%PSRUN%"
+echo $tsk=schtasks /query /fo CSV /v 2^>$null^|Select-String '\\Temp\\^|\\AppData\\';if($tsk){ck 'WARN' "Tasks running from Temp/AppData: $(@($tsk).Count) matches" 'Strong IOC. Review task details in Section 6.'}else{ck 'PASS' 'No scheduled tasks running from Temp or AppData'} >> "%PSRUN%"
+echo. >> "%PSRUN%"
 
-sec 'ACCESSIBILITY BINARY INTEGRITY  T1546.008  (Section 13)'
-$accBins = @('sethc.exe','utilman.exe','osk.exe','Magnify.exe','Narrator.exe','DisplaySwitch.exe','AtBroker.exe')
-$ifeoBase = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options'
-$ifeoHits = @(); foreach ($b in $accBins) { $d = Get-ItemProperty (Join-Path $ifeoBase $b) -Name Debugger -EA SilentlyContinue; if ($d) { $ifeoHits += $b+' -> '+$d.Debugger } }
-if ($ifeoHits.Count -gt 0) { ck 'CRIT' "IFEO Debugger hijack on $($ifeoHits.Count) accessibility binaries" "Affected: $($ifeoHits -join '; ')" } else { ck 'PASS' 'No IFEO Debugger hijacks on accessibility binaries - T1546.008' }
-$sysDir = "$env:SystemRoot\System32"; $badSig = @()
-foreach ($b in $accBins) { $f = Join-Path $sysDir $b; if (Test-Path $f) { $sig = Get-AuthenticodeSignature $f; if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'Microsoft') { $badSig += $b } } }
-if ($badSig.Count -gt 0) { ck 'CRIT' ('Accessibility binary signature INVALID: '+($badSig -join ', ')) 'Run: sfc /scannow or restore from WinRE.' } else { ck 'PASS' 'All 7 accessibility binaries carry valid Microsoft signatures' }
-$sf = (Get-ItemProperty 'HKCU:\Control Panel\Accessibility\StickyKeys' -Name Flags -EA SilentlyContinue).Flags
-if ($null -ne $sf -and ($sf -band 0x02) -gt 0) { ck 'WARN' 'Sticky Keys shortcut enabled (Shift x5 at login)' 'Disable: Settings > Accessibility > Keyboard > Sticky Keys shortcut OFF' } else { ck 'PASS' 'Sticky Keys shortcut disabled' }
+:: ===== ACCESSIBILITY BINARY INTEGRITY (T1546.008) ====================
+echo sec 'ACCESSIBILITY BINARY INTEGRITY  T1546.008  (Section 13)' >> "%PSRUN%"
+echo $accBins = @('sethc.exe','utilman.exe','osk.exe','Magnify.exe','Narrator.exe','DisplaySwitch.exe','AtBroker.exe') >> "%PSRUN%"
+echo $ifeoBase = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options' >> "%PSRUN%"
+echo $ifeoHits = @(); foreach ($b in $accBins) { $d = Get-ItemProperty (Join-Path $ifeoBase $b) -Name Debugger -EA SilentlyContinue; if ($d) { $ifeoHits += $b+' -^> '+$d.Debugger } } >> "%PSRUN%"
+echo if ($ifeoHits.Count -gt 0) { ck 'CRIT' "IFEO Debugger hijack on $($ifeoHits.Count) accessibility binaries" "Affected: $($ifeoHits -join '; '). Pressing Shift x5 or Win+U at login = SYSTEM shell. Delete Debugger value in HKLM\...\IFEO\[binary]" } else { ck 'PASS' 'No IFEO Debugger hijacks on accessibility binaries - T1546.008' } >> "%PSRUN%"
+echo $sysDir = "$env:SystemRoot\System32"; $badSig = @() >> "%PSRUN%"
+echo foreach ($b in $accBins) { $f = Join-Path $sysDir $b; if (Test-Path $f) { $sig = Get-AuthenticodeSignature $f; if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'Microsoft') { $badSig += $b } } } >> "%PSRUN%"
+echo if ($badSig.Count -gt 0) { ck 'CRIT' ('Accessibility binary signature INVALID: '+($badSig -join ', ')) 'Binaries may have been replaced with cmd.exe. Run: sfc /scannow or restore from WinRE.' } else { ck 'PASS' 'All 7 accessibility binaries carry valid Microsoft signatures' } >> "%PSRUN%"
+echo $sf = (Get-ItemProperty 'HKCU:\Control Panel\Accessibility\StickyKeys' -Name Flags -EA SilentlyContinue).Flags >> "%PSRUN%"
+echo if ($null -ne $sf -and ($sf -band 0x02) -gt 0) { ck 'WARN' 'Sticky Keys shortcut enabled (Shift x5 triggers at login screen)' 'Reduces attack surface: Settings ^> Accessibility ^> Keyboard ^> Sticky Keys shortcut OFF' } else { ck 'PASS' 'Sticky Keys shortcut disabled (no unauthenticated login-screen trigger)' } >> "%PSRUN%"
+echo. >> "%PSRUN%"
 
-sec 'CTI-ENHANCED DETECTIONS  (Section 18)'
-try{$pipes=Get-ChildItem \\.\pipe\ -EA Stop|Where-Object{$_.Name -match 'sliverpb|havoc|bruteratel|badger_|b4_|systemd-|svc_pivot'};if($pipes){ck 'CRIT' ('Next-gen C2 pipes: '+@($pipes).Count) ('Pipes: '+($pipes.Name -join ', ')+'. See Section 18.')}else{ck 'PASS' 'No Sliver/Havoc/BruteRatel C2 pipes'}}catch{ck 'INFO' 'Next-gen C2 pipe check unavailable'}
-$byovd=@('RTCore64.sys','DBUtil_2_3.sys','gdrv.sys','cpuz141.sys','AsIO64.sys','HW64.sys','WinIO64.sys','IQVW64E.sys','kprocesshacker.sys','ProcExp152.sys','zemana.sys','viragt64.sys');$bHits=@();foreach($d in $byovd){if(Test-Path "$env:SystemRoot\System32\drivers\$d"){$bHits+=$d}};if($bHits.Count -gt 0){ck 'CRIT' ('BYOVD exploit drivers: '+($bHits -join ', ')) 'Delete these files immediately.'}else{ck 'PASS' 'No known BYOVD exploit drivers'}
-$amsiEvts=Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-PowerShell/Operational';Id=4104} -MaxEvents 200 -EA SilentlyContinue;$amsiHit=$false;if($amsiEvts){foreach($e in $amsiEvts){if($e.Message -match 'AmsiUtils|amsiInitFailed|AmsiScanBuffer|SetProtectedState'){$amsiHit=$true;break}}};if($amsiHit){ck 'CRIT' 'AMSI bypass pattern in PowerShell logs' 'Investigate Event 4104 logs.'}else{ck 'PASS' 'No AMSI bypass patterns in recent PS logs'}
-$ransomCmds=wevtutil qe Security /q:"*[System[(EventID=4688)]]" /c:100 /rd:true /f:text 2>$null;$rHit=$ransomCmds|Select-String 'vssadmin delete|wmic shadowcopy|bcdedit.*recoveryenabled no|wbadmin delete';if($rHit){ck 'CRIT' 'Ransomware precursor commands detected' 'VSS/recovery deletion. Isolate NOW.'}else{ck 'PASS' 'No ransomware precursor commands detected'}
-$ssh=Get-Service sshd -EA SilentlyContinue;if($ssh -and $ssh.Status -eq 'Running'){ck 'WARN' 'OpenSSH Server (sshd) is RUNNING' 'Verify authorized_keys. Disable if not needed.'}elseif($ssh){ck 'INFO' 'OpenSSH Server installed but not running'}else{ck 'PASS' 'OpenSSH Server not installed'}
+:: ===== DISK HEALTH ===================================================
+echo sec 'DISK HEALTH  (Pre-flight INIT 14)' >> "%PSRUN%"
+echo if($sw -eq '1'){ck 'CRIT' 'SMART failure on one or more drives' 'Back up all data NOW. See SmartData\ folder. Replace failing drive before continuing.'}else{ck 'PASS' 'All drives report healthy SMART status'} >> "%PSRUN%"
+echo. >> "%PSRUN%"
 
-sec 'DISK HEALTH  (Pre-flight INIT 14)'
-if($sw -eq '1'){ck 'CRIT' 'SMART failure on one or more drives' 'Back up all data NOW.'}else{ck 'PASS' 'All drives report healthy SMART status'}
+:: ===== CTI IOC SWEEP ================================================
+echo sec 'CTI IOC SWEEP  (Section 18 - SENTINEL-X)' >> "%PSRUN%"
+echo $iocHits='%IOC_HITS%' >> "%PSRUN%"
+echo if($iocHits -gt 0){ck 'CRIT' "CTI IOC sweep: $iocHits category matches found" 'Review Section 18 for specific IOC matches. Investigate all CRITICAL and WARNING entries.'}else{ck 'PASS' 'CTI IOC sweep: no threat indicator matches across all categories'} >> "%PSRUN%"
+echo. >> "%PSRUN%"
 
-# ===== COMPOSE AND OUTPUT =====
-$bar = '#' * 70
-$status = if($cr -gt 0){'ACTION REQUIRED  --  '+$cr+' CRITICAL  /  '+$wa+' WARNING  /  '+$pa+' PASSED'}elseif($wa -gt 0){'REVIEW RECOMMENDED  --  0 CRITICAL  /  '+$wa+' WARNING  /  '+$pa+' PASSED'}else{'ALL '+$pa+' CHECKS PASSED  --  System appears clean'}
-$statusColor = if($cr -gt 0){'Red'}elseif($wa -gt 0){'Yellow'}else{'Green'}
-
-# Plain text to stdout (captured to file)
-''
-$bar
-'##'
-'##  SECURITY AUDIT SUMMARY  --  ' + $env:COMPUTERNAME
-'##  ' + (Get-Date -Format 'yyyy-MM-dd  HH:mm:ss')
-'##'
-'##  ' + $status
-'##'
-$bar
-foreach ($line in $r) { $line }
-''
-$bar
-if ($cr -gt 0) {
-  '  NEXT STEPS -- CRITICAL issues found:'
-  '  1. Isolate this machine from the network NOW'
-  '  2. Do NOT reboot -- volatile RAM evidence will be lost'
-  '  3. Image the drive before any remediation'
-  '  4. Apply the Fix listed next to each CRITICAL item above'
-  '  5. Report nation-state indicators to CISA: cisa.gov/report'
-} elseif ($wa -gt 0) {
-  '  NEXT STEPS -- No active compromise. Apply improvements:'
-  '  1. Apply the Fix listed next to each WARNING above'
-  '  2. Priority: Credential > Defender > Attack Surface > Hardening'
-  '  3. Re-run this audit after fixing to confirm clean'
-} else {
-  '  System security posture is good.'
-  '  Recommendation: re-run this audit monthly.'
-}
-$bar
-''
-
-# Colored version to terminal via Write-Host (bypasses file redirect)
-Write-Host ''
-Write-Host $bar -ForegroundColor White
-Write-Host '##' -ForegroundColor White
-Write-Host ('##  SECURITY AUDIT SUMMARY  --  ' + $env:COMPUTERNAME) -ForegroundColor White
-Write-Host ('##  ' + (Get-Date -Format 'yyyy-MM-dd  HH:mm:ss')) -ForegroundColor DarkGray
-Write-Host '##' -ForegroundColor White
-Write-Host ('##  ' + $status) -ForegroundColor $statusColor
-Write-Host '##' -ForegroundColor White
-Write-Host $bar -ForegroundColor White
-foreach ($entry in $rc) { Write-Host $entry.text -ForegroundColor $entry.color }
-Write-Host ''
-Write-Host $bar -ForegroundColor White
-if ($cr -gt 0) {
-  Write-Host '  NEXT STEPS -- CRITICAL issues found:' -ForegroundColor Red
-  Write-Host '  1. Isolate this machine from the network NOW' -ForegroundColor Red
-  Write-Host '  2. Do NOT reboot -- volatile RAM evidence will be lost' -ForegroundColor Red
-  Write-Host '  3. Image the drive before any remediation' -ForegroundColor Yellow
-  Write-Host '  4. Apply the Fix listed next to each CRITICAL item' -ForegroundColor Yellow
-  Write-Host '  5. Report nation-state indicators to CISA: cisa.gov/report' -ForegroundColor Yellow
-} elseif ($wa -gt 0) {
-  Write-Host '  NEXT STEPS -- No active compromise. Apply improvements:' -ForegroundColor Yellow
-  Write-Host '  1. Apply the Fix listed next to each WARNING above' -ForegroundColor Yellow
-  Write-Host '  2. Priority: Credential > Defender > Attack Surface > Hardening' -ForegroundColor Yellow
-  Write-Host '  3. Re-run this audit after fixing to confirm clean' -ForegroundColor Yellow
-} else {
-  Write-Host '  System security posture is good.' -ForegroundColor Green
-  Write-Host '  Recommendation: re-run this audit monthly.' -ForegroundColor DarkGray
-}
-Write-Host $bar -ForegroundColor White
-Write-Host ''
-
-if ($cr -gt 0) { 'CRIT' | Out-File $scf -Encoding ASCII } elseif ($wa -gt 0) { 'WARN' | Out-File $scf -Encoding ASCII } else { 'OK' | Out-File $scf -Encoding ASCII }
-'@ | Add-Content '%PSRUN%' -Encoding ASCII"
+:: ===== COMPOSE AND OUTPUT SUMMARY ====================================
+echo $bar = '#' * 70 >> "%PSRUN%"
+echo $status = if($cr -gt 0){'ACTION REQUIRED  --  '+$cr+' CRITICAL  /  '+$wa+' WARNING  /  '+$pa+' PASSED'}elseif($wa -gt 0){'REVIEW RECOMMENDED  --  0 CRITICAL  /  '+$wa+' WARNING  /  '+$pa+' PASSED'}else{'ALL '+$pa+' CHECKS PASSED  --  System appears clean'} >> "%PSRUN%"
+echo '' >> "%PSRUN%"
+echo $bar >> "%PSRUN%"
+echo '##' >> "%PSRUN%"
+echo ('##  SECURITY AUDIT SUMMARY  --  ' + $env:COMPUTERNAME) >> "%PSRUN%"
+echo ('##  ' + (Get-Date -Format 'yyyy-MM-dd  HH:mm:ss')) >> "%PSRUN%"
+echo '##' >> "%PSRUN%"
+echo ('##  ' + $status) >> "%PSRUN%"
+echo '##' >> "%PSRUN%"
+echo $bar >> "%PSRUN%"
+echo foreach ($line in $r) { $line } >> "%PSRUN%"
+echo '' >> "%PSRUN%"
+echo $bar >> "%PSRUN%"
+echo if ($cr -gt 0) { >> "%PSRUN%"
+echo '  NEXT STEPS -- CRITICAL issues found:' >> "%PSRUN%"
+echo '  1. Isolate this machine from the network NOW' >> "%PSRUN%"
+echo '  2. Do NOT reboot -- volatile RAM evidence will be lost' >> "%PSRUN%"
+echo '  3. Image the drive before any remediation (forensic preservation)' >> "%PSRUN%"
+echo '  4. Apply the Fix listed next to each CRITICAL item above' >> "%PSRUN%"
+echo '  5. Report nation-state indicators to CISA: cisa.gov/report' >> "%PSRUN%"
+echo } elseif ($wa -gt 0) { >> "%PSRUN%"
+echo '  NEXT STEPS -- No active compromise found. Apply these improvements:' >> "%PSRUN%"
+echo '  1. Apply the Fix listed next to each WARNING above' >> "%PSRUN%"
+echo '  2. Priority: Credential ^> Defender ^> Attack Surface ^> Hardening' >> "%PSRUN%"
+echo '  3. Re-run this audit after fixing to confirm clean' >> "%PSRUN%"
+echo } else { >> "%PSRUN%"
+echo '  System security posture is good.' >> "%PSRUN%"
+echo '  Recommendation: re-run this audit monthly.' >> "%PSRUN%"
+echo } >> "%PSRUN%"
+echo $bar >> "%PSRUN%"
+echo '' >> "%PSRUN%"
+echo if ($cr -gt 0) { 'CRIT' ^| Out-File $scf -Encoding ASCII } elseif ($wa -gt 0) { 'WARN' ^| Out-File $scf -Encoding ASCII } else { 'OK' ^| Out-File $scf -Encoding ASCII } >> "%PSRUN%"
 
 :: ---- Run PS, show on screen, append to report ----------------------
-:: PS stdout (plain text) goes to file; Write-Host (colored) goes to terminal
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" > "%SUMFILE%" 2>&1
 if exist "%SUMFILE%" (
-    :: Colored version was already displayed via Write-Host during PS execution.
-    :: Append the plain-text version to the report file only.
+    type "%SUMFILE%"
+    echo.>> "%REPORT%"
+    type "%SUMFILE%">> "%REPORT%"
     echo.>> "%REPORT%"
     type "%SUMFILE%">> "%REPORT%"
 ) else (
