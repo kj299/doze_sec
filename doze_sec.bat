@@ -71,14 +71,144 @@ set "SMARTCTL_PATH="
 :: ====================================================================
 :parse_args
 if "%~1"=="" goto :args_done
-if /i "%~1"=="-dev"    set "DEV_MODE=1"
-if /i "%~1"=="-resume" set "RESUME_MODE=1"
-if /i "%~1"=="-sdu"    set "SKIP_THREAT_UPDATE=1"
-if /i "%~1"=="-nosrp"     set "SKIP_SRP=1"
-if /i "%~1"=="-updateTTP" set "UPDATE_TTP=1"
+if /i "%~1"=="-help"       goto :show_help
+if /i "%~1"=="--help"      goto :show_help
+if /i "%~1"=="-h"          goto :show_help
+if /i "%~1"=="/?"          goto :show_help
+if /i "%~1"=="-dev"        set "DEV_MODE=1"
+if /i "%~1"=="-resume"     set "RESUME_MODE=1"
+if /i "%~1"=="-sdu"        set "SKIP_THREAT_UPDATE=1"
+if /i "%~1"=="-nosrp"      set "SKIP_SRP=1"
+if /i "%~1"=="-updateTTP"  set "UPDATE_TTP=1"
 shift
 goto :parse_args
 :args_done
+goto :help_done
+
+:show_help
+echo.
+echo.
+echo  %C_BOLD%%C_WHITE%====================================================================
+echo   WIN11 SECURITY FORENSIC AUDIT  v%SCRIPT_VERSION%
+echo   SENTINEL-X CTI Integration
+echo  ====================================================================%C_RESET%
+echo.
+echo  %C_BOLD%USAGE:%C_RESET%  %C_CYAN%%~nx0%C_RESET% [switches]
+echo.
+echo  %C_BOLD%SWITCHES:%C_RESET%
+echo.
+echo    %C_GREEN%-dev%C_RESET%         Bypass the unsupported-OS check. Use on Server editions,
+echo                 Windows 8.1, or unrecognised builds for testing/research.
+echo.
+echo    %C_GREEN%-resume%C_RESET%      Skip pre-flight steps 8-14 (F8, SRP, SMART, updates).
+echo                 Used automatically by the RunOnce key if a previous run
+echo                 was interrupted by a reboot or crash.
+echo.
+echo    %C_GREEN%-sdu%C_RESET%         Skip threat intel list update from the configured GitHub
+echo                 URL. Useful on air-gapped systems or slow connections.
+echo.
+echo    %C_GREEN%-nosrp%C_RESET%       Skip System Restore Point creation. Saves 30-60 seconds
+echo                 if you already have a recent restore point.
+echo.
+echo    %C_GREEN%-updateTTP%C_RESET%   Refresh the ThreatLists/ IOC files before the audit.
+echo                 Requires network. Downloads latest indicators from the
+echo                 configured threat intelligence source.
+echo.
+echo    %C_GREEN%-help, -h, /?, --help%C_RESET%
+echo                 Show this help screen and exit.
+echo.
+echo  %C_BOLD%EXAMPLES:%C_RESET%
+echo.
+echo    Run as Administrator (full audit):
+echo      Right-click ^> Run as administrator
+echo      %~nx0
+echo.
+echo    Run on unsupported OS for research:
+echo      %~nx0 -dev
+echo.
+echo    Combine switches:
+echo      %~nx0 -nosrp -sdu
+echo.
+echo  %C_BOLD%AUDIT SECTIONS (18 total):%C_RESET%
+echo.
+echo    Pre-flight (INIT 1-14):
+echo      Temp path check, admin detection, OS version, Safe Mode,
+echo      log dirs, resume detection, RunOnce key, network check,
+echo      self-update, F8 boot menu, SRP, disk config, SMART
+echo.
+echo    Security Audit:
+echo      1.  System identity and patch level
+echo      2.  User accounts and privilege audit
+echo      3.  Network configuration and live connections
+echo      4.  Running processes (LOLBins, RMM tools, suspicious paths)
+echo      5.  Startup and persistence mechanisms
+echo      6.  Scheduled tasks
+echo      7.  Windows services audit
+echo      8.  Firewall configuration
+echo      9.  Windows Defender and AV status
+echo      10. SMB, RDP and remote access
+echo      11. PowerShell security
+echo      12. Credential and LSASS protection
+echo      13. System hardening
+echo      14. Suspicious files and file system anomalies
+echo      15. Installed software and driver audit
+echo      16. Windows Event Log anomalies
+echo      17. Nation-state threat indicators
+echo      18. CTI-driven IOC sweep (SENTINEL-X threat intelligence)
+echo.
+echo  %C_BOLD%SECTION 18 -- CTI IOC SWEEP:%C_RESET%
+echo    Reads IOC files from ThreatLists/ and matches against the live
+echo    system. Sub-checks:
+echo      18a  Process name IOC match
+echo      18b  Named pipe IOC match (C2 frameworks)
+echo      18c  Service IOC match
+echo      18d  Malware staging file path check
+echo      18e  Scheduled task IOC match
+echo      18f  DNS cache C2 domain match
+echo      18g  LOLBin command-line pattern match
+echo      18h  Suspicious registry key check
+echo      18i  MITRE ATT^&CK TTP coverage summary
+echo.
+echo  %C_BOLD%IOC FILES (ThreatLists/ directory):%C_RESET%
+echo    ioc_processes.txt       Malicious process names
+echo    ioc_named_pipes.txt     C2 named pipes
+echo    ioc_services.txt        Malicious service names
+echo    ioc_registry.txt        Suspicious registry keys
+echo    ioc_file_paths.txt      Known malware staging paths
+echo    ioc_scheduled_tasks.txt Malicious task names
+echo    ioc_domains.txt         C2 domains
+echo    ioc_hashes.txt          SHA256 malware hashes
+echo    ioc_lolbins.txt         LOLBin command patterns
+echo    ttp_manifest.txt        MITRE ATT^&CK technique map
+echo.
+echo  %C_BOLD%EXIT CODES:%C_RESET%
+echo    0  Success -- all checks passed
+echo    1  Fatal error (check console output)
+echo    2  Warning -- audit complete but issues found
+echo    3  Unsupported OS (use -dev to override)
+echo    4  Reboot pending (reboot then re-run)
+echo    5  Script ran from TEMP directory (move and re-run)
+echo.
+echo  %C_BOLD%OUTPUT:%C_RESET%
+echo    C:\SecurityAudit\SecurityReport_[timestamp].txt
+echo    SMART data:    C:\SecurityAudit\SmartData\
+echo    Event exports: C:\SecurityAudit\EventExports\
+echo    IOC copies:    C:\SecurityAudit\ThreatLists\
+echo.
+echo  %C_BOLD%THREAT COVERAGE:%C_RESET%
+echo    APT/Nation-State: Volt Typhoon, Salt Typhoon, Midnight Blizzard,
+echo      Forest Blizzard, Scattered Spider, Lazarus Group, Flax Typhoon,
+echo      Linen Typhoon, Violet Typhoon, Peach/Mango Sandstorm, APT29
+echo    Ransomware: LockBit 3.0, BlackCat/ALPHV, Akira, Play, Royal,
+echo      Black Basta, Rhysida, Medusa
+echo    Credential: BYOVD, Mimikatz variants, Kerberoasting, NTLM relay
+echo    C2 Frameworks: Cobalt Strike, Sliver, Brute Ratel, Havoc, Mythic
+echo    Supply Chain: Trojanized packages, compromised update mechanisms
+echo.
+echo  ====================================================================
+echo.
+endlocal & exit /b 0
+:help_done
 
 :: ====================================================================
 :: -updateTTP HANDLER: Invoke CTI skill via Claude Code CLI
@@ -357,12 +487,12 @@ echo Windows Version    : %OS_VER%>> "%REPORT%"
 echo Product Type       : %OS_PTYPE%  (1=Client/Workstation  2=DomainController  3=Server)>> "%REPORT%"
 echo IE Version         : %IE_VER%  (legacy ref only - Edge is primary browser on Win10/11)>> "%REPORT%"
 echo.>> "%REPORT%"
-echo [INIT 3/14] %WIN_GEN% Build %OS_BUILD%  IE %IE_VER%  ProductType %OS_PTYPE%
+echo %C_GREEN%[INIT 3/14]%C_RESET% %WIN_GEN% Build %OS_BUILD%  IE %IE_VER%  ProductType %OS_PTYPE%
 
 :: ====================================================================
 :: [INIT 4/14] UNSUPPORTED OS CHECK (Exit code 3)
 :: ====================================================================
-echo [INIT 4/14] Checking OS compatibility...
+echo %C_GREEN%[INIT 4/14]%C_RESET% Checking OS compatibility...
 echo --- [INIT 4/14] OS Compatibility Check --->> "%REPORT%"
 set "OS_BLOCK_REASON="
 
@@ -379,12 +509,12 @@ if "%DEV_MODE%"=="1" (
     echo  [WARN] Unsupported OS: %OS_BLOCK_REASON%>> "%REPORT%"
     echo  [WARN] -dev override active. Continuing on unsupported OS.>> "%REPORT%"
     echo  [WARN] Some checks may fail or return incorrect results.>> "%REPORT%"
-    echo [INIT 4/14] WARN: %OS_BLOCK_REASON% -- -dev override active, continuing.
+    echo %C_GREEN%[INIT 4/14]%C_RESET% WARN: %OS_BLOCK_REASON% -- -dev override active, continuing.
     if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
     goto :os_check_passed
 )
 echo.
-echo  [EXIT 3] Unsupported OS detected: %OS_BLOCK_REASON%
+echo  %C_RED%[EXIT 3]%C_RESET% Unsupported OS detected: %OS_BLOCK_REASON%
 echo  This script targets Windows 10 and Windows 11 client editions.
 echo  Use the -dev switch to run anyway on unsupported versions.
 echo  Example:  WIN11_SecurityAudit.bat -dev
@@ -394,13 +524,13 @@ set "EXIT_CODE=3"
 goto :end_script
 :os_check_passed
 echo  [OK] OS supported: %WIN_GEN% Build %OS_BUILD%>> "%REPORT%"
-echo [INIT 4/14] OS check: OK (%WIN_GEN%)
+echo %C_GREEN%[INIT 4/14]%C_RESET% OS check: OK (%WIN_GEN%)
 echo.>> "%REPORT%"
 
 :: ====================================================================
 :: [INIT 5/14] SAFE MODE DETECTION
 :: ====================================================================
-echo [INIT 5/14] Detecting boot mode...
+echo %C_GREEN%[INIT 5/14]%C_RESET% Detecting boot mode...
 echo --- [INIT 5/14] Safe Mode Detection --->> "%REPORT%"
 wmic computersystem get BootupState /value 2>nul | findstr /i "safe" >nul 2>&1
 if %errorlevel% equ 0 (
@@ -408,10 +538,10 @@ if %errorlevel% equ 0 (
     echo  [INFO] Running in Safe Mode.>> "%REPORT%"
     echo  System Restore Point creation not supported in Safe Mode.>> "%REPORT%"
     echo  This is a known Windows 10 bug with no workaround. Use normal mode for SRP.>> "%REPORT%"
-    echo [INIT 5/14] Safe Mode: YES - SRP skipped due to Win10 bug
+    echo %C_GREEN%[INIT 5/14]%C_RESET% Safe Mode: YES - SRP skipped due to Win10 bug
 ) else (
     echo  [OK] Normal mode boot.>> "%REPORT%"
-    echo [INIT 5/14] Safe Mode: No - normal boot
+    echo %C_GREEN%[INIT 5/14]%C_RESET% Safe Mode: No - normal boot
 )
 echo.>> "%REPORT%"
 
@@ -424,28 +554,28 @@ echo  SMART data: %OUTDIR%\SmartData>> "%REPORT%"
 echo  Event logs: %OUTDIR%\EventExports>> "%REPORT%"
 echo  Threat IPs: %OUTDIR%\ThreatLists>> "%REPORT%"
 echo.>> "%REPORT%"
-echo [INIT 6/14] Log dirs: %OUTDIR%
+echo %C_GREEN%[INIT 6/14]%C_RESET% Log dirs: %OUTDIR%
 
 :: ====================================================================
 :: [INIT 7/14] DETECT RESUME FROM PREVIOUS RUN
 :: ====================================================================
-echo [INIT 7/14] Checking for previous interrupted run...
+echo %C_GREEN%[INIT 7/14]%C_RESET% Checking for previous interrupted run...
 echo --- [INIT 7/14] Resume Detection --->> "%REPORT%"
 if "%RESUME_MODE%"=="1" (
     echo  [RESUME] Resuming interrupted run. Pre-flight steps 8-14 skipped.>> "%REPORT%"
     echo  SRP, update checks, F8, SMART were completed in the previous run.>> "%REPORT%"
     echo.>> "%REPORT%"
-    echo [INIT 7/14] RESUME mode active - jumping to audit sections.
+    echo %C_GREEN%[INIT 7/14]%C_RESET% RESUME mode active - jumping to audit sections.
     goto :preflight_complete
 )
 echo  [OK] Fresh run detected. No interrupted session found.>> "%REPORT%"
 echo.>> "%REPORT%"
-echo [INIT 7/14] Fresh run. Proceeding with full pre-flight.
+echo %C_GREEN%[INIT 7/14]%C_RESET% Fresh run. Proceeding with full pre-flight.
 
 :: ====================================================================
 :: [INIT 8/14] CREATE RUNONCE RESUME ENTRY
 :: ====================================================================
-echo [INIT 8/14] Creating RunOnce resume entry...
+echo %C_GREEN%[INIT 8/14]%C_RESET% Creating RunOnce resume entry...
 echo --- [INIT 8/14] RunOnce Resume Key --->> "%REPORT%"
 echo  If this run is interrupted (reboot/crash), Windows will automatically>> "%REPORT%"
 echo  re-run the script with the -resume switch on next login.>> "%REPORT%"
@@ -455,7 +585,7 @@ echo  The * prefix forces execution even in Safe Mode.>> "%REPORT%"
 reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /t REG_SZ /d "\"%~f0\" -resume" /f >nul 2>&1
 if %errorlevel% equ 0 (
     echo  [OK] RunOnce key created successfully.>> "%REPORT%"
-    echo [INIT 8/14] RunOnce key created - auto-deleted on clean exit.
+    echo %C_GREEN%[INIT 8/14]%C_RESET% RunOnce key created - auto-deleted on clean exit.
     echo [TEMPORARY] RunOnce resume key created.>> "%CHANGELOG%"
     echo             Key: HKCU\...\RunOnce\*%SCRIPT_NAME%_resume>> "%CHANGELOG%"
     echo             Status: AUTO-DELETED at end of audit on clean exit.>> "%CHANGELOG%"
@@ -463,44 +593,44 @@ if %errorlevel% equ 0 (
     echo.>> "%CHANGELOG%"
 ) else (
     echo  [WARN] Could not create RunOnce key. Resume will not be available.>> "%REPORT%"
-    echo [INIT 8/14] RunOnce key creation failed - non-fatal.
+    echo %C_GREEN%[INIT 8/14]%C_RESET% RunOnce key creation failed - non-fatal.
 )
 echo.>> "%REPORT%"
 
 :: ====================================================================
 :: [INIT 9/14] NETWORK CONNECTIVITY CHECK
 :: ====================================================================
-echo [INIT 9/14] Checking network connectivity...
+echo %C_GREEN%[INIT 9/14]%C_RESET% Checking network connectivity...
 echo --- [INIT 9/14] Network Connectivity --->> "%REPORT%"
 
 ping -n 1 -w 2000 8.8.8.8 >nul 2>&1
 if %errorlevel% equ 0 (
     set "NETWORK_AVAIL=1"
     echo  [OK] Network connected - Google DNS reachable.>> "%REPORT%"
-    echo [INIT 9/14] Network: Connected
+    echo %C_GREEN%[INIT 9/14]%C_RESET% Network: Connected
     goto :netcheck_done
 )
 ping -n 1 -w 2000 1.1.1.1 >nul 2>&1
 if %errorlevel% equ 0 (
     set "NETWORK_AVAIL=1"
     echo  [OK] Network connected - Cloudflare DNS reachable.>> "%REPORT%"
-    echo [INIT 9/14] Network: Connected via fallback ping
+    echo %C_GREEN%[INIT 9/14]%C_RESET% Network: Connected via fallback ping
     goto :netcheck_done
 )
 echo  [INFO] No network detected. Update and threat list checks will be skipped.>> "%REPORT%"
-echo [INIT 9/14] Network: Not available. Skipping update checks.
+echo %C_GREEN%[INIT 9/14]%C_RESET% Network: Not available. Skipping update checks.
 :netcheck_done
 echo.>> "%REPORT%"
 
 :: ====================================================================
 :: [INIT 10/14] SELF-UPDATE CHECK
 :: ====================================================================
-echo [INIT 10/14] Checking for script updates...
+echo %C_GREEN%[INIT 10/14]%C_RESET% Checking for script updates...
 echo --- [INIT 10/14] Self-Update Check --->> "%REPORT%"
 
 if "%NETWORK_AVAIL%"=="0" (
     echo  [SKIP] No network available.>> "%REPORT%"
-    echo [INIT 10/14] Skipped - no network available.
+    echo %C_GREEN%[INIT 10/14]%C_RESET% Skipped - no network available.
     goto :update_done
 )
 
@@ -508,7 +638,7 @@ if "%NETWORK_AVAIL%"=="0" (
 echo %UPDATE_URL% | findstr /c:"YOURUSERNAME" >nul 2>&1
 if %errorlevel% equ 0 (
     echo  [SKIP] UPDATE_URL not configured. Set it at the top of this script.>> "%REPORT%"
-    echo [INIT 10/14] Update URL not configured - set UPDATE_URL at top of script.
+    echo %C_GREEN%[INIT 10/14]%C_RESET% Update URL not configured - set UPDATE_URL at top of script.
     goto :update_done
 )
 
@@ -553,7 +683,7 @@ echo.>> "%REPORT%"
 :: ====================================================================
 :: [INIT 11/14] ENABLE F8 SAFE MODE SELECTION
 :: ====================================================================
-echo [INIT 11/14] Re-enabling F8 Safe Mode selection...
+echo %C_GREEN%[INIT 11/14]%C_RESET% Re-enabling F8 Safe Mode selection...
 echo --- [INIT 11/14] F8 Boot Menu --->> "%REPORT%"
 echo  Re-enables the F8 key during boot for Safe Mode access.>> "%REPORT%"
 echo  Enabled by default on Win7 and Server 2012/2012 R2.>> "%REPORT%"
@@ -561,7 +691,7 @@ echo  Disabled by default on Windows 8 and later (by design for fast boot).>> "%
 
 if "%WIN_GEN%"=="Win7" (
     echo  [SKIP] Win7 - F8 is already enabled by default.>> "%REPORT%"
-    echo [INIT 11/14] Skipped - Win7 F8 already enabled by default.
+    echo %C_GREEN%[INIT 11/14]%C_RESET% Skipped - Win7 F8 already enabled by default.
     goto :f8_done
 )
 
@@ -582,7 +712,7 @@ if %errorlevel% equ 0 (
     bcdedit /timeout 5 >nul 2>&1
     echo  [OK] Boot timeout set to 5 seconds.>> "%REPORT%"
     echo  [CHANGED] Was: timeout=%PREV_TIMEOUT%  Now: 5>> "%REPORT%"
-    echo [INIT 11/14] F8 boot menu re-enabled - 5 second timeout set.
+    echo %C_GREEN%[INIT 11/14]%C_RESET% F8 boot menu re-enabled - 5 second timeout set.
 
     :: Log the changes
     echo [CHANGED] bcdedit {bootmgr} displaybootmenu: was "%PREV_BOOTMENU%" -- set to "yes">> "%CHANGELOG%"
@@ -606,7 +736,7 @@ if %errorlevel% equ 0 (
     echo.>> "%UNDO_BAT%"
 ) else (
     echo  [WARN] Could not set displaybootmenu. May already be set or bcdedit restricted.>> "%REPORT%"
-    echo [INIT 11/14] F8 re-enable returned non-zero - non-fatal.
+    echo %C_GREEN%[INIT 11/14]%C_RESET% F8 re-enable returned non-zero - non-fatal.
 )
 :f8_done
 echo.>> "%REPORT%"
@@ -614,7 +744,7 @@ echo.>> "%REPORT%"
 :: ====================================================================
 :: [INIT 12/14] SYSTEM RESTORE POINT
 :: ====================================================================
-echo [INIT 12/14] Creating System Restore Point...
+echo %C_GREEN%[INIT 12/14]%C_RESET% Creating System Restore Point...
 echo --- [INIT 12/14] System Restore Point --->> "%REPORT%"
 echo  Description: Pre-WIN11-Security-Audit-v%SCRIPT_VERSION%>> "%REPORT%"
 echo  Note: Vista and later ONLY. Client OS ONLY. Not supported on Server.>> "%REPORT%"
@@ -623,22 +753,22 @@ echo  If you require a restore point, always run this script in Normal mode.>> "
 
 if "%SKIP_SRP%"=="1" (
     echo  [SKIP] -nosrp switch active.>> "%REPORT%"
-    echo [INIT 12/14] SRP skipped via -nosrp switch.
+    echo %C_GREEN%[INIT 12/14]%C_RESET% SRP skipped via -nosrp switch.
     goto :srp_done
 )
 if "%SAFE_MODE%"=="1" (
     echo  [SKIP] In Safe Mode - SRP not possible. Win10 known bug with no workaround.>> "%REPORT%"
-    echo [INIT 12/14] SRP skipped - Safe Mode Windows 10 known bug.
+    echo %C_GREEN%[INIT 12/14]%C_RESET% SRP skipped - Safe Mode Windows 10 known bug.
     goto :srp_done
 )
 if "%OS_PTYPE%" NEQ "1" (
     echo  [SKIP] Server or Domain Controller OS - SRP not supported.>> "%REPORT%"
-    echo [INIT 12/14] SRP skipped - Server or DC OS not supported.
+    echo %C_GREEN%[INIT 12/14]%C_RESET% SRP skipped - Server or DC OS not supported.
     goto :srp_done
 )
 if "%WIN_GEN%"=="Win7" (
     echo  [SKIP] Skipped on Win7 - use built-in System Restore manually.>> "%REPORT%"
-    echo [INIT 12/14] SRP skipped - Win7, use built-in System Restore manually.
+    echo %C_GREEN%[INIT 12/14]%C_RESET% SRP skipped - Win7, use built-in System Restore manually.
     goto :srp_done
 )
 
@@ -667,7 +797,7 @@ echo.>> "%REPORT%"
 :: ====================================================================
 :: [INIT 13/14] DISK CONFIGURATION AND FREE SPACE
 :: ====================================================================
-echo [INIT 13/14] Checking disk configuration and available space...
+echo %C_GREEN%[INIT 13/14]%C_RESET% Checking disk configuration and available space...
 echo --- [INIT 13/14] Disk Configuration --->> "%REPORT%"
 echo  Determines: SSD/HDD/VM/error. Sets SKIP_DEFRAG flag accordingly.>> "%REPORT%"
 echo  SKIP_DEFRAG values: no=HDD, yes_ssd=SSD, yes_vm=VirtualDisk, yes_error=SmartCTL error>> "%REPORT%"
@@ -717,15 +847,22 @@ for /f "tokens=2 delims==" %%a in ('wmic logicaldisk where "DeviceID=^'%SystemDr
     if not "%%a"=="" set "FREE_BEFORE=%%a"
 )
 set "FREE_BEFORE=%FREE_BEFORE: =%"
+:: Fallback: if wmic returned 0 or empty, try PowerShell
+if not "%FREE_BEFORE%"=="0" goto :freebefore_done
+echo $d=Get-PSDrive -Name '%SystemDrive:~0,1%' -EA SilentlyContinue; if($d){$d.Free} > "%PSRUN%"
+for /f "usebackq" %%a in (`"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" 2^>nul`) do (
+    if not "%%a"=="" if not "%%a"=="0" set "FREE_BEFORE=%%a"
+)
+:freebefore_done
 echo System drive: %SystemDrive%>> "%REPORT%"
 echo Free space  : %FREE_BEFORE% bytes>> "%REPORT%"
 echo.>> "%REPORT%"
-echo [INIT 13/14] Disk: SKIP_DEFRAG=%SKIP_DEFRAG%  Free: %FREE_BEFORE% bytes
+echo %C_GREEN%[INIT 13/14]%C_RESET% Disk: SKIP_DEFRAG=%SKIP_DEFRAG%  Free: %FREE_BEFORE% bytes
 
 :: ====================================================================
 :: [INIT 14/14] SMART DISK HEALTH CHECK
 :: ====================================================================
-echo [INIT 14/14] Running SMART disk health check...
+echo %C_GREEN%[INIT 14/14]%C_RESET% Running SMART disk health check...
 echo ====================================================================>> "%REPORT%"
 echo  [INIT 14/14] SMART DISK HEALTH CHECK>> "%REPORT%"
 echo  Alert statuses: Error, Degraded, Unknown, PredFail, Service,>> "%REPORT%"
@@ -810,11 +947,11 @@ if "%SMART_WARN%"=="1" (
     echo [WARNING] One or more drives report SMART/health failure. Back up data immediately.>> "%REPORT%"
     echo [WARNING] Do not run this script again until drives are replaced or verified.>> "%REPORT%"
     if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
-    echo [INIT 14/14] SMART: WARNING - drive health issue detected
+    echo %C_GREEN%[INIT 14/14]%C_RESET% SMART: WARNING - drive health issue detected
 ) else (
     echo.>> "%REPORT%"
     echo [OK] All drives healthy.>> "%REPORT%"
-    echo [INIT 14/14] SMART: All drives healthy
+    echo %C_GREEN%[INIT 14/14]%C_RESET% SMART: All drives healthy
 )
 echo.>> "%REPORT%"
 
@@ -833,15 +970,15 @@ echo ====================================================================>> "%RE
 echo.>> "%REPORT%"
 
 echo.
-echo ====================================================================
-echo  Pre-flight complete. Starting 17-section security audit...
-echo ====================================================================
+echo %C_BOLD%%C_WHITE%====================================================================
+echo  Pre-flight complete. Starting 17-section security audit...%C_RESET%
+echo %C_BOLD%%C_WHITE%====================================================================%C_RESET%
 echo.
 
 :: ====================================================================
 set "SEC1_PREV_CODE=%EXIT_CODE%"
 set "SEC1_WARN=0"
-echo %C_BOLD%%C_CYAN%[1/17]%C_RESET% Collecting system identity and patch level...
+echo %C_CYAN%[1/17]%C_RESET% Collecting system identity and patch level...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
 echo  [1/17] SYSTEM IDENTITY AND PATCH LEVEL>> "%REPORT%"
@@ -891,7 +1028,7 @@ if "%EXIT_CODE%"=="%SEC1_PREV_CODE%" (
 echo ====================================================================>> "%REPORT%"
 set "SEC2_PREV_CODE=%EXIT_CODE%"
 set "SEC2_WARN=0"
-echo %C_BOLD%%C_CYAN%[2/17]%C_RESET% Auditing user accounts and privileges...
+echo %C_CYAN%[2/17]%C_RESET% Auditing user accounts and privileges...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
 echo  [2/17] USER ACCOUNTS AND PRIVILEGE AUDIT>> "%REPORT%"
@@ -941,7 +1078,7 @@ if "%EXIT_CODE%"=="%SEC2_PREV_CODE%" (
 echo ====================================================================>> "%REPORT%"
 set "SEC3_PREV_CODE=%EXIT_CODE%"
 set "SEC3_WARN=0"
-echo %C_BOLD%%C_CYAN%[3/17]%C_RESET% Scanning network connections and configuration...
+echo %C_CYAN%[3/17]%C_RESET% Scanning network connections and configuration...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
 echo  [3/17] NETWORK CONFIGURATION AND LIVE CONNECTIONS>> "%REPORT%"
@@ -989,7 +1126,7 @@ type "%WINDIR%\System32\drivers\etc\hosts">> "%REPORT%" 2>&1
 echo.>> "%REPORT%"
 echo --- Proxy Settings --->> "%REPORT%"
 echo $p=Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -EA SilentlyContinue > "%PSRUN%"
-echo if($p){Write-Output ('ProxyEnable : '+(if($p.ProxyEnable){'1 [ENABLED]'}else{'0 [DISABLED]'}));if($p.ProxyServer){Write-Output ('ProxyServer : '+$p.ProxyServer)}else{Write-Output 'ProxyServer : [OK] Not configured'};if($p.AutoConfigURL){Write-Output ('AutoConfigURL: '+$p.AutoConfigURL)}else{Write-Output 'AutoConfigURL: [OK] Not configured'}}else{Write-Output '[OK] No proxy settings in registry'} >> "%PSRUN%"
+echo if($p){$pe=if($p.ProxyEnable){'1 [ENABLED]'}else{'0 [DISABLED]'};Write-Output "ProxyEnable : $pe";if($p.ProxyServer){Write-Output "ProxyServer : $($p.ProxyServer)"}else{Write-Output 'ProxyServer : [OK] Not configured'};if($p.AutoConfigURL){Write-Output "AutoConfigURL: $($p.AutoConfigURL)"}else{Write-Output 'AutoConfigURL: [OK] Not configured'}}else{Write-Output '[OK] No proxy settings in registry'} >> "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 echo $p=(Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -EA SilentlyContinue).ProxyServer > "%PSRUN%"
 echo if($p){Write-Output ('HKLM ProxyServer: '+$p)}else{Write-Output 'HKLM ProxyServer: [OK] Not configured'} >> "%PSRUN%"
@@ -1012,7 +1149,7 @@ if "%EXIT_CODE%"=="%SEC3_PREV_CODE%" (
 echo ====================================================================>> "%REPORT%"
 set "SEC4_PREV_CODE=%EXIT_CODE%"
 set "SEC4_WARN=0"
-echo %C_BOLD%%C_CYAN%[4/17]%C_RESET% Enumerating running processes...
+echo %C_CYAN%[4/17]%C_RESET% Enumerating running processes...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
 echo  [4/17] RUNNING PROCESSES>> "%REPORT%"
@@ -1061,7 +1198,7 @@ if "%EXIT_CODE%"=="%SEC4_PREV_CODE%" (
 echo ====================================================================>> "%REPORT%"
 set "SEC5_PREV_CODE=%EXIT_CODE%"
 set "SEC5_WARN=0"
-echo %C_BOLD%%C_CYAN%[5/17]%C_RESET% Checking startup and persistence locations...
+echo %C_CYAN%[5/17]%C_RESET% Checking startup and persistence locations...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
 echo  [5/17] STARTUP AND PERSISTENCE MECHANISMS>> "%REPORT%"
@@ -1123,7 +1260,7 @@ if "%EXIT_CODE%"=="%SEC5_PREV_CODE%" (
 echo ====================================================================>> "%REPORT%"
 set "SEC6_PREV_CODE=%EXIT_CODE%"
 set "SEC6_WARN=0"
-echo %C_BOLD%%C_CYAN%[6/17]%C_RESET% Enumerating scheduled tasks...
+echo %C_CYAN%[6/17]%C_RESET% Enumerating scheduled tasks...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
 echo  [6/17] SCHEDULED TASKS>> "%REPORT%"
@@ -1157,7 +1294,7 @@ if "%EXIT_CODE%"=="%SEC6_PREV_CODE%" (
 echo ====================================================================>> "%REPORT%"
 set "SEC7_PREV_CODE=%EXIT_CODE%"
 set "SEC7_WARN=0"
-echo %C_BOLD%%C_CYAN%[7/17]%C_RESET% Auditing Windows services...
+echo %C_CYAN%[7/17]%C_RESET% Auditing Windows services...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
 echo  [7/17] WINDOWS SERVICES AUDIT>> "%REPORT%"
@@ -1191,7 +1328,7 @@ if "%EXIT_CODE%"=="%SEC7_PREV_CODE%" (
 echo ====================================================================>> "%REPORT%"
 set "SEC8_PREV_CODE=%EXIT_CODE%"
 set "SEC8_WARN=0"
-echo %C_BOLD%%C_CYAN%[8/17]%C_RESET% Checking firewall configuration...
+echo %C_CYAN%[8/17]%C_RESET% Checking firewall configuration...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
 echo  [8/17] WINDOWS FIREWALL CONFIGURATION>> "%REPORT%"
@@ -1224,7 +1361,7 @@ if "%EXIT_CODE%"=="%SEC8_PREV_CODE%" (
 echo ====================================================================>> "%REPORT%"
 set "SEC9_PREV_CODE=%EXIT_CODE%"
 set "SEC9_WARN=0"
-echo %C_BOLD%%C_CYAN%[9/17]%C_RESET% Checking Defender and AV configuration...
+echo %C_CYAN%[9/17]%C_RESET% Checking Defender and AV configuration...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
 echo  [9/17] WINDOWS DEFENDER AND ANTIVIRUS STATUS>> "%REPORT%"
@@ -1277,7 +1414,7 @@ if "%EXIT_CODE%"=="%SEC9_PREV_CODE%" (
 echo ====================================================================>> "%REPORT%"
 set "SEC10_PREV_CODE=%EXIT_CODE%"
 set "SEC10_WARN=0"
-echo %C_BOLD%%C_CYAN%[10/17]%C_RESET% Checking SMB and remote access...
+echo %C_CYAN%[10/17]%C_RESET% Checking SMB and remote access...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
 echo  [10/17] SMB, RDP AND REMOTE ACCESS>> "%REPORT%"
@@ -1322,7 +1459,7 @@ if "%EXIT_CODE%"=="%SEC10_PREV_CODE%" (
 echo ====================================================================>> "%REPORT%"
 set "SEC11_PREV_CODE=%EXIT_CODE%"
 set "SEC11_WARN=0"
-echo %C_BOLD%%C_CYAN%[11/17]%C_RESET% Checking PowerShell security...
+echo %C_CYAN%[11/17]%C_RESET% Checking PowerShell security...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
 echo  [11/17] POWERSHELL SECURITY CONFIGURATION>> "%REPORT%"
@@ -1381,7 +1518,7 @@ if "%EXIT_CODE%"=="%SEC11_PREV_CODE%" (
 echo ====================================================================>> "%REPORT%"
 set "SEC12_PREV_CODE=%EXIT_CODE%"
 set "SEC12_WARN=0"
-echo %C_BOLD%%C_CYAN%[12/17]%C_RESET% Checking credential and LSASS protection...
+echo %C_CYAN%[12/17]%C_RESET% Checking credential and LSASS protection...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
 echo  [12/17] CREDENTIAL PROTECTION AND LSASS HARDENING>> "%REPORT%"
@@ -1436,7 +1573,7 @@ if "%EXIT_CODE%"=="%SEC12_PREV_CODE%" (
 echo ====================================================================>> "%REPORT%"
 set "SEC13_PREV_CODE=%EXIT_CODE%"
 set "SEC13_WARN=0"
-echo %C_BOLD%%C_CYAN%[13/17]%C_RESET% Checking system hardening settings...
+echo %C_CYAN%[13/17]%C_RESET% Checking system hardening settings...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
 echo  [13/17] SYSTEM HARDENING CONFIGURATION>> "%REPORT%"
@@ -1499,7 +1636,7 @@ echo   $key = Join-Path $ifeoBase $b >> "%PSRUN%"
 echo   $d = Get-ItemProperty $key -Name Debugger -EA SilentlyContinue >> "%PSRUN%"
 echo   if ($d) { $hits += '[CRITICAL] IFEO Debugger hijack: '+$b+' -^> '+$d.Debugger } >> "%PSRUN%"
 echo } >> "%PSRUN%"
-echo if ($hits) { $hits; Write-Output '[!!] Accessibility IFEO hijack = SYSTEM-level login-screen backdoor. Remove Debugger value immediately.' } else { '[OK] No IFEO Debugger hijacks on accessibility binaries.' } >> "%PSRUN%"
+echo if ($hits) { $hits; Write-Output '[^^!^^!] Accessibility IFEO hijack = SYSTEM-level login-screen backdoor. Remove Debugger value immediately.' } else { '[OK] No IFEO Debugger hijacks on accessibility binaries.' } >> "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
@@ -1519,7 +1656,7 @@ echo       Write-Output ('[CRITICAL] '+$b+' - Signature: '+$sig.Status+' / '+$si
 echo     } >> "%PSRUN%"
 echo   } else { Write-Output ('[WARN] '+$b+' - not found in System32') } >> "%PSRUN%"
 echo } >> "%PSRUN%"
-echo if ($bad.Count -gt 0) { Write-Output '[!!] Replace tampered binaries: sfc /scannow or restore from WinRE.' } >> "%PSRUN%"
+echo if ($bad.Count -gt 0) { Write-Output '[^^!^^!] Replace tampered binaries: sfc /scannow or restore from WinRE.' } >> "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
@@ -1547,7 +1684,7 @@ if "%EXIT_CODE%"=="%SEC13_PREV_CODE%" (
 echo ====================================================================>> "%REPORT%"
 set "SEC14_PREV_CODE=%EXIT_CODE%"
 set "SEC14_WARN=0"
-echo %C_BOLD%%C_CYAN%[14/17]%C_RESET% Scanning file system for suspicious files...
+echo %C_CYAN%[14/17]%C_RESET% Scanning file system for suspicious files...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
 echo  [14/17] SUSPICIOUS FILES AND FILE SYSTEM ANOMALIES>> "%REPORT%"
@@ -1598,7 +1735,7 @@ if "%EXIT_CODE%"=="%SEC14_PREV_CODE%" (
 echo ====================================================================>> "%REPORT%"
 set "SEC15_PREV_CODE=%EXIT_CODE%"
 set "SEC15_WARN=0"
-echo %C_BOLD%%C_CYAN%[15/17]%C_RESET% Auditing installed software and drivers...
+echo %C_CYAN%[15/17]%C_RESET% Auditing installed software and drivers...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
 echo  [15/17] INSTALLED SOFTWARE AND DRIVER AUDIT>> "%REPORT%"
@@ -1645,7 +1782,7 @@ if "%EXIT_CODE%"=="%SEC15_PREV_CODE%" (
 echo ====================================================================>> "%REPORT%"
 set "SEC16_PREV_CODE=%EXIT_CODE%"
 set "SEC16_WARN=0"
-echo %C_BOLD%%C_CYAN%[16/17]%C_RESET% Pulling Windows Event Log anomalies...
+echo %C_CYAN%[16/17]%C_RESET% Pulling Windows Event Log anomalies...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
 echo  [16/17] WINDOWS EVENT LOG ANOMALIES>> "%REPORT%"
@@ -1721,7 +1858,7 @@ if "%EXIT_CODE%"=="%SEC16_PREV_CODE%" (
 echo ====================================================================>> "%REPORT%"
 set "SEC17_PREV_CODE=%EXIT_CODE%"
 set "SEC17_WARN=0"
-echo %C_BOLD%%C_CYAN%[17/17]%C_RESET% Nation-state threat indicators from MDDR 2023...
+echo %C_CYAN%[17/17]%C_RESET% Nation-state threat indicators from MDDR 2023...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
 echo  [17/17] NATION-STATE THREAT INDICATORS - MDDR 2023>> "%REPORT%"
@@ -1862,7 +1999,7 @@ echo     $h = (Get-FileHash $f -Algorithm SHA256).Hash >> "%PSRUN%"
 echo     $sig = Get-AuthenticodeSignature $f >> "%PSRUN%"
 echo     Write-Output ($b+' SHA256: '+$h) >> "%PSRUN%"
 echo     Write-Output ($b+' Signature: '+$sig.Status+' / '+$sig.SignerCertificate.Subject) >> "%PSRUN%"
-echo     if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'Microsoft') { Write-Output ('[CRITICAL] '+$b+' may have been replaced with a non-Microsoft binary!') } >> "%PSRUN%"
+echo     if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'Microsoft') { Write-Output ('[CRITICAL] '+$b+' may have been replaced with a non-Microsoft binary^^!') } >> "%PSRUN%"
 echo   } >> "%PSRUN%"
 echo } >> "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
@@ -1879,7 +2016,7 @@ if "%EXIT_CODE%"=="%SEC17_PREV_CODE%" (
 echo ====================================================================>> "%REPORT%"
 set "SEC18_PREV_CODE=%EXIT_CODE%"
 set "SEC18_WARN=0"
-echo %C_BOLD%%C_CYAN%[18/18]%C_RESET% CTI-enhanced TTP detection (2024-2026 threat landscape)...
+echo %C_CYAN%[18/18]%C_RESET% CTI-enhanced TTP detection (2024-2026 threat landscape)...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
 echo  [18/18] CTI-ENHANCED TTP DETECTION -- 2024-2026 THREAT LANDSCAPE>> "%REPORT%"
@@ -1889,6 +2026,26 @@ echo  cloud token theft, AiTM phishing artifacts, ransomware precursors,>> "%REP
 echo  EDR evasion, and living-off-the-cloud techniques.>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
+:: Check if ThreatLists directory exists with IOC files
+:: Try script directory first, then output directory as fallback
+set "IOCDIR=%SCRIPT_DIR%ThreatLists"
+if not exist "%IOCDIR%\ioc_processes.txt" set "IOCDIR=%OUTDIR%\ThreatLists"
+if not exist "%IOCDIR%\ioc_processes.txt" (
+    echo  [SKIP] No ThreatLists directory found at:>> "%REPORT%"
+    echo    Checked: %SCRIPT_DIR%ThreatLists\>> "%REPORT%"
+    echo    Checked: %OUTDIR%\ThreatLists\>> "%REPORT%"
+    echo  [INFO] Place IOC files in either location or run with -updateTTP.>> "%REPORT%"
+    echo %C_MAGENTA%[18/18] Skipped%C_RESET% - no IOC files found. Continuing with inline CTI checks.
+    goto :sec18_inline
+)
+echo  IOC directory: %IOCDIR%>> "%REPORT%"
+
+:: Copy IOC files to output dir for reference
+if not exist "%OUTDIR%\ThreatLists" mkdir "%OUTDIR%\ThreatLists"
+copy "%IOCDIR%\*.txt" "%OUTDIR%\ThreatLists\" >nul 2>&1
+echo.>> "%REPORT%"
+
+:sec18_inline
 :: --- [CTI] Sliver / Havoc / Brute Ratel Named Pipes (next-gen C2) ---
 echo.>> "%REPORT%"
 echo --- [CTI] Sliver / Havoc / Brute Ratel C2 Named Pipes --->> "%REPORT%"
@@ -2093,7 +2250,7 @@ set "TTP_BLOCKS=%OUTDIR%\ThreatLists\ttp_generated_checks.bat"
 if exist "%TTP_BLOCKS%" (
     echo.>> "%REPORT%"
     echo --- Executing auto-generated CTI detection blocks --->> "%REPORT%"
-    echo %C_BOLD%%C_CYAN%[18/18]%C_RESET% Running auto-generated TTP checks from SENTINEL-X...
+    echo %C_CYAN%[18/18]%C_RESET% Running auto-generated TTP checks from SENTINEL-X...
     call "%TTP_BLOCKS%"
 )
 
@@ -2113,14 +2270,20 @@ for /f "tokens=2 delims==" %%a in ('wmic logicaldisk where "DeviceID=^'%SystemDr
     if not "%%a"=="" set "FREE_AFTER=%%a"
 )
 set "FREE_AFTER=%FREE_AFTER: =%"
+if not "%FREE_AFTER%"=="0" goto :freeafter_done
+echo $d=Get-PSDrive -Name '%SystemDrive:~0,1%' -EA SilentlyContinue; if($d){$d.Free} > "%PSRUN%"
+for /f "usebackq" %%a in (`"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" 2^>nul`) do (
+    if not "%%a"=="" if not "%%a"=="0" set "FREE_AFTER=%%a"
+)
+:freeafter_done
 echo Free space before audit : %FREE_BEFORE% bytes>> "%REPORT%"
 echo Free space after audit  : %FREE_AFTER% bytes>> "%REPORT%"
 echo.>> "%REPORT%"
 
 echo.
-echo ====================================================================
+echo %C_BOLD%%C_WHITE%====================================================================
 echo  Computing live security summary...
-echo ====================================================================
+echo ====================================================================%C_RESET%
 echo.
 
 set "SUMFILE=%TEMP%\AuditSummary_%TIMESTAMP%.txt"
@@ -2155,8 +2318,8 @@ function sec($t){
 sec 'ACTIVE COMPROMISE INDICATORS'
 $ev=Get-WinEvent -FilterHashtable @{LogName='Security';Id=1102} -MaxEvents 1 -EA SilentlyContinue;if($ev){ck 'CRIT' 'Security event log was CLEARED' ('At '+$ev.TimeCreated+' -- attacker erased evidence.')}else{ck 'PASS' 'Security event log has not been cleared'}
 $ev=Get-WinEvent -FilterHashtable @{LogName='System';Id=104} -MaxEvents 1 -EA SilentlyContinue;if($ev){ck 'CRIT' 'System event log was CLEARED' ('At '+$ev.TimeCreated)}else{ck 'PASS' 'System event log has not been cleared'}
-$ev=Get-WinEvent -FilterHashtable @{LogName='Security';Id=4720} -MaxEvents 5 -EA SilentlyContinue;if($ev){ck 'WARN' ('New local accounts created: '+@($ev).Count+' event(s)') 'Review account names in Section 16'}else{ck 'PASS' 'No new local account creation events (4720)'}
-$ev=Get-WinEvent -FilterHashtable @{LogName='Security';Id=4732} -MaxEvents 5 -EA SilentlyContinue;if($ev){ck 'WARN' ('Users added to Administrators: '+@($ev).Count+' event(s)') 'Review account names in Section 16'}else{ck 'PASS' 'No unexpected additions to Administrators group (4732)'}
+$ev=Get-WinEvent -FilterHashtable @{LogName='Security';Id=4720} -MaxEvents 5 -EA SilentlyContinue;if($ev){ck 'WARN' "New local accounts created: $(@($ev).Count) events" 'Review account names in Section 16'}else{ck 'PASS' 'No new local account creation events - 4720'}
+$ev=Get-WinEvent -FilterHashtable @{LogName='Security';Id=4732} -MaxEvents 5 -EA SilentlyContinue;if($ev){ck 'WARN' "Users added to Administrators: $(@($ev).Count) events" 'Review account names in Section 16'}else{ck 'PASS' 'No unexpected additions to Administrators group - 4732'}
 $pp=(netsh interface portproxy show all 2>$null)|Out-String;if($pp -match '\d+\.\d+'){ck 'CRIT' 'netsh portproxy tunnel rules are ACTIVE' 'Volt Typhoon C2 IOC. Remove: netsh interface portproxy reset. See Section 17.'}else{ck 'PASS' 'No netsh portproxy tunnel rules (Volt Typhoon check)'}
 try{$pipes=Get-ChildItem \\.\pipe\ -EA Stop|Where-Object{$_.Name -match 'postex_|msagent_|MSSE-|metsvc'};if($pipes){ck 'CRIT' ('Cobalt Strike named pipes detected: '+@($pipes).Count) ('Pipes: '+($pipes.Name -join ', ')+'. Active C2. See Section 17.')}else{ck 'PASS' 'No Cobalt Strike default named pipes detected'}}catch{ck 'INFO' 'Named pipe check unavailable (non-fatal)'}
 $subs=@(Get-WMIObject -Namespace root\subscription -Class __EventFilter -EA SilentlyContinue);if($subs.Count -gt 0){ck 'CRIT' ('WMI EventFilter subscriptions present: '+$subs.Count) 'Stealthy reboot-persistent implant. See Section 17.'}else{ck 'PASS' 'No WMI permanent EventFilter subscriptions'}
@@ -2169,11 +2332,11 @@ $v=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name LmCompat
 
 sec 'WINDOWS DEFENDER  (Section 9)'
 $mp=Get-MpComputerStatus -EA SilentlyContinue
-if($mp){if($mp.RealTimeProtectionEnabled){ck 'PASS' 'Real-time protection enabled'}else{ck 'CRIT' 'Real-time protection DISABLED' 'Run: Set-MpPreference -DisableRealtimeMonitoring `$false'};if($mp.IsTamperProtected){ck 'PASS' 'Tamper protection enabled'}else{ck 'WARN' 'Tamper protection disabled' 'Enable via Windows Security > Virus settings'};$age=$mp.AntivirusSignatureAge;if($age -lt 3){ck 'PASS' ('Signatures current ('+$age+' day(s) old)')}elseif($age -lt 7){ck 'WARN' ('Signatures aging: '+$age+' days old') 'Run: Update-MpSignature'}else{ck 'CRIT' ('Signatures OUTDATED: '+$age+' days old') 'Run: Update-MpSignature or Windows Update now'}}else{ck 'INFO' 'Cannot query Defender (third-party AV or WMI issue)'}
-$mpp=Get-MpPreference -EA SilentlyContinue;if($mpp){$ep=@($mpp.ExclusionPath|Where-Object{$_});$epr=@($mpp.ExclusionProcess|Where-Object{$_});if($ep.Count -gt 0){ck 'WARN' ('Defender path exclusions: '+$ep.Count+' path(s)') 'Verify each is legitimate. See Section 9.'}else{ck 'PASS' 'No Defender path exclusions'};if($epr.Count -gt 0){ck 'WARN' ('Defender process exclusions: '+$epr.Count) 'Verify each is legitimate.'}else{ck 'PASS' 'No Defender process exclusions'}}
+if($mp){if($mp.RealTimeProtectionEnabled){ck 'PASS' 'Real-time protection enabled'}else{ck 'CRIT' 'Real-time protection DISABLED' 'Run: Set-MpPreference -DisableRealtimeMonitoring `$false'};if($mp.IsTamperProtected){ck 'PASS' 'Tamper protection enabled'}else{ck 'WARN' 'Tamper protection disabled' 'Enable via Windows Security > Virus settings'};$age=$mp.AntivirusSignatureAge;if($age -lt 3){ck 'PASS' "Signatures current ($age days old)"}elseif($age -lt 7){ck 'WARN' "Signatures aging: $age days old" 'Run: Update-MpSignature'}else{ck 'CRIT' "Signatures OUTDATED: $age days old" 'Run: Update-MpSignature or Windows Update now'}}else{ck 'INFO' 'Cannot query Defender - third-party AV or WMI issue'}
+$mpp=Get-MpPreference -EA SilentlyContinue;if($mpp){$ep=@($mpp.ExclusionPath|Where-Object{$_});$epr=@($mpp.ExclusionProcess|Where-Object{$_});if($ep.Count -gt 0){ck 'WARN' "Defender path exclusions configured: $($ep.Count) paths" 'Exclusions hide malware from Defender. Verify each is legitimate. See Section 9.'}else{ck 'PASS' 'No Defender path exclusions configured'};if($epr.Count -gt 0){ck 'WARN' "Defender process exclusions configured: $($epr.Count)" 'Verify each is legitimate. See Section 9.'}else{ck 'PASS' 'No Defender process exclusions configured'}}
 
 sec 'ATTACK SURFACE  (Sections 8, 10, 11)'
-$fwOn=(netsh advfirewall show allprofiles 2>$null|Select-String 'State\s+ON').Count;if($fwOn -ge 3){ck 'PASS' 'All three firewall profiles enabled'}else{ck 'CRIT' ('Firewall DISABLED on '+(3-$fwOn)+' profile(s)') 'Fix: netsh advfirewall set allprofiles state on'}
+$fwOn=(netsh advfirewall show allprofiles 2>$null|Select-String 'State\s+ON').Count;if($fwOn -ge 3){ck 'PASS' 'All three firewall profiles enabled - Domain, Private, Public'}else{ck 'CRIT' "Firewall DISABLED on $(3-$fwOn) profiles" 'Fix: netsh advfirewall set allprofiles state on'}
 $s1=(Get-SmbServerConfiguration -EA SilentlyContinue).EnableSMB1Protocol;if($s1 -eq $false){ck 'PASS' 'SMBv1 disabled (EternalBlue not exploitable)'}elseif($s1 -eq $true){ck 'CRIT' 'SMBv1 ENABLED (EternalBlue CVE-2017-0144)' 'Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol'}else{ck 'INFO' 'SMBv1 state unavailable -- see Section 10'}
 $psv2=Get-WmiObject Win32_OptionalFeature -Filter "Name='MicrosoftWindowsPowerShellV2Root'" -EA SilentlyContinue;if($psv2 -and $psv2.InstallState -eq 1){ck 'WARN' 'PowerShell v2 ENABLED (AMSI downgrade possible)' 'Disable-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2Root'}elseif($psv2){ck 'PASS' 'PowerShell v2 disabled'}else{ck 'INFO' 'PSv2 state unavailable -- see Section 11'}
 $rdp=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -EA SilentlyContinue).fDenyTSConnections;if($rdp -eq 1){ck 'PASS' 'RDP is disabled'}else{$nla=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -EA SilentlyContinue).UserAuthentication;if($nla -eq 1){ck 'PASS' 'RDP enabled with NLA'}else{ck 'WARN' 'RDP enabled WITHOUT NLA' 'Set UserAuthentication=1 in HKLM\...\RDP-Tcp'}}
@@ -2189,13 +2352,13 @@ sec 'PERSISTENCE INTEGRITY  (Sections 5, 6, 7)'
 $ui=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name Userinit -EA SilentlyContinue).Userinit;if($ui -match '^C:\\Windows\\[Ss]ystem32\\userinit\.exe,?\s*$'){ck 'PASS' ('Winlogon Userinit clean: '+$ui.Trim())}else{ck 'CRIT' ('Winlogon Userinit MODIFIED: '+$ui) 'Expected: C:\Windows\system32\userinit.exe,'}
 $sh=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name Shell -EA SilentlyContinue).Shell;if($sh -match '^explorer\.exe$'){ck 'PASS' 'Winlogon Shell clean (explorer.exe)'}else{ck 'CRIT' ('Winlogon Shell MODIFIED: '+$sh) 'Expected: explorer.exe only'}
 $ai=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows' -Name AppInit_DLLs -EA SilentlyContinue).AppInit_DLLs;if([string]::IsNullOrWhiteSpace($ai)){ck 'PASS' 'AppInit_DLLs empty (no injected DLL)'}else{ck 'CRIT' ('AppInit_DLLs set: '+$ai) 'Clear AppInit_DLLs in HKLM\...\Windows immediately.'}
-$tsk=schtasks /query /fo CSV /v 2>$null|Select-String '\\Temp\\|\\AppData\\';if($tsk){ck 'WARN' ('Tasks from Temp/AppData: '+@($tsk).Count+' match(es)') 'Strong IOC. Review Section 6.'}else{ck 'PASS' 'No scheduled tasks running from Temp or AppData'}
+$tsk=schtasks /query /fo CSV /v 2>$null|Select-String '\\Temp\\|\\AppData\\';if($tsk){ck 'WARN' "Tasks running from Temp/AppData: $(@($tsk).Count) matches" 'Strong IOC. Review Section 6.'}else{ck 'PASS' 'No scheduled tasks running from Temp or AppData'}
 
 sec 'ACCESSIBILITY BINARY INTEGRITY  T1546.008  (Section 13)'
 $accBins = @('sethc.exe','utilman.exe','osk.exe','Magnify.exe','Narrator.exe','DisplaySwitch.exe','AtBroker.exe')
 $ifeoBase = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options'
 $ifeoHits = @(); foreach ($b in $accBins) { $d = Get-ItemProperty (Join-Path $ifeoBase $b) -Name Debugger -EA SilentlyContinue; if ($d) { $ifeoHits += $b+' -> '+$d.Debugger } }
-if ($ifeoHits.Count -gt 0) { ck 'CRIT' ('IFEO Debugger hijack on '+$ifeoHits.Count+' binary(ies)') ('Affected: '+($ifeoHits -join '; ')) } else { ck 'PASS' 'No IFEO Debugger hijacks on accessibility binaries (T1546.008)' }
+if ($ifeoHits.Count -gt 0) { ck 'CRIT' "IFEO Debugger hijack on $($ifeoHits.Count) accessibility binaries" "Affected: $($ifeoHits -join '; ')" } else { ck 'PASS' 'No IFEO Debugger hijacks on accessibility binaries - T1546.008' }
 $sysDir = "$env:SystemRoot\System32"; $badSig = @()
 foreach ($b in $accBins) { $f = Join-Path $sysDir $b; if (Test-Path $f) { $sig = Get-AuthenticodeSignature $f; if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'Microsoft') { $badSig += $b } } }
 if ($badSig.Count -gt 0) { ck 'CRIT' ('Accessibility binary signature INVALID: '+($badSig -join ', ')) 'Run: sfc /scannow or restore from WinRE.' } else { ck 'PASS' 'All 7 accessibility binaries carry valid Microsoft signatures' }

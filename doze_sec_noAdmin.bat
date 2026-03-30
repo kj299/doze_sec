@@ -811,12 +811,12 @@ for /f "tokens=2 delims==" %%a in ('wmic logicaldisk where "DeviceID=^'%SystemDr
 )
 set "FREE_BEFORE=%FREE_BEFORE: =%"
 :: Fallback: if wmic returned 0 or empty, try PowerShell
-if "%FREE_BEFORE%"=="0" (
-    echo $d=Get-PSDrive -Name '%SystemDrive:~0,1%' -EA SilentlyContinue; if($d){$d.Free} > "%PSRUN%"
-    for /f "usebackq" %%a in (`"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" 2^>nul`) do (
-        if not "%%a"=="" if not "%%a"=="0" set "FREE_BEFORE=%%a"
-    )
+if not "%FREE_BEFORE%"=="0" goto :freebefore_done
+echo $d=Get-PSDrive -Name '%SystemDrive:~0,1%' -EA SilentlyContinue; if($d){$d.Free} > "%PSRUN%"
+for /f "usebackq" %%a in (`"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" 2^>nul`) do (
+    if not "%%a"=="" if not "%%a"=="0" set "FREE_BEFORE=%%a"
 )
+:freebefore_done
 echo System drive: %SystemDrive%>> "%REPORT%"
 echo Free space  : %FREE_BEFORE% bytes>> "%REPORT%"
 echo.>> "%REPORT%"
@@ -2255,12 +2255,12 @@ for /f "tokens=2 delims==" %%a in ('wmic logicaldisk where "DeviceID=^'%SystemDr
     if not "%%a"=="" set "FREE_AFTER=%%a"
 )
 set "FREE_AFTER=%FREE_AFTER: =%"
-if "%FREE_AFTER%"=="0" (
-    echo $d=Get-PSDrive -Name '%SystemDrive:~0,1%' -EA SilentlyContinue; if($d){$d.Free} > "%PSRUN%"
-    for /f "usebackq" %%a in (`"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" 2^>nul`) do (
-        if not "%%a"=="" if not "%%a"=="0" set "FREE_AFTER=%%a"
-    )
+if not "%FREE_AFTER%"=="0" goto :freeafter_done
+echo $d=Get-PSDrive -Name '%SystemDrive:~0,1%' -EA SilentlyContinue; if($d){$d.Free} > "%PSRUN%"
+for /f "usebackq" %%a in (`"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" 2^>nul`) do (
+    if not "%%a"=="" if not "%%a"=="0" set "FREE_AFTER=%%a"
 )
+:freeafter_done
 echo Free space before audit : %FREE_BEFORE% bytes>> "%REPORT%"
 echo Free space after audit  : %FREE_AFTER% bytes>> "%REPORT%"
 echo.>> "%REPORT%"
