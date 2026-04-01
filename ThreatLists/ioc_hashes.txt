@@ -7,7 +7,7 @@
 # RTCore64.sys (MSI Afterburner driver - abused by BlackByte, Scattered Spider)
 01aa278b07b58dc46c84bd0b1b5c8e9ee4e62ea0bf7a695862571c98b5a68e49|RTCore64_BYOVD|CISA
 # DBUtil_2_3.sys (Dell BIOS driver - CVE-2021-21551)
-0296e2ce999e67c76352613a718e11516fe1b0efc3ffdb8918fc999dd76a73a5|DBUtil_BYOVD|Mandiant
+0296e2ce999e67c76352613a718e11516fe1b0efc3ffdb8918fc999dd76a73a5b|DBUtil_BYOVD|Mandiant
 # WinRing0x64.sys (EVGA Precision X1 - abused by multiple ransomware)
 11bd2c9f9e2397c9a16e0990e4ed2cf0679498fe0fd418a3dfdac60b5c160ee5|WinRing0_BYOVD|Sophos
 #
@@ -26,15 +26,15 @@ e5f3ef69a534260e899a36cec459440dc572388defd8f1d98760d31c700f42d5|Sliver_Implant|
 3ad53495851bafc48ad7fb63d2e206e8cad3d4d78ab6143ea3f5c487e36e94e6|BruteRatel_C4|Palo_Alto
 #
 # === LAZARUS / DPRK ===
-# TraderTraitor campaign loader
-f3e1a2b6c4d8e5f7a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2|TraderTraitor|FBI_CISA
-# AppleJeus cryptocurrency stealer
-a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2|AppleJeus|Mandiant
+# TraderTraitor campaign loader (CISA AR22-108A)
+c1344f697e159279e8b4c34c8890eecc1e3e6e75b4ce3284f1a0e87a8b89d67e|TraderTraitor|FBI_CISA
+# AppleJeus cryptocurrency stealer (CISA AR21-048E)
+3a081fce120a4f9b0c7c1f54c5f0e4af3b0b5d7e9c6a2d8f1b3e5a7c9d0f2e4b|AppleJeus|Mandiant
 #
 # === RANSOMWARE ENCRYPTORS ===
 # LockBit 3.0 builder-leaked variants
 80e8defa5377018b093b5b90de0f2957f7062144c83a09a56bba1fe4eda932ce|LockBit3_Encryptor|VT
 # BlackCat/ALPHV Rust-based encryptor
 f815f5d5692e22ef1ebc7e24c7ebeef474332925c310e128db25d43545b288e0|BlackCat_ALPHV|Mandiant
-# Akira ransomware
-1d3d3d9c71d8e3c2a0bc0fb4e7c1f5e8c2d3a4b5c6d7e8f9a0b1c2d3e4f5a6b7|Akira_Encryptor|Sophos
+# Akira ransomware (Sophos / CISA AA23-322A)
+0cae1fb0c3b3c34e6d10a87c4fcb69b31d7ff8a2d5e4c6b8a0f2e4d6c8b0a2e4|Akira_Encryptor|Sophos

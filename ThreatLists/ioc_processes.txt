@@ -60,7 +60,6 @@ pingcastle
 seatbelt
 sharpup
 winpeas
-linpeas
 #
 # === LOLBin ABUSE (unusual process names) ===
 rclone
@@ -78,11 +77,11 @@ BLINDINGCAN
 COPPERHEDGE
 #
 # === VOLT TYPHOON / SALT TYPHOON ===
-netsh.exe portproxy
-comsvcs.dll MiniDump
+# Note: these are detected via command-line matching in ioc_lolbins.txt
+ntdsutil
+netsh
 #
 # === SCATTERED SPIDER ===
-ngrok
 Screenconnect.ClientService
 Splashtop.Streamer
 fleetdeck_agent

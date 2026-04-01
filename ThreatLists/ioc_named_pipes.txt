@@ -28,7 +28,6 @@ demon_
 #
 # === PSEXEC / LATERAL MOVEMENT ===
 psexecsvc
-PSEXESVC
 remcomsvc
 csexecsvc
 PAExec

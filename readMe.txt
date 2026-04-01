@@ -141,7 +141,7 @@ Lines starting with # are comments.
   ioc_domains.txt          C2 domain patterns and suspicious TLDs
   ioc_hashes.txt           SHA256 hashes of known malware (BYOVD, ransomware)
   ioc_lolbins.txt          LOLBin command-line abuse patterns
-  ttp_manifest.txt         MITRE ATT&CK v14+ technique map (50+ techniques)
+  ttp_manifest.txt         MITRE ATT&CK v14+ technique map (48 techniques)
 
 
 THREAT COVERAGE
@@ -183,7 +183,7 @@ REQUIREMENTS
 CONSOLE COLOR SCHEME
 --------------------------------------------------------------------------------
   Green      INIT steps completing successfully
-  Cyan       Audit section progress (e.g., [3/17] Scanning network...)
+  Cyan       Audit section progress (e.g., [3/18] Scanning network...)
   Red        Fatal errors, EXIT codes
   Magenta    Deferred checks (non-admin mode)
   Yellow     Warnings in final summary

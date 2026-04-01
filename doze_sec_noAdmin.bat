@@ -47,7 +47,7 @@ set "SCRIPT_VERSION=7.0-noAdmin"
 set "SCRIPT_NAME=WIN11_SecurityAudit"
 :: Set UPDATE_URL to your GitHub raw base URL to enable self-update checks.
 :: Leave as-is to skip the update check (placeholder is detected and skipped).
-set "UPDATE_URL=https://raw.githubusercontent.com/YOURUSERNAME/WIN11_SecurityAudit/main"
+set "UPDATE_URL=https://raw.githubusercontent.com/kj299/doze_sec/main"
 
 :: ---- Runtime state variables ----
 set "EXIT_CODE=0"
@@ -91,6 +91,12 @@ if /i "%~1"=="-updateTTP"  set "UPDATE_TTP=1"
 shift
 goto :parse_args
 :args_done
+:: -updateTTP is not implemented in noAdmin variant; warn the user
+if "%UPDATE_TTP%"=="1" (
+    echo  %C_YELLOW%[WARN]%C_RESET% -updateTTP is only available in doze_sec.bat ^(admin variant^).
+    echo  Continuing audit without TTP update.
+    set "UPDATE_TTP=0"
+)
 goto :help_done
 
 :show_help
@@ -279,55 +285,57 @@ if not exist "%OUTDIR%\SmartData"   mkdir "%OUTDIR%\SmartData"
 if not exist "%OUTDIR%\EventExports" mkdir "%OUTDIR%\EventExports"
 if not exist "%OUTDIR%\ThreatLists" mkdir "%OUTDIR%\ThreatLists"
 
-:: ---- Initialize Undo script and Change Log --------------------------
-set "CHANGELOG=%OUTDIR%\ChangeLog_%TIMESTAMP%.txt"
-set "UNDO_BAT=%OUTDIR%\Undo_%TIMESTAMP%.bat"
-echo @echo off> "%UNDO_BAT%"
-echo :: ==================================================================>> "%UNDO_BAT%"
-echo :: WIN11_SecurityAudit -- UNDO SCRIPT>> "%UNDO_BAT%"
-echo :: Generated: %TIMESTAMP%>> "%UNDO_BAT%"
-echo :: Run AS ADMINISTRATOR to reverse changes made by the audit script.>> "%UNDO_BAT%"
-echo :: Only changes that are NOT security improvements are listed here.>> "%UNDO_BAT%"
-echo :: Security-improving changes (Defender, UAC, etc.) are intentional>> "%UNDO_BAT%"
-echo :: and must be reversed manually if desired.>> "%UNDO_BAT%"
-echo :: ==================================================================>> "%UNDO_BAT%"
-echo.>> "%UNDO_BAT%"
-echo echo Reversing WIN11_SecurityAudit changes...>> "%UNDO_BAT%"
-echo.>> "%UNDO_BAT%"
-
-echo WIN11_SecurityAudit v%SCRIPT_VERSION% -- Change Log> "%CHANGELOG%"
-echo Run: %TIMESTAMP%>> "%CHANGELOG%"
-echo Host: %COMPUTERNAME%>> "%CHANGELOG%"
-echo ================================================================>> "%CHANGELOG%"
-echo.>> "%CHANGELOG%"
-echo NOTE: Security-improving changes the script recommends applying>> "%CHANGELOG%"
-echo are NOT tracked here -- only changes the script made automatically.>> "%CHANGELOG%"
-echo.>> "%CHANGELOG%"
-
+:: ---- Compute TIMESTAMP first (needed by changelog, undo, and report filenames) ----
 for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value 2^>nul') do set "DT=%%I"
 :: Trim trailing whitespace/CR that wmic appends to output
 set "DT=%DT: =%"
 :: Build timestamp - if wmic failed (DT empty), fall back to %date%/%time%
 if defined DT (
-    set "TIMESTAMP=%DT:~0,8%_%DT:~8,6%"
+    set "TIMESTAMP=!DT:~0,8!_!DT:~8,6!"
 )
 :: Validate: wmic may have returned empty or a non-date value
-if "%TIMESTAMP%"=="__" set "TIMESTAMP="
-if "%TIMESTAMP%"=="_" set "TIMESTAMP="
+if "!TIMESTAMP!"=="__" set "TIMESTAMP="
+if "!TIMESTAMP!"=="_" set "TIMESTAMP="
 if not defined TIMESTAMP (
     :: Fallback: parse %date% as YYYY-MM-DD or MM/DD/YYYY and %time%
     :: This is locale-dependent but good enough for a filename
-    set "_D=%date:/=-%"
-    set "_D=%_D: =_%"
-    set "_T=%time::=-%"
-    set "_T=%_T: =0%"
-    set "TIMESTAMP=%_D%_%_T:~0,8%"
-    set "TIMESTAMP=%TIMESTAMP: =0%"
+    set "_D=!date:/=-!"
+    set "_D=!_D: =_!"
+    set "_T=!time::=-!"
+    set "_T=!_T: =0!"
+    set "TIMESTAMP=!_D!_!_T:~0,8!"
+    set "TIMESTAMP=!TIMESTAMP: =0!"
     :: Final fallback: random-based name that at least won't collide
-    if "%TIMESTAMP%"=="__0-0-0" set "TIMESTAMP=NODATE_%RANDOM%_%RANDOM%"
+    if "!TIMESTAMP!"=="__0-0-0" set "TIMESTAMP=NODATE_!RANDOM!_!RANDOM!"
 )
-set "REPORT=%OUTDIR%\SecurityReport_%TIMESTAMP%.txt"
-set "PSRUN=%TEMP%\AuditPS_%TIMESTAMP%.ps1"
+
+:: ---- Initialize Undo script and Change Log --------------------------
+set "CHANGELOG=%OUTDIR%\ChangeLog_!TIMESTAMP!.txt"
+set "UNDO_BAT=%OUTDIR%\Undo_!TIMESTAMP!.bat"
+echo @echo off> "!UNDO_BAT!"
+echo :: ==================================================================>> "!UNDO_BAT!"
+echo :: WIN11_SecurityAudit -- UNDO SCRIPT>> "!UNDO_BAT!"
+echo :: Generated: !TIMESTAMP!>> "!UNDO_BAT!"
+echo :: Run AS ADMINISTRATOR to reverse changes made by the audit script.>> "!UNDO_BAT!"
+echo :: Only changes that are NOT security improvements are listed here.>> "!UNDO_BAT!"
+echo :: Security-improving changes (Defender, UAC, etc.) are intentional>> "!UNDO_BAT!"
+echo :: and must be reversed manually if desired.>> "!UNDO_BAT!"
+echo :: ==================================================================>> "!UNDO_BAT!"
+echo.>> "!UNDO_BAT!"
+echo echo Reversing WIN11_SecurityAudit changes...>> "!UNDO_BAT!"
+echo.>> "!UNDO_BAT!"
+
+echo WIN11_SecurityAudit v%SCRIPT_VERSION% -- Change Log> "!CHANGELOG!"
+echo Run: !TIMESTAMP!>> "!CHANGELOG!"
+echo Host: %COMPUTERNAME%>> "!CHANGELOG!"
+echo ================================================================>> "!CHANGELOG!"
+echo.>> "!CHANGELOG!"
+echo NOTE: Security-improving changes the script recommends applying>> "!CHANGELOG!"
+echo are NOT tracked here -- only changes the script made automatically.>> "!CHANGELOG!"
+echo.>> "!CHANGELOG!"
+
+set "REPORT=%OUTDIR%\SecurityReport_!TIMESTAMP!.txt"
+set "PSRUN=%TEMP%\AuditPS_!TIMESTAMP!.ps1"
 set "SCRIPT_CHANGED=0"
 
 :: Locate PowerShell
@@ -951,10 +959,10 @@ echo.
 :: ====================================================================
 set "SEC1_PREV_CODE=%EXIT_CODE%"
 set "SEC1_WARN=0"
-echo %C_CYAN%[1/17]%C_RESET% Collecting system identity and patch level...
+echo %C_CYAN%[1/18]%C_RESET% Collecting system identity and patch level...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
-echo  [1/17] SYSTEM IDENTITY AND PATCH LEVEL>> "%REPORT%"
+echo  [1/18] SYSTEM IDENTITY AND PATCH LEVEL>> "%REPORT%"
 echo  THREAT: Unpatched OS as exploit entry point (T1190)>> "%REPORT%"
 echo  MDDR 2023: Forest Blizzard used CVE-2023-23397 (Outlook zero-day)>> "%REPORT%"
 echo       and Mulberry Typhoon used CVE-2022-27518. Patch fast.>> "%REPORT%"
@@ -991,20 +999,20 @@ echo.>> "%REPORT%"
 
 :: ====================================================================
 
-:: ---- Section 1/17 verdict -----------------------------------------------
+:: ---- Section 1/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC1_PREV_CODE%" (
-    echo  [SECTION 1/17 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    echo  [SECTION 1/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
 ) else (
-    echo  [SECTION 1/17 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
+    echo  [SECTION 1/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC2_PREV_CODE=%EXIT_CODE%"
 set "SEC2_WARN=0"
-echo %C_CYAN%[2/17]%C_RESET% Auditing user accounts and privileges...
+echo %C_CYAN%[2/18]%C_RESET% Auditing user accounts and privileges...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
-echo  [2/17] USER ACCOUNTS AND PRIVILEGE AUDIT>> "%REPORT%"
+echo  [2/18] USER ACCOUNTS AND PRIVILEGE AUDIT>> "%REPORT%"
 echo  THREAT: Hidden backdoor local admin accounts (T1136.001)>> "%REPORT%"
 echo  MDDR 2023: Russian and Iranian actors create accounts post-compromise.>> "%REPORT%"
 echo       North Korean actors use RMM tools as backup persistent access.>> "%REPORT%"
@@ -1041,20 +1049,20 @@ echo.>> "%REPORT%"
 
 :: ====================================================================
 
-:: ---- Section 2/17 verdict -----------------------------------------------
+:: ---- Section 2/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC2_PREV_CODE%" (
-    echo  [SECTION 2/17 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    echo  [SECTION 2/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
 ) else (
-    echo  [SECTION 2/17 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
+    echo  [SECTION 2/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC3_PREV_CODE=%EXIT_CODE%"
 set "SEC3_WARN=0"
-echo %C_CYAN%[3/17]%C_RESET% Scanning network connections and configuration...
+echo %C_CYAN%[3/18]%C_RESET% Scanning network connections and configuration...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
-echo  [3/17] NETWORK CONFIGURATION AND LIVE CONNECTIONS>> "%REPORT%"
+echo  [3/18] NETWORK CONFIGURATION AND LIVE CONNECTIONS>> "%REPORT%"
 echo  THREAT: C2 beaconing, exfiltration, MITM proxy (T1071)>> "%REPORT%"
 echo  MDDR 2023: Volt Typhoon routes C2 through SOHO routers and custom>> "%REPORT%"
 echo       VPNs. Match netstat PIDs against Section 4 process list.>> "%REPORT%"
@@ -1112,20 +1120,20 @@ echo.>> "%REPORT%"
 
 :: ====================================================================
 
-:: ---- Section 3/17 verdict -----------------------------------------------
+:: ---- Section 3/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC3_PREV_CODE%" (
-    echo  [SECTION 3/17 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    echo  [SECTION 3/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
 ) else (
-    echo  [SECTION 3/17 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
+    echo  [SECTION 3/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC4_PREV_CODE=%EXIT_CODE%"
 set "SEC4_WARN=0"
-echo %C_CYAN%[4/17]%C_RESET% Enumerating running processes...
+echo %C_CYAN%[4/18]%C_RESET% Enumerating running processes...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
-echo  [4/17] RUNNING PROCESSES>> "%REPORT%"
+echo  [4/18] RUNNING PROCESSES>> "%REPORT%"
 echo  THREAT: Process injection, hollowing, masquerading (T1055)>> "%REPORT%"
 echo  MDDR 2023: Volt Typhoon uses LOLBins (native Windows binaries) so>> "%REPORT%"
 echo       malware appears as legitimate system tools. Any process from>> "%REPORT%"
@@ -1161,20 +1169,20 @@ echo.>> "%REPORT%"
 
 :: ====================================================================
 
-:: ---- Section 4/17 verdict -----------------------------------------------
+:: ---- Section 4/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC4_PREV_CODE%" (
-    echo  [SECTION 4/17 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    echo  [SECTION 4/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
 ) else (
-    echo  [SECTION 4/17 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
+    echo  [SECTION 4/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC5_PREV_CODE=%EXIT_CODE%"
 set "SEC5_WARN=0"
-echo %C_CYAN%[5/17]%C_RESET% Checking startup and persistence locations...
+echo %C_CYAN%[5/18]%C_RESET% Checking startup and persistence locations...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
-echo  [5/17] STARTUP AND PERSISTENCE MECHANISMS>> "%REPORT%"
+echo  [5/18] STARTUP AND PERSISTENCE MECHANISMS>> "%REPORT%"
 echo  THREAT: Run keys, Winlogon hijack, IFEO, AppInit, BootExecute (T1547)>> "%REPORT%"
 echo  MDDR 2023: Iranian actors use MischiefTut (PS backdoor) and BellaCiao>> "%REPORT%"
 echo       (dropper) for persistence. Russian actors use HTML-smuggled payloads.>> "%REPORT%"
@@ -1223,20 +1231,20 @@ echo.>> "%REPORT%"
 
 :: ====================================================================
 
-:: ---- Section 5/17 verdict -----------------------------------------------
+:: ---- Section 5/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC5_PREV_CODE%" (
-    echo  [SECTION 5/17 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    echo  [SECTION 5/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
 ) else (
-    echo  [SECTION 5/17 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
+    echo  [SECTION 5/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC6_PREV_CODE=%EXIT_CODE%"
 set "SEC6_WARN=0"
-echo %C_CYAN%[6/17]%C_RESET% Enumerating scheduled tasks...
+echo %C_CYAN%[6/18]%C_RESET% Enumerating scheduled tasks...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
-echo  [6/17] SCHEDULED TASKS>> "%REPORT%"
+echo  [6/18] SCHEDULED TASKS>> "%REPORT%"
 echo  THREAT: Task-based persistence (T1053.005)>> "%REPORT%"
 echo  MDDR 2023: Flax Typhoon and Volt Typhoon use scheduled tasks that>> "%REPORT%"
 echo       launch programs from TEMP. Microsoft MDDR recommends marking>> "%REPORT%"
@@ -1257,20 +1265,20 @@ echo.>> "%REPORT%"
 
 :: ====================================================================
 
-:: ---- Section 6/17 verdict -----------------------------------------------
+:: ---- Section 6/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC6_PREV_CODE%" (
-    echo  [SECTION 6/17 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    echo  [SECTION 6/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
 ) else (
-    echo  [SECTION 6/17 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
+    echo  [SECTION 6/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC7_PREV_CODE=%EXIT_CODE%"
 set "SEC7_WARN=0"
-echo %C_CYAN%[7/17]%C_RESET% Auditing Windows services...
+echo %C_CYAN%[7/18]%C_RESET% Auditing Windows services...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
-echo  [7/17] WINDOWS SERVICES AUDIT>> "%REPORT%"
+echo  [7/18] WINDOWS SERVICES AUDIT>> "%REPORT%"
 echo  THREAT: Malicious service, unquoted path (T1543.003)>> "%REPORT%"
 echo  MDDR 2023: DPRK actors installed RMM tools as services for C2.>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
@@ -1297,20 +1305,20 @@ echo.>> "%REPORT%"
 
 :: ====================================================================
 
-:: ---- Section 7/17 verdict -----------------------------------------------
+:: ---- Section 7/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC7_PREV_CODE%" (
-    echo  [SECTION 7/17 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    echo  [SECTION 7/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
 ) else (
-    echo  [SECTION 7/17 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
+    echo  [SECTION 7/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC8_PREV_CODE=%EXIT_CODE%"
 set "SEC8_WARN=0"
-echo %C_CYAN%[8/17]%C_RESET% Checking firewall configuration...
+echo %C_CYAN%[8/18]%C_RESET% Checking firewall configuration...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
-echo  [8/17] WINDOWS FIREWALL CONFIGURATION>> "%REPORT%"
+echo  [8/18] WINDOWS FIREWALL CONFIGURATION>> "%REPORT%"
 echo  THREAT: Disabled firewall or rogue allow rules (T1562.004)>> "%REPORT%"
 echo  MDDR 2023: Russian and Iranian actors added inbound rules to keep>> "%REPORT%"
 echo       backdoor access open post-compromise.>> "%REPORT%"
@@ -1322,7 +1330,7 @@ goto :sec8_run
 echo  [DEFERRED - ADMIN REQUIRED] netsh advfirewall requires administrator privileges.>> "%REPORT%"
 echo  Affected: Firewall profile status, inbound allow rules, outbound block rules.>> "%REPORT%"
 echo.>> "%REPORT%"
-echo %C_MAGENTA%[8/17] [DEFERRED]%C_RESET% Firewall check requires admin.
+echo %C_MAGENTA%[8/18] [DEFERRED]%C_RESET% Firewall check requires admin.
 set /a DEFERRED_COUNT+=1
 goto :sec8_verdict
 :sec8_run
@@ -1342,20 +1350,20 @@ echo.>> "%REPORT%"
 :: ====================================================================
 :sec8_verdict
 
-:: ---- Section 8/17 verdict -----------------------------------------------
+:: ---- Section 8/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC8_PREV_CODE%" (
-    echo  [SECTION 8/17 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    echo  [SECTION 8/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
 ) else (
-    echo  [SECTION 8/17 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
+    echo  [SECTION 8/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC9_PREV_CODE=%EXIT_CODE%"
 set "SEC9_WARN=0"
-echo %C_CYAN%[9/17]%C_RESET% Checking Defender and AV configuration...
+echo %C_CYAN%[9/18]%C_RESET% Checking Defender and AV configuration...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
-echo  [9/17] WINDOWS DEFENDER AND ANTIVIRUS STATUS>> "%REPORT%"
+echo  [9/18] WINDOWS DEFENDER AND ANTIVIRUS STATUS>> "%REPORT%"
 echo  THREAT: AV disabled, tampered, exclusion abuse (T1562.001)>> "%REPORT%"
 echo  MDDR 2023: Nation-state actors add exclusions as first step after>> "%REPORT%"
 echo       gaining admin, making Defender blind to their implants.>> "%REPORT%"
@@ -1367,7 +1375,7 @@ goto :sec9_run
 echo  [DEFERRED - ADMIN REQUIRED] Defender cmdlets require administrator privileges.>> "%REPORT%"
 echo  Affected: Get-MpComputerStatus, Get-MpPreference, Get-MpThreatDetection.>> "%REPORT%"
 echo.>> "%REPORT%"
-echo %C_MAGENTA%[9/17] [DEFERRED]%C_RESET% Defender check requires admin.
+echo %C_MAGENTA%[9/18] [DEFERRED]%C_RESET% Defender check requires admin.
 set /a DEFERRED_COUNT+=1
 goto :sec9_verdict
 :sec9_run
@@ -1407,20 +1415,20 @@ echo.>> "%REPORT%"
 :: ====================================================================
 :sec9_verdict
 
-:: ---- Section 9/17 verdict -----------------------------------------------
+:: ---- Section 9/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC9_PREV_CODE%" (
-    echo  [SECTION 9/17 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    echo  [SECTION 9/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
 ) else (
-    echo  [SECTION 9/17 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
+    echo  [SECTION 9/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC10_PREV_CODE=%EXIT_CODE%"
 set "SEC10_WARN=0"
-echo %C_CYAN%[10/17]%C_RESET% Checking SMB and remote access...
+echo %C_CYAN%[10/18]%C_RESET% Checking SMB and remote access...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
-echo  [10/17] SMB, RDP AND REMOTE ACCESS>> "%REPORT%"
+echo  [10/18] SMB, RDP AND REMOTE ACCESS>> "%REPORT%"
 echo  THREAT: EternalBlue SMBv1, RDP brute force (T1021, CVE-2017-0144)>> "%REPORT%"
 echo  MDDR 2023: Russian actors phished then password-sprayed across NATO>> "%REPORT%"
 echo       member states. Forest Blizzard used Exchange Web Services>> "%REPORT%"
@@ -1464,20 +1472,20 @@ echo.>> "%REPORT%"
 
 :: ====================================================================
 
-:: ---- Section 10/17 verdict -----------------------------------------------
+:: ---- Section 10/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC10_PREV_CODE%" (
-    echo  [SECTION 10/17 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    echo  [SECTION 10/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
 ) else (
-    echo  [SECTION 10/17 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
+    echo  [SECTION 10/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC11_PREV_CODE=%EXIT_CODE%"
 set "SEC11_WARN=0"
-echo %C_CYAN%[11/17]%C_RESET% Checking PowerShell security...
+echo %C_CYAN%[11/18]%C_RESET% Checking PowerShell security...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
-echo  [11/17] POWERSHELL SECURITY CONFIGURATION>> "%REPORT%"
+echo  [11/18] POWERSHELL SECURITY CONFIGURATION>> "%REPORT%"
 echo  THREAT: PSv2 downgrade, AMSI bypass, encoded commands (T1059.001)>> "%REPORT%"
 echo  MDDR 2023: Iranian Mint Sandstorm used MischiefTut - a custom PS>> "%REPORT%"
 echo       backdoor for recon and tool delivery. Check history for:>> "%REPORT%"
@@ -1529,20 +1537,20 @@ echo.>> "%REPORT%"
 
 :: ====================================================================
 
-:: ---- Section 11/17 verdict -----------------------------------------------
+:: ---- Section 11/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC11_PREV_CODE%" (
-    echo  [SECTION 11/17 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    echo  [SECTION 11/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
 ) else (
-    echo  [SECTION 11/17 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
+    echo  [SECTION 11/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC12_PREV_CODE=%EXIT_CODE%"
 set "SEC12_WARN=0"
-echo %C_CYAN%[12/17]%C_RESET% Checking credential and LSASS protection...
+echo %C_CYAN%[12/18]%C_RESET% Checking credential and LSASS protection...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
-echo  [12/17] CREDENTIAL PROTECTION AND LSASS HARDENING>> "%REPORT%"
+echo  [12/18] CREDENTIAL PROTECTION AND LSASS HARDENING>> "%REPORT%"
 echo  THREAT: Mimikatz, Pass-the-Hash, LSASS dump (T1003.001)>> "%REPORT%"
 echo  MDDR 2023: Forest Blizzard (Russia), Peach Sandstorm (Iran), Jade>> "%REPORT%"
 echo       Sleet (DPRK) used custom credential stealers. Forest Blizzard>> "%REPORT%"
@@ -1584,20 +1592,20 @@ echo.>> "%REPORT%"
 
 :: ====================================================================
 
-:: ---- Section 12/17 verdict -----------------------------------------------
+:: ---- Section 12/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC12_PREV_CODE%" (
-    echo  [SECTION 12/17 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    echo  [SECTION 12/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
 ) else (
-    echo  [SECTION 12/17 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
+    echo  [SECTION 12/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC13_PREV_CODE=%EXIT_CODE%"
 set "SEC13_WARN=0"
-echo %C_CYAN%[13/17]%C_RESET% Checking system hardening settings...
+echo %C_CYAN%[13/18]%C_RESET% Checking system hardening settings...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
-echo  [13/17] SYSTEM HARDENING CONFIGURATION>> "%REPORT%"
+echo  [13/18] SYSTEM HARDENING CONFIGURATION>> "%REPORT%"
 echo  THREAT: UAC bypass, boot tamper, USB autorun, WSH abuse (T1548)>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
@@ -1713,20 +1721,20 @@ echo.>> "%REPORT%"
 
 :: ====================================================================
 
-:: ---- Section 13/17 verdict -----------------------------------------------
+:: ---- Section 13/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC13_PREV_CODE%" (
-    echo  [SECTION 13/17 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    echo  [SECTION 13/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
 ) else (
-    echo  [SECTION 13/17 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
+    echo  [SECTION 13/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC14_PREV_CODE=%EXIT_CODE%"
 set "SEC14_WARN=0"
-echo %C_CYAN%[14/17]%C_RESET% Scanning file system for suspicious files...
+echo %C_CYAN%[14/18]%C_RESET% Scanning file system for suspicious files...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
-echo  [14/17] SUSPICIOUS FILES AND FILE SYSTEM ANOMALIES>> "%REPORT%"
+echo  [14/18] SUSPICIOUS FILES AND FILE SYSTEM ANOMALIES>> "%REPORT%"
 echo  THREAT: Dropper staging, ADS hiding, System32 tampering (T1564)>> "%REPORT%"
 echo  MDDR 2023: Iranian BellaCiao staged in Temp/AppData.>> "%REPORT%"
 echo       Midnight Blizzard used HTML smuggling (large .html attachments).>> "%REPORT%"
@@ -1764,20 +1772,20 @@ echo.>> "%REPORT%"
 
 :: ====================================================================
 
-:: ---- Section 14/17 verdict -----------------------------------------------
+:: ---- Section 14/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC14_PREV_CODE%" (
-    echo  [SECTION 14/17 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    echo  [SECTION 14/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
 ) else (
-    echo  [SECTION 14/17 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
+    echo  [SECTION 14/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC15_PREV_CODE=%EXIT_CODE%"
 set "SEC15_WARN=0"
-echo %C_CYAN%[15/17]%C_RESET% Auditing installed software and drivers...
+echo %C_CYAN%[15/18]%C_RESET% Auditing installed software and drivers...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
-echo  [15/17] INSTALLED SOFTWARE AND DRIVER AUDIT>> "%REPORT%"
+echo  [15/18] INSTALLED SOFTWARE AND DRIVER AUDIT>> "%REPORT%"
 echo  THREAT: Trojanized software, rogue kernel drivers (T1195, T1014)>> "%REPORT%"
 echo  MDDR 2023: North Korean Citrine Sleet: 3CX supply chain attack.>> "%REPORT%"
 echo       Ruby Sleet: signed malware with stolen IT security certificate.>> "%REPORT%"
@@ -1811,20 +1819,20 @@ echo.>> "%REPORT%"
 
 :: ====================================================================
 
-:: ---- Section 15/17 verdict -----------------------------------------------
+:: ---- Section 15/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC15_PREV_CODE%" (
-    echo  [SECTION 15/17 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    echo  [SECTION 15/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
 ) else (
-    echo  [SECTION 15/17 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
+    echo  [SECTION 15/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC16_PREV_CODE=%EXIT_CODE%"
 set "SEC16_WARN=0"
-echo %C_CYAN%[16/17]%C_RESET% Pulling Windows Event Log anomalies...
+echo %C_CYAN%[16/18]%C_RESET% Pulling Windows Event Log anomalies...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
-echo  [16/17] WINDOWS EVENT LOG ANOMALIES>> "%REPORT%"
+echo  [16/18] WINDOWS EVENT LOG ANOMALIES>> "%REPORT%"
 echo  THREAT: Log wiping, brute force, privilege escalation (T1070.001)>> "%REPORT%"
 echo  MDDR 2023: 1102 = logs cleared (attacker cover-up). Russian actors>> "%REPORT%"
 echo       password-sprayed at scale (Event 4625 spikes). DPRK/Iran>> "%REPORT%"
@@ -1897,20 +1905,20 @@ echo.>> "%REPORT%"
 
 :: ====================================================================
 
-:: ---- Section 16/17 verdict -----------------------------------------------
+:: ---- Section 16/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC16_PREV_CODE%" (
-    echo  [SECTION 16/17 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    echo  [SECTION 16/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
 ) else (
-    echo  [SECTION 16/17 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
+    echo  [SECTION 16/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC17_PREV_CODE=%EXIT_CODE%"
 set "SEC17_WARN=0"
-echo %C_CYAN%[17/17]%C_RESET% Nation-state threat indicators from MDDR 2023...
+echo %C_CYAN%[17/18]%C_RESET% Nation-state threat indicators from MDDR 2023...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
-echo  [17/17] NATION-STATE THREAT INDICATORS - MDDR 2023>> "%REPORT%"
+echo  [17/18] NATION-STATE THREAT INDICATORS - MDDR 2023>> "%REPORT%"
 echo  Volt Typhoon (China): LOLBin abuse, portproxy C2, SOHO pivot>> "%REPORT%"
 echo  Forest Blizzard (Russia): CVE-2023-23397 NTLM relay, EWS pivot>> "%REPORT%"
 echo  Midnight Blizzard (Russia): OAuth token replay, HTML smuggling>> "%REPORT%"
@@ -2081,12 +2089,12 @@ echo } >> "%PSRUN%"
 echo.>> "%REPORT%"
 
 
-:: ---- Section 17/17 verdict -----------------------------------------------
+:: ---- Section 17/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC17_PREV_CODE%" (
-    echo  [SECTION 17/17 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    echo  [SECTION 17/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
 ) else (
-    echo  [SECTION 17/17 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
+    echo  [SECTION 17/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC18_PREV_CODE=%EXIT_CODE%"
@@ -2235,6 +2243,161 @@ if "!IOC_HITS!"=="0" (
 ) else (
     echo [WARNING] !IOC_HITS! IOC category matches found. Review [WARNING] and [CRITICAL] entries above.>> "%REPORT%"
 )
+echo.>> "%REPORT%"
+
+:: --- [CTI] Inline checks (non-admin safe) ---
+
+:: --- [CTI] Sliver / Havoc / Brute Ratel Named Pipes (next-gen C2) ---
+echo.>> "%REPORT%"
+echo --- [CTI] Sliver / Havoc / Brute Ratel C2 Named Pipes --->> "%REPORT%"
+echo try{$pipes=Get-ChildItem \\.\pipe\ -EA SilentlyContinue ^| Where-Object {$_.Name -match 'sliverpb^|havoc^|bruteratel^|badger_^|b4_^|_krbtgt^|dcetest^|systemd-^|svc_pivot'}; if($pipes){$pipes ^| Select-Object Name; '[WARNING] Possible next-gen C2 named pipes detected.'}else{'[OK] No Sliver/Havoc/BruteRatel default pipes.'}}catch{'[INFO] Pipe enumeration unavailable.'} > "%PSRUN%"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+
+:: --- [CTI] DLL Search Order Hijacking (T1574.001) ---
+echo.>> "%REPORT%"
+echo --- [CTI][T1574.001] DLL Search Order Hijacking - Suspicious DLLs in System Paths --->> "%REPORT%"
+echo $suspDlls = @('version.dll','winhttp.dll','dbghelp.dll','dbgcore.dll','wer.dll','ualapi.dll','WTSAPI32.dll','msasn1.dll','npmproxy.dll') > "%PSRUN%"
+echo $sysDirs = @("$env:SystemRoot\System32","$env:SystemRoot\SysWOW64","$env:ProgramFiles","${env:ProgramFiles(x86)}") >> "%PSRUN%"
+echo $hits = @() >> "%PSRUN%"
+echo foreach ($dir in $sysDirs) { >> "%PSRUN%"
+echo   foreach ($dll in $suspDlls) { >> "%PSRUN%"
+echo     $f = Join-Path $dir $dll >> "%PSRUN%"
+echo     if (Test-Path $f) { >> "%PSRUN%"
+echo       $sig = Get-AuthenticodeSignature $f -EA SilentlyContinue >> "%PSRUN%"
+echo       if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'Microsoft') { >> "%PSRUN%"
+echo         $hits += $f + ' [SIG: ' + $sig.Status + ']' >> "%PSRUN%"
+echo       } >> "%PSRUN%"
+echo     } >> "%PSRUN%"
+echo   } >> "%PSRUN%"
+echo } >> "%PSRUN%"
+echo if ($hits.Count -gt 0) { '[WARNING][T1574.001] Unsigned/suspicious DLLs in system paths:'; $hits ^| ForEach-Object { '  '+$_ } } else { '[OK] No suspicious unsigned DLLs found in system paths.' } >> "%PSRUN%"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+
+:: --- [CTI] Credential Access via DPAPI (T1555.003 / T1555.004) ---
+echo.>> "%REPORT%"
+echo --- [CTI][T1555.003] Browser Credential Store Access (DPAPI) --->> "%REPORT%"
+echo $paths = @( > "%PSRUN%"
+echo   "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Login Data", >> "%PSRUN%"
+echo   "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Login Data", >> "%PSRUN%"
+echo   "$env:APPDATA\Mozilla\Firefox\Profiles" >> "%PSRUN%"
+echo ) >> "%PSRUN%"
+echo $recent = @() >> "%PSRUN%"
+echo foreach ($p in $paths) { >> "%PSRUN%"
+echo   if (Test-Path $p) { >> "%PSRUN%"
+echo     $item = Get-Item $p -EA SilentlyContinue >> "%PSRUN%"
+echo     if ($item.LastAccessTime -gt (Get-Date).AddHours(-24)) { >> "%PSRUN%"
+echo       $recent += $p + ' accessed ' + $item.LastAccessTime >> "%PSRUN%"
+echo     } >> "%PSRUN%"
+echo   } >> "%PSRUN%"
+echo } >> "%PSRUN%"
+echo if ($recent.Count -gt 0) { '[INFO] Browser credential stores accessed in last 24h (may be normal browser activity):'; $recent ^| ForEach-Object { '  '+$_ } } else { '[OK] No unusual recent access to browser credential stores.' } >> "%PSRUN%"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+
+:: --- [CTI] AiTM Phishing / Token Theft Artifacts (T1557.001) ---
+echo.>> "%REPORT%"
+echo --- [CTI][T1557.001] AiTM Phishing - Suspicious AAD Token Cache --->> "%REPORT%"
+echo $tokenPaths = @( > "%PSRUN%"
+echo   "$env:LOCALAPPDATA\Microsoft\TokenBroker\Cache", >> "%PSRUN%"
+echo   "$env:LOCALAPPDATA\Microsoft\Credentials", >> "%PSRUN%"
+echo   "$env:LOCALAPPDATA\.IdentityService" >> "%PSRUN%"
+echo ) >> "%PSRUN%"
+echo $hits = @() >> "%PSRUN%"
+echo foreach ($tp in $tokenPaths) { >> "%PSRUN%"
+echo   if (Test-Path $tp) { >> "%PSRUN%"
+echo     $files = Get-ChildItem $tp -Recurse -EA SilentlyContinue ^| Where-Object { $_.LastWriteTime -gt (Get-Date).AddHours(-2) } >> "%PSRUN%"
+echo     if ($files) { $hits += $tp + ': ' + $files.Count + ' file(s) modified in last 2h' } >> "%PSRUN%"
+echo   } >> "%PSRUN%"
+echo } >> "%PSRUN%"
+echo if ($hits.Count -gt 0) { '[INFO] Recent AAD/token cache activity (correlate with login events):'; $hits ^| ForEach-Object { '  '+$_ } } else { '[OK] No unusual recent token cache modifications.' } >> "%PSRUN%"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+
+:: --- [CTI] Ransomware File Extension Survey (T1486) ---
+echo.>> "%REPORT%"
+echo --- [CTI][T1486] Ransomware File Extension Survey --->> "%REPORT%"
+echo $exts = @('.encrypted','.locked','.crypt','.locky','.cerber','.zepto','.thor','.aesir','.zzzzz','.WNCRY','.wcry','.rdmk','.PLAY','.black','.basta','.royal','.akira','.lockbit','.clop') > "%PSRUN%"
+echo $hits = @() >> "%PSRUN%"
+echo foreach ($d in @($env:USERPROFILE,"$env:SystemDrive\Users\Public",$env:TEMP)) { >> "%PSRUN%"
+echo   if (Test-Path $d) { >> "%PSRUN%"
+echo     foreach ($ext in $exts) { >> "%PSRUN%"
+echo       $f = Get-ChildItem $d -Filter "*$ext" -Recurse -EA SilentlyContinue -Depth 3 ^| Select-Object -First 3 >> "%PSRUN%"
+echo       if ($f) { $hits += $f ^| ForEach-Object { $_.FullName } } >> "%PSRUN%"
+echo     } >> "%PSRUN%"
+echo   } >> "%PSRUN%"
+echo } >> "%PSRUN%"
+echo if ($hits.Count -gt 0) { '[CRITICAL][T1486] Files with ransomware-associated extensions found:'; $hits ^| Select-Object -First 20 ^| ForEach-Object { '  '+$_ } } else { '[OK] No files with known ransomware extensions in user directories.' } >> "%PSRUN%"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+
+:: --- [CTI] EDR/AV Tampering via Driver Load (T1562.001) ---
+echo.>> "%REPORT%"
+echo --- [CTI][T1562.001] Kernel Driver Tampering (BYOVD - Bring Your Own Vulnerable Driver) --->> "%REPORT%"
+echo $byovd = @('RTCore64.sys','DBUtil_2_3.sys','gdrv.sys','cpuz141.sys','AsIO64.sys','HW64.sys','WinIO64.sys','IQVW64E.sys','kprocesshacker.sys','ProcExp152.sys','zemana.sys','viragt64.sys') > "%PSRUN%"
+echo $drvDir = "$env:SystemRoot\System32\drivers" >> "%PSRUN%"
+echo $hits = @() >> "%PSRUN%"
+echo foreach ($drv in $byovd) { >> "%PSRUN%"
+echo   $f = Join-Path $drvDir $drv >> "%PSRUN%"
+echo   if (Test-Path $f) { $hits += $f } >> "%PSRUN%"
+echo } >> "%PSRUN%"
+echo if ($hits.Count -gt 0) { '[CRITICAL][T1562.001] Known BYOVD (vulnerable driver) files present:'; $hits ^| ForEach-Object { '  '+$_ }; '[WARNING] Attackers use these to disable EDR/AV from kernel. Remove immediately.' } else { '[OK] No known BYOVD exploit drivers found in drivers directory.' } >> "%PSRUN%"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+
+:: --- [CTI] COM Object Hijacking (T1546.015) ---
+echo.>> "%REPORT%"
+echo --- [CTI][T1546.015] COM Object Hijacking - User CLSID Overrides --->> "%REPORT%"
+> "%PSRUN%" (
+echo.$defProp = [char]40 + 'default' + [char]41
+echo.$clsids = 'HKCU:\Software\Classes\CLSID'
+echo.$hits = @(^)
+echo.if (Test-Path $clsids^) {
+echo.  $keys = Get-ChildItem $clsids -EA SilentlyContinue
+echo.  foreach ($k in $keys^) {
+echo.    $sv = Get-ItemProperty "$($k.PSPath^)\InprocServer32" -Name $defProp -EA SilentlyContinue
+echo.    if ($sv -and $sv.$defProp -and $sv.$defProp -notmatch 'Microsoft^|Windows^|System32'^) {
+echo.      $hits += $k.PSChildName + ' -^> ' + $sv.$defProp
+echo.    }
+echo.  }
+echo.}
+echo.if ($hits.Count -gt 0^) { '[WARNING][T1546.015] User-level COM hijack overrides found:'; $hits ^| Select-Object -First 15 ^| ForEach-Object { '  '+$_ } } else { '[OK] No suspicious user-level COM CLSID overrides.' }
+)
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+
+:: --- [CTI] Living-off-the-Cloud: Azure/M365 CLI Token Files ---
+echo.>> "%REPORT%"
+echo --- [CTI] Cloud Token Theft - Azure/AWS/GCP CLI Credential Files --->> "%REPORT%"
+echo $cloudCreds = @( > "%PSRUN%"
+echo   @{Name='Azure CLI';Path="$env:USERPROFILE\.azure\accessTokens.json"}, >> "%PSRUN%"
+echo   @{Name='Azure CLI MSAL';Path="$env:USERPROFILE\.azure\msal_token_cache.json"}, >> "%PSRUN%"
+echo   @{Name='AWS CLI';Path="$env:USERPROFILE\.aws\credentials"}, >> "%PSRUN%"
+echo   @{Name='GCP';Path="$env:APPDATA\gcloud\credentials.db"}, >> "%PSRUN%"
+echo   @{Name='GCP ADC';Path="$env:APPDATA\gcloud\application_default_credentials.json"}, >> "%PSRUN%"
+echo   @{Name='kubectl';Path="$env:USERPROFILE\.kube\config"} >> "%PSRUN%"
+echo ) >> "%PSRUN%"
+echo $found = @() >> "%PSRUN%"
+echo foreach ($c in $cloudCreds) { >> "%PSRUN%"
+echo   if (Test-Path $c.Path) { >> "%PSRUN%"
+echo     $item = Get-Item $c.Path >> "%PSRUN%"
+echo     $found += $c.Name + ': ' + $c.Path + ' (modified: ' + $item.LastWriteTime + ')' >> "%PSRUN%"
+echo   } >> "%PSRUN%"
+echo } >> "%PSRUN%"
+echo if ($found.Count -gt 0) { '[INFO] Cloud CLI credential files present (verify these are expected):'; $found ^| ForEach-Object { '  '+$_ } } else { '[OK] No cloud CLI credential files found (no cloud attack surface from local tokens).' } >> "%PSRUN%"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+
+:: --- [CTI] SSH Server (OpenSSH) Enabled Check ---
+echo.>> "%REPORT%"
+echo --- [CTI] OpenSSH Server Lateral Movement Surface --->> "%REPORT%"
+echo $ssh = Get-Service sshd -EA SilentlyContinue > "%PSRUN%"
+echo if ($ssh -and $ssh.Status -eq 'Running') { >> "%PSRUN%"
+echo   $authKeys = "$env:ProgramData\ssh\administrators_authorized_keys" >> "%PSRUN%"
+echo   '[WARNING] OpenSSH Server (sshd) is RUNNING' >> "%PSRUN%"
+echo   if (Test-Path $authKeys) { >> "%PSRUN%"
+echo     $lines = (Get-Content $authKeys -EA SilentlyContinue).Count >> "%PSRUN%"
+echo     '[INFO] administrators_authorized_keys has ' + $lines + ' key(s) - verify each is legitimate' >> "%PSRUN%"
+echo   } >> "%PSRUN%"
+echo } elseif ($ssh) { >> "%PSRUN%"
+echo   '[OK] OpenSSH Server installed but not running.' >> "%PSRUN%"
+echo } else { >> "%PSRUN%"
+echo   '[OK] OpenSSH Server not installed.' >> "%PSRUN%"
+echo } >> "%PSRUN%"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 echo.>> "%REPORT%"
 
 :sec18_verdict
