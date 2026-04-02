@@ -36,7 +36,7 @@ T1070.001|Defense Evasion|Clear Event Logs|All APT|Sec 16 Event 1102
 T1036|Defense Evasion|Masquerading|Volt Typhoon,Salt Typhoon|Sec 4 process paths
 T1197|Defense Evasion|BITS Jobs|Various|Sec 18 LOLBin patterns
 T1140|Defense Evasion|Deobfuscate/Decode Files|Various|Sec 18 certutil patterns
-T1068|Privilege Escalation|BYOVD Exploitation|BlackByte,Scattered Spider,Akira|Sec 18 file path IOCs + BYOVD driver check
+T1014|Defense Evasion|Rootkit (BYOVD)|BlackByte,Scattered Spider,Akira|Sec 18 file path IOCs + BYOVD driver check
 #
 # === CREDENTIAL ACCESS ===
 T1003.001|Credential Access|LSASS Memory Dump|All APT,Ransomware|Sec 12 LSASS PPL

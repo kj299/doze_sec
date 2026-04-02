@@ -2421,8 +2421,6 @@ if exist "%SUMFILE%" (
     type "%SUMFILE%"
     echo.>> "%REPORT%"
     type "%SUMFILE%">> "%REPORT%"
-    echo.>> "%REPORT%"
-    type "%SUMFILE%">> "%REPORT%"
 ) else (
     echo  [WARN] Live summary could not run - PWSH failed to produce output.>> "%REPORT%"
     echo  [WARN] Check PowerShell execution policy or PWSH path.>> "%REPORT%"
