@@ -383,7 +383,7 @@ set "UNDO_BAT=%OUTDIR%\Undo_!TIMESTAMP!.bat"
 echo @echo off> "!UNDO_BAT!"
 echo :: ==================================================================>> "!UNDO_BAT!"
 echo :: WIN11_SecurityAudit -- UNDO SCRIPT>> "!UNDO_BAT!"
-echo :: Generated: !TIMESTAMP!>> "!UNDO_BAT!"
+(echo :: Generated: !TIMESTAMP!)>> "!UNDO_BAT!"
 echo :: Run AS ADMINISTRATOR to reverse changes made by the audit script.>> "!UNDO_BAT!"
 echo :: Only changes that are NOT security improvements are listed here.>> "!UNDO_BAT!"
 echo :: Security-improving changes (Defender, UAC, etc.) are intentional>> "!UNDO_BAT!"
@@ -394,7 +394,7 @@ echo echo Reversing WIN11_SecurityAudit changes...>> "!UNDO_BAT!"
 echo.>> "!UNDO_BAT!"
 
 echo WIN11_SecurityAudit v%SCRIPT_VERSION% -- Change Log> "!CHANGELOG!"
-echo Run: !TIMESTAMP!>> "!CHANGELOG!"
+(echo Run: !TIMESTAMP!)>> "!CHANGELOG!"
 echo Host: %COMPUTERNAME%>> "!CHANGELOG!"
 echo ================================================================>> "!CHANGELOG!"
 echo.>> "!CHANGELOG!"
@@ -436,14 +436,14 @@ echo %C_GREEN%[INIT 2/14]%C_RESET% Administrator privileges: OK
 
 :: ---- Create report header (admin confirmed, report is safe to write) ----
 echo ====================================================================>> "%REPORT%"
-echo   WIN11 SECURITY FORENSIC AUDIT  v%SCRIPT_VERSION%>> "%REPORT%"
+(echo   WIN11 SECURITY FORENSIC AUDIT  v%SCRIPT_VERSION%)>> "%REPORT%"
 echo   Generated : %date%  %time%>> "%REPORT%"
 echo   Host      : %COMPUTERNAME%>> "%REPORT%"
 echo   User      : %USERNAME%>> "%REPORT%"
 echo   Domain    : %USERDOMAIN%>> "%REPORT%"
 echo   Script    : %~f0>> "%REPORT%"
 echo   PS Engine : %PWSH%>> "%REPORT%"
-echo   Switches  : Dev=%DEV_MODE%  Resume=%RESUME_MODE%  SkipSRP=%SKIP_SRP%>> "%REPORT%"
+(echo   Switches  : Dev=%DEV_MODE%  Resume=%RESUME_MODE%  SkipSRP=%SKIP_SRP%)>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 echo.>> "%REPORT%"
 
@@ -487,9 +487,9 @@ if %OS_BUILD% GEQ 9600  if %OS_BUILD% LSS 10240           set "WIN_GEN=Win8.1"
 if %OS_BUILD% GEQ 9200  if %OS_BUILD% LSS 9600            set "WIN_GEN=Win8"
 if %OS_BUILD% GEQ 7600  if %OS_BUILD% LSS 9200            set "WIN_GEN=Win7"
 
-echo Windows Generation : %WIN_GEN%>> "%REPORT%"
-echo Windows Build      : %OS_BUILD%>> "%REPORT%"
-echo Windows Version    : %OS_VER%>> "%REPORT%"
+(echo Windows Generation : %WIN_GEN%)>> "%REPORT%"
+(echo Windows Build      : %OS_BUILD%)>> "%REPORT%"
+(echo Windows Version    : %OS_VER%)>> "%REPORT%"
 echo Product Type       : %OS_PTYPE%  (1=Client/Workstation  2=DomainController  3=Server)>> "%REPORT%"
 echo IE Version         : %IE_VER%  (legacy ref only - Edge is primary browser on Win10/11)>> "%REPORT%"
 echo.>> "%REPORT%"
@@ -529,7 +529,7 @@ echo  [BLOCKED] Use -dev to override. Exiting.>> "%REPORT%"
 set "EXIT_CODE=3"
 goto :end_script
 :os_check_passed
-echo  [OK] OS supported: %WIN_GEN% Build %OS_BUILD%>> "%REPORT%"
+(echo  [OK] OS supported: %WIN_GEN% Build %OS_BUILD%)>> "%REPORT%"
 echo %C_GREEN%[INIT 4/14]%C_RESET% OS check: OK (%WIN_GEN%)
 echo.>> "%REPORT%"
 
@@ -717,7 +717,7 @@ if %errorlevel% equ 0 (
     echo  [CHANGED] Was: displaybootmenu=%PREV_BOOTMENU%  Now: yes>> "%REPORT%"
     bcdedit /timeout 5 >nul 2>&1
     echo  [OK] Boot timeout set to 5 seconds.>> "%REPORT%"
-    echo  [CHANGED] Was: timeout=%PREV_TIMEOUT%  Now: 5>> "%REPORT%"
+    (echo  [CHANGED] Was: timeout=%PREV_TIMEOUT%  Now: 5)>> "%REPORT%"
     echo %C_GREEN%[INIT 11/14]%C_RESET% F8 boot menu re-enabled - 5 second timeout set.
 
     :: Log the changes
@@ -736,7 +736,7 @@ if %errorlevel% equ 0 (
     if "%PREV_TIMEOUT%"=="absent" (
         echo bcdedit /deletevalue {bootmgr} timeout>> "%UNDO_BAT%"
     ) else (
-        echo bcdedit /timeout %PREV_TIMEOUT%>> "%UNDO_BAT%"
+        (echo bcdedit /timeout %PREV_TIMEOUT%)>> "%UNDO_BAT%"
     )
     echo echo Boot menu settings restored.>> "%UNDO_BAT%"
     echo.>> "%UNDO_BAT%"
@@ -752,7 +752,7 @@ echo.>> "%REPORT%"
 :: ====================================================================
 echo %C_GREEN%[INIT 12/14]%C_RESET% Creating System Restore Point...
 echo --- [INIT 12/14] System Restore Point --->> "%REPORT%"
-echo  Description: Pre-WIN11-Security-Audit-v%SCRIPT_VERSION%>> "%REPORT%"
+(echo  Description: Pre-WIN11-Security-Audit-v%SCRIPT_VERSION%)>> "%REPORT%"
 echo  Note: Vista and later ONLY. Client OS ONLY. Not supported on Server.>> "%REPORT%"
 echo  Known Win10 bug: SRP creation FAILS in Safe Mode with no workaround.>> "%REPORT%"
 echo  If you require a restore point, always run this script in Normal mode.>> "%REPORT%"
@@ -793,7 +793,7 @@ echo } >> "%PSRUN%"
 echo [CREATED] System Restore Point: "Pre-WIN11-Security-Audit-v%SCRIPT_VERSION%">> "%CHANGELOG%"
 echo           This is a safety net -- it lets you roll back any changes made AFTER this point.>> "%CHANGELOG%"
 echo           Undo (if desired): Control Panel ^> System ^> System Protection ^> System Restore>> "%CHANGELOG%"
-echo           Select the restore point named Pre-WIN11-Security-Audit-v%SCRIPT_VERSION%>> "%CHANGELOG%"
+(echo           Select the restore point named Pre-WIN11-Security-Audit-v%SCRIPT_VERSION%)>> "%CHANGELOG%"
 echo           NOTE: This is intentional and recommended. Only remove it if you are certain.>> "%CHANGELOG%"
 echo.>> "%CHANGELOG%"
 set "SCRIPT_CHANGED=1"
@@ -849,16 +849,17 @@ echo } >> "%PSRUN%"
 
 echo.>> "%REPORT%"
 echo --- Free Space on System Drive Before Audit --->> "%REPORT%"
+:: Primary: PowerShell Get-CimInstance (works on all Win10/11 including 24H2+)
+echo (Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='%SystemDrive%'" -EA SilentlyContinue).FreeSpace > "%PSRUN%"
+for /f "usebackq" %%a in (`"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" 2^>nul`) do (
+    if not "%%a"=="" if not "%%a"=="0" set "FREE_BEFORE=%%a"
+)
+:: Fallback: wmic (for older systems where CIM may not be available)
+if not "%FREE_BEFORE%"=="0" goto :freebefore_done
 for /f "tokens=2 delims==" %%a in ('wmic logicaldisk where "DeviceID=^'%SystemDrive%^'" get FreeSpace /value 2^>nul') do (
     if not "%%a"=="" set "FREE_BEFORE=%%a"
 )
 set "FREE_BEFORE=%FREE_BEFORE: =%"
-:: Fallback: if wmic returned 0 or empty, try PowerShell
-if not "%FREE_BEFORE%"=="0" goto :freebefore_done
-echo $d=Get-PSDrive -Name '%SystemDrive:~0,1%' -EA SilentlyContinue; if($d){$d.Free} > "%PSRUN%"
-for /f "usebackq" %%a in (`"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" 2^>nul`) do (
-    if not "%%a"=="" if not "%%a"=="0" set "FREE_BEFORE=%%a"
-)
 :freebefore_done
 echo System drive: %SystemDrive%>> "%REPORT%"
 echo Free space  : %FREE_BEFORE% bytes>> "%REPORT%"
@@ -968,10 +969,10 @@ echo.>> "%REPORT%"
 echo.>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 echo  PRE-FLIGHT COMPLETE - Starting 18-Section Security Audit>> "%REPORT%"
-echo  OS       : %WIN_GEN%  Build %OS_BUILD%  ProductType %OS_PTYPE%>> "%REPORT%"
-echo  Disk     : SKIP_DEFRAG=%SKIP_DEFRAG%  Free=%FREE_BEFORE% bytes>> "%REPORT%"
-echo  SafeMode : %SAFE_MODE%   Network: %NETWORK_AVAIL%   Resume: %RESUME_MODE%>> "%REPORT%"
-echo  Exit code so far: %EXIT_CODE%  (0=clean, 2=warning accumulated)>> "%REPORT%"
+(echo  OS       : %WIN_GEN%  Build %OS_BUILD%  ProductType %OS_PTYPE%)>> "%REPORT%"
+(echo  Disk     : SKIP_DEFRAG=%SKIP_DEFRAG%  Free=%FREE_BEFORE% bytes)>> "%REPORT%"
+(echo  SafeMode : %SAFE_MODE%   Network: %NETWORK_AVAIL%   Resume: %RESUME_MODE%)>> "%REPORT%"
+(echo  Exit code so far: %EXIT_CODE%  [0=clean, 2=warning accumulated])>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 echo.>> "%REPORT%"
 
@@ -2272,15 +2273,15 @@ echo ====================================================================>> "%RE
 :: POST-AUDIT: FREE SPACE CAPTURE AND LIVE SECURITY SUMMARY
 :: ====================================================================
 echo --- Post-Audit Free Space --->> "%REPORT%"
+echo (Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='%SystemDrive%'" -EA SilentlyContinue).FreeSpace > "%PSRUN%"
+for /f "usebackq" %%a in (`"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" 2^>nul`) do (
+    if not "%%a"=="" if not "%%a"=="0" set "FREE_AFTER=%%a"
+)
+if not "%FREE_AFTER%"=="0" goto :freeafter_done
 for /f "tokens=2 delims==" %%a in ('wmic logicaldisk where "DeviceID=^'%SystemDrive%^'" get FreeSpace /value 2^>nul') do (
     if not "%%a"=="" set "FREE_AFTER=%%a"
 )
 set "FREE_AFTER=%FREE_AFTER: =%"
-if not "%FREE_AFTER%"=="0" goto :freeafter_done
-echo $d=Get-PSDrive -Name '%SystemDrive:~0,1%' -EA SilentlyContinue; if($d){$d.Free} > "%PSRUN%"
-for /f "usebackq" %%a in (`"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" 2^>nul`) do (
-    if not "%%a"=="" if not "%%a"=="0" set "FREE_AFTER=%%a"
-)
 :freeafter_done
 echo Free space before audit : %FREE_BEFORE% bytes>> "%REPORT%"
 echo Free space after audit  : %FREE_AFTER% bytes>> "%REPORT%"
@@ -2456,7 +2457,7 @@ echo.
 :end_script
 
 echo ====================================================================>> "%REPORT%"
-echo  EXIT CODE: %EXIT_CODE%>> "%REPORT%"
+(echo  EXIT CODE: %EXIT_CODE%)>> "%REPORT%"
 echo  0=Success  1=Error  2=Warning  3=UnsupportedOS  4=RebootPending  5=RanFromTEMP>> "%REPORT%"
 if "%EXIT_CODE%"=="0" echo  STATUS: Clean run - no fatal issues encountered.>> "%REPORT%"
 if "%EXIT_CODE%"=="1" echo  STATUS: Fatal error. Check console output above for details.>> "%REPORT%"
