@@ -2,11 +2,11 @@
 
 Windows 10/11 security forensic audit tool with SENTINEL-X CTI integration.
 
-**Version 7.0** | 18-section audit | 48 MITRE ATT&CK techniques | 10 IOC categories
+**Version 7.1** | 18-section audit | 48 MITRE ATT&CK techniques | 10 IOC categories
 
 ## What It Does
 
-Standalone batch script that audits a Windows workstation for nation-state TTPs, ransomware indicators, credential theft artifacts, persistence mechanisms, and misconfigurations. Produces a timestamped report with a color-coded terminal summary.
+Standalone batch script that audits a Windows workstation for nation-state TTPs, ransomware indicators, credential theft artifacts, persistence mechanisms, and misconfigurations. Produces a timestamped text report, a navigable HTML report with color-coded findings, and a color-coded terminal summary.
 
 ## Scripts
 
@@ -154,13 +154,16 @@ Plain-text IOC files. One entry per line. `#` = comment.
 **Admin mode:**
 ```
 C:\SecurityAudit\
-  SecurityReport_YYYYMMDD_HHMMSS.txt    Main report
+  SecurityReport_YYYYMMDD_HHMMSS.txt    Plain text report
+  SecurityReport_YYYYMMDD_HHMMSS.html   HTML report (dark theme, navigable)
   ChangeLog_YYYYMMDD_HHMMSS.txt         Changes made by the script
   Undo_YYYYMMDD_HHMMSS.bat              Reversal script
   SmartData\                             SMART disk health exports
   EventExports\                          Windows event log exports
   ThreatLists\                           IOC file copies
 ```
+
+The HTML report features a navigation sidebar, color-coded findings (green/yellow/red), collapsible detail sections, and a dashboard with CRITICAL/WARNING/PASSED/INFO counts.
 
 **Non-admin mode:** Same structure under `%USERPROFILE%\SecurityAudit\`
 

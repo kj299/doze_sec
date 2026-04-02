@@ -27,8 +27,9 @@
 setlocal enabledelayedexpansion
 
 :: ---- Script identity and config ----
-set "SCRIPT_VERSION=7.0"
+set "SCRIPT_VERSION=7.1"
 set "SCRIPT_NAME=WIN11_SecurityAudit"
+set "SCRIPT_PATH=%~dp0%~nx0"
 :: Set UPDATE_URL to your GitHub raw base URL to enable self-update checks.
 :: Leave as-is to skip the update check (placeholder is detected and skipped).
 set "UPDATE_URL=https://raw.githubusercontent.com/kj299/doze_sec/main"
@@ -403,6 +404,7 @@ echo are NOT tracked here -- only changes the script made automatically.>> "!CHA
 echo.>> "!CHANGELOG!"
 
 set "REPORT=%OUTDIR%\SecurityReport_!TIMESTAMP!.txt"
+set "REPORT_HTML=%OUTDIR%\SecurityReport_!TIMESTAMP!.html"
 set "PSRUN=%TEMP%\AuditPS_!TIMESTAMP!.ps1"
 set "SCRIPT_CHANGED=0"
 
@@ -441,10 +443,32 @@ echo   Generated : %date%  %time%>> "%REPORT%"
 echo   Host      : %COMPUTERNAME%>> "%REPORT%"
 echo   User      : %USERNAME%>> "%REPORT%"
 echo   Domain    : %USERDOMAIN%>> "%REPORT%"
-echo   Script    : %~f0>> "%REPORT%"
+(echo   Script    : %SCRIPT_PATH%)>> "%REPORT%"
 echo   PS Engine : %PWSH%>> "%REPORT%"
 (echo   Switches  : Dev=%DEV_MODE%  Resume=%RESUME_MODE%  SkipSRP=%SKIP_SRP%)>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
+echo.>> "%REPORT%"
+echo  TABLE OF CONTENTS>> "%REPORT%"
+echo  ------------------------------------------------------------------>> "%REPORT%"
+echo   1. System Identity and Patch Level>> "%REPORT%"
+echo   2. User Accounts and Privilege Audit>> "%REPORT%"
+echo   3. Network Configuration and Live Connections>> "%REPORT%"
+echo   4. Running Processes>> "%REPORT%"
+echo   5. Startup and Persistence Mechanisms>> "%REPORT%"
+echo   6. Scheduled Tasks>> "%REPORT%"
+echo   7. Windows Services Audit>> "%REPORT%"
+echo   8. Windows Firewall Configuration>> "%REPORT%"
+echo   9. Windows Defender and AV Status>> "%REPORT%"
+echo  10. SMB, RDP and Remote Access>> "%REPORT%"
+echo  11. PowerShell Security Configuration>> "%REPORT%"
+echo  12. Credential Protection and LSASS Hardening>> "%REPORT%"
+echo  13. System Hardening Configuration>> "%REPORT%"
+echo  14. Suspicious Files and File System Anomalies>> "%REPORT%"
+echo  15. Installed Software and Driver Audit>> "%REPORT%"
+echo  16. Windows Event Log Anomalies>> "%REPORT%"
+echo  17. Nation-State Threat Indicators>> "%REPORT%"
+echo  18. CTI-Driven IOC Sweep (SENTINEL-X)>> "%REPORT%"
+echo  ------------------------------------------------------------------>> "%REPORT%"
 echo.>> "%REPORT%"
 
 echo %C_BOLD%%C_WHITE%[*] %SCRIPT_NAME% v%SCRIPT_VERSION% starting...%C_RESET%
@@ -556,6 +580,7 @@ echo.>> "%REPORT%"
 :: ====================================================================
 echo --- [INIT 6/14] Log Directories --->> "%REPORT%"
 echo  Report    : %REPORT%>> "%REPORT%"
+echo  HTML Report: %REPORT_HTML%>> "%REPORT%"
 echo  SMART data: %OUTDIR%\SmartData>> "%REPORT%"
 echo  Event logs: %OUTDIR%\EventExports>> "%REPORT%"
 echo  Threat IPs: %OUTDIR%\ThreatLists>> "%REPORT%"
@@ -992,6 +1017,7 @@ echo  [1/18] SYSTEM IDENTITY AND PATCH LEVEL>> "%REPORT%"
 echo  THREAT: Unpatched OS as exploit entry point (T1190)>> "%REPORT%"
 echo  MDDR 2023: Forest Blizzard used CVE-2023-23397 (Outlook zero-day)>> "%REPORT%"
 echo       and Mulberry Typhoon used CVE-2022-27518. Patch fast.>> "%REPORT%"
+echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
 systeminfo | findstr /i /c:"OS Name" /c:"OS Version" /c:"System Boot" /c:"Domain" /c:"Logon Server" /c:"Total Physical" /c:"Hotfix">> "%REPORT%" 2>&1
@@ -1042,13 +1068,16 @@ echo  [2/18] USER ACCOUNTS AND PRIVILEGE AUDIT>> "%REPORT%"
 echo  THREAT: Hidden backdoor local admin accounts (T1136.001)>> "%REPORT%"
 echo  MDDR 2023: Russian and Iranian actors create accounts post-compromise.>> "%REPORT%"
 echo       North Korean actors use RMM tools as backup persistent access.>> "%REPORT%"
+echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
 echo --- All Local Users --->> "%REPORT%"
+echo  [INFO] Local user account inventory.>> "%REPORT%"
 net user>> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- Detailed Account Info: LastLogon, PasswordLastSet, SID --->> "%REPORT%"
+echo  [INFO] Account details for privilege audit.>> "%REPORT%"
 echo Get-LocalUser ^| Select-Object Name,Enabled,LastLogon,PasswordLastSet,PasswordExpires,SID ^| Format-Table -AutoSize > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
@@ -1070,7 +1099,8 @@ net accounts>> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- All Account SIDs --->> "%REPORT%"
-wmic useraccount get Name,SID,Disabled,PasswordExpires,PasswordChangeable /format:list>> "%REPORT%" 2>&1
+echo Get-CimInstance Win32_UserAccount -EA SilentlyContinue ^| Select-Object Name,SID,Disabled,PasswordExpires,PasswordChangeable ^| Format-List > "%PSRUN%"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 echo.>> "%REPORT%"
 
 :: ====================================================================
@@ -1093,42 +1123,57 @@ echo  THREAT: C2 beaconing, exfiltration, MITM proxy (T1071)>> "%REPORT%"
 echo  MDDR 2023: Volt Typhoon routes C2 through SOHO routers and custom>> "%REPORT%"
 echo       VPNs. Match netstat PIDs against Section 4 process list.>> "%REPORT%"
 echo       HOSTS tampering redirects domains. Proxy = traffic interception.>> "%REPORT%"
+echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
 echo --- Network Adapter Config --->> "%REPORT%"
+echo  [INFO] Reference data - review for network anomalies.>> "%REPORT%"
 ipconfig /all>> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- All TCP/UDP Connections with PIDs --->> "%REPORT%"
+echo  [INFO] Full connection listing for correlation with process analysis.>> "%REPORT%"
 netstat -ano>> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- ESTABLISHED Connections --->> "%REPORT%"
 netstat -ano | findstr /c:"ESTABLISHED">> "%REPORT%" 2>&1
+echo  [INFO] Review ESTABLISHED connections against known-good baselines.>> "%REPORT%"
 
 echo.>> "%REPORT%"
 echo --- LISTENING Ports --->> "%REPORT%"
 netstat -ano | findstr /c:"LISTENING">> "%REPORT%" 2>&1
+echo  [INFO] Review listening ports for unexpected services.>> "%REPORT%"
 
 echo.>> "%REPORT%"
 echo --- DNS Cache (random subdomains = DNS-tunnel C2) --->> "%REPORT%"
+echo  [INFO] DNS cache for C2/tunneling analysis.>> "%REPORT%"
 ipconfig /displaydns>> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- ARP Cache --->> "%REPORT%"
+echo  [INFO] ARP table for network device mapping.>> "%REPORT%"
 arp -a>> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- Open Network Shares --->> "%REPORT%"
+echo  [INFO] Network share exposure inventory.>> "%REPORT%"
 net share>> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- Routing Table --->> "%REPORT%"
+echo  [INFO] Routing table for network path analysis.>> "%REPORT%"
 route print>> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- HOSTS File (SAFE: only 127.0.0.1 and ::1 localhost entries) --->> "%REPORT%"
 type "%WINDIR%\System32\drivers\etc\hosts">> "%REPORT%" 2>&1
+type "%WINDIR%\System32\drivers\etc\hosts" 2>nul | findstr /v /r "^#" | findstr /v /r "^$" | findstr /v /c:"127.0.0.1" /c:"::1" | findstr /r "[0-9]" >nul 2>&1
+if !errorlevel! equ 0 (
+    echo  [WARNING] Non-standard entries found in HOSTS file. Review for DNS hijacking.>> "%REPORT%"
+) else (
+    echo  [OK] HOSTS file contains only standard entries.>> "%REPORT%"
+)
 
 echo.>> "%REPORT%"
 echo --- Proxy Settings --->> "%REPORT%"
@@ -1141,6 +1186,7 @@ echo if($p){Write-Output ('HKLM ProxyServer: '+$p)}else{Write-Output 'HKLM Proxy
 
 echo.>> "%REPORT%"
 echo --- Saved WiFi Profiles --->> "%REPORT%"
+echo  [INFO] Saved wireless network history.>> "%REPORT%"
 netsh wlan show profiles>> "%REPORT%" 2>&1
 echo.>> "%REPORT%"
 
@@ -1164,15 +1210,19 @@ echo  THREAT: Process injection, hollowing, masquerading (T1055)>> "%REPORT%"
 echo  MDDR 2023: Volt Typhoon uses LOLBins (native Windows binaries) so>> "%REPORT%"
 echo       malware appears as legitimate system tools. Any process from>> "%REPORT%"
 echo       Temp, AppData, Downloads, or Public = critical IOC.>> "%REPORT%"
+echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
 echo --- All Processes: PID, PPID, Name, Path --->> "%REPORT%"
-echo Get-Process ^| Select-Object Id,@{N='PPID';E={(Get-WmiObject -Class Win32_Process -Filter ('ProcessId='+$_.Id) -EA SilentlyContinue).ParentProcessId}},Name,Path ^| Sort-Object Name ^| Format-Table -AutoSize > "%PSRUN%"
+echo  [INFO] Complete process tree for forensic analysis.>> "%REPORT%"
+echo Get-Process ^| Select-Object Id,@{N='PPID';E={(Get-CimInstance -ClassName Win32_Process -Filter ('ProcessId='+$_.Id) -EA SilentlyContinue).ParentProcessId}},Name,Path ^| Sort-Object Name ^| Format-Table -AutoSize > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- Full Command Lines --->> "%REPORT%"
-wmic process get Name,ProcessId,ParentProcessId,ExecutablePath,CommandLine /format:list>> "%REPORT%" 2>&1
+echo  [INFO] Full command lines for behavioral analysis.>> "%REPORT%"
+echo Get-CimInstance Win32_Process -EA SilentlyContinue ^| Select-Object Name,ProcessId,ParentProcessId,ExecutablePath,CommandLine ^| Format-List > "%PSRUN%"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- HIGH SUSPICION: Processes from Temp, AppData, Downloads, Public --->> "%REPORT%"
@@ -1212,17 +1262,20 @@ echo  [5/18] STARTUP AND PERSISTENCE MECHANISMS>> "%REPORT%"
 echo  THREAT: Run keys, Winlogon hijack, IFEO, AppInit, BootExecute (T1547)>> "%REPORT%"
 echo  MDDR 2023: Iranian actors use MischiefTut (PS backdoor) and BellaCiao>> "%REPORT%"
 echo       (dropper) for persistence. Russian actors use HTML-smuggled payloads.>> "%REPORT%"
+echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
 echo --- HKCU Run Keys --->> "%REPORT%"
 reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Run">> "%REPORT%" 2>&1
 reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce">> "%REPORT%" 2>&1
+echo  [INFO] Review Run key entries for unexpected persistence.>> "%REPORT%"
 
 echo.>> "%REPORT%"
 echo --- HKLM Run Keys --->> "%REPORT%"
 reg query "HKLM\Software\Microsoft\Windows\CurrentVersion\Run">> "%REPORT%" 2>&1
 reg query "HKLM\Software\Microsoft\Windows\CurrentVersion\RunOnce">> "%REPORT%" 2>&1
 reg query "HKLM\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Run">> "%REPORT%" 2>&1
+echo  [INFO] Review Run key entries for unexpected persistence.>> "%REPORT%"
 
 echo.>> "%REPORT%"
 echo --- Startup Folders --->> "%REPORT%"
@@ -1275,9 +1328,11 @@ echo  THREAT: Task-based persistence (T1053.005)>> "%REPORT%"
 echo  MDDR 2023: Flax Typhoon and Volt Typhoon use scheduled tasks that>> "%REPORT%"
 echo       launch programs from TEMP. Microsoft MDDR recommends marking>> "%REPORT%"
 echo       such tasks as unsafe for investigation.>> "%REPORT%"
+echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
 echo --- Full Task Listing --->> "%REPORT%"
+echo  [INFO] Complete scheduled task inventory.>> "%REPORT%"
 schtasks /query /fo LIST /v>> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
@@ -1307,6 +1362,7 @@ echo ====================================================================>> "%RE
 echo  [7/18] WINDOWS SERVICES AUDIT>> "%REPORT%"
 echo  THREAT: Malicious service, unquoted path (T1543.003)>> "%REPORT%"
 echo  MDDR 2023: DPRK actors installed RMM tools as services for C2.>> "%REPORT%"
+echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
 echo --- Services with Non-Standard Paths --->> "%REPORT%"
@@ -1320,6 +1376,7 @@ echo $v=Get-WmiObject Win32_Service ^| Where-Object {$_.PathName -and $_.PathNam
 
 echo.>> "%REPORT%"
 echo --- All Services State --->> "%REPORT%"
+echo  [INFO] Complete service inventory.>> "%REPORT%"
 sc query type= all state= all>> "%REPORT%" 2>&1
 echo.>> "%REPORT%"
 
@@ -1342,9 +1399,11 @@ echo  [8/18] WINDOWS FIREWALL CONFIGURATION>> "%REPORT%"
 echo  THREAT: Disabled firewall or rogue allow rules (T1562.004)>> "%REPORT%"
 echo  MDDR 2023: Russian and Iranian actors added inbound rules to keep>> "%REPORT%"
 echo       backdoor access open post-compromise.>> "%REPORT%"
+echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
 echo --- All Firewall Profile Status --->> "%REPORT%"
+echo  [INFO] Complete firewall profile configuration.>> "%REPORT%"
 netsh advfirewall show allprofiles>> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
@@ -1375,6 +1434,7 @@ echo  [9/18] WINDOWS DEFENDER AND ANTIVIRUS STATUS>> "%REPORT%"
 echo  THREAT: AV disabled, tampered, exclusion abuse (T1562.001)>> "%REPORT%"
 echo  MDDR 2023: Nation-state actors add exclusions as first step after>> "%REPORT%"
 echo       gaining admin, making Defender blind to their implants.>> "%REPORT%"
+echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
 echo --- Defender Core Status --->> "%REPORT%"
@@ -1429,6 +1489,7 @@ echo  THREAT: EternalBlue SMBv1, RDP brute force (T1021, CVE-2017-0144)>> "%REPO
 echo  MDDR 2023: Russian actors phished then password-sprayed across NATO>> "%REPORT%"
 echo       member states. Forest Blizzard used Exchange Web Services>> "%REPORT%"
 echo       to access mailboxes post-compromise with modified folder perms.>> "%REPORT%"
+echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
 echo --- SMBv1 Status (MUST be Disabled) --->> "%REPORT%"
@@ -1474,6 +1535,7 @@ echo  THREAT: PSv2 downgrade, AMSI bypass, encoded commands (T1059.001)>> "%REPO
 echo  MDDR 2023: Iranian Mint Sandstorm used MischiefTut - a custom PS>> "%REPORT%"
 echo       backdoor for recon and tool delivery. Check history for:>> "%REPORT%"
 echo       IEX, DownloadString, -enc, -Bypass, Add-MpPreference.>> "%REPORT%"
+echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
 echo --- Execution Policy All Scopes --->> "%REPORT%"
@@ -1533,6 +1595,7 @@ echo  THREAT: Mimikatz, Pass-the-Hash, LSASS dump (T1003.001)>> "%REPORT%"
 echo  MDDR 2023: Forest Blizzard (Russia), Peach Sandstorm (Iran), Jade>> "%REPORT%"
 echo       Sleet (DPRK) used custom credential stealers. Forest Blizzard>> "%REPORT%"
 echo       exploited CVE-2023-23397 to force NTLM auth without user click.>> "%REPORT%"
+echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
 echo --- Credential Guard and Device Guard --->> "%REPORT%"
@@ -1585,6 +1648,7 @@ echo %C_CYAN%[13/18]%C_RESET% Checking system hardening settings...
 echo ====================================================================>> "%REPORT%"
 echo  [13/18] SYSTEM HARDENING CONFIGURATION>> "%REPORT%"
 echo  THREAT: UAC bypass, boot tamper, USB autorun, WSH abuse (T1548)>> "%REPORT%"
+echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
 echo --- UAC Config --->> "%REPORT%"
@@ -1699,6 +1763,7 @@ echo  THREAT: Dropper staging, ADS hiding, System32 tampering (T1564)>> "%REPORT
 echo  MDDR 2023: Iranian BellaCiao staged in Temp/AppData.>> "%REPORT%"
 echo       Midnight Blizzard used HTML smuggling (large .html attachments).>> "%REPORT%"
 echo       DPRK Ruby Sleet signed malware with stolen legitimate cert.>> "%REPORT%"
+echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
 echo --- Executables in Temp (Last 7 Days) --->> "%REPORT%"
@@ -1749,14 +1814,17 @@ echo  [15/18] INSTALLED SOFTWARE AND DRIVER AUDIT>> "%REPORT%"
 echo  THREAT: Trojanized software, rogue kernel drivers (T1195, T1014)>> "%REPORT%"
 echo  MDDR 2023: North Korean Citrine Sleet: 3CX supply chain attack.>> "%REPORT%"
 echo       Ruby Sleet: signed malware with stolen IT security certificate.>> "%REPORT%"
+echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
 echo --- Installed Programs (64-bit) --->> "%REPORT%"
 reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall" /s | findstr /c:"DisplayName" /c:"DisplayVersion" /c:"InstallDate">> "%REPORT%" 2>&1
+echo  [INFO] Software inventory for supply chain analysis.>> "%REPORT%"
 
 echo.>> "%REPORT%"
 echo --- Installed Programs (32-bit) --->> "%REPORT%"
 reg query "HKLM\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall" /s | findstr /c:"DisplayName" /c:"DisplayVersion" /c:"InstallDate">> "%REPORT%" 2>&1
+echo  [INFO] 32-bit software inventory.>> "%REPORT%"
 
 echo.>> "%REPORT%"
 echo --- Per-User Installed Programs --->> "%REPORT%"
@@ -1766,6 +1834,7 @@ echo.>> "%REPORT%"
 echo --- Running Kernel Drivers --->> "%REPORT%"
 echo Get-WmiObject Win32_SystemDriver ^| Where-Object {$_.Started -eq $true} ^| Select-Object Name,State,PathName ^| Sort-Object Name ^| Format-Table -AutoSize > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+echo  [INFO] Kernel driver inventory. Unsigned or unexpected drivers = high risk.>> "%REPORT%"
 
 echo.>> "%REPORT%"
 echo --- Driver Signature Log (run sigverif.exe as admin to generate) --->> "%REPORT%"
@@ -1798,6 +1867,7 @@ echo  MDDR 2023: 1102 = logs cleared (attacker cover-up). Russian actors>> "%REP
 echo       password-sprayed at scale (Event 4625 spikes). DPRK/Iran>> "%REPORT%"
 echo       cleared logs after destructive operations.>> "%REPORT%"
 echo  IF EVENT 1102 EXISTS AND YOU DID NOT CLEAR IT = ACTIVE BREACH>> "%REPORT%"
+echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
 echo --- Log Cleared (1102=Security cleared, 104=System cleared) --->> "%REPORT%"
@@ -1868,12 +1938,13 @@ set "SEC17_WARN=0"
 echo %C_CYAN%[17/18]%C_RESET% Nation-state threat indicators from MDDR 2023...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
-echo  [17/18] NATION-STATE THREAT INDICATORS - MDDR 2023>> "%REPORT%"
+(echo  [17/18] NATION-STATE THREAT INDICATORS - MDDR 2023)>> "%REPORT%"
 echo  Volt Typhoon (China): LOLBin abuse, portproxy C2, SOHO pivot>> "%REPORT%"
 echo  Forest Blizzard (Russia): CVE-2023-23397 NTLM relay, EWS pivot>> "%REPORT%"
 echo  Midnight Blizzard (Russia): OAuth token replay, HTML smuggling>> "%REPORT%"
 echo  Peach/Mango Sandstorm (Iran): GoldenSAML/ADFS, cloud pivot>> "%REPORT%"
 echo  Jade/Diamond/Citrine/Ruby Sleet (DPRK): RMM tools, signed malware>> "%REPORT%"
+echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
 echo.>> "%REPORT%"
@@ -2031,6 +2102,7 @@ echo  Source: SENTINEL-X CTI Skill + MITRE ATT^&CK v15+>> "%REPORT%"
 echo  Covers: Sliver/Havoc/BruteRatel C2, DLL hijacking, LOLBin evolution,>> "%REPORT%"
 echo  cloud token theft, AiTM phishing artifacts, ransomware precursors,>> "%REPORT%"
 echo  EDR evasion, and living-off-the-cloud techniques.>> "%REPORT%"
+echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
 :: Check if ThreatLists directory exists with IOC files
@@ -2190,21 +2262,19 @@ echo if ($hits.Count -gt 0) { '[WARNING][T1543.003] Suspicious service installat
 :: --- [CTI] COM Object Hijacking (T1546.015) ---
 echo.>> "%REPORT%"
 echo --- [CTI][T1546.015] COM Object Hijacking - User CLSID Overrides --->> "%REPORT%"
-> "%PSRUN%" (
-echo.$defProp = [char]40 + 'default' + [char]41
-echo.$clsids = 'HKCU:\Software\Classes\CLSID'
-echo.$hits = @(^)
-echo.if (Test-Path $clsids^) {
-echo.  $keys = Get-ChildItem $clsids -EA SilentlyContinue
-echo.  foreach ($k in $keys^) {
-echo.    $sv = Get-ItemProperty "$($k.PSPath^)\InprocServer32" -Name $defProp -EA SilentlyContinue
-echo.    if ($sv -and $sv.$defProp -and $sv.$defProp -notmatch 'Microsoft^|Windows^|System32'^) {
-echo.      $hits += $k.PSChildName + ' -^> ' + $sv.$defProp
-echo.    }
-echo.  }
-echo.}
-echo.if ($hits.Count -gt 0^) { '[WARNING][T1546.015] User-level COM hijack overrides found:'; $hits ^| Select-Object -First 15 ^| ForEach-Object { '  '+$_ } } else { '[OK] No suspicious user-level COM CLSID overrides.' }
-)
+echo $defProp = [char]40 + 'default' + [char]41 > "%PSRUN%"
+echo $clsids = 'HKCU:\Software\Classes\CLSID' >> "%PSRUN%"
+echo $hits = @() >> "%PSRUN%"
+echo if (Test-Path $clsids) { >> "%PSRUN%"
+echo   $keys = Get-ChildItem $clsids -EA SilentlyContinue >> "%PSRUN%"
+echo   foreach ($k in $keys) { >> "%PSRUN%"
+echo     $sv = Get-ItemProperty "$($k.PSPath)\InprocServer32" -Name $defProp -EA SilentlyContinue >> "%PSRUN%"
+echo     if ($sv -and $sv.$defProp -and $sv.$defProp -notmatch 'Microsoft^|Windows^|System32') { >> "%PSRUN%"
+echo       $hits += $k.PSChildName + ' -^> ' + $sv.$defProp >> "%PSRUN%"
+echo     } >> "%PSRUN%"
+echo   } >> "%PSRUN%"
+echo } >> "%PSRUN%"
+echo if ($hits.Count -gt 0) { '[WARNING][T1546.015] User-level COM hijack overrides found:'; $hits ^| Select-Object -First 15 ^| ForEach-Object { '  '+$_ } } else { '[OK] No suspicious user-level COM CLSID overrides.' } >> "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 :: --- [CTI] Living-off-the-Cloud: Azure/M365 CLI Token Files ---
@@ -2486,6 +2556,7 @@ if "%EXIT_CODE%"=="4" echo  Exit code  : %C_YELLOW%%EXIT_CODE%%C_RESET%
 if "%EXIT_CODE%"=="5" echo  Exit code  : %C_RED%%EXIT_CODE%%C_RESET%
 echo  %C_DIM%0=Success  1=Error  2=Warning  3=UnsupportedOS  4=Reboot  5=TEMP%C_RESET%
 echo  Report     : %C_CYAN%%REPORT%%C_RESET%
+echo  HTML Report: %C_CYAN%%REPORT_HTML%%C_RESET%
 if "%SMART_WARN%"=="1" echo  %C_BOLD%%C_RED%SMART WARN : Drive health issue detected - back up data immediately%C_RESET%
 if "%EXIT_CODE%"=="2"  echo  %C_YELLOW%WARNINGS   : Review all [WARNING] entries in the report%C_RESET%
 echo %C_BOLD%====================================================================%C_RESET%
@@ -2529,8 +2600,108 @@ if "%SCRIPT_CHANGED%"=="1" (
 )
 echo.
 
-if exist "%REPORT%" (
-    echo Opening report...
+:: ====================================================================
+:: GENERATE HTML REPORT
+:: ====================================================================
+echo %C_CYAN%Generating HTML report...%C_RESET%
+echo $reportPath = '%REPORT%' > "%PSRUN%"
+echo $htmlPath = '%REPORT_HTML%' >> "%PSRUN%"
+echo $lines = Get-Content $reportPath -Encoding UTF8 >> "%PSRUN%"
+echo Add-Type -AssemblyName System.Web >> "%PSRUN%"
+echo $html = [System.Text.StringBuilder]::new() >> "%PSRUN%"
+echo [void]$html.AppendLine('^<^^!DOCTYPE html^>') >> "%PSRUN%"
+echo [void]$html.AppendLine('^<html lang="en"^>^<head^>^<meta charset="UTF-8"^>') >> "%PSRUN%"
+echo [void]$html.AppendLine('^<title^>Security Audit Report^</title^>') >> "%PSRUN%"
+echo [void]$html.AppendLine('^<style^>') >> "%PSRUN%"
+echo [void]$html.AppendLine('body{font-family:Consolas,monospace;margin:0;background:#1a1a2e;color:#e0e0e0}') >> "%PSRUN%"
+echo [void]$html.AppendLine('.wrap{display:flex}') >> "%PSRUN%"
+echo [void]$html.AppendLine('nav{position:fixed;top:0;left:0;width:260px;height:100vh;overflow-y:auto;background:#16213e;padding:16px;box-sizing:border-box;border-right:2px solid #0f3460}') >> "%PSRUN%"
+echo [void]$html.AppendLine('nav h2{color:#e94560;font-size:14px;margin:0 0 12px}') >> "%PSRUN%"
+echo [void]$html.AppendLine('nav a{display:block;color:#a8b2d1;text-decoration:none;padding:4px 0;font-size:12px}') >> "%PSRUN%"
+echo [void]$html.AppendLine('nav a:hover{color:#e94560}') >> "%PSRUN%"
+echo [void]$html.AppendLine('main{margin-left:270px;padding:20px;max-width:1100px}') >> "%PSRUN%"
+echo [void]$html.AppendLine('.section{margin-bottom:24px;border:1px solid #0f3460;border-radius:6px;padding:16px;background:#16213e}') >> "%PSRUN%"
+echo [void]$html.AppendLine('.section h2{color:#e94560;margin-top:0;font-size:16px;border-bottom:1px solid #0f3460;padding-bottom:8px}') >> "%PSRUN%"
+echo [void]$html.AppendLine('.ok{color:#00d26a;font-weight:bold}') >> "%PSRUN%"
+echo [void]$html.AppendLine('.warn{color:#ffc107;font-weight:bold}') >> "%PSRUN%"
+echo [void]$html.AppendLine('.crit{color:#ff4444;font-weight:bold;background:#3a0000;padding:4px 8px;border-radius:3px}') >> "%PSRUN%"
+echo [void]$html.AppendLine('.info{color:#17a2b8}') >> "%PSRUN%"
+echo [void]$html.AppendLine('details{margin:8px 0}') >> "%PSRUN%"
+echo [void]$html.AppendLine('summary{cursor:pointer;color:#a8b2d1;font-size:13px}') >> "%PSRUN%"
+echo [void]$html.AppendLine('summary:hover{color:#e94560}') >> "%PSRUN%"
+echo [void]$html.AppendLine('pre{background:#0a0a1a;padding:12px;border-radius:4px;overflow-x:auto;font-size:12px;line-height:1.4;color:#c8c8c8;max-height:400px;overflow-y:auto}') >> "%PSRUN%"
+echo [void]$html.AppendLine('.dashboard{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px}') >> "%PSRUN%"
+echo [void]$html.AppendLine('.card{padding:16px;border-radius:6px;text-align:center}') >> "%PSRUN%"
+echo [void]$html.AppendLine('.card h3{margin:0;font-size:28px}') >> "%PSRUN%"
+echo [void]$html.AppendLine('.card p{margin:4px 0 0;font-size:12px}') >> "%PSRUN%"
+echo [void]$html.AppendLine('.card-ok{background:#0a3d0a;border:1px solid #00d26a}') >> "%PSRUN%"
+echo [void]$html.AppendLine('.card-warn{background:#3d3a0a;border:1px solid #ffc107}') >> "%PSRUN%"
+echo [void]$html.AppendLine('.card-crit{background:#3d0a0a;border:1px solid #ff4444}') >> "%PSRUN%"
+echo [void]$html.AppendLine('.card-info{background:#0a2a3d;border:1px solid #17a2b8}') >> "%PSRUN%"
+echo [void]$html.AppendLine('^</style^>^</head^>^<body^>') >> "%PSRUN%"
+echo $secNum = 0; $okCount = 0; $warnCount = 0; $critCount = 0; $infoCount = 0 >> "%PSRUN%"
+echo $navLinks = [System.Text.StringBuilder]::new() >> "%PSRUN%"
+echo $bodyContent = [System.Text.StringBuilder]::new() >> "%PSRUN%"
+echo $inPre = $false >> "%PSRUN%"
+echo foreach ($line in $lines) { >> "%PSRUN%"
+echo   $esc = [System.Web.HttpUtility]::HtmlEncode($line) >> "%PSRUN%"
+echo   if ($line -match '^\s*\[(\d+)/18\]\s+(.+)$') { >> "%PSRUN%"
+echo     if ($inPre) { [void]$bodyContent.AppendLine('^</pre^>^</details^>'); $inPre = $false } >> "%PSRUN%"
+echo     $secNum = $Matches[1]; $secTitle = $Matches[2].Trim() >> "%PSRUN%"
+echo     [void]$navLinks.AppendLine('^<a href="#sec'+$secNum+'"^>'+$secNum+'. '+$secTitle+'^</a^>') >> "%PSRUN%"
+echo     [void]$bodyContent.AppendLine('^</div^>^<div class="section" id="sec'+$secNum+'"^>^<h2^>['+$secNum+'/18] '+[System.Web.HttpUtility]::HtmlEncode($secTitle)+'^</h2^>') >> "%PSRUN%"
+echo     [void]$bodyContent.AppendLine('^<details open^>^<summary^>Section output^</summary^>^<pre^>') >> "%PSRUN%"
+echo     $inPre = $true >> "%PSRUN%"
+echo   } elseif ($line -match '\[OK\]') { >> "%PSRUN%"
+echo     $okCount++ >> "%PSRUN%"
+echo     if ($inPre) { [void]$bodyContent.AppendLine('^</pre^>^</details^>'); $inPre = $false } >> "%PSRUN%"
+echo     [void]$bodyContent.AppendLine('^<div class="ok"^>'+$esc+'^</div^>') >> "%PSRUN%"
+echo     if (-not $inPre) { [void]$bodyContent.AppendLine('^<details^>^<summary^>Details^</summary^>^<pre^>'); $inPre = $true } >> "%PSRUN%"
+echo   } elseif ($line -match '\[WARNING\]' -or $line -match '\[WARN\]') { >> "%PSRUN%"
+echo     $warnCount++ >> "%PSRUN%"
+echo     if ($inPre) { [void]$bodyContent.AppendLine('^</pre^>^</details^>'); $inPre = $false } >> "%PSRUN%"
+echo     [void]$bodyContent.AppendLine('^<div class="warn"^>'+$esc+'^</div^>') >> "%PSRUN%"
+echo     if (-not $inPre) { [void]$bodyContent.AppendLine('^<details^>^<summary^>Details^</summary^>^<pre^>'); $inPre = $true } >> "%PSRUN%"
+echo   } elseif ($line -match '\[CRITICAL\]' -or $line -match '\[CRIT\]') { >> "%PSRUN%"
+echo     $critCount++ >> "%PSRUN%"
+echo     if ($inPre) { [void]$bodyContent.AppendLine('^</pre^>^</details^>'); $inPre = $false } >> "%PSRUN%"
+echo     [void]$bodyContent.AppendLine('^<div class="crit"^>'+$esc+'^</div^>') >> "%PSRUN%"
+echo     if (-not $inPre) { [void]$bodyContent.AppendLine('^<details^>^<summary^>Details^</summary^>^<pre^>'); $inPre = $true } >> "%PSRUN%"
+echo   } elseif ($line -match '\[INFO\]') { >> "%PSRUN%"
+echo     $infoCount++ >> "%PSRUN%"
+echo     if ($inPre) { [void]$bodyContent.AppendLine('^</pre^>^</details^>'); $inPre = $false } >> "%PSRUN%"
+echo     [void]$bodyContent.AppendLine('^<div class="info"^>'+$esc+'^</div^>') >> "%PSRUN%"
+echo     if (-not $inPre) { [void]$bodyContent.AppendLine('^<details^>^<summary^>Details^</summary^>^<pre^>'); $inPre = $true } >> "%PSRUN%"
+echo   } else { >> "%PSRUN%"
+echo     if ($inPre) { [void]$bodyContent.AppendLine($esc) } >> "%PSRUN%"
+echo   } >> "%PSRUN%"
+echo } >> "%PSRUN%"
+echo if ($inPre) { [void]$bodyContent.AppendLine('^</pre^>^</details^>^</div^>') } >> "%PSRUN%"
+echo [void]$html.AppendLine('^<div class="wrap"^>^<nav^>^<h2^>DOZE_SEC AUDIT^</h2^>') >> "%PSRUN%"
+echo [void]$html.AppendLine('^<a href="#dashboard"^>Dashboard^</a^>') >> "%PSRUN%"
+echo [void]$html.AppendLine($navLinks.ToString()) >> "%PSRUN%"
+echo [void]$html.AppendLine('^</nav^>^<main^>') >> "%PSRUN%"
+echo [void]$html.AppendLine('^<div id="dashboard"^>^<h1 style="color:#e94560;margin-top:0"^>Security Audit Report^</h1^>') >> "%PSRUN%"
+echo [void]$html.AppendLine('^<div class="dashboard"^>') >> "%PSRUN%"
+echo [void]$html.AppendLine('^<div class="card card-crit"^>^<h3^>'+$critCount+'^</h3^>^<p^>CRITICAL^</p^>^</div^>') >> "%PSRUN%"
+echo [void]$html.AppendLine('^<div class="card card-warn"^>^<h3^>'+$warnCount+'^</h3^>^<p^>WARNING^</p^>^</div^>') >> "%PSRUN%"
+echo [void]$html.AppendLine('^<div class="card card-ok"^>^<h3^>'+$okCount+'^</h3^>^<p^>PASSED^</p^>^</div^>') >> "%PSRUN%"
+echo [void]$html.AppendLine('^<div class="card card-info"^>^<h3^>'+$infoCount+'^</h3^>^<p^>INFO^</p^>^</div^>') >> "%PSRUN%"
+echo [void]$html.AppendLine('^</div^>^</div^>^<div class="section"^>') >> "%PSRUN%"
+echo [void]$html.AppendLine($bodyContent.ToString()) >> "%PSRUN%"
+echo [void]$html.AppendLine('^</main^>^</div^>^</body^>^</html^>') >> "%PSRUN%"
+echo $html.ToString() ^| Out-File $htmlPath -Encoding UTF8 >> "%PSRUN%"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" 2>&1
+if exist "%REPORT_HTML%" (
+    echo %C_GREEN%[OK]%C_RESET% HTML report: %REPORT_HTML%
+) else (
+    echo %C_YELLOW%[WARN]%C_RESET% HTML generation failed. Text report available.
+)
+if exist "%REPORT_HTML%" (
+    echo Opening HTML report...
+    start "" "%REPORT_HTML%"
+) else if exist "%REPORT%" (
+    echo Opening text report...
     start "" notepad "%REPORT%"
 )
 

@@ -1,6 +1,6 @@
 ================================================================================
   doze_sec - Windows Security Forensic Audit Tool
-  Version 7.0 | SENTINEL-X CTI Integration
+  Version 7.1 | SENTINEL-X CTI Integration | HTML Report Output
 ================================================================================
 
 WHAT IT DOES
@@ -66,14 +66,22 @@ EXIT CODES
 OUTPUT FILES
 --------------------------------------------------------------------------------
   Admin mode:
-    C:\SecurityAudit\SecurityReport_[timestamp].txt
+    C:\SecurityAudit\SecurityReport_[timestamp].txt      Plain text report
+    C:\SecurityAudit\SecurityReport_[timestamp].html     HTML report (navigable)
+    C:\SecurityAudit\ChangeLog_[timestamp].txt           Changes made
+    C:\SecurityAudit\Undo_[timestamp].bat                Reversal script
     C:\SecurityAudit\SmartData\
     C:\SecurityAudit\EventExports\
     C:\SecurityAudit\ThreatLists\
 
   Non-admin mode:
     %USERPROFILE%\SecurityAudit\SecurityReport_[timestamp].txt
+    %USERPROFILE%\SecurityAudit\SecurityReport_[timestamp].html
     (same subdirectory structure)
+
+  The HTML report opens automatically after the audit completes. It features
+  a dark-theme dashboard with CRITICAL/WARNING/PASSED/INFO counts, a
+  navigation sidebar, color-coded findings, and collapsible detail sections.
 
 
 AUDIT SECTIONS (18 total)
