@@ -250,12 +250,23 @@ if not exist "%CTI_SKILL_PATH%" (
     goto :skip_ttp_update
 )
 
+:: Collect existing IOC entries for deduplication
+set "EXISTING_IOCS=%TEMP%\existing_iocs_%RANDOM%.txt"
+if exist "%~dp0ThreatLists" (
+    type "%~dp0ThreatLists\ioc_processes.txt" 2>nul | findstr /v /r "^#" > "%EXISTING_IOCS%" 2>nul
+    type "%~dp0ThreatLists\ioc_named_pipes.txt" 2>nul | findstr /v /r "^#" >> "%EXISTING_IOCS%" 2>nul
+    type "%~dp0ThreatLists\ttp_manifest.txt" 2>nul | findstr /v /r "^#" >> "%EXISTING_IOCS%" 2>nul
+)
+
 echo  [*] Querying CTI skill for latest Windows endpoint TTPs...
 echo  [*] Output: %TTP_OUTPUT%
+echo  [*] Mode: INCREMENTAL (merging with existing IOCs)
 echo.
 
 :: Call Claude Code with the CTI skill context to generate TTP intel
-claude -p "You are operating as the SENTINEL-X CTI Skill defined in this file. Analyze the CURRENT threat landscape (2024-2026) for Windows 10/11 endpoints. Output ONLY a structured list of the top 20 NEW TTPs not commonly covered in 2023-era scripts. For each TTP provide: MITRE_ID, Name, Detection_Method (registry key, event ID, file path, process name, named pipe, or WMI query), Detection_Value (the exact IOC string), Severity (CRITICAL/WARNING/INFO), and Actor (threat group). Format as pipe-delimited CSV: MITRE_ID|Name|Detection_Method|Detection_Value|Severity|Actor. No headers, no explanation, just the data rows." --file "%CTI_SKILL_PATH%" > "%TTP_OUTPUT%" 2>&1
+:: The prompt instructs incremental-only output and provides existing IOCs for dedup
+claude -p "You are operating as the SENTINEL-X CTI Skill defined in this file. Today is %date%. Analyze the CURRENT threat landscape (2025-2026) for Windows 10/11 endpoints. IMPORTANT: Output ONLY NEW TTPs that are NOT already in the existing IOC list below. Do not duplicate existing detections. Output a structured list of up to 20 NEW TTPs. For each TTP provide: MITRE_ID, Name, Detection_Method (registry key, event ID, file path, process name, named pipe, or WMI query), Detection_Value (the exact IOC string), Severity (CRITICAL/WARNING/INFO), and Actor (threat group). Format as pipe-delimited CSV: MITRE_ID|Name|Detection_Method|Detection_Value|Severity|Actor. No headers, no explanation, just the data rows. EXISTING IOCs (do NOT duplicate these):" --file "%CTI_SKILL_PATH%" --file "%EXISTING_IOCS%" > "%TTP_OUTPUT%" 2>&1
+if exist "%EXISTING_IOCS%" del "%EXISTING_IOCS%" >nul 2>&1
 
 if %errorlevel% neq 0 (
     echo  [WARN] Claude Code returned an error. Using existing TTP checks.
@@ -271,16 +282,20 @@ echo  [OK] CTI intelligence retrieved. Generating detection blocks...
 
 :: Parse the TTP output and generate batch detection commands
 :: Each line: MITRE_ID|Name|Detection_Method|Detection_Value|Severity|Actor
-(
-    echo :: ====================================================================
-    echo :: AUTO-GENERATED TTP DETECTION BLOCKS
-    echo :: Generated: %date% %time%
-    echo :: Source: SENTINEL-X CTI Skill via Claude Code
-    echo :: Re-generate: doze_sec.bat -updateTTP
-    echo :: ====================================================================
-    echo echo.^>^> "%%REPORT%%"
-    echo echo --- [CTI-AUTO] Auto-Generated TTP Checks from SENTINEL-X ---^>^> "%%REPORT%%"
-) > "%TTP_BLOCKS%"
+:: INCREMENTAL: Append to existing TTP_BLOCKS if present, don't overwrite
+if not exist "%TTP_BLOCKS%" (
+    (
+        echo @echo off
+        echo :: ====================================================================
+        echo :: AUTO-GENERATED TTP DETECTION BLOCKS
+        echo :: Source: SENTINEL-X CTI Skill via Claude Code
+        echo :: Re-generate: doze_sec.bat -updateTTP
+        echo :: ====================================================================
+        echo echo.^>^> "%%REPORT%%"
+        echo echo --- [CTI-AUTO] Auto-Generated TTP Checks from SENTINEL-X ---^>^> "%%REPORT%%"
+    ) > "%TTP_BLOCKS%"
+)
+echo :: --- Update: %date% %time% --->> "%TTP_BLOCKS%"
 
 :: Process each TTP line from the CTI output
 for /f "usebackq tokens=1-6 delims=|" %%a in ("%TTP_OUTPUT%") do (
@@ -295,7 +310,8 @@ for /f "usebackq tokens=1-6 delims=|" %%a in ("%TTP_OUTPUT%") do (
     )
     if /i "%%c"=="process name" (
         echo echo --- [CTI-AUTO][%%a] %%b ^(%%f^) ---^>^> "%%REPORT%%">> "%TTP_BLOCKS%"
-        echo wmic process where "name='%%d'" get Name,ProcessId,ExecutablePath 2^>nul ^| findstr /i /c:"%%d"^>^> "%%REPORT%%" 2^>^&1>> "%TTP_BLOCKS%"
+        echo echo Get-CimInstance Win32_Process -Filter "name='%%d'" -EA SilentlyContinue ^| Select-Object Name,ProcessId,ExecutablePath ^| Format-Table -AutoSize ^> "%%PSRUN%%">> "%TTP_BLOCKS%"
+        echo "%%PWSH%%" -NoProfile -ExecutionPolicy Bypass -File "%%PSRUN%%"^>^> "%%REPORT%%" 2^>^&1>> "%TTP_BLOCKS%"
     )
     if /i "%%c"=="file path" (
         echo echo --- [CTI-AUTO][%%a] %%b ^(%%f^) ---^>^> "%%REPORT%%">> "%TTP_BLOCKS%"
@@ -306,6 +322,35 @@ for /f "usebackq tokens=1-6 delims=|" %%a in ("%TTP_OUTPUT%") do (
         echo echo try{$p=Get-ChildItem \\.\pipe\ -EA SilentlyContinue ^| Where-Object {$_.Name -match '%%d'}; if($p){'[%%e] %%b pipe detected: '+($p.Name -join ', ')}else{'[OK] %%b pipe check clear.'}}catch{'[INFO] Pipe check unavailable.'} ^> "%%PSRUN%%">> "%TTP_BLOCKS%"
         echo "%%PWSH%%" -NoProfile -ExecutionPolicy Bypass -File "%%PSRUN%%"^>^> "%%REPORT%%" 2^>^&1>> "%TTP_BLOCKS%"
     )
+)
+
+:: Merge new IOCs into ThreatLists files incrementally
+set "SCRIPT_THREATS=%~dp0ThreatLists"
+if exist "%SCRIPT_THREATS%" (
+    for /f "usebackq tokens=1-6 delims=|" %%a in ("%TTP_OUTPUT%") do (
+        if /i "%%c"=="process name" (
+            findstr /x /c:"%%d" "%SCRIPT_THREATS%\ioc_processes.txt" >nul 2>&1
+            if !errorlevel! neq 0 (
+                echo # CTI-AUTO %date% [%%a] %%f>> "%SCRIPT_THREATS%\ioc_processes.txt"
+                echo %%d>> "%SCRIPT_THREATS%\ioc_processes.txt"
+            )
+        )
+        if /i "%%c"=="named pipe" (
+            findstr /x /c:"%%d" "%SCRIPT_THREATS%\ioc_named_pipes.txt" >nul 2>&1
+            if !errorlevel! neq 0 (
+                echo # CTI-AUTO %date% [%%a] %%f>> "%SCRIPT_THREATS%\ioc_named_pipes.txt"
+                echo %%d>> "%SCRIPT_THREATS%\ioc_named_pipes.txt"
+            )
+        )
+        if /i "%%c"=="file path" (
+            findstr /x /c:"%%d" "%SCRIPT_THREATS%\ioc_file_paths.txt" >nul 2>&1
+            if !errorlevel! neq 0 (
+                echo # CTI-AUTO %date% [%%a] %%f>> "%SCRIPT_THREATS%\ioc_file_paths.txt"
+                echo %%d>> "%SCRIPT_THREATS%\ioc_file_paths.txt"
+            )
+        )
+    )
+    echo  [OK] New IOCs merged into ThreatLists/ files.
 )
 
 echo  [OK] Generated: %TTP_BLOCKS%
@@ -699,14 +744,35 @@ if "%SKIP_THREAT_UPDATE%"=="1" (
     goto :update_done
 )
 echo  Checking for updated threat indicator lists...>> "%REPORT%"
-echo $listUrl='%UPDATE_URL%/ThreatLists/ioc_hashes.txt' > "%PSRUN%"
-echo $dest='%OUTDIR%\ThreatLists\ioc_hashes.txt' >> "%PSRUN%"
-echo try { >> "%PSRUN%"
-echo   Invoke-WebRequest $listUrl -OutFile $dest -UseBasicParsing -TimeoutSec 15 -EA Stop >> "%PSRUN%"
-echo   Write-Output ('  [OK] Threat list updated: '+$dest) >> "%PSRUN%"
-echo } catch { >> "%PSRUN%"
-echo   Write-Output ('  [INFO] Threat list not available at configured URL.') >> "%PSRUN%"
+echo  Mode: INCREMENTAL (new entries merged, existing preserved)>> "%REPORT%"
+echo $baseUrl='%UPDATE_URL%/ThreatLists' > "%PSRUN%"
+echo $localDir='%SCRIPT_DIR%ThreatLists' >> "%PSRUN%"
+echo $files=@('ioc_processes.txt','ioc_named_pipes.txt','ioc_services.txt','ioc_registry.txt','ioc_file_paths.txt','ioc_scheduled_tasks.txt','ioc_domains.txt','ioc_hashes.txt','ioc_lolbins.txt','ttp_manifest.txt') >> "%PSRUN%"
+echo $updated=0; $skipped=0 >> "%PSRUN%"
+echo foreach($f in $files){ >> "%PSRUN%"
+echo   $url="$baseUrl/$f"; $dest=Join-Path $localDir $f >> "%PSRUN%"
+echo   try{ >> "%PSRUN%"
+echo     $remote=Invoke-WebRequest $url -UseBasicParsing -TimeoutSec 10 -EA Stop >> "%PSRUN%"
+echo     $newLines=$remote.Content -split "`n" ^| ForEach-Object {$_.Trim()} ^| Where-Object {$_ -and $_ -notmatch '^\s*#'} >> "%PSRUN%"
+echo     if(Test-Path $dest){ >> "%PSRUN%"
+echo       $existing=Get-Content $dest ^| ForEach-Object {$_.Trim()} ^| Where-Object {$_ -and $_ -notmatch '^\s*#'} >> "%PSRUN%"
+echo       $added=0 >> "%PSRUN%"
+echo       foreach($line in $newLines){ >> "%PSRUN%"
+echo         if($existing -notcontains $line){ >> "%PSRUN%"
+echo           Add-Content $dest "# Added by -updateTTP on $(Get-Date -Format yyyy-MM-dd)" >> "%PSRUN%"
+echo           Add-Content $dest $line >> "%PSRUN%"
+echo           $added++ >> "%PSRUN%"
+echo         } >> "%PSRUN%"
+echo       } >> "%PSRUN%"
+echo       if($added -gt 0){'  [OK] '+$f+': '+$added+' new entries merged'; $updated++} >> "%PSRUN%"
+echo       else{'  [OK] '+$f+': already up to date'; $skipped++} >> "%PSRUN%"
+echo     }else{ >> "%PSRUN%"
+echo       $remote.Content ^| Out-File $dest -Encoding UTF8 >> "%PSRUN%"
+echo       '  [OK] '+$f+': downloaded (new file)'; $updated++ >> "%PSRUN%"
+echo     } >> "%PSRUN%"
+echo   }catch{'  [INFO] '+$f+': not available at remote URL'; $skipped++} >> "%PSRUN%"
 echo } >> "%PSRUN%"
+echo "  Summary: $updated files updated, $skipped unchanged/unavailable" >> "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 :update_done
 echo.>> "%REPORT%"
