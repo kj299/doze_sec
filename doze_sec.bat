@@ -900,7 +900,7 @@ echo  Determines: SSD/HDD/VM/error. Sets SKIP_DEFRAG flag accordingly.>> "%REPOR
 echo  SKIP_DEFRAG values: no=HDD, yes_ssd=SSD, yes_vm=VirtualDisk, yes_error=SmartCTL error>> "%REPORT%"
 
 :: VM detection
-echo $cs=Get-WmiObject Win32_ComputerSystem -EA SilentlyContinue > "%PSRUN%"
+echo $cs=Get-CimInstance Win32_ComputerSystem -EA SilentlyContinue > "%PSRUN%"
 echo if($cs) { >> "%PSRUN%"
 echo   Write-Output ('Manufacturer: '+$cs.Manufacturer+'  Model: '+$cs.Model) >> "%PSRUN%"
 echo   if($cs.Manufacturer -match 'VMware^|QEMU^|Xen^|Bochs^|Parallels^|innotek' -or $cs.Model -match 'Virtual^|VMware^|VirtualBox^|KVM^|HVM domU') { >> "%PSRUN%"
@@ -912,7 +912,7 @@ echo } >> "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 :: Get a single word output to set SKIP_DEFRAG variable in cmd
-echo $cs=Get-WmiObject Win32_ComputerSystem -EA SilentlyContinue > "%PSRUN%"
+echo $cs=Get-CimInstance Win32_ComputerSystem -EA SilentlyContinue > "%PSRUN%"
 echo if($cs -and ($cs.Manufacturer -match 'VMware^|QEMU^|Xen^|Bochs^|Parallels^|innotek' -or $cs.Model -match 'Virtual^|VMware^|VirtualBox^|KVM^|HVM domU')){'yes_vm'}else{'no'} >> "%PSRUN%"
 for /f "usebackq" %%a in (`"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" 2^>nul`) do set "VM_CHECK=%%a"
 if /i "%VM_CHECK%"=="yes_vm" set "SKIP_DEFRAG=yes_vm"
@@ -934,7 +934,7 @@ echo $pd=Get-PhysicalDisk -EA SilentlyContinue > "%PSRUN%"
 echo if($pd){ >> "%PSRUN%"
 echo   $pd ^| Select-Object FriendlyName,MediaType,BusType,@{N='SizeGB';E={[math]::Round($_.Size/1GB,1)}},OperationalStatus,HealthStatus ^| Format-Table -AutoSize >> "%PSRUN%"
 echo } else { >> "%PSRUN%"
-echo   Get-WmiObject Win32_DiskDrive ^| Select-Object Model,MediaType,Status,@{N='SizeGB';E={[math]::Round($_.Size/1GB,1)}} ^| Format-Table -AutoSize >> "%PSRUN%"
+echo   Get-CimInstance Win32_DiskDrive ^| Select-Object Model,MediaType,Status,@{N='SizeGB';E={[math]::Round($_.Size/1GB,1)}} ^| Format-Table -AutoSize >> "%PSRUN%"
 echo } >> "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
@@ -1006,7 +1006,7 @@ echo --- WMI Disk Health (smartctl not found - WMI fallback) --->> "%REPORT%"
 echo For full SMART attribute data install smartmontools.>> "%REPORT%"
 echo.>> "%REPORT%"
 echo $warn=$false > "%PSRUN%"
-echo $d=Get-WmiObject Win32_DiskDrive -EA SilentlyContinue >> "%PSRUN%"
+echo $d=Get-CimInstance Win32_DiskDrive -EA SilentlyContinue >> "%PSRUN%"
 echo foreach($disk in $d) { >> "%PSRUN%"
 echo   $gb=[math]::Round($disk.Size/1GB,1) >> "%PSRUN%"
 echo   Write-Output ('Drive: '+$disk.Model+'  Size: '+$gb+'GB  Status: '+$disk.Status) >> "%PSRUN%"
@@ -1029,7 +1029,7 @@ echo } catch {} >> "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 :: Capture WMI health status for SMART_WARN flag
-echo $d=Get-WmiObject Win32_DiskDrive -EA SilentlyContinue > "%PSRUN%"
+echo $d=Get-CimInstance Win32_DiskDrive -EA SilentlyContinue > "%PSRUN%"
 echo $bad=$d ^| Where-Object {$_.Status -and $_.Status -notmatch '^OK$'} >> "%PSRUN%"
 echo try { >> "%PSRUN%"
 echo   $pd=Get-PhysicalDisk -EA Stop >> "%PSRUN%"
@@ -1432,12 +1432,12 @@ echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
 echo --- Services with Non-Standard Paths --->> "%REPORT%"
-echo Get-WmiObject Win32_Service ^| Where-Object {$_.PathName -and $_.PathName -notmatch 'system32^|SysWOW64^|Program Files^|MpKsl^|Windows Defender^|SecurityHealth^|MsMpEng'} ^| Select-Object Name,State,StartMode,PathName ^| Format-Table -AutoSize -Wrap > "%PSRUN%"
+echo Get-CimInstance Win32_Service ^| Where-Object {$_.PathName -and $_.PathName -notmatch 'system32^|SysWOW64^|Program Files^|MpKsl^|Windows Defender^|SecurityHealth^|MsMpEng'} ^| Select-Object Name,State,StartMode,PathName ^| Format-Table -AutoSize -Wrap > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- Unquoted Service Paths with Spaces --->> "%REPORT%"
-echo $v=Get-WmiObject Win32_Service ^| Where-Object {$_.PathName -and $_.PathName -notmatch '^\x22' -and $_.PathName -match ' ' -and $_.PathName -notmatch '^^[A-Za-z]:\\Windows\\'}; if($v){$v ^| Select-Object Name,StartMode,PathName ^| Format-Table -AutoSize -Wrap}else{'[OK] No unquoted service paths found.'} > "%PSRUN%"
+echo $v=Get-CimInstance Win32_Service ^| Where-Object {$_.PathName -and $_.PathName -notmatch '^\x22' -and $_.PathName -match ' ' -and $_.PathName -notmatch '^^[A-Za-z]:\\Windows\\'}; if($v){$v ^| Select-Object Name,StartMode,PathName ^| Format-Table -AutoSize -Wrap}else{'[OK] No unquoted service paths found.'} > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
@@ -1898,7 +1898,7 @@ reg query "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall" /s | findst
 
 echo.>> "%REPORT%"
 echo --- Running Kernel Drivers --->> "%REPORT%"
-echo Get-WmiObject Win32_SystemDriver ^| Where-Object {$_.Started -eq $true} ^| Select-Object Name,State,PathName ^| Sort-Object Name ^| Format-Table -AutoSize > "%PSRUN%"
+echo Get-CimInstance Win32_SystemDriver ^| Where-Object {$_.Started -eq $true} ^| Select-Object Name,State,PathName ^| Sort-Object Name ^| Format-Table -AutoSize > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 echo  [INFO] Kernel driver inventory. Unsigned or unexpected drivers = high risk.>> "%REPORT%"
 
@@ -2451,7 +2451,7 @@ echo $ev=Get-WinEvent -FilterHashtable @{LogName='Security';Id=4732} -MaxEvents 
 echo $pp=(netsh interface portproxy show all 2^>$null)^|Out-String;if($pp -match '\d+\.\d+'){ck 'CRIT' 'netsh portproxy tunnel rules are ACTIVE' 'Volt Typhoon C2 IOC. Remove: netsh interface portproxy reset. See Section 17.'}else{ck 'PASS' 'No netsh portproxy tunnel rules - Volt Typhoon check'} >> "%PSRUN%"
 echo try{$pipes=Get-ChildItem \\.\pipe\ -EA Stop^|Where-Object{$_.Name -match 'postex_^|msagent_^|MSSE-^|metsvc'};if($pipes){ck 'CRIT' ('Cobalt Strike named pipes detected: '+@($pipes).Count) ('Pipes: '+($pipes.Name -join ', ')+'. Active C2. See Section 17.')}else{ck 'PASS' 'No Cobalt Strike default named pipes detected'}}catch{ck 'INFO' 'Named pipe check unavailable'} >> "%PSRUN%"
 echo $subs=@(Get-WMIObject -Namespace root\subscription -Class __EventFilter -EA SilentlyContinue);if($subs.Count -gt 0){ck 'CRIT' ('WMI EventFilter subscriptions present: '+$subs.Count) 'Stealthy reboot-persistent implant. See Section 17. Remove: Get-WMIObject -NS root\subscription -Class __EventFilter ^| Remove-WMIObject'}else{ck 'PASS' 'No WMI permanent EventFilter subscriptions'} >> "%PSRUN%"
-echo $sus=@(Get-WmiObject Win32_Process -EA SilentlyContinue^|Where-Object{$_.ExecutablePath -match '\\Temp\\^|\\AppData\\^|\\Downloads\\^|\\Users\\Public\\'});if($sus.Count -gt 0){ck 'CRIT' ('Processes from suspicious paths: '+$sus.Count) ('Names: '+(($sus^|Select-Object -Exp Name^|Sort-Object -Unique) -join ', ')+'. See Section 4.')}else{ck 'PASS' 'No processes running from Temp / AppData / Downloads'} >> "%PSRUN%"
+echo $sus=@(Get-CimInstance Win32_Process -EA SilentlyContinue^|Where-Object{$_.ExecutablePath -match '\\Temp\\^|\\AppData\\^|\\Downloads\\^|\\Users\\Public\\'});if($sus.Count -gt 0){ck 'CRIT' ('Processes from suspicious paths: '+$sus.Count) ('Names: '+(($sus^|Select-Object -Exp Name^|Sort-Object -Unique) -join ', ')+'. See Section 4.')}else{ck 'PASS' 'No processes running from Temp / AppData / Downloads'} >> "%PSRUN%"
 echo. >> "%PSRUN%"
 
 :: ===== CREDENTIAL PROTECTION =========================================
@@ -2472,7 +2472,7 @@ echo. >> "%PSRUN%"
 echo sec 'ATTACK SURFACE  (Sections 8, 10, 11)' >> "%PSRUN%"
 echo $fwOn=(netsh advfirewall show allprofiles 2^>$null^|Select-String 'State\s+ON').Count;if($fwOn -ge 3){ck 'PASS' 'All three firewall profiles enabled - Domain, Private, Public'}else{ck 'CRIT' "Firewall DISABLED on $(3-$fwOn) profiles" 'Fix: netsh advfirewall set allprofiles state on'} >> "%PSRUN%"
 echo $s1=(Get-SmbServerConfiguration -EA SilentlyContinue).EnableSMB1Protocol;if($s1 -eq $false){ck 'PASS' 'SMBv1 disabled (EternalBlue not exploitable)'}elseif($s1 -eq $true){ck 'CRIT' 'SMBv1 ENABLED (EternalBlue CVE-2017-0144)' 'Run: Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart'}else{ck 'INFO' 'SMBv1 state unavailable -- see Section 10'} >> "%PSRUN%"
-echo $psv2=Get-WmiObject Win32_OptionalFeature -Filter 'Name=''MicrosoftWindowsPowerShellV2Root''' -EA SilentlyContinue;if($psv2 -and $psv2.InstallState -eq 1){ck 'WARN' 'PowerShell v2 ENABLED (AMSI downgrade possible)' 'Run: Disable-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2Root'}elseif($psv2){ck 'PASS' 'PowerShell v2 disabled'}else{ck 'INFO' 'PSv2 state unavailable -- see Section 11'} >> "%PSRUN%"
+echo $psv2=Get-CimInstance Win32_OptionalFeature -Filter 'Name=''MicrosoftWindowsPowerShellV2Root''' -EA SilentlyContinue;if($psv2 -and $psv2.InstallState -eq 1){ck 'WARN' 'PowerShell v2 ENABLED (AMSI downgrade possible)' 'Run: Disable-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2Root'}elseif($psv2){ck 'PASS' 'PowerShell v2 disabled'}else{ck 'INFO' 'PSv2 state unavailable -- see Section 11'} >> "%PSRUN%"
 echo $rdp=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -EA SilentlyContinue).fDenyTSConnections;if($rdp -eq 1){ck 'PASS' 'RDP is disabled'}else{$nla=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -EA SilentlyContinue).UserAuthentication;if($nla -eq 1){ck 'PASS' 'RDP enabled with NLA (Network Level Authentication)'}else{ck 'WARN' 'RDP enabled WITHOUT NLA' 'Set UserAuthentication=1 in HKLM\...\RDP-Tcp or via Group Policy'}} >> "%PSRUN%"
 echo $wmr=Get-Service WinRM -EA SilentlyContinue;if($wmr -and $wmr.Status -eq 'Running'){ck 'WARN' 'WinRM RUNNING (remote PowerShell enabled)' 'Disable: Stop-Service WinRM; Set-Service WinRM -StartupType Disabled'}else{ck 'PASS' 'WinRM not running'} >> "%PSRUN%"
 echo. >> "%PSRUN%"
