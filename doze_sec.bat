@@ -251,7 +251,10 @@ if not exist "%CTI_SKILL_PATH%" (
 )
 
 :: Collect existing IOC entries for deduplication
-set "EXISTING_IOCS=%TEMP%\existing_iocs_%RANDOM%.txt"
+:: Use a GUID for the temp filename so a same-user local attacker cannot pre-create/race the path
+for /f "usebackq delims=" %%g in (`powershell -NoProfile -Command "[guid]::NewGuid().ToString('N')"`) do set "IOC_GUID=%%g"
+if not defined IOC_GUID set "IOC_GUID=%RANDOM%%RANDOM%%RANDOM%"
+set "EXISTING_IOCS=%TEMP%\existing_iocs_%IOC_GUID%.txt"
 if exist "%~dp0ThreatLists" (
     type "%~dp0ThreatLists\ioc_processes.txt" 2>nul | findstr /v /r "^#" > "%EXISTING_IOCS%" 2>nul
     type "%~dp0ThreatLists\ioc_named_pipes.txt" 2>nul | findstr /v /r "^#" >> "%EXISTING_IOCS%" 2>nul
@@ -275,6 +278,32 @@ if %errorlevel% neq 0 (
 
 if not exist "%TTP_OUTPUT%" (
     echo  [WARN] No output from CTI skill. Using existing checks.
+    goto :skip_ttp_update
+)
+
+:: ====================================================================
+:: SANITIZE CTI OUTPUT: drop any row whose Detection_Value contains
+:: shell or PowerShell metacharacters, to prevent code injection when
+:: the value is later emitted into TTP_BLOCKS or merged into the IOC
+:: source files. Metachars are expressed as [char] codes in the PS
+:: below so we never have to escape them through CMD.
+::   Blocked char codes: 34 39 96 36 59 124 38 60 62 40 41 123 125 94
+::   (double/single/backtick quotes, dollar, semicolon, pipe, amp,
+::    angle brackets, parens, braces, caret)
+:: ====================================================================
+set "TTP_SANITIZER_REPORT=%TEMP%\ttp_sanitize_%IOC_GUID%.log"
+:: Note: %PWSH% is not resolved until later in setup; use plain 'powershell' here.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$src='%TTP_OUTPUT%'; $lines=Get-Content -LiteralPath $src -ErrorAction SilentlyContinue; $allow=@('registry key','event id','process name','file path','named pipe','wmi query'); $bad=[char[]]@(34,39,96,36,59,124,38,60,62,40,41,123,125,94); $safe=New-Object System.Collections.Generic.List[string]; $drop=0; foreach($l in $lines){ if(-not $l -or $l.Trim() -eq ''){continue}; $p=$l -split '\|'; if($p.Count -ne 6){$drop++;continue}; $m=$p[2].Trim().ToLower(); $v=$p[3].Trim(); if($v.Length -eq 0 -or $v.Length -gt 260){$drop++;continue}; if($allow -notcontains $m){$drop++;continue}; if($v.IndexOfAny($bad) -ne -1){$drop++;continue}; if($v -notmatch '^[\x20-\x7E]+$'){$drop++;continue}; $safe.Add($l) }; Set-Content -LiteralPath $src -Value $safe -Encoding ASCII; Write-Output ('  [SANITIZE] Kept: '+$safe.Count+'  Dropped: '+$drop)" > "%TTP_SANITIZER_REPORT%" 2>&1
+type "%TTP_SANITIZER_REPORT%"
+del "%TTP_SANITIZER_REPORT%" >nul 2>&1
+
+:: Abort the update if nothing survived sanitization
+:: (use file size: ~za resolves to a plain numeric byte count with no prefix)
+set "TTP_SAFE_SIZE=0"
+for %%a in ("%TTP_OUTPUT%") do set "TTP_SAFE_SIZE=%%~za"
+if "%TTP_SAFE_SIZE%"=="0" (
+    echo  [WARN] CTI output failed sanitization (all rows dropped). Skipping update.
+    del "%TTP_OUTPUT%" >nul 2>&1
     goto :skip_ttp_update
 )
 
@@ -356,6 +385,10 @@ if exist "%SCRIPT_THREATS%" (
 echo  [OK] Generated: %TTP_BLOCKS%
 echo  [*] Auto-generated checks will execute during Section 18.
 echo.
+
+:: Remove the sanitized CTI response; keeping it serves no purpose
+:: and leaks content from other runs if the folder is later shared.
+if exist "%TTP_OUTPUT%" del "%TTP_OUTPUT%" >nul 2>&1
 
 :skip_ttp_update
 
@@ -767,7 +800,7 @@ echo       } >> "%PSRUN%"
 echo       if($added -gt 0){'  [OK] '+$f+': '+$added+' new entries merged'; $updated++} >> "%PSRUN%"
 echo       else{'  [OK] '+$f+': already up to date'; $skipped++} >> "%PSRUN%"
 echo     }else{ >> "%PSRUN%"
-echo       $remote.Content ^| Out-File $dest -Encoding UTF8 >> "%PSRUN%"
+echo       [System.IO.File]::WriteAllText($dest,$remote.Content,(New-Object System.Text.UTF8Encoding $false)) >> "%PSRUN%"
 echo       '  [OK] '+$f+': downloaded (new file)'; $updated++ >> "%PSRUN%"
 echo     } >> "%PSRUN%"
 echo   }catch{'  [INFO] '+$f+': not available at remote URL'; $skipped++} >> "%PSRUN%"
