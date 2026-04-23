@@ -188,6 +188,63 @@ Requires:
 1. Claude Code CLI installed (`npm install -g @anthropic-ai/claude-code`)
 2. The [threat-intel](https://github.com/kj299/threat-intel) repo cloned as a sibling directory
 
+## Self-Update and IOC Download from a Private Repo
+
+If the `doze_sec` repo is private, `raw.githubusercontent.com` returns 404 for anonymous requests and the INIT 10/14 update check reports:
+
+```
+[INFO] Update check: 404 (repo is private and no GitHub PAT found).
+```
+
+To enable self-update and the GitHub IOC-list download against a private repo, provide a GitHub Personal Access Token via one of:
+
+### Option 1: Environment variable (recommended for one-off runs)
+
+```powershell
+$env:DOZESEC_TOKEN = 'github_pat_...'
+.\doze_sec.bat
+```
+
+### Option 2: Token file (persistent, user-scoped)
+
+```powershell
+Set-Content -Path "$env:USERPROFILE\.dozesec_token" -Value 'github_pat_...'
+icacls "$env:USERPROFILE\.dozesec_token" /inheritance:r /grant:r "$($env:USERNAME):F"
+```
+
+Env var wins over token file when both are set.
+
+### Token requirements
+
+Create a **fine-grained** PAT at [github.com/settings/personal-access-tokens](https://github.com/settings/personal-access-tokens) with:
+
+| Setting | Value |
+|---------|-------|
+| Resource owner | Owner of the `doze_sec` repo |
+| Repository access | Only select repositories → `doze_sec` |
+| Repository permissions | **Contents: Read-only** (that is sufficient) |
+| Expiration | Whatever fits your rotation cadence (30/60/90 days) |
+
+**Do not use a classic token** with broad scopes. Fine-grained, single-repo, read-only is the minimum and the safest.
+
+### Troubleshooting by error code
+
+| HTTP | Meaning | Fix |
+|------|---------|-----|
+| 404 (no token) | Repo is private | Create a PAT and set `DOZESEC_TOKEN` |
+| 404 (with token) | Token scope is wrong | PAT is not scoped to this repo; re-create it |
+| 401 | Token invalid or expired | Rotate the PAT |
+| 403 | Rate-limited or scope-restricted | Wait or narrow the request |
+
+### Threat model note
+
+Running a PAT-bearing script on a compromised endpoint exposes the token. Prefer:
+- A token scoped to a *read-only* repo (e.g., a dedicated `doze_sec-mirror` repo that the org owns)
+- Short expiration
+- Revoke immediately after incident-response use
+
+If those trade-offs are not acceptable, make the repo public or skip the update check entirely (the script works fine without it).
+
 ## License
 
 For personal and organizational security use. Not for redistribution without permission.
