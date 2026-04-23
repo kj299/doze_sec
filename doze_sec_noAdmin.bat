@@ -2710,9 +2710,22 @@ echo if($joined -match 'Real-time protection DISABLED'){ addfix 'Re-enable Defen
 echo if($joined -match 'Signatures OUTDATED^|Signatures aging'){ addfix 'Update Defender signatures' "Update-MpSignature" } >> "%PSRUN%"
 echo if($joined -match 'Tamper protection disabled'){ addfix 'Enable Defender tamper protection (via Windows Security UI)' "Write-Host 'Tamper Protection is UI-managed. Open: Windows Security ^> Virus and threat protection ^> Manage settings ^> Tamper Protection ^> On'" } >> "%PSRUN%"
 echo if(-not (Get-Content -LiteralPath $rem ^| Where-Object { $_ -match '^Set-^|^Disable-^|^Enable-^|^netsh^|^bcdedit^|^Update-^|^Stop-^|^sfc^|^New-^|^Get-^|^Remove-' })){ Add-Content -LiteralPath $rem -Value '# No auto-fixable findings detected. The system is either clean or the findings require manual remediation (see the report).' } >> "%PSRUN%"
-echo Write-Output ('') >> "%PSRUN%"
-echo Write-Output ('  Remediation script: '+$rem) >> "%PSRUN%"
-echo Write-Output ('  Review and edit $IReadAndUnderstand=$true before running as admin.') >> "%PSRUN%"
+echo $fixCount = @(Get-Content -LiteralPath $rem ^| Where-Object { $_ -match '^Set-^|^Disable-^|^Enable-^|^netsh^|^bcdedit^|^Update-^|^Stop-^|^sfc^|^New-^|^Get-^|^Remove-' }).Count >> "%PSRUN%"
+echo Write-Output '' >> "%PSRUN%"
+echo Write-Output '######################################################################' >> "%PSRUN%"
+echo Write-Output '##  REMEDIATION SCRIPT' >> "%PSRUN%"
+echo Write-Output ('##  Location : ' + $rem) >> "%PSRUN%"
+echo Write-Output ('##  Fixes    : ' + $fixCount + ' auto-fix command(s) queued') >> "%PSRUN%"
+echo Write-Output '##' >> "%PSRUN%"
+echo Write-Output '##  TO APPLY (requires admin):' >> "%PSRUN%"
+echo Write-Output '##    1. Open the script and REVIEW every command' >> "%PSRUN%"
+echo Write-Output '##    2. Change $IReadAndUnderstand=$false to $true' >> "%PSRUN%"
+echo Write-Output '##    3. Run from elevated PowerShell:' >> "%PSRUN%"
+echo Write-Output ('##       powershell -NoProfile -ExecutionPolicy Bypass -File "' + $rem + '"') >> "%PSRUN%"
+echo Write-Output '##' >> "%PSRUN%"
+echo Write-Output '##  After running, re-run doze_sec to verify.' >> "%PSRUN%"
+echo Write-Output '######################################################################' >> "%PSRUN%"
+echo Write-Output '' >> "%PSRUN%"
 
 :: ---- Run PS, show on screen, append to report ----------------------
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" > "%SUMFILE%" 2>&1
@@ -2786,7 +2799,10 @@ echo  Exit code  : %EXIT_CODE%
 echo  %C_DIM%0=Success  1=Error  2=Warning  3=UnsupportedOS  4=Reboot  5=TEMP  6=PartialNoAdmin%C_RESET%
 echo  Report     : %C_WHITE%%REPORT%%C_RESET%
 if exist "%REPORT_HTML%" echo  HTML Report: %C_WHITE%%REPORT_HTML%%C_RESET%
-if exist "%REMEDIATION%" echo  Remediation: %C_CYAN%%REMEDIATION%%C_RESET% %C_DIM%(review before running)%C_RESET%
+if exist "%REMEDIATION%" (
+    echo  %C_BOLD%%C_YELLOW%^>^> REMEDIATION: %REMEDIATION%%C_RESET%
+    echo  %C_DIM%   Review every line, set $IReadAndUnderstand=$true, then run as admin%C_RESET%
+)
 if "%SMART_WARN%"=="1" echo  %C_RED%SMART WARN%C_RESET% : Drive health issue detected - back up data immediately
 if "%EXIT_CODE%"=="2"  echo  %C_YELLOW%WARNINGS%C_RESET%   : Review all [WARNING] entries in the report
 if "%EXIT_CODE%"=="6"  echo  %C_MAGENTA%NON-ADMIN%C_RESET%  : !DEFERRED_COUNT! check(s) deferred. Re-run as admin for full audit.
