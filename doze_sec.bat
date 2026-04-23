@@ -302,7 +302,7 @@ del "%TTP_SANITIZER_REPORT%" >nul 2>&1
 set "TTP_SAFE_SIZE=0"
 for %%a in ("%TTP_OUTPUT%") do set "TTP_SAFE_SIZE=%%~za"
 if "%TTP_SAFE_SIZE%"=="0" (
-    echo  [WARN] CTI output failed sanitization (all rows dropped). Skipping update.
+    echo  [WARN] CTI output failed sanitization ^(all rows dropped^). Skipping update.
     del "%TTP_OUTPUT%" >nul 2>&1
     goto :skip_ttp_update
 )
