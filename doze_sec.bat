@@ -2799,9 +2799,11 @@ if exist "%REPORT_HTML%" (
 if exist "%REPORT_HTML%" (
     echo Opening HTML report...
     start "" "%REPORT_HTML%"
-) else if exist "%REPORT%" (
-    echo Opening text report...
-    start "" notepad "%REPORT%"
+) else (
+    if exist "%REPORT%" (
+        echo Opening text report...
+        start "" notepad "%REPORT%"
+    )
 )
 
 :: endlocal and exit /b MUST be on one line.
