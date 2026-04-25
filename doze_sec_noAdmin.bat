@@ -1528,8 +1528,15 @@ reg query "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP
 
 echo.>> "%REPORT%"
 echo --- WinRM and SSH Status --->> "%REPORT%"
-sc query WinRM>> "%REPORT%" 2>&1
-sc query sshd>> "%REPORT%" 2>&1
+sc query WinRM>> "%REPORT%" 2>nul
+set "_SSHD_HIT="
+sc query sshd >nul 2>nul && set "_SSHD_HIT=1"
+if defined _SSHD_HIT (
+    sc query sshd>> "%REPORT%" 2>nul
+) else (
+    echo [OK] OpenSSH Server ^(sshd^) not installed.>> "%REPORT%"
+)
+set "_SSHD_HIT="
 echo.>> "%REPORT%"
 
 :: ====================================================================
@@ -1677,9 +1684,10 @@ echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
 echo --- UAC Config --->> "%REPORT%"
-reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v EnableLUA>> "%REPORT%" 2>&1
-reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v ConsentPromptBehaviorAdmin>> "%REPORT%" 2>&1
-reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v LocalAccountTokenFilterPolicy>> "%REPORT%" 2>&1
+reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v EnableLUA>> "%REPORT%" 2>nul
+reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v ConsentPromptBehaviorAdmin>> "%REPORT%" 2>nul
+reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v LocalAccountTokenFilterPolicy>> "%REPORT%" 2>nul
+if errorlevel 1 (echo [OK] LocalAccountTokenFilterPolicy not set -- default remote-admin token filtering applies.)>> "%REPORT%"
 
 echo.>> "%REPORT%"
 echo --- Secure Boot --->> "%REPORT%"
