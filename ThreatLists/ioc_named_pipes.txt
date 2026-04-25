@@ -37,11 +37,12 @@ mimikatz
 sekurlsa
 #
 # === IMPACKET ===
+# NOTE: atsvc, svcctl, epmapper, and lsarpc are default Windows RPC pipes
+# present on every host. Detecting Impacket abuse of them requires Sysmon
+# Event ID 17/18 with PID/parent context, not bare-pipe enumeration.
+# Removed to prevent guaranteed false positives on every clean Win11 host.
 RemCom_
 __wmi_
-atsvc
-svcctl
-epmapper_
 #
 # === RANSOMWARE SPECIFIC ===
 lockbit_pipe

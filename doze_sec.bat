@@ -764,7 +764,10 @@ echo try { >> "%PSRUN%"
 echo   $remoteVer=(Invoke-WebRequest $remoteUrl -UseBasicParsing -TimeoutSec 10 -Headers $headers -EA Stop).Content.Trim() >> "%PSRUN%"
 echo   Write-Output ('  Remote version : '+$remoteVer) >> "%PSRUN%"
 echo   Write-Output ('  Local version  : '+$localVer) >> "%PSRUN%"
-echo   if([version]$remoteVer -gt [version]$localVer) { >> "%PSRUN%"
+echo   $rv = $remoteVer -replace '[^^0-9.]','' >> "%PSRUN%"
+echo   $lv = $localVer -replace '[^^0-9.]','' >> "%PSRUN%"
+echo   $rv = $rv.Trim('.'); $lv = $lv.Trim('.') >> "%PSRUN%"
+echo   if([version]$rv -gt [version]$lv) { >> "%PSRUN%"
 echo     Write-Output '[UPDATE AVAILABLE] A newer version exists. Download from:' >> "%PSRUN%"
 echo     Write-Output ('  %UPDATE_URL%/%SCRIPT_NAME%.bat') >> "%PSRUN%"
 echo     Write-Output 'Verify SHA256 hash after downloading before running.' >> "%PSRUN%"
@@ -1352,6 +1355,7 @@ if %errorlevel% equ 0 (
 echo.>> "%REPORT%"
 echo --- LOLBin Processes (mshta, certutil, regsvr32, cmstp, wscript) --->> "%REPORT%"
 wmic process get Name,ProcessId,ExecutablePath,CommandLine | findstr /i /c:"mshta" /c:"regsvr32" /c:"certutil" /c:"cmstp" /c:"wscript" /c:"cscript" /c:"msiexec" /c:"installutil">> "%REPORT%" 2>&1
+if errorlevel 1 (echo [OK] No LOLBin processes currently running.)>> "%REPORT%"
 
 echo.>> "%REPORT%"
 echo --- Remote Monitoring and Management Tools (DPRK/Iran C2 vector) --->> "%REPORT%"
@@ -1453,6 +1457,7 @@ schtasks /query /fo LIST /v>> "%REPORT%" 2>&1
 echo.>> "%REPORT%"
 echo --- CRITICAL: Tasks with Actions in Temp or AppData --->> "%REPORT%"
 schtasks /query /fo CSV /v 2>nul | findstr /i /c:"\Temp\" /c:"\AppData\" /c:"\Downloads\">> "%REPORT%" 2>&1
+if errorlevel 1 (echo [OK] No scheduled-task actions in Temp/AppData/Downloads.)>> "%REPORT%"
 
 echo.>> "%REPORT%"
 echo --- Tasks Running as SYSTEM --->> "%REPORT%"
@@ -1722,7 +1727,8 @@ reg query "HKLM\SYSTEM\CurrentControlSet\Control\Lsa" /v RunAsPPL>> "%REPORT%" 2
 
 echo.>> "%REPORT%"
 echo --- WDigest: SAFE=UseLogonCredential=0 (1=plaintext in RAM) --->> "%REPORT%"
-reg query "HKLM\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest" /v UseLogonCredential>> "%REPORT%" 2>&1
+reg query "HKLM\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest" /v UseLogonCredential>> "%REPORT%" 2>nul
+if errorlevel 1 (echo [OK] WDigest UseLogonCredential not set -- Win11 default does not cache plaintext credentials.)>> "%REPORT%"
 
 echo.>> "%REPORT%"
 echo --- NTLM Level: SAFE=LmCompatibilityLevel=5 (NTLMv2 only) --->> "%REPORT%"
@@ -1739,7 +1745,8 @@ reg query "HKLM\SYSTEM\CurrentControlSet\Control\Lsa" /v "Notification Packages"
 
 echo.>> "%REPORT%"
 echo --- LsaCfgFlags: 0=disabled, 1=UEFI lock, 2=no lock --->> "%REPORT%"
-reg query "HKLM\SYSTEM\CurrentControlSet\Control\Lsa" /v LsaCfgFlags>> "%REPORT%" 2>&1
+reg query "HKLM\SYSTEM\CurrentControlSet\Control\Lsa" /v LsaCfgFlags>> "%REPORT%" 2>nul
+if errorlevel 1 (echo [INFO] LsaCfgFlags not set -- Credential Guard not explicitly configured ^(may still be on if VBS-managed^).)>> "%REPORT%"
 
 echo.>> "%REPORT%"
 echo --- Full LSA Key --->> "%REPORT%"
@@ -1795,12 +1802,16 @@ if %errorlevel% equ 0 (
 
 echo.>> "%REPORT%"
 echo --- AutoRun/AutoPlay: SAFE=NoDriveTypeAutoRun=0xFF --->> "%REPORT%"
-reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v NoDriveTypeAutoRun>> "%REPORT%" 2>&1
-reg query "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v NoDriveTypeAutoRun>> "%REPORT%" 2>&1
+set "_AR_HIT="
+reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v NoDriveTypeAutoRun>> "%REPORT%" 2>nul && set "_AR_HIT=1"
+reg query "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v NoDriveTypeAutoRun>> "%REPORT%" 2>nul && set "_AR_HIT=1"
+if not defined _AR_HIT (echo [INFO] NoDriveTypeAutoRun not pinned via policy -- default OS behavior applies.)>> "%REPORT%"
+set "_AR_HIT="
 
 echo.>> "%REPORT%"
 echo --- Windows Script Host: SAFE=Enabled=0 --->> "%REPORT%"
-reg query "HKLM\SOFTWARE\Microsoft\Windows Script Host\Settings" /v Enabled>> "%REPORT%" 2>&1
+reg query "HKLM\SOFTWARE\Microsoft\Windows Script Host\Settings" /v Enabled>> "%REPORT%" 2>nul
+if errorlevel 1 (echo [INFO] WSH Enabled value not set -- default is enabled. Disable via policy if .vbs/.js execution is not required.)>> "%REPORT%"
 
 echo.>> "%REPORT%"
 echo --- Remote Registry: SAFE=STOPPED and Disabled --->> "%REPORT%"
@@ -2012,6 +2023,7 @@ wevtutil qe Security /q:"*[System[(EventID=4624)]]" /c:25 /rd:true /f:text | fin
 echo.>> "%REPORT%"
 echo --- New Service Installed - Event 7045 --->> "%REPORT%"
 wevtutil qe System /q:"*[System[(EventID=7045)]]" /c:20 /rd:true /f:text | findstr /c:"TimeCreated" /c:"ServiceName" /c:"ImagePath" /c:"AccountName">> "%REPORT%" 2>&1
+if errorlevel 1 (echo [OK] No recent service install events ^(7045^) found.)>> "%REPORT%"
 
 echo.>> "%REPORT%"
 echo --- Scheduled Task Changes - Events 4698, 4702 --->> "%REPORT%"
@@ -2019,7 +2031,20 @@ wevtutil qe Security /q:"*[System[(EventID=4698 or EventID=4702)]]" /c:20 /rd:tr
 
 echo.>> "%REPORT%"
 echo --- PS Script Block Executions - Event 4104 --->> "%REPORT%"
-wevtutil qe "Microsoft-Windows-PowerShell/Operational" /q:"*[System[(EventID=4104)]]" /c:30 /rd:true /f:text | findstr /c:"TimeCreated" /c:"ScriptBlock" /c:"Path">> "%REPORT%" 2>&1
+echo $evts = Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-PowerShell/Operational';Id=4104} -MaxEvents 200 -EA SilentlyContinue > "%PSRUN%"
+echo $skip = 'AuditPS_\d{8}_\d{6}\.ps1^|doze_sec_noAdmin\.bat^|doze_sec\.bat' >> "%PSRUN%"
+echo if($evts){ >> "%PSRUN%"
+echo   $shown = @($evts ^| Where-Object { $_.Message -notmatch $skip }) ^| Select-Object -First 30 >> "%PSRUN%"
+echo   if($shown){ >> "%PSRUN%"
+echo     foreach($e in $shown){ >> "%PSRUN%"
+echo       Write-Output ('TimeCreated: '+$e.TimeCreated.ToString('s')) >> "%PSRUN%"
+echo       $msg = $e.Message -split "`n" >> "%PSRUN%"
+echo       $msg ^| Where-Object { $_ -match '^^ScriptBlock ID:^|^^Path:' } ^| ForEach-Object { Write-Output ('  ' + $_.Trim()) } >> "%PSRUN%"
+echo       Write-Output '' >> "%PSRUN%"
+echo     } >> "%PSRUN%"
+echo   } else { Write-Output '[OK] No external PS Script Block events (audit-self events filtered).' } >> "%PSRUN%"
+echo } else { Write-Output '[OK] No PS Script Block events found.' } >> "%PSRUN%"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- Process Creation - Event 4688 --->> "%REPORT%"
@@ -2090,23 +2115,41 @@ if %errorlevel% neq 0 echo [OK] No Office/AAD OAuth identity registrations found
 
 echo.>> "%REPORT%"
 echo --- [MIDNIGHT/AQUA BLIZZARD] Large HTML/HTA in Temp (HTML Smuggling) --->> "%REPORT%"
-echo Get-ChildItem -Path $env:TEMP -Recurse -Include '*.html','*.htm','*.hta' -EA SilentlyContinue ^| Where-Object {$_.Length -gt 200000} ^| Select-Object FullName,@{N='SizeKB';E={[math]::Round($_.Length/1024,1)}},LastWriteTime ^| Format-Table -AutoSize > "%PSRUN%"
+echo $r = @(Get-ChildItem -Path $env:TEMP -Recurse -Include '*.html','*.htm','*.hta' -EA SilentlyContinue ^| Where-Object {$_.Length -gt 200000}); if($r.Count -gt 0){ '[WARNING] Large HTML/HTA files in Temp:'; $r ^| Select-Object FullName,@{N='SizeKB';E={[math]::Round($_.Length/1024,1)}},LastWriteTime ^| Format-Table -AutoSize } else { '[OK] No oversized HTML/HTA files in user TEMP.' } > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- [FOREST BLIZZARD] CVE-2023-23397 Outlook .msg Artefacts --->> "%REPORT%"
-echo Get-ChildItem -Path ([System.Environment]::GetFolderPath('LocalApplicationData')+'\Microsoft\Outlook') -Recurse -Include '*.msg','*.oft' -EA SilentlyContinue ^| Where-Object {$_.LastWriteTime -gt (Get-Date).AddDays(-90)} ^| Select-Object FullName,LastWriteTime ^| Format-Table -AutoSize > "%PSRUN%"
+echo $r = @(Get-ChildItem -Path ([System.Environment]::GetFolderPath('LocalApplicationData')+'\Microsoft\Outlook') -Recurse -Include '*.msg','*.oft' -EA SilentlyContinue ^| Where-Object {$_.LastWriteTime -gt (Get-Date).AddDays(-90)}); if($r.Count -gt 0){ '[WARNING] Recent Outlook .msg/.oft artefacts (review for CVE-2023-23397 NTLM relay):'; $r ^| Select-Object FullName,LastWriteTime ^| Format-Table -AutoSize } else { '[OK] No recent Outlook .msg/.oft artefacts (Outlook profile may be absent).' } > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- [PEACH SANDSTORM] ADFS Service (GoldenSAML attack surface) --->> "%REPORT%"
-sc query adfssrv>> "%REPORT%" 2>&1
-reg query "HKLM\SOFTWARE\Microsoft\ADFS">> "%REPORT%" 2>&1
+set "_ADFS_HIT="
+sc query adfssrv >nul 2>nul && set "_ADFS_HIT=1"
+reg query "HKLM\SOFTWARE\Microsoft\ADFS" >nul 2>nul && set "_ADFS_HIT=1"
+if defined _ADFS_HIT (
+    sc query adfssrv>> "%REPORT%" 2>nul
+    reg query "HKLM\SOFTWARE\Microsoft\ADFS">> "%REPORT%" 2>nul
+    echo [WARNING] ADFS detected -- GoldenSAML attack surface present.>> "%REPORT%"
+) else (
+    echo [OK] ADFS not installed -- no GoldenSAML attack surface.>> "%REPORT%"
+)
+set "_ADFS_HIT="
 
 echo.>> "%REPORT%"
 echo --- [MANGO SANDSTORM] Azure AD Connect (on-prem to cloud pivot) --->> "%REPORT%"
-sc query "ADSync">> "%REPORT%" 2>&1
-reg query "HKLM\SOFTWARE\Microsoft\Azure AD Connect">> "%REPORT%" 2>&1
+set "_AAD_HIT="
+sc query ADSync >nul 2>nul && set "_AAD_HIT=1"
+reg query "HKLM\SOFTWARE\Microsoft\Azure AD Connect" >nul 2>nul && set "_AAD_HIT=1"
+if defined _AAD_HIT (
+    sc query "ADSync">> "%REPORT%" 2>nul
+    reg query "HKLM\SOFTWARE\Microsoft\Azure AD Connect">> "%REPORT%" 2>nul
+    echo [WARNING] Azure AD Connect detected -- on-prem to cloud pivot surface present.>> "%REPORT%"
+) else (
+    echo [OK] Azure AD Connect not installed -- no on-prem to cloud pivot.>> "%REPORT%"
+)
+set "_AAD_HIT="
 
 echo.>> "%REPORT%"
 echo --- [ALL ACTORS] Password Spray Analysis (Event 4625 unique accounts) --->> "%REPORT%"
@@ -2143,23 +2186,25 @@ echo try{$pipes=Get-ChildItem \\.\pipe\ -EA SilentlyContinue ^| Where-Object {$_
 
 echo.>> "%REPORT%"
 echo --- [ALL ACTORS] WMI Permanent Subscriptions (stealthy persistence) --->> "%REPORT%"
-echo $subs=Get-WMIObject -Namespace root\subscription -Class __EventFilter -EA SilentlyContinue; if($subs){'[WARNING] WMI EventFilters found:'; $subs ^| Select-Object Name,Query ^| Format-Table -AutoSize}else{'[OK] No WMI EventFilter subscriptions.'} > "%PSRUN%"
+echo $subs=@(Get-WMIObject -Namespace root\subscription -Class __EventFilter -EA SilentlyContinue ^| Where-Object { $_.Name -notin @('SCM Event Log Filter','BVTConsumer','BVTFilter','RmAssistEventLog') }); if($subs.Count -gt 0){'[WARNING] Non-default WMI EventFilters found:'; $subs ^| Select-Object Name,Query ^| Format-Table -AutoSize}else{'[OK] No non-default WMI EventFilter subscriptions (default Microsoft filters allowlisted).'} > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 echo $cons=Get-WMIObject -Namespace root\subscription -Class CommandLineEventConsumer -EA SilentlyContinue; if($cons){'[WARNING] WMI CommandLine Consumers found:'; $cons ^| Select-Object Name,CommandLineTemplate ^| Format-Table -AutoSize}else{'[OK] No WMI CommandLineEventConsumer.'} > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- [CHINA/VOLT TYPHOON] Kerberos RC4 Encryption Types --->> "%REPORT%"
-reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Kerberos\Parameters" /v SupportedEncryptionTypes>> "%REPORT%" 2>&1
+reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Kerberos\Parameters" /v SupportedEncryptionTypes>> "%REPORT%" 2>nul
+if errorlevel 1 (echo [INFO] SupportedEncryptionTypes not pinned -- Kerberos uses defaults ^(may include RC4-HMAC^). To restrict to AES, set value 0x18.)>> "%REPORT%"
 
 echo.>> "%REPORT%"
 echo --- [DPRK/RUBY SLEET] Recently Installed Root Certificates --->> "%REPORT%"
-echo Get-ChildItem Cert:\LocalMachine\Root ^| Where-Object {$_.NotBefore -gt (Get-Date).AddDays(-90)} ^| Select-Object Subject,Thumbprint,NotBefore,NotAfter ^| Format-Table -AutoSize > "%PSRUN%"
+echo $r = @(Get-ChildItem Cert:\LocalMachine\Root ^| Where-Object {$_.NotBefore -gt (Get-Date).AddDays(-90)}); if($r.Count -gt 0){ '[WARNING] Root certificates installed in last 90 days (Ruby Sleet drops fake roots):'; $r ^| Select-Object Subject,Thumbprint,NotBefore,NotAfter ^| Format-Table -AutoSize } else { '[OK] No new root certificates installed in last 90 days.' } > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- [VOLT TYPHOON] VPN Client Processes --->> "%REPORT%"
 wmic process get Name,ProcessId,ExecutablePath | findstr /i /c:"FortiClient" /c:"GlobalProtect" /c:"pulse" /c:"ivanti" /c:"vpnclient">> "%REPORT%" 2>&1
+if errorlevel 1 (echo [OK] No targeted VPN client processes running.)>> "%REPORT%"
 echo.>> "%REPORT%"
 
 echo --- [LINEN/VIOLET TYPHOON] Accessibility Login-Screen Backdoor (T1546.008) --->> "%REPORT%"
@@ -2379,17 +2424,31 @@ echo.>> "%REPORT%"
 echo --- [CTI][T1546.015] COM Object Hijacking - User CLSID Overrides --->> "%REPORT%"
 echo $defProp = [char]40 + 'default' + [char]41 > "%PSRUN%"
 echo $clsids = 'HKCU:\Software\Classes\CLSID' >> "%PSRUN%"
-echo $hits = @() >> "%PSRUN%"
+echo $vendor = @() >> "%PSRUN%"
+echo $flagged = @() >> "%PSRUN%"
+echo $trusted = 'Microsoft^|Adobe^|Brave^|Google^|Mozilla^|WinSCP^|Cisco^|Citrix^|Logitech^|VMware^|Dropbox^|Zoom^|Apple^|NVIDIA^|Intel^|Realtek^|Lenovo^|HP Inc^|Dell' >> "%PSRUN%"
 echo if (Test-Path $clsids) { >> "%PSRUN%"
-echo   $keys = Get-ChildItem $clsids -EA SilentlyContinue >> "%PSRUN%"
-echo   foreach ($k in $keys) { >> "%PSRUN%"
+echo   foreach ($k in (Get-ChildItem $clsids -EA SilentlyContinue)) { >> "%PSRUN%"
 echo     $sv = Get-ItemProperty "$($k.PSPath)\InprocServer32" -Name $defProp -EA SilentlyContinue >> "%PSRUN%"
 echo     if ($sv -and $sv.$defProp -and $sv.$defProp -notmatch 'Microsoft^|Windows^|System32') { >> "%PSRUN%"
-echo       $hits += $k.PSChildName + ' -^> ' + $sv.$defProp >> "%PSRUN%"
+echo       $dll = [string]$sv.$defProp >> "%PSRUN%"
+echo       $entry = $k.PSChildName + ' -^> ' + $dll >> "%PSRUN%"
+echo       $bad = ($dll -match '\\Temp\\^|\\Downloads\\^|\\Public\\') >> "%PSRUN%"
+echo       $sig = $null; try { $sig = Get-AuthenticodeSignature -FilePath $dll -EA Stop } catch {} >> "%PSRUN%"
+echo       if ($sig -and $sig.Status -eq 'Valid' -and $sig.SignerCertificate.Subject -match $trusted -and -not $bad) { >> "%PSRUN%"
+echo         $cn = (($sig.SignerCertificate.Subject -split ',')[0]) -replace '^^CN=','' >> "%PSRUN%"
+echo         $vendor += $entry + '   [signed: ' + $cn + ']' >> "%PSRUN%"
+echo       } else { >> "%PSRUN%"
+echo         if ($null -eq $sig) { $why = 'no-file' } elseif ($sig.Status -eq 'Valid') { $why = 'unexpected-signer' } elseif ($sig.Status -eq 'NotSigned') { $why = 'unsigned' } else { $why = [string]$sig.Status } >> "%PSRUN%"
+echo         if ($bad) { $why = $why + ' bad-path' } >> "%PSRUN%"
+echo         $flagged += $entry + '   [' + $why + ']' >> "%PSRUN%"
+echo       } >> "%PSRUN%"
 echo     } >> "%PSRUN%"
 echo   } >> "%PSRUN%"
 echo } >> "%PSRUN%"
-echo if ($hits.Count -gt 0) { '[WARNING][T1546.015] User-level COM hijack overrides found:'; $hits ^| Select-Object -First 15 ^| ForEach-Object { '  '+$_ } } else { '[OK] No suspicious user-level COM CLSID overrides.' } >> "%PSRUN%"
+echo if ($flagged.Count -gt 0) { '[WARNING][T1546.015] Suspicious COM CLSID overrides ('+$flagged.Count+'):'; $flagged ^| Select-Object -First 15 ^| ForEach-Object { '  '+$_ } } >> "%PSRUN%"
+echo if ($vendor.Count -gt 0) { '[INFO][T1546.015] Vendor-registered user CLSID overrides ('+$vendor.Count+', expected):'; $vendor ^| Select-Object -First 15 ^| ForEach-Object { '  '+$_ } } >> "%PSRUN%"
+echo if ($flagged.Count -eq 0 -and $vendor.Count -eq 0) { '[OK] No user-level COM CLSID overrides.' } >> "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 :: --- [CTI] Living-off-the-Cloud: Azure/M365 CLI Token Files ---
@@ -2521,7 +2580,7 @@ echo $ev=Get-WinEvent -FilterHashtable @{LogName='Security';Id=4720} -MaxEvents 
 echo $ev=Get-WinEvent -FilterHashtable @{LogName='Security';Id=4732} -MaxEvents 5 -EA SilentlyContinue;if($ev){ck 'WARN' "Users added to Administrators: $(@($ev).Count) events" 'Review account names in Section 16'}else{ck 'PASS' 'No unexpected additions to Administrators group - 4732'} >> "%PSRUN%"
 echo $pp=(netsh interface portproxy show all 2^>$null)^|Out-String;if($pp -match '\d+\.\d+'){ck 'CRIT' 'netsh portproxy tunnel rules are ACTIVE' 'Volt Typhoon C2 IOC. Remove: netsh interface portproxy reset. See Section 17.'}else{ck 'PASS' 'No netsh portproxy tunnel rules - Volt Typhoon check'} >> "%PSRUN%"
 echo try{$pipes=Get-ChildItem \\.\pipe\ -EA Stop^|Where-Object{$_.Name -match 'postex_^|msagent_^|MSSE-^|metsvc'};if($pipes){ck 'CRIT' ('Cobalt Strike named pipes detected: '+@($pipes).Count) ('Pipes: '+($pipes.Name -join ', ')+'. Active C2. See Section 17.')}else{ck 'PASS' 'No Cobalt Strike default named pipes detected'}}catch{ck 'INFO' 'Named pipe check unavailable'} >> "%PSRUN%"
-echo $subs=@(Get-WMIObject -Namespace root\subscription -Class __EventFilter -EA SilentlyContinue);if($subs.Count -gt 0){ck 'CRIT' ('WMI EventFilter subscriptions present: '+$subs.Count) 'Stealthy reboot-persistent implant. See Section 17. Remove: Get-WMIObject -NS root\subscription -Class __EventFilter ^| Remove-WMIObject'}else{ck 'PASS' 'No WMI permanent EventFilter subscriptions'} >> "%PSRUN%"
+echo $subs=@(Get-WMIObject -Namespace root\subscription -Class __EventFilter -EA SilentlyContinue ^| Where-Object { $_.Name -notin @('SCM Event Log Filter','BVTConsumer','BVTFilter','RmAssistEventLog') });if($subs.Count -gt 0){ck 'CRIT' ('Non-default WMI EventFilter subscriptions present: '+$subs.Count) 'Stealthy reboot-persistent implant. See Section 17. Remove: Get-WMIObject -NS root\subscription -Class __EventFilter ^| Remove-WMIObject'}else{ck 'PASS' 'No non-default WMI permanent EventFilter subscriptions'} >> "%PSRUN%"
 echo $sus=@(Get-CimInstance Win32_Process -EA SilentlyContinue^|Where-Object{$_.ExecutablePath -match '\\Temp\\^|\\AppData\\^|\\Downloads\\^|\\Users\\Public\\'});if($sus.Count -gt 0){ck 'CRIT' ('Processes from suspicious paths: '+$sus.Count) ('Names: '+(($sus^|Select-Object -Exp Name^|Sort-Object -Unique) -join ', ')+'. See Section 4.')}else{ck 'PASS' 'No processes running from Temp / AppData / Downloads'} >> "%PSRUN%"
 echo. >> "%PSRUN%"
 
