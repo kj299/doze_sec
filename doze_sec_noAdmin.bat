@@ -1318,15 +1318,11 @@ echo --- Full Task Listing --->> "%REPORT%"
 schtasks /query /fo LIST /v>> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
-echo --- CRITICAL: Tasks with Actions in Temp or AppData --->> "%REPORT%"
-schtasks /query /fo CSV /v > "%TEMP%\dz_pipe.tmp" 2>nul
-if errorlevel 1 (
-    echo [INFO] schtasks unavailable -- task path check skipped.>> "%REPORT%"
-) else (
-    findstr /i /c:"\Temp\" /c:"\AppData\" /c:"\Downloads\" "%TEMP%\dz_pipe.tmp">> "%REPORT%"
-    if errorlevel 1 echo [OK] No scheduled-task actions in Temp/AppData/Downloads.>> "%REPORT%"
-)
-del "%TEMP%\dz_pipe.tmp" 2>nul
+echo --- CRITICAL: Tasks with Actions in Suspicious Paths --->> "%REPORT%"
+echo $tasks = (schtasks /query /fo CSV /v 2^>$null) ^| ConvertFrom-Csv -EA SilentlyContinue > "%PSRUN%"
+echo $patt = '\\Temp\\^|\\AppData\\^|\\Downloads\\^|\\Users\\Public\\^|\\ProgramData\\update' >> "%PSRUN%"
+echo if (-not $tasks) { '[INFO] schtasks unavailable or no tasks -- check skipped.' } else { $susp = @($tasks ^| Where-Object { $_."Task To Run" -match $patt }); if ($susp.Count -gt 0) { '[CRITICAL] Tasks with action paths in suspicious locations:'; $susp ^| Select-Object TaskName,'Task To Run','Run As User' ^| Format-Table -AutoSize } else { '[OK] No scheduled-task actions in Temp/AppData/Downloads/Public/ProgramData\update.' } } >> "%PSRUN%"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- Tasks Running as SYSTEM --->> "%REPORT%"
@@ -2318,14 +2314,17 @@ echo if($hits.Count -gt 0){'[CRITICAL] Known malware staging files found:'; $hit
 
 echo.>> "%REPORT%"
 echo --- [18e] Scheduled Task IOC Match --->> "%REPORT%"
-echo  Matching scheduled tasks against ioc_scheduled_tasks.txt>> "%REPORT%"
-schtasks /query /fo CSV /v 2>nul | findstr /i /g:"%IOCDIR%\ioc_scheduled_tasks.txt" | findstr /v /c:"#">> "%REPORT%" 2>&1
-if %errorlevel% equ 0 (
-    echo [WARNING] Scheduled task IOC matches found above.>> "%REPORT%"
+echo  Matching scheduled task NAMES and ACTIONS against ioc_scheduled_tasks.txt>> "%REPORT%"
+echo $iocFile = '%IOCDIR%\ioc_scheduled_tasks.txt' > "%PSRUN%"
+echo $patterns = if (Test-Path $iocFile) { Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'} } >> "%PSRUN%"
+echo $tasks = (schtasks /query /fo CSV /v 2^>$null) ^| ConvertFrom-Csv -EA SilentlyContinue >> "%PSRUN%"
+echo if (-not $tasks) { '[INFO] schtasks returned no data -- IOC check skipped.' } elseif (-not $patterns) { '[INFO] ioc_scheduled_tasks.txt missing or empty.' } else { $hits = @(); foreach ($p in $patterns) { $rx = [regex]::Escape($p.Trim()); $hits += $tasks ^| Where-Object { ($_.TaskName -match $rx) -or ($_."Task To Run" -match $rx) } }; $hits = @($hits ^| Sort-Object TaskName,'Task To Run' -Unique); if ($hits.Count -gt 0) { $hits ^| Select-Object TaskName,'Task To Run' ^| Format-Table -AutoSize; '[WARNING] Scheduled task IOC matches found.'; New-Item "$env:TEMP\dz_taskioc_hits.txt" -Force ^| Out-Null } else { '[OK] No scheduled task IOC matches.' } } >> "%PSRUN%"
+del "%TEMP%\dz_taskioc_hits.txt" 2>nul
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+if exist "%TEMP%\dz_taskioc_hits.txt" (
     set /a IOC_HITS+=1
     if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
-) else (
-    echo [OK] No scheduled task IOC matches.>> "%REPORT%"
+    del "%TEMP%\dz_taskioc_hits.txt" 2>nul
 )
 
 echo.>> "%REPORT%"

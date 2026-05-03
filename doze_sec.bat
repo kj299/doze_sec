@@ -1461,15 +1461,11 @@ echo  [INFO] Complete scheduled task inventory.>> "%REPORT%"
 schtasks /query /fo LIST /v>> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
-echo --- CRITICAL: Tasks with Actions in Temp or AppData --->> "%REPORT%"
-schtasks /query /fo CSV /v > "%TEMP%\dz_pipe.tmp" 2>nul
-if errorlevel 1 (
-    echo [INFO] schtasks unavailable -- task path check skipped.>> "%REPORT%"
-) else (
-    findstr /i /c:"\Temp\" /c:"\AppData\" /c:"\Downloads\" "%TEMP%\dz_pipe.tmp">> "%REPORT%"
-    if errorlevel 1 echo [OK] No scheduled-task actions in Temp/AppData/Downloads.>> "%REPORT%"
-)
-del "%TEMP%\dz_pipe.tmp" 2>nul
+echo --- CRITICAL: Tasks with Actions in Suspicious Paths --->> "%REPORT%"
+echo $tasks = (schtasks /query /fo CSV /v 2^>$null) ^| ConvertFrom-Csv -EA SilentlyContinue > "%PSRUN%"
+echo $patt = '\\Temp\\^|\\AppData\\^|\\Downloads\\^|\\Users\\Public\\^|\\ProgramData\\update' >> "%PSRUN%"
+echo if (-not $tasks) { '[INFO] schtasks unavailable or no tasks -- check skipped.' } else { $susp = @($tasks ^| Where-Object { $_."Task To Run" -match $patt }); if ($susp.Count -gt 0) { '[CRITICAL] Tasks with action paths in suspicious locations:'; $susp ^| Select-Object TaskName,'Task To Run','Run As User' ^| Format-Table -AutoSize } else { '[OK] No scheduled-task actions in Temp/AppData/Downloads/Public/ProgramData\update.' } } >> "%PSRUN%"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- Tasks Running as SYSTEM --->> "%REPORT%"
