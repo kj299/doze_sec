@@ -22,15 +22,12 @@ azureedge-cdn.cloud
 akamai-static.cloud
 #
 # === DGA / SUSPICIOUS TLD PATTERNS ===
-.top
-.xyz
-.club
-.buzz
-.surf
-.icu
-.cam
-.rest
-.monster
+# NOTE: Bare TLD patterns (.top, .xyz, .club, .buzz, .surf, .icu,
+# .cam, .rest, .monster) were removed. These are findstr substring
+# patterns, so .top matches "laptop" and "desktop", .rest matches
+# REST API documentation cache entries, etc. .top alone has 4M+
+# registered legit domains. DGA detection requires entropy analysis
+# or rare-TLD frequency baselining, not bare suffix matching.
 #
 # === TUNNELING SERVICES (legitimate but abused) ===
 ngrok.io
@@ -41,14 +38,17 @@ bore.digital
 localtunnel.me
 #
 # === DNS-OVER-HTTPS ABUSE ===
+# NOTE: cloudflare-dns.com/dns-query and dns.google/resolve were
+# removed -- these are first-party DoH endpoints from the two
+# largest DNS providers, used by default in Firefox and Chrome
+# in many regions. doh.dns.sb retained as a less-common third-party
+# DoH endpoint that's a stronger signal in enterprise environments.
 doh.dns.sb
-cloudflare-dns.com/dns-query
-dns.google/resolve
 #
 # === SCATTERED SPIDER / SOCIAL ENG INFRA ===
--okta.com
--sso.com
--login.com
--helpdesk.com
--vpn.com
--mfa.com
+# NOTE: Bare suffix patterns (-okta.com, -sso.com, -login.com,
+# -helpdesk.com, -vpn.com, -mfa.com) were removed. findstr substring
+# matching makes "myapp-login.com" indistinguishable from a phishing
+# domain "paypal-login.com". Typosquat detection requires DNS
+# distance analysis against known-legit corporate domains, which is
+# out of scope for this script.
