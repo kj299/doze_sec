@@ -1150,15 +1150,16 @@ echo --- Pending Reboot Check --->> "%REPORT%"
 echo $reboot=$false > "%PSRUN%"
 echo if(Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'){$reboot=$true; '[REBOOT PENDING] Windows Update requires a reboot.'} >> "%PSRUN%"
 echo if(Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'){$reboot=$true; '[REBOOT PENDING] Component Based Servicing pending reboot.'} >> "%PSRUN%"
-echo try{ $pnd=Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -Name PendingFileRenameOperations -EA Stop; if($pnd){'[REBOOT PENDING] PendingFileRenameOperations set.' }}catch{} >> "%PSRUN%"
+echo try{ $pnd=Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -Name PendingFileRenameOperations -EA Stop; if($pnd){$reboot=$true; '[REBOOT PENDING] PendingFileRenameOperations set.' }}catch{} >> "%PSRUN%"
 echo if(-not $reboot){'[OK] No pending reboot detected.'} >> "%PSRUN%"
-echo if($reboot){'REBOOT_NEEDED'}else{'REBOOT_CLEAR'} >> "%PSRUN%"
-for /f "usebackq" %%a in (`%PWSH% -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" 2^>nul ^| findstr /c:"REBOOT_NEEDED" /c:"REBOOT_CLEAR"`) do set "REBOOT_STATUS=%%a"
+echo if($reboot){ New-Item "$env:TEMP\dz_reboot_needed.txt" -Force ^| Out-Null } >> "%PSRUN%"
+del "%TEMP%\dz_reboot_needed.txt" 2>nul
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
-if /i "%REBOOT_STATUS%"=="REBOOT_NEEDED" (
+if exist "%TEMP%\dz_reboot_needed.txt" (
     echo [EXIT 4] A reboot is pending. Reboot the system then re-run the audit.>> "%REPORT%"
     echo [EXIT 4] Results may be incomplete until the pending reboot is applied.>> "%REPORT%"
     set "EXIT_CODE=4"
+    del "%TEMP%\dz_reboot_needed.txt" 2>nul
 )
 
 echo.>> "%REPORT%"
