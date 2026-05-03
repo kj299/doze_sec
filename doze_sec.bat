@@ -2212,6 +2212,8 @@ echo $subs=@(Get-WMIObject -Namespace root\subscription -Class __EventFilter -EA
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 echo $cons=Get-WMIObject -Namespace root\subscription -Class CommandLineEventConsumer -EA SilentlyContinue; if($cons){'[WARNING] WMI CommandLine Consumers found:'; $cons ^| Select-Object Name,CommandLineTemplate ^| Format-Table -AutoSize}else{'[OK] No WMI CommandLineEventConsumer.'} > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+echo $acons=Get-WMIObject -Namespace root\subscription -Class ActiveScriptEventConsumer -EA SilentlyContinue; if($acons){'[WARNING] WMI ActiveScript (VBScript/JScript) Consumers found:'; $acons ^| Select-Object Name,ScriptingEngine,@{n='ScriptText';e={if($_.ScriptText.Length -gt 200){$_.ScriptText.Substring(0,200)+'...[truncated]'}else{$_.ScriptText}}} ^| Format-List}else{'[OK] No WMI ActiveScriptEventConsumer.'} > "%PSRUN%"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- [CHINA/VOLT TYPHOON] Kerberos RC4 Encryption Types --->> "%REPORT%"
@@ -2330,7 +2332,7 @@ echo $iocFile='%IOCDIR%\ioc_named_pipes.txt' > "%PSRUN%"
 echo $patterns=Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'} >> "%PSRUN%"
 echo $pipes=Get-ChildItem \\.\pipe\ -EA SilentlyContinue >> "%PSRUN%"
 echo $hits=@() >> "%PSRUN%"
-echo foreach($p in $patterns){$m=$pipes ^| Where-Object {$_.Name -match [regex]::Escape($p)}; if($m){$hits+=$m}} >> "%PSRUN%"
+echo foreach($p in $patterns){try{$m=$pipes ^| Where-Object {$_.Name -match $p}; if($m){$hits+=$m}}catch{}} >> "%PSRUN%"
 echo if($hits.Count -gt 0){$hits ^| Select-Object -Unique Name; '[WARNING] Named pipe IOC matches found.'; New-Item "$env:TEMP\dz_iochit_18b.txt" -Force ^| Out-Null}else{'[OK] No named pipe IOC matches.'} >> "%PSRUN%"
 del "%TEMP%\dz_iochit_18b.txt" 2>nul
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
@@ -2347,7 +2349,7 @@ echo $iocFile='%IOCDIR%\ioc_services.txt' > "%PSRUN%"
 echo $patterns=Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'} >> "%PSRUN%"
 echo $svcs=Get-CimInstance Win32_Service -EA SilentlyContinue >> "%PSRUN%"
 echo $hits=@() >> "%PSRUN%"
-echo foreach($p in $patterns){$m=$svcs ^| Where-Object {$_.Name -match [regex]::Escape($p) -or $_.DisplayName -match [regex]::Escape($p)}; if($m){$hits+=$m}} >> "%PSRUN%"
+echo foreach($p in $patterns){try{$m=$svcs ^| Where-Object {$_.Name -match $p -or $_.DisplayName -match $p}; if($m){$hits+=$m}}catch{}} >> "%PSRUN%"
 echo if($hits.Count -gt 0){$hits ^| Select-Object Name,State,PathName ^| Format-Table -AutoSize; '[WARNING] Service IOC matches found.'; New-Item "$env:TEMP\dz_iochit_18c.txt" -Force ^| Out-Null}else{'[OK] No service IOC matches.'} >> "%PSRUN%"
 del "%TEMP%\dz_iochit_18c.txt" 2>nul
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
