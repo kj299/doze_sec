@@ -1354,8 +1354,14 @@ if %errorlevel% equ 0 (
 
 echo.>> "%REPORT%"
 echo --- LOLBin Processes (mshta, certutil, regsvr32, cmstp, wscript) --->> "%REPORT%"
-wmic process get Name,ProcessId,ExecutablePath,CommandLine | findstr /i /c:"mshta" /c:"regsvr32" /c:"certutil" /c:"cmstp" /c:"wscript" /c:"cscript" /c:"msiexec" /c:"installutil">> "%REPORT%" 2>&1
-if errorlevel 1 (echo [OK] No LOLBin processes currently running.)>> "%REPORT%"
+wmic process get Name,ProcessId,ExecutablePath,CommandLine > "%TEMP%\dz_pipe.tmp" 2>nul
+if errorlevel 1 (
+    echo [INFO] wmic unavailable -- LOLBin process check skipped.>> "%REPORT%"
+) else (
+    findstr /i /c:"mshta" /c:"regsvr32" /c:"certutil" /c:"cmstp" /c:"wscript" /c:"cscript" /c:"msiexec" /c:"installutil" "%TEMP%\dz_pipe.tmp">> "%REPORT%"
+    if errorlevel 1 echo [OK] No LOLBin processes currently running.>> "%REPORT%"
+)
+del "%TEMP%\dz_pipe.tmp" 2>nul
 
 echo.>> "%REPORT%"
 echo --- Remote Monitoring and Management Tools (DPRK/Iran C2 vector) --->> "%REPORT%"
@@ -1456,8 +1462,14 @@ schtasks /query /fo LIST /v>> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- CRITICAL: Tasks with Actions in Temp or AppData --->> "%REPORT%"
-schtasks /query /fo CSV /v 2>nul | findstr /i /c:"\Temp\" /c:"\AppData\" /c:"\Downloads\">> "%REPORT%" 2>&1
-if errorlevel 1 (echo [OK] No scheduled-task actions in Temp/AppData/Downloads.)>> "%REPORT%"
+schtasks /query /fo CSV /v > "%TEMP%\dz_pipe.tmp" 2>nul
+if errorlevel 1 (
+    echo [INFO] schtasks unavailable -- task path check skipped.>> "%REPORT%"
+) else (
+    findstr /i /c:"\Temp\" /c:"\AppData\" /c:"\Downloads\" "%TEMP%\dz_pipe.tmp">> "%REPORT%"
+    if errorlevel 1 echo [OK] No scheduled-task actions in Temp/AppData/Downloads.>> "%REPORT%"
+)
+del "%TEMP%\dz_pipe.tmp" 2>nul
 
 echo.>> "%REPORT%"
 echo --- Tasks Running as SYSTEM --->> "%REPORT%"
@@ -2030,8 +2042,14 @@ wevtutil qe Security /q:"*[System[(EventID=4624)]]" /c:25 /rd:true /f:text | fin
 
 echo.>> "%REPORT%"
 echo --- New Service Installed - Event 7045 --->> "%REPORT%"
-wevtutil qe System /q:"*[System[(EventID=7045)]]" /c:20 /rd:true /f:text | findstr /c:"TimeCreated" /c:"ServiceName" /c:"ImagePath" /c:"AccountName">> "%REPORT%" 2>&1
-if errorlevel 1 (echo [OK] No recent service install events ^(7045^) found.)>> "%REPORT%"
+wevtutil qe System /q:"*[System[(EventID=7045)]]" /c:20 /rd:true /f:text > "%TEMP%\dz_pipe.tmp" 2>nul
+if errorlevel 1 (
+    echo [INFO] wevtutil unavailable or System log inaccessible -- 7045 check skipped.>> "%REPORT%"
+) else (
+    findstr /c:"TimeCreated" /c:"ServiceName" /c:"ImagePath" /c:"AccountName" "%TEMP%\dz_pipe.tmp">> "%REPORT%"
+    if errorlevel 1 echo [OK] No recent service install events ^(7045^) found.>> "%REPORT%"
+)
+del "%TEMP%\dz_pipe.tmp" 2>nul
 
 echo.>> "%REPORT%"
 echo --- Scheduled Task Changes - Events 4698, 4702 --->> "%REPORT%"
@@ -2211,8 +2229,14 @@ echo $r = @(Get-ChildItem Cert:\LocalMachine\Root ^| Where-Object {$_.NotBefore 
 
 echo.>> "%REPORT%"
 echo --- [VOLT TYPHOON] VPN Client Processes --->> "%REPORT%"
-wmic process get Name,ProcessId,ExecutablePath | findstr /i /c:"FortiClient" /c:"GlobalProtect" /c:"pulse" /c:"ivanti" /c:"vpnclient">> "%REPORT%" 2>&1
-if errorlevel 1 (echo [OK] No targeted VPN client processes running.)>> "%REPORT%"
+wmic process get Name,ProcessId,ExecutablePath > "%TEMP%\dz_pipe.tmp" 2>nul
+if errorlevel 1 (
+    echo [INFO] wmic unavailable -- VPN client process check skipped.>> "%REPORT%"
+) else (
+    findstr /i /c:"FortiClient" /c:"GlobalProtect" /c:"pulse" /c:"ivanti" /c:"vpnclient" "%TEMP%\dz_pipe.tmp">> "%REPORT%"
+    if errorlevel 1 echo [OK] No targeted VPN client processes running.>> "%REPORT%"
+)
+del "%TEMP%\dz_pipe.tmp" 2>nul
 echo.>> "%REPORT%"
 
 echo --- [LINEN/VIOLET TYPHOON] Accessibility Login-Screen Backdoor (T1546.008) --->> "%REPORT%"
