@@ -70,19 +70,25 @@ atexec
 dcomexec
 #
 # === DPRK / LAZARUS ===
-TraderTraitor
-AppleJeus
-DreamJob
-BLINDINGCAN
-COPPERHEDGE
+# NOTE: Campaign names (TraderTraitor, AppleJeus, DreamJob, BLINDINGCAN,
+# COPPERHEDGE) were removed -- these are FBI/CISA designations, never
+# the actual process names threat actors use. Detection of these
+# campaigns relies on hash-matching (ioc_hashes.txt), C2 domain
+# patterns (ioc_domains.txt), and command-line indicators in
+# ioc_lolbins.txt -- not process-name matching.
 #
 # === VOLT TYPHOON / SALT TYPHOON ===
-# Note: these are detected via command-line matching in ioc_lolbins.txt
-ntdsutil
-netsh
+# NOTE: ntdsutil and netsh were removed -- both are legitimate
+# Windows admin tools called constantly by the OS, drivers, and
+# AD administrators. Volt Typhoon abuses them via specific command
+# lines (ntdsutil ... ifm, netsh ... portproxy), which are caught
+# in ioc_lolbins.txt and Section 17's portproxy check.
 #
 # === SCATTERED SPIDER ===
-Screenconnect.ClientService
-Splashtop.Streamer
-fleetdeck_agent
-level_agent
+# NOTE: Screenconnect.ClientService, Splashtop.Streamer, fleetdeck_agent,
+# and level_agent were removed -- these are legitimate process names
+# for commercially-licensed RMM products used by tens of thousands of
+# MSPs. Distinguishing attacker use from legitimate IT use requires
+# context (process tree, install path, signing cert) not visible to a
+# bare process-name findstr. RMM tool RUNNING/INSTALLED status is
+# already surfaced in Section 17's enumeration.

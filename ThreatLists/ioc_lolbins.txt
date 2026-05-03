@@ -36,7 +36,12 @@ msiexec /y
 msiexec /z
 #
 # === BITSADMIN (T1197) ===
-bitsadmin /transfer
+# NOTE: bitsadmin /transfer was removed -- Windows Update, WSUS,
+# and Defender signature updates use BITS via this command, so
+# the substring match fires on routine update activity. The other
+# bitsadmin verbs (/create, /addfile, /resume) are more strongly
+# associated with attack chains where an adversary stages a file
+# for later download.
 bitsadmin /create
 bitsadmin /addfile
 bitsadmin /resume
@@ -47,19 +52,26 @@ wmic /node:
 wmic shadowcopy delete
 #
 # === POWERSHELL OBFUSCATION (T1059.001) ===
+# NOTE: Several patterns were removed because findstr substring
+# matching produced too many false positives on legitimate PS
+# automation:
+#   -enc            matched -encoding (Get-Content -Encoding UTF8)
+#   iex             native PS alias used in countless signed scripts
+#   invoke-expression   used by Chocolatey installer and others
+#   downloadstring  used by every PS package bootstrapper
+#   downloadfile    same
+#   invoke-webrequest   every PS-based update / health-check script
+#   new-object net.webclient   used by Microsoft's own Azure scripts
+#   reflection.assembly   used by any script doing dynamic types
+#   [convert]::     base64/type conversion in many legit scripts
+# Retained patterns are stronger signals: -encodedcommand (full
+# spelling, less common in legit), specific base64 prefixes (JAB
+# starts most PS-encoded payloads), frombase64string, and the
+# execution-policy bypass combinations.
 -encodedcommand
--enc
 -e JAB
 -e SQBFA
 frombase64string
-iex
-invoke-expression
-downloadstring
-downloadfile
-invoke-webrequest
-new-object net.webclient
-reflection.assembly
-[convert]::
 bypass -nop
 -nop -w hidden
 -exec bypass

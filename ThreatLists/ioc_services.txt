@@ -3,17 +3,16 @@
 # Format: service name per line (matched case-insensitive)
 #
 # === REMOTE ACCESS PERSISTENCE ===
-ScreenConnect Client
-AnyDeskMSI
-TeamViewerService
-RustDeskService
-SplashtopStreamer
-AteraAgent
-KaseyaAgent
-ConnectWiseControl
-BeyondTrustService
-level_agent
-fleetdeck
+# NOTE: ScreenConnect Client, AnyDeskMSI, TeamViewerService,
+# RustDeskService, SplashtopStreamer, AteraAgent, KaseyaAgent,
+# ConnectWiseControl, BeyondTrustService, level_agent, and fleetdeck
+# were removed. These are legitimate service names for commercially-
+# licensed RMM/remote-support products used by every MSP-managed
+# enterprise endpoint. RMM detection that distinguishes attacker
+# from defender requires context (install signature, process tree,
+# install date) -- service-name matching alone produces near-100%
+# false positives. Section 17's RMM enumeration emits these as
+# context lines for an analyst to evaluate.
 #
 # === C2 IMPLANT SERVICES ===
 WinDefendUpdate
@@ -38,20 +37,31 @@ PAExec-
 wmiprvse_alt
 #
 # === BYOVD (Bring Your Own Vulnerable Driver) ===
+# NOTE: HWiNFO and WinRing0 were removed -- both are widely shipped
+# legitimate driver service names (HWiNFO is the most popular
+# hardware-monitoring tool, WinRing0 ships with OEM motherboard
+# utilities from Asus/MSI). Hash-based detection (ioc_hashes.txt)
+# is the right way to flag the vulnerable driver bytes regardless
+# of how they got installed.
 gdrv
 RTCore64
 dbutil_2_3
-HWiNFO
-WinRing0
 asio
 ene_io
 #
 # === RANSOMWARE SERVICES ===
+# NOTE: vssadmin_shadow and bcdedit_recovery were removed -- these
+# are not real service names used by any documented ransomware
+# family. The ransomware abuse of vssadmin/bcdedit happens via
+# command-line invocation (see ioc_lolbins.txt), not via service
+# creation under those names.
 LockBitSvc
-vssadmin_shadow
-bcdedit_recovery
 #
-# === SCATTERED SPIDER / LAPSUS$ ===
+# === TUNNELING SERVICES (legitimate but abused by Scattered Spider/LAPSUS$) ===
+# NOTE: tailscale_daemon was removed -- Tailscale is a legitimate
+# enterprise mesh-VPN with millions of users. ngrok and cloudflared
+# remain because their service installation in an enterprise context
+# is a strong signal (most enterprises proxy outbound traffic and
+# would see these as policy violations).
 ngrok_service
 cloudflared_service
-tailscale_daemon
