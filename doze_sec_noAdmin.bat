@@ -1204,7 +1204,10 @@ echo Get-CimInstance Win32_Process -EA SilentlyContinue ^| Select-Object Name,Pr
 
 echo.>> "%REPORT%"
 echo --- HIGH SUSPICION: Processes from Temp, AppData, Downloads, Public --->> "%REPORT%"
-wmic process get Name,ProcessId,ExecutablePath | findstr /i /c:"\Temp\" /c:"\AppData\" /c:"\Downloads\" /c:"\Recycle" /c:"\Users\Public" /c:"\ProgramData\">> "%REPORT%" 2>&1
+:: \ProgramData\ removed -- legitimate vendor agents (Dropbox, OneDrive, Cisco
+:: AnyConnect, EDR/AV) routinely run from there. Section 18a IOC sweep catches
+:: known-bad ProgramData process names against ioc_processes.txt.
+wmic process get Name,ProcessId,ExecutablePath | findstr /i /c:"\Temp\" /c:"\AppData\" /c:"\Downloads\" /c:"\Recycle" /c:"\Users\Public">> "%REPORT%" 2>&1
 if %errorlevel% equ 0 (
     echo [WARNING] Suspicious process paths found above. Investigate now.>> "%REPORT%"
     if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"

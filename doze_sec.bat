@@ -1344,7 +1344,10 @@ echo Get-CimInstance Win32_Process -EA SilentlyContinue ^| Select-Object Name,Pr
 
 echo.>> "%REPORT%"
 echo --- HIGH SUSPICION: Processes from Temp, AppData, Downloads, Public --->> "%REPORT%"
-wmic process get Name,ProcessId,ExecutablePath | findstr /i /c:"\Temp\" /c:"\AppData\" /c:"\Downloads\" /c:"\Recycle" /c:"\Users\Public" /c:"\ProgramData\">> "%REPORT%" 2>&1
+:: \ProgramData\ removed -- legitimate vendor agents (Dropbox, OneDrive, Cisco
+:: AnyConnect, EDR/AV) routinely run from there. Section 18a IOC sweep catches
+:: known-bad ProgramData process names against ioc_processes.txt.
+wmic process get Name,ProcessId,ExecutablePath | findstr /i /c:"\Temp\" /c:"\AppData\" /c:"\Downloads\" /c:"\Recycle" /c:"\Users\Public">> "%REPORT%" 2>&1
 if %errorlevel% equ 0 (
     echo [WARNING] Suspicious process paths found above. Investigate now.>> "%REPORT%"
     if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
@@ -1908,11 +1911,19 @@ echo       DPRK Ruby Sleet signed malware with stolen legitimate cert.>> "%REPOR
 echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
-echo --- Executables in Temp (Last 7 Days) --->> "%REPORT%"
+echo --- Executables in User Temp (Last 7 Days) --->> "%REPORT%"
 forfiles /p "%TEMP%" /s /d -7 /m "*.exe" /c "cmd /c echo @path @fdate @ftime">> "%REPORT%" 2>&1
 forfiles /p "%TEMP%" /s /d -7 /m "*.dll" /c "cmd /c echo @path @fdate @ftime">> "%REPORT%" 2>&1
 forfiles /p "%TEMP%" /s /d -7 /m "*.ps1" /c "cmd /c echo @path @fdate @ftime">> "%REPORT%" 2>&1
 forfiles /p "%TEMP%" /s /d -7 /m "*.vbs" /c "cmd /c echo @path @fdate @ftime">> "%REPORT%" 2>&1
+
+echo.>> "%REPORT%"
+echo --- Executables in System Temp (C:\Windows\Temp, Last 7 Days) --->> "%REPORT%"
+echo  Catches SYSTEM-context staging (post-priv-esc payload drops).>> "%REPORT%"
+forfiles /p "%WINDIR%\Temp" /s /d -7 /m "*.exe" /c "cmd /c echo @path @fdate @ftime">> "%REPORT%" 2>&1
+forfiles /p "%WINDIR%\Temp" /s /d -7 /m "*.dll" /c "cmd /c echo @path @fdate @ftime">> "%REPORT%" 2>&1
+forfiles /p "%WINDIR%\Temp" /s /d -7 /m "*.ps1" /c "cmd /c echo @path @fdate @ftime">> "%REPORT%" 2>&1
+forfiles /p "%WINDIR%\Temp" /s /d -7 /m "*.vbs" /c "cmd /c echo @path @fdate @ftime">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- HTML Smuggling: Large HTML/HTA in Downloads (Midnight Blizzard) --->> "%REPORT%"
