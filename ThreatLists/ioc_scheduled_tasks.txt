@@ -30,10 +30,12 @@ bcdedit /set recoveryenabled
 wbadmin delete catalog
 #
 # === C2 CALLBACK TASKS ===
-# NOTE: Path fragments \Temp\, \AppData\, \Downloads\, \Users\Public\
-# matched against the full schtasks /v CSV row (which includes the Action
-# column with vendor binary paths) caused guaranteed false positives on
-# legitimate Brave/Zoom/Chrome auto-updaters that live in %LOCALAPPDATA%.
-# Path-based detection is performed in Section 13 against the Action
-# column only ("Tasks with Actions in Temp or AppData").
+# NOTE: Path fragments \Temp\, \AppData\, \Downloads\, \Users\Public\ were
+# removed from this list. Both this file and the Section 6 inline check
+# (doze_sec.bat:1458 / doze_sec_noAdmin.bat:1315) match against the full
+# schtasks /v CSV row -- including the Action column with vendor binary
+# paths under %LOCALAPPDATA% -- causing guaranteed false positives on
+# Brave/Zoom/Chrome auto-updaters. Until the inline check is rewritten
+# to isolate the Action column (e.g. PS CSV parser), keep this list lean
+# to avoid amplifying the FP rate via doze_sec_noAdmin.bat:2298.
 \ProgramData\update
