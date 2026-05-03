@@ -61,7 +61,7 @@ Temp path check, admin detection, OS version, OS compatibility, Safe Mode, log d
 | 3 | Network configuration and connections | No | C2 callbacks, DNS anomalies, open shares |
 | 4 | Running processes | No | LOLBins, RMM tools, suspicious paths |
 | 5 | Startup and persistence | No | Run keys, Winlogon, IFEO debuggers |
-| 6 | Scheduled tasks | No | Malicious tasks, suspicious paths |
+| 6 | Scheduled tasks | No | Malicious tasks, action-path detection (PS CSV, Task-To-Run column only) |
 | 7 | Windows services | Partial | Unsigned services, unusual accounts |
 | 8 | Firewall configuration | Yes | Disabled profiles, risky rules |
 | 9 | Defender and AV status | Yes | Disabled Defender, exclusions, tamper |
@@ -72,7 +72,7 @@ Temp path check, admin detection, OS version, OS compatibility, Safe Mode, log d
 | 14 | Suspicious files | No | ADS streams, double extensions, staging dirs |
 | 15 | Installed software and drivers | No | Unsigned drivers, vulnerable software |
 | 16 | Event log anomalies | Partial | Log clearing (1102), brute force (4625), lateral (4624) |
-| 17 | Nation-state threat indicators | No | MDDR 2023-2025 TTPs, portproxy, WMI persistence |
+| 17 | Nation-state threat indicators | No | MDDR 2023-2025 TTPs, portproxy, WMI persistence (SCM defaults allowlisted by Name+Query) |
 | 18 | CTI-driven IOC sweep | No | SENTINEL-X file-based + inline CTI checks |
 
 ## Section 18: CTI IOC Sweep
@@ -87,7 +87,7 @@ Reads structured IOC files from `ThreatLists/` and matches against the live syst
 | 18b | Named pipe IOC match | PowerShell pipe enum vs `ioc_named_pipes.txt` |
 | 18c | Service IOC match | PowerShell service enum vs `ioc_services.txt` |
 | 18d | Malware staging paths | `Test-Path` vs `ioc_file_paths.txt` |
-| 18e | Scheduled task IOC match | `schtasks` vs `ioc_scheduled_tasks.txt` |
+| 18e | Scheduled task IOC match | `schtasks` (PS CSV) vs `ioc_scheduled_tasks.txt` -- TaskName + Task To Run columns only |
 | 18f | DNS cache C2 domains | `ipconfig /displaydns` vs `ioc_domains.txt` |
 | 18g | LOLBin command patterns | `wmic process` vs `ioc_lolbins.txt` |
 | 18h | Registry IOC check | `reg query` vs `ioc_registry.txt` |
@@ -100,7 +100,7 @@ Reads structured IOC files from `ThreatLists/` and matches against the live syst
 - AiTM phishing token cache artifacts (T1557.001)
 - Ransomware file extension survey (T1486)
 - BYOVD vulnerable driver detection (T1562.001)
-- COM object hijacking (T1546.015)
+- COM object hijacking (T1546.015) -- vendor-allowlist with word-boundary anchors, plus Authenticode signature, revocation (Test-Certificate), and expiry checks; labels distinguish trusted-signer vs unexpected-signer when paired with bad-path
 - Cloud CLI token theft (Azure/AWS/GCP)
 - OpenSSH server lateral movement surface
 - LOLBin download cradles in Event 4688 (admin only)
@@ -115,11 +115,11 @@ Plain-text IOC files. One entry per line. `#` = comment.
 | File | Entries | Format | Content |
 |------|:-------:|--------|---------|
 | `ioc_processes.txt` | 77 | Process name | Ransomware, C2, cred tools, RMM, APT |
-| `ioc_named_pipes.txt` | 46 | Pipe name | Cobalt Strike, Sliver, Havoc, Mythic, PsExec |
+| `ioc_named_pipes.txt` | 32 | Pipe name | Cobalt Strike, Sliver, Havoc, Mythic, PsExec |
 | `ioc_services.txt` | 45 | Service name | RMM, BYOVD, fake updates, implants |
 | `ioc_registry.txt` | 49 | `HIVE\Path\|Value` | Persistence, COM hijack, defense evasion |
 | `ioc_file_paths.txt` | 57 | File path | Staging dirs, webshells, driver drops |
-| `ioc_scheduled_tasks.txt` | 38 | Task name/path | Fake updates, APT persistence, C2 callbacks |
+| `ioc_scheduled_tasks.txt` | 19 | Task name/path | Fake updates, APT persistence, ransomware pre-staging |
 | `ioc_domains.txt` | 55 | Domain fragment | C2 infra, tunneling, DGA TLDs |
 | `ioc_hashes.txt` | 10 | `SHA256\|Family\|Source` | BYOVD drivers, CS loaders, ransomware |
 | `ioc_lolbins.txt` | 97 | Command fragment | certutil, mshta, regsvr32, PowerShell obfuscation |
