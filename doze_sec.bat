@@ -2310,6 +2310,150 @@ echo  IOC directory: %IOCDIR%>> "%REPORT%"
 :: Copy IOC files to output dir for reference
 if not exist "%OUTDIR%\ThreatLists" mkdir "%OUTDIR%\ThreatLists"
 copy "%IOCDIR%\*.txt" "%OUTDIR%\ThreatLists\" >nul 2>&1
+
+echo.>> "%REPORT%"
+echo --- [18a] Process IOC Match --->> "%REPORT%"
+echo  Matching running processes against ioc_processes.txt>> "%REPORT%"
+wmic process get Name,ProcessId,ExecutablePath 2>nul | findstr /i /g:"%IOCDIR%\ioc_processes.txt" | findstr /v /c:"#">> "%REPORT%" 2>&1
+if %errorlevel% equ 0 (
+    echo [WARNING] Process IOC matches found above. Investigate immediately.>> "%REPORT%"
+    set /a IOC_HITS+=1
+    if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+) else (
+    echo [OK] No process IOC matches.>> "%REPORT%"
+)
+
+echo.>> "%REPORT%"
+echo --- [18b] Named Pipe IOC Match --->> "%REPORT%"
+echo  Matching named pipes against ioc_named_pipes.txt>> "%REPORT%"
+echo $iocFile='%IOCDIR%\ioc_named_pipes.txt' > "%PSRUN%"
+echo $patterns=Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'} >> "%PSRUN%"
+echo $pipes=Get-ChildItem \\.\pipe\ -EA SilentlyContinue >> "%PSRUN%"
+echo $hits=@() >> "%PSRUN%"
+echo foreach($p in $patterns){$m=$pipes ^| Where-Object {$_.Name -match [regex]::Escape($p)}; if($m){$hits+=$m}} >> "%PSRUN%"
+echo if($hits.Count -gt 0){$hits ^| Select-Object -Unique Name; '[WARNING] Named pipe IOC matches found.'; New-Item "$env:TEMP\dz_iochit_18b.txt" -Force ^| Out-Null}else{'[OK] No named pipe IOC matches.'} >> "%PSRUN%"
+del "%TEMP%\dz_iochit_18b.txt" 2>nul
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+if exist "%TEMP%\dz_iochit_18b.txt" (
+    set /a IOC_HITS+=1
+    if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+    del "%TEMP%\dz_iochit_18b.txt" 2>nul
+)
+
+echo.>> "%REPORT%"
+echo --- [18c] Service IOC Match --->> "%REPORT%"
+echo  Matching services against ioc_services.txt>> "%REPORT%"
+echo $iocFile='%IOCDIR%\ioc_services.txt' > "%PSRUN%"
+echo $patterns=Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'} >> "%PSRUN%"
+echo $svcs=Get-CimInstance Win32_Service -EA SilentlyContinue >> "%PSRUN%"
+echo $hits=@() >> "%PSRUN%"
+echo foreach($p in $patterns){$m=$svcs ^| Where-Object {$_.Name -match [regex]::Escape($p) -or $_.DisplayName -match [regex]::Escape($p)}; if($m){$hits+=$m}} >> "%PSRUN%"
+echo if($hits.Count -gt 0){$hits ^| Select-Object Name,State,PathName ^| Format-Table -AutoSize; '[WARNING] Service IOC matches found.'; New-Item "$env:TEMP\dz_iochit_18c.txt" -Force ^| Out-Null}else{'[OK] No service IOC matches.'} >> "%PSRUN%"
+del "%TEMP%\dz_iochit_18c.txt" 2>nul
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+if exist "%TEMP%\dz_iochit_18c.txt" (
+    set /a IOC_HITS+=1
+    if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+    del "%TEMP%\dz_iochit_18c.txt" 2>nul
+)
+
+echo.>> "%REPORT%"
+echo --- [18d] Suspicious File Path IOC Check --->> "%REPORT%"
+echo  Checking for known malware staging paths from ioc_file_paths.txt>> "%REPORT%"
+echo $iocFile='%IOCDIR%\ioc_file_paths.txt' > "%PSRUN%"
+echo $paths=Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'} >> "%PSRUN%"
+echo $hits=@() >> "%PSRUN%"
+echo foreach($p in $paths){ >> "%PSRUN%"
+echo   $expanded=[System.Environment]::ExpandEnvironmentVariables($p.Trim()) >> "%PSRUN%"
+echo   if(Test-Path $expanded){$hits+=$expanded} >> "%PSRUN%"
+echo } >> "%PSRUN%"
+echo if($hits.Count -gt 0){'[CRITICAL] Known malware staging files found:'; $hits; '[ACTION] Quarantine these files immediately.'; New-Item "$env:TEMP\dz_iochit_18d.txt" -Force ^| Out-Null}else{'[OK] No known malware staging files found.'} >> "%PSRUN%"
+del "%TEMP%\dz_iochit_18d.txt" 2>nul
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+if exist "%TEMP%\dz_iochit_18d.txt" (
+    set /a IOC_HITS+=1
+    if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+    del "%TEMP%\dz_iochit_18d.txt" 2>nul
+)
+
+echo.>> "%REPORT%"
+echo --- [18e] Scheduled Task IOC Match --->> "%REPORT%"
+echo  Matching scheduled task NAMES and ACTIONS against ioc_scheduled_tasks.txt>> "%REPORT%"
+echo $iocFile = '%IOCDIR%\ioc_scheduled_tasks.txt' > "%PSRUN%"
+echo $patterns = if (Test-Path $iocFile) { Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'} } >> "%PSRUN%"
+echo $tasks = (schtasks /query /fo CSV /v 2^>$null) ^| ConvertFrom-Csv -EA SilentlyContinue >> "%PSRUN%"
+echo if (-not $tasks) { '[INFO] schtasks returned no data -- IOC check skipped.' } elseif (-not $patterns) { '[INFO] ioc_scheduled_tasks.txt missing or empty.' } else { $hits = @(); foreach ($p in $patterns) { $rx = $p.Trim(); $hits += $tasks ^| Where-Object { ($_.TaskName -match $rx) -or ($_."Task To Run" -match $rx) } }; $hits = @($hits ^| Sort-Object TaskName,'Task To Run' -Unique); if ($hits.Count -gt 0) { $hits ^| Select-Object TaskName,'Task To Run' ^| Format-Table -AutoSize; '[WARNING] Scheduled task IOC matches found.'; New-Item "$env:TEMP\dz_iochit_18e.txt" -Force ^| Out-Null } else { '[OK] No scheduled task IOC matches.' } } >> "%PSRUN%"
+del "%TEMP%\dz_iochit_18e.txt" 2>nul
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+if exist "%TEMP%\dz_iochit_18e.txt" (
+    set /a IOC_HITS+=1
+    if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+    del "%TEMP%\dz_iochit_18e.txt" 2>nul
+)
+
+echo.>> "%REPORT%"
+echo --- [18f] DNS Cache C2 Domain Match --->> "%REPORT%"
+echo  Matching DNS cache against ioc_domains.txt>> "%REPORT%"
+ipconfig /displaydns 2>nul | findstr /i /g:"%IOCDIR%\ioc_domains.txt" | findstr /v /c:"#">> "%REPORT%" 2>&1
+if %errorlevel% equ 0 (
+    echo [WARNING] C2 domain IOC matches found in DNS cache above.>> "%REPORT%"
+    set /a IOC_HITS+=1
+    if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+) else (
+    echo [OK] No C2 domain IOC matches in DNS cache.>> "%REPORT%"
+)
+
+echo.>> "%REPORT%"
+echo --- [18g] LOLBin Command-Line Pattern Match --->> "%REPORT%"
+echo  Matching process command lines against ioc_lolbins.txt>> "%REPORT%"
+wmic process get Name,ProcessId,CommandLine 2>nul | findstr /i /g:"%IOCDIR%\ioc_lolbins.txt" | findstr /v /c:"#">> "%REPORT%" 2>&1
+if %errorlevel% equ 0 (
+    echo [CRITICAL] LOLBin abuse patterns detected in running processes.>> "%REPORT%"
+    set /a IOC_HITS+=1
+    if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+) else (
+    echo [OK] No LOLBin abuse patterns in running processes.>> "%REPORT%"
+)
+
+echo.>> "%REPORT%"
+echo --- [18h] Registry IOC Check --->> "%REPORT%"
+echo  Checking suspicious registry keys from ioc_registry.txt>> "%REPORT%"
+echo $iocFile='%IOCDIR%\ioc_registry.txt' > "%PSRUN%"
+echo $lines=Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'} >> "%PSRUN%"
+echo $hits=@() >> "%PSRUN%"
+echo foreach($line in $lines){ >> "%PSRUN%"
+echo   $parts=$line.Split('^|'); $keyPath=$parts[0]; $valName=if($parts.Count -gt 1){$parts[1]}else{$null} >> "%PSRUN%"
+echo   $psPath=$keyPath -replace '^HKLM\\','HKLM:\' -replace '^HKCU\\','HKCU:\' >> "%PSRUN%"
+echo   try{ >> "%PSRUN%"
+echo     if($valName){$v=Get-ItemProperty $psPath -Name $valName -EA Stop; $hits+="$keyPath\$valName = $($v.$valName)"} >> "%PSRUN%"
+echo     else{if(Test-Path $psPath){$hits+="$keyPath [EXISTS]"}} >> "%PSRUN%"
+echo   }catch{} >> "%PSRUN%"
+echo } >> "%PSRUN%"
+echo if($hits.Count -gt 0){'[WARNING] Suspicious registry IOCs found:'; $hits; New-Item "$env:TEMP\dz_iochit_18h.txt" -Force ^| Out-Null}else{'[OK] No suspicious registry IOC matches.'} >> "%PSRUN%"
+del "%TEMP%\dz_iochit_18h.txt" 2>nul
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+if exist "%TEMP%\dz_iochit_18h.txt" (
+    set /a IOC_HITS+=1
+    if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+    del "%TEMP%\dz_iochit_18h.txt" 2>nul
+)
+
+echo.>> "%REPORT%"
+echo --- [18i] TTP Coverage Summary --->> "%REPORT%"
+echo  MITRE ATT^&CK techniques covered by this audit:>> "%REPORT%"
+if exist "%IOCDIR%\ttp_manifest.txt" (
+    findstr /v /c:"#" "%IOCDIR%\ttp_manifest.txt" | findstr /v /r "^$">> "%REPORT%" 2>&1
+) else (
+    echo  [INFO] ttp_manifest.txt not found.>> "%REPORT%"
+)
+
+echo.>> "%REPORT%"
+echo --- [18 SUMMARY] IOC Sweep Results --->> "%REPORT%"
+if "!IOC_HITS!"=="0" (
+    echo [OK] No threat indicator matches found across all IOC categories.>> "%REPORT%"
+) else (
+    echo [WARNING] !IOC_HITS! IOC category matches found. Review [WARNING] and [CRITICAL] entries above.>> "%REPORT%"
+)
 echo.>> "%REPORT%"
 
 :sec18_inline
