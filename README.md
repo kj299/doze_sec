@@ -98,6 +98,7 @@ Reads structured IOC files from `ThreatLists/` and matches against the live syst
 | 18h | Registry IOC check | `reg query` vs `ioc_registry.txt` |
 | 18i | TTP coverage summary | `ttp_manifest.txt` dump |
 | 18j | VirusTotal hash reputation (opt-in via `-vt`) | `Get-FileHash` SHA256 -> VT API; capped at 20 priority files; rate-limited for free tier |
+| 18k | Local hash IOC match (always-on) | `Get-FileHash` SHA256 vs `ioc_hashes.txt`; offline complement to 18j |
 
 **Inline CTI checks:**
 - Sliver / Havoc / Brute Ratel named pipes
@@ -299,7 +300,6 @@ Open coverage gaps and cleanup items surfaced by the multi-agent audit are track
 | [#9](https://github.com/kj299/doze_sec/issues/9) | Section 7 service-path allowlist bypass (Authenticode signature gating) | HIGH |
 | [#11](https://github.com/kj299/doze_sec/issues/11) | `HKCU\Wow6432Node\Run` + other-user HKU persistence enumeration | MED |
 | [#12](https://github.com/kj299/doze_sec/issues/12) | Event 4688 time-window guard (currently `-MaxEvents N` only) | MED |
-| [#14](https://github.com/kj299/doze_sec/issues/14) | Local hash matching against `ioc_hashes.txt` (complements `-vt` network check) | MED |
 | [#15](https://github.com/kj299/doze_sec/issues/15) | noAdmin self-update should refresh all 10 IOC files (currently only `ioc_hashes.txt`) | MED |
 | [#17](https://github.com/kj299/doze_sec/issues/17) | noAdmin per-section verdicts: distinguish CLEAN vs PARTIAL when checks were DEFERRED | MED |
 
