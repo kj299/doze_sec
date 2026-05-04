@@ -48,6 +48,7 @@ doze_sec.bat -help
 | `-noAdmin` | noAdmin only | Run without elevation; defers admin-only checks |
 | `-updateTTP` | Admin only | Refresh ThreatLists/ via SENTINEL-X CTI skill (requires Claude Code CLI) |
 | `-vt` | Both | Section 18j: query VirusTotal for SHA256 of priority files. Requires `~/.vt_token` |
+| `-noVtSelf` | Both | Skip the automatic pre-flight VT integrity check on script-critical binaries (default: runs whenever `~/.vt_token` exists and network is up) |
 | `-help` | Both | Show usage guide with section descriptions |
 
 ## Audit Sections
@@ -153,6 +154,7 @@ Plain-text IOC files. One entry per line. `#` = comment.
 | 4 | Reboot pending | Both |
 | 5 | Running from TEMP directory (move script) | Both |
 | 6 | Partial audit - non-admin, checks deferred | noAdmin only |
+| 7 | Pre-flight VT integrity check FAILED (script-critical binary flagged) | Both |
 
 ## Output
 
@@ -222,6 +224,14 @@ Section 18j queries the [VirusTotal v3 API](https://docs.virustotal.com/referenc
 The candidate set is capped at 20 files. Free-tier rate limit is 4 lookups/min, so the script sleeps 16 s between calls — full 20-file run takes ~5 minutes. Per-file results: `[CRITICAL] N/M engines flagged`, `[OK] 0/M clean`, `[INFO] not in VT corpus`, or `[ERROR]` for HTTP 401 (bad key) / 429 (rate limit).
 
 **Threat model note:** the API key is read at script start and held in process memory only. As with `DOZESEC_TOKEN`, prefer a token scoped narrowly (free-tier VT keys cannot be scoped further; create a dedicated VT account for incident-response use and rotate after).
+
+### Automatic pre-flight integrity check
+
+Whenever `~/.vt_token` exists **and** network is available, every audit run also performs a pre-flight VT lookup on the script-critical binaries (`%PWSH%`, `wmic.exe`, `wevtutil.exe`, `reg.exe`) before any audit data is collected. This adds ~50 seconds to startup and aborts the audit with `EXIT_CODE=7` if any of those binaries is flagged malicious by VT — a tampered system binary would invalidate every downstream finding (e.g. a backdoored `wmic.exe` could hide the attacker's process from the LOLBin scan).
+
+To skip the pre-flight check (e.g. for fast iteration during development), pass `-noVtSelf`. The script will still run, just without the integrity gate.
+
+This check runs on the SAME 4-lookups-per-minute free-tier rate limit as `-vt`, so combining `-vt` with the pre-flight check uses ~24 of the 500 daily lookups per audit run.
 
 ## Self-Update and IOC Download from a Private Repo
 
