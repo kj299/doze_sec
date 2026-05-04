@@ -266,7 +266,12 @@ set "CTI_SKILL_PATH=%~dp0..\threat-intel\cyber_threat_skill.yaml"
 :: Ensure OUTDIR is set before use (main OUTDIR set later, but -updateTTP runs early)
 if not defined OUTDIR set "OUTDIR=C:\SecurityAudit"
 if not exist "%OUTDIR%\ThreatLists" mkdir "%OUTDIR%\ThreatLists" 2>nul
-set "TTP_OUTPUT=%OUTDIR%\ThreatLists\ttp_update_%date:~-4%%date:~4,2%%date:~7,2%.txt"
+:: Compute today's date as locale-independent yyyyMMdd via PowerShell.
+:: %date% is locale-dependent (US=ddd MM/DD/YYYY, ISO=YYYY-MM-DD, DE=DD.MM.YYYY,
+:: etc.) and substring slicing produces garbage on non-US systems.
+for /f "usebackq" %%i in (`powershell -NoProfile -Command "Get-Date -Format yyyyMMdd"`) do set "TTP_TODAY=%%i"
+if not defined TTP_TODAY set "TTP_TODAY=unknown"
+set "TTP_OUTPUT=%OUTDIR%\ThreatLists\ttp_update_%TTP_TODAY%.txt"
 set "TTP_BLOCKS=%OUTDIR%\ThreatLists\ttp_generated_checks.bat"
 
 if not exist "%CTI_SKILL_PATH%" (
