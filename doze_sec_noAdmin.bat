@@ -13,6 +13,8 @@
 ::    -updateTTP  NOT AVAILABLE in noAdmin -- use doze_sec.bat -updateTTP
 ::    -vt         Query VirusTotal for SHA256 hashes of user-readable
 ::                priority files (Section 18j). API key in %USERPROFILE%\.vt_token
+::    -noVtSelf   Skip the automatic pre-flight binary integrity check
+::                (which runs whenever ~/.vt_token exists and network is up)
 ::    -help       Show usage guide, all switches, and section descriptions
 ::
 ::  EXIT CODES:
@@ -75,6 +77,7 @@ set "DEFERRED_COUNT=0"
 set "NO_ADMIN_MODE=0"
 set "UPDATE_TTP=0"
 set "VT_CHECK=0"
+set "VT_SELF_SKIP=0"
 set "IOC_HITS=0"
 
 :: ====================================================================
@@ -93,6 +96,7 @@ if /i "%~1"=="-nosrp"      set "SKIP_SRP=1"
 if /i "%~1"=="-noAdmin"    set "NO_ADMIN_MODE=1"
 if /i "%~1"=="-updateTTP"  set "UPDATE_TTP=1"
 if /i "%~1"=="-vt"         set "VT_CHECK=1"
+if /i "%~1"=="-noVtSelf"   set "VT_SELF_SKIP=1"
 shift
 goto :parse_args
 :args_done
@@ -148,6 +152,14 @@ echo                 Requires a VT API key in %%USERPROFILE%%\.vt_token (single
 echo                 line, no quotes). Capped at 20 files; free-tier rate
 echo                 limit ~16 s/file. Only hashes are sent; file contents
 echo                 are never uploaded.
+echo.
+echo    %C_GREEN%-noVtSelf%C_RESET%    Skip the automatic pre-flight VT integrity check on
+echo                 the script-critical binaries (PWSH, wmic, wevtutil, reg).
+echo                 By default that check runs whenever %%USERPROFILE%%\.vt_token
+echo                 exists and the network is up. Adds ~50 s to startup but
+echo                 detects tampered system binaries before any audit data
+echo                 is collected. Audit aborts with EXIT_CODE=7 if any
+echo                 binary is flagged malicious by VT.
 echo.
 echo    %C_GREEN%-help, -h, /?, --help%C_RESET%
 echo                 Show this help screen and exit.
@@ -612,6 +624,36 @@ echo  [INFO] No network detected. Update and threat list checks will be skipped.
 echo %C_GREEN%[INIT 9/14]%C_RESET% Network: Not available. Skipping update checks.
 :netcheck_done
 echo.>> "%REPORT%"
+
+:: ====================================================================
+:: VT SELF-INTEGRITY CHECK
+:: Runs when network is up AND ~/.vt_token exists AND -noVtSelf was
+:: not passed. Hashes the script-critical binaries (PWSH host, wmic,
+:: wevtutil, reg) and queries VirusTotal. Aborts the audit with
+:: EXIT_CODE=7 if any are flagged malicious -- a tampered system
+:: binary would invalidate every downstream finding.
+:: ====================================================================
+if "%NETWORK_AVAIL%"=="1" if "%VT_SELF_SKIP%"=="0" if exist "%USERPROFILE%\.vt_token" (
+    echo %C_GREEN%[INIT 9/14]%C_RESET% VT integrity check on critical binaries (~50s)...
+    echo --- [INIT 9/14] VT Pre-flight Integrity Check --->> "%REPORT%"
+    if exist "%SCRIPT_DIR%tools\vt_self_check.ps1" (
+        "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\vt_self_check.ps1" -Binaries "%PWSH%","%SystemRoot%\System32\wbem\wmic.exe","%SystemRoot%\System32\wevtutil.exe","%SystemRoot%\System32\reg.exe" >> "%REPORT%" 2>&1
+        :: PS script exit codes: 0=clean, 1=MALICIOUS (HARD FAIL), 2=skipped/error.
+        :: Use delayed expansion since we are inside a parenthesized block;
+        :: %errorlevel% would be expanded at block-parse time, not runtime.
+        if !errorlevel! equ 1 (
+            echo  [CRITICAL] Pre-flight VT integrity check FAILED -- script-critical binary flagged.>> "%REPORT%"
+            echo  [CRITICAL] Aborting audit. See report for details.>> "%REPORT%"
+            echo %C_RED%[CRITICAL]%C_RESET% Script-critical binary flagged by VirusTotal. Audit aborted.
+            echo %C_RED%[CRITICAL]%C_RESET% See %REPORT% for the offending hash and engine count.
+            set "EXIT_CODE=7"
+            goto :final_exit
+        )
+    ) else (
+        echo  [INFO] tools\vt_self_check.ps1 not found -- pre-flight VT integrity check skipped.>> "%REPORT%"
+    )
+    echo.>> "%REPORT%"
+)
 
 :: ====================================================================
 :: [INIT 10/14] SELF-UPDATE CHECK
@@ -3154,4 +3196,5 @@ if exist "%REPORT_HTML%" (
 :: cmd.exe expands %EXIT_CODE% before executing, so the value is
 :: captured before endlocal clears all setlocal variables.
 :: Splitting them onto two lines means exit /b sees an empty var.
+:final_exit
 endlocal & exit /b %EXIT_CODE%
