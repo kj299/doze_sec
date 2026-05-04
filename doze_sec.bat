@@ -2548,6 +2548,29 @@ if "%VT_CHECK%"=="1" (
     )
 )
 
+:: Section 18k: local SHA256 hash matching against ioc_hashes.txt.
+:: Always-on (offline-only, no rate limit, no API key, no network).
+:: Complements 18j (-vt) which does network reputation lookups.
+echo.>> "%REPORT%"
+echo --- [18k] Local Hash IOC Match (ioc_hashes.txt) --->> "%REPORT%"
+echo  Hashing priority files on disk and matching SHA256 against ioc_hashes.txt.>> "%REPORT%"
+echo  No network calls; complements [18j] -vt VirusTotal lookup.>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\ioc_hash_check.ps1" (
+    if exist "%IOCDIR%\ioc_hashes.txt" (
+        del "%TEMP%\dz_iochit_18k.txt" 2>nul
+        "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\ioc_hash_check.ps1" -IocFile "%IOCDIR%\ioc_hashes.txt" >> "%REPORT%" 2>&1
+        if exist "%TEMP%\dz_iochit_18k.txt" (
+            set /a IOC_HITS+=1
+            if !EXIT_CODE! LSS 2 set "EXIT_CODE=2"
+            del "%TEMP%\dz_iochit_18k.txt" 2>nul
+        )
+    ) else (
+        echo  [INFO] %IOCDIR%\ioc_hashes.txt not found -- local hash check skipped.>> "%REPORT%"
+    )
+) else (
+    echo  [INFO] tools\ioc_hash_check.ps1 not found -- local hash check skipped.>> "%REPORT%"
+)
+
 echo.>> "%REPORT%"
 echo --- [18 SUMMARY] IOC Sweep Results --->> "%REPORT%"
 if "!IOC_HITS!"=="0" (
