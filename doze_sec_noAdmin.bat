@@ -1352,15 +1352,37 @@ echo       (dropper) for persistence. Russian actors use HTML-smuggled payloads.
 echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
-echo --- HKCU Run Keys --->> "%REPORT%"
+echo --- HKCU Run Keys (current user, native + WoW6432Node) --->> "%REPORT%"
 reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Run">> "%REPORT%" 2>&1
 reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce">> "%REPORT%" 2>&1
+reg query "HKCU\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Run">> "%REPORT%" 2>&1
+reg query "HKCU\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\RunOnce">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
-echo --- HKLM Run Keys --->> "%REPORT%"
+echo --- HKLM Run Keys (system, native + WoW6432Node) --->> "%REPORT%"
 reg query "HKLM\Software\Microsoft\Windows\CurrentVersion\Run">> "%REPORT%" 2>&1
 reg query "HKLM\Software\Microsoft\Windows\CurrentVersion\RunOnce">> "%REPORT%" 2>&1
 reg query "HKLM\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Run">> "%REPORT%" 2>&1
+reg query "HKLM\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\RunOnce">> "%REPORT%" 2>&1
+
+echo.>> "%REPORT%"
+echo --- Other Users' Run Keys (HKU\^<SID^> enumeration) --->> "%REPORT%"
+echo  noAdmin: only the current user's hive is loaded under HKEY_USERS;>> "%REPORT%"
+echo  re-run as admin to enumerate other users' Run/RunOnce persistence.>> "%REPORT%"
+echo $loadedHives = Get-ChildItem 'Registry::HKEY_USERS' -EA SilentlyContinue ^| Where-Object { $_.Name -match 'S-1-5-21-' } > "%PSRUN%"
+echo $hits = @() >> "%PSRUN%"
+echo foreach ($hive in $loadedHives) { >> "%PSRUN%"
+echo   $sid = $hive.PSChildName >> "%PSRUN%"
+echo   foreach ($sub in 'Software\Microsoft\Windows\CurrentVersion\Run','Software\Microsoft\Windows\CurrentVersion\RunOnce','Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Run','Software\Wow6432Node\Microsoft\Windows\CurrentVersion\RunOnce') { >> "%PSRUN%"
+echo     $path = "Registry::HKEY_USERS\$sid\$sub" >> "%PSRUN%"
+echo     if (Test-Path $path) { >> "%PSRUN%"
+echo       $values = Get-ItemProperty $path -EA SilentlyContinue >> "%PSRUN%"
+echo       if ($values) { $values.PSObject.Properties ^| Where-Object { $_.Name -notmatch '^^PS' } ^| ForEach-Object { $hits += "  HKU\$sid\$sub\$($_.Name) = $($_.Value)" } } >> "%PSRUN%"
+echo     } >> "%PSRUN%"
+echo   } >> "%PSRUN%"
+echo } >> "%PSRUN%"
+echo if ($hits.Count -gt 0) { '[INFO] Run/RunOnce entries in loaded hives:'; $hits } else { '[OK] No Run/RunOnce entries in other loaded hives.' } >> "%PSRUN%"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- Startup Folders --->> "%REPORT%"
