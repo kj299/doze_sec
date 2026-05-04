@@ -11,6 +11,8 @@
 ::    -nosrp     Skip System Restore Point creation
 ::    -updateTTP Run CTI skill via Claude Code to pull latest TTPs and
 ::               auto-generate new detection blocks (requires Claude Code CLI)
+::    -vt        Query VirusTotal for SHA256 hashes of priority files
+::               (Section 18j). Requires API key in %USERPROFILE%\.vt_token
 ::
 ::  EXIT CODES:
 ::    0  Success
@@ -54,6 +56,7 @@ set "RESUME_MODE=0"
 set "SKIP_THREAT_UPDATE=0"
 set "SKIP_SRP=0"
 set "UPDATE_TTP=0"
+set "VT_CHECK=0"
 set "IOC_HITS=0"
 set "NETWORK_AVAIL=0"
 set "SAFE_MODE=0"
@@ -82,6 +85,7 @@ if /i "%~1"=="-resume"     set "RESUME_MODE=1"
 if /i "%~1"=="-sdu"        set "SKIP_THREAT_UPDATE=1"
 if /i "%~1"=="-nosrp"      set "SKIP_SRP=1"
 if /i "%~1"=="-updateTTP"  set "UPDATE_TTP=1"
+if /i "%~1"=="-vt"         set "VT_CHECK=1"
 shift
 goto :parse_args
 :args_done
@@ -116,6 +120,14 @@ echo.
 echo    %C_GREEN%-updateTTP%C_RESET%   Refresh the ThreatLists/ IOC files before the audit.
 echo                 Requires network. Downloads latest indicators from the
 echo                 configured threat intelligence source.
+echo.
+echo    %C_GREEN%-vt%C_RESET%          Query VirusTotal for SHA256 hashes of priority files
+echo                 (recent EXE/DLL/PS/VBS in TEMP/Downloads/AppData and
+echo                 recent drivers in System32\drivers). Requires a VT API
+echo                 key in %%USERPROFILE%%\.vt_token (single line, no quotes).
+echo                 Capped at 20 files; free-tier rate limit ~16 s/file
+echo                 (~5 min for the full set). Only hashes are sent; file
+echo                 contents are never uploaded.
 echo.
 echo    %C_GREEN%-help, -h, /?, --help%C_RESET%
 echo                 Show this help screen and exit.
@@ -2458,6 +2470,24 @@ if exist "%IOCDIR%\ttp_manifest.txt" (
     findstr /v /c:"#" "%IOCDIR%\ttp_manifest.txt" | findstr /v /r "^$">> "%REPORT%" 2>&1
 ) else (
     echo  [INFO] ttp_manifest.txt not found.>> "%REPORT%"
+)
+
+if "%VT_CHECK%"=="1" (
+    echo.>> "%REPORT%"
+    echo --- [18j] VirusTotal File Hash Reputation --->> "%REPORT%"
+    echo  Querying VirusTotal for SHA256 hashes of priority candidate files.>> "%REPORT%"
+    echo  Source: https://docs.virustotal.com/reference/file-info ^| API key from %%USERPROFILE%%\.vt_token>> "%REPORT%"
+    echo  NOTE: only file hashes are submitted; file contents are never uploaded.>> "%REPORT%"
+    if exist "%SCRIPT_DIR%tools\vt_check.ps1" (
+        "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\vt_check.ps1">> "%REPORT%" 2>&1
+        if exist "%TEMP%\dz_iochit_18j.txt" (
+            set /a IOC_HITS+=1
+            if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+            del "%TEMP%\dz_iochit_18j.txt" 2>nul
+        )
+    ) else (
+        echo  [INFO] tools\vt_check.ps1 not found -- VT check skipped.>> "%REPORT%"
+    )
 )
 
 echo.>> "%REPORT%"

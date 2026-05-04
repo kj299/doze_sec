@@ -11,6 +11,8 @@
 ::    -nosrp   Skip System Restore Point creation
 ::    -noAdmin    Run in non-admin mode (defers admin-only checks)
 ::    -updateTTP  NOT AVAILABLE in noAdmin -- use doze_sec.bat -updateTTP
+::    -vt         Query VirusTotal for SHA256 hashes of user-readable
+::                priority files (Section 18j). API key in %USERPROFILE%\.vt_token
 ::    -help       Show usage guide, all switches, and section descriptions
 ::
 ::  EXIT CODES:
@@ -72,6 +74,7 @@ set "IS_ADMIN=0"
 set "DEFERRED_COUNT=0"
 set "NO_ADMIN_MODE=0"
 set "UPDATE_TTP=0"
+set "VT_CHECK=0"
 set "IOC_HITS=0"
 
 :: ====================================================================
@@ -89,6 +92,7 @@ if /i "%~1"=="-sdu"        set "SKIP_THREAT_UPDATE=1"
 if /i "%~1"=="-nosrp"      set "SKIP_SRP=1"
 if /i "%~1"=="-noAdmin"    set "NO_ADMIN_MODE=1"
 if /i "%~1"=="-updateTTP"  set "UPDATE_TTP=1"
+if /i "%~1"=="-vt"         set "VT_CHECK=1"
 shift
 goto :parse_args
 :args_done
@@ -136,6 +140,14 @@ echo    %C_GREEN%-updateTTP%C_RESET%   NOT AVAILABLE in this variant. Use doze_s
 echo                 (admin variant) to refresh ThreatLists/ via the SENTINEL-X
 echo                 CTI skill. Passing -updateTTP to noAdmin emits a warning
 echo                 and proceeds without updating.
+echo.
+echo    %C_GREEN%-vt%C_RESET%          Query VirusTotal for SHA256 hashes of priority files
+echo                 (recent EXE/DLL/PS/VBS in TEMP/Downloads/AppData; this
+echo                 variant cannot read System32\drivers without admin).
+echo                 Requires a VT API key in %%USERPROFILE%%\.vt_token (single
+echo                 line, no quotes). Capped at 20 files; free-tier rate
+echo                 limit ~16 s/file. Only hashes are sent; file contents
+echo                 are never uploaded.
 echo.
 echo    %C_GREEN%-help, -h, /?, --help%C_RESET%
 echo                 Show this help screen and exit.
@@ -2407,6 +2419,25 @@ if exist "%IOCDIR%\ttp_manifest.txt" (
     findstr /v /c:"#" "%IOCDIR%\ttp_manifest.txt" | findstr /v /r "^$">> "%REPORT%" 2>&1
 ) else (
     echo  [INFO] ttp_manifest.txt not found.>> "%REPORT%"
+)
+
+if "%VT_CHECK%"=="1" (
+    echo.>> "%REPORT%"
+    echo --- [18j] VirusTotal File Hash Reputation --->> "%REPORT%"
+    echo  Querying VirusTotal for SHA256 hashes of priority candidate files.>> "%REPORT%"
+    echo  Source: https://docs.virustotal.com/reference/file-info ^| API key from %%USERPROFILE%%\.vt_token>> "%REPORT%"
+    echo  NOTE: only file hashes are submitted; file contents are never uploaded.>> "%REPORT%"
+    echo  NOTE: noAdmin variant cannot read C:\Windows\System32\drivers; checks user-readable files only.>> "%REPORT%"
+    if exist "%SCRIPT_DIR%tools\vt_check.ps1" (
+        "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\vt_check.ps1">> "%REPORT%" 2>&1
+        if exist "%TEMP%\dz_iochit_18j.txt" (
+            set /a IOC_HITS+=1
+            if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+            del "%TEMP%\dz_iochit_18j.txt" 2>nul
+        )
+    ) else (
+        echo  [INFO] tools\vt_check.ps1 not found -- VT check skipped.>> "%REPORT%"
+    )
 )
 
 echo.>> "%REPORT%"
