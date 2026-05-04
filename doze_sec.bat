@@ -367,6 +367,30 @@ if %errorlevel% neq 0 (
     goto :skip_ttp_update
 )
 
+rem Detect specific Claude CLI auth failures that get captured into TTP_OUTPUT
+rem instead of being raised as a non-zero exit (the CLI exits 0 but writes the
+rem error message into stdout, which the sanitizer would later reject as
+rem "wrong field count" -- confusing).
+findstr /c:"CLAUDE_CODE_SESSION_ACCESS_TOKEN" "%TTP_OUTPUT%" >nul 2>&1
+if not errorlevel 1 (
+    echo  [ERROR] Claude Code CLI requires CLAUDE_CODE_SESSION_ACCESS_TOKEN to
+    echo          be set for --file uploads. Two ways to proceed:
+    echo            ^(a^) Set the env var with your Claude Code session token, then re-run
+    echo                ^(see Anthropic Claude Code docs for how to obtain it^), or
+    echo            ^(b^) Use:  %~nx0 -importTTP ^<file^>
+    echo                to skip the Claude CLI dependency entirely. The pipe-delimited
+    echo                file feeds into the same sanitizer + IOC merge.
+    del "%TTP_OUTPUT%" >nul 2>&1
+    goto :skip_ttp_update
+)
+findstr /i /c:"please run /login" /c:"not authenticated" /c:"not logged in" "%TTP_OUTPUT%" >nul 2>&1
+if not errorlevel 1 (
+    echo  [ERROR] Claude Code CLI is not authenticated. Run `claude` interactively
+    echo          first to log in, or use:  %~nx0 -importTTP ^<file^>  instead.
+    del "%TTP_OUTPUT%" >nul 2>&1
+    goto :skip_ttp_update
+)
+
 if not exist "%TTP_OUTPUT%" (
     echo  [WARN] No output from CTI skill. Using existing checks.
     goto :skip_ttp_update
