@@ -99,6 +99,7 @@ Reads structured IOC files from `ThreatLists/` and matches against the live syst
 | 18i | TTP coverage summary | `ttp_manifest.txt` dump |
 | 18j | VirusTotal hash reputation (opt-in via `-vt`) | `Get-FileHash` SHA256 -> VT API; capped at 20 priority files; rate-limited for free tier |
 | 18k | Local hash IOC match (always-on) | `Get-FileHash` SHA256 vs `ioc_hashes.txt`; offline complement to 18j |
+| 18l | VirusTotal IP reputation (opt-in via `-vt`) | `Get-NetTCPConnection` (Established) -> VT API; capped at 10 public remote IPs; rate-limited for free tier |
 
 **Inline CTI checks:**
 - Sliver / Havoc / Brute Ratel named pipes
@@ -219,10 +220,13 @@ Section 18j queries the [VirusTotal v3 API](https://docs.virustotal.com/referenc
 
 **What gets checked:**
 
-- Recent (`<30d`) `.sys` drivers in `C:\Windows\System32\drivers\` (admin only)
-- Recent (`<7d`) `.exe` / `.dll` / `.ps1` / `.vbs` in `%TEMP%`, `~\Downloads`, `%LOCALAPPDATA%\Temp`, `C:\Windows\Temp`
+`-vt` enables three sub-checks (each gated by the same `~/.vt_token` and rate-limit):
 
-The candidate set is capped at 20 files. Free-tier rate limit is 4 lookups/min, so the script sleeps 16 s between calls — full 20-file run takes ~5 minutes. Per-file results: `[CRITICAL] N/M engines flagged`, `[OK] 0/M clean`, `[INFO] not in VT corpus`, or `[ERROR]` for HTTP 401 (bad key) / 429 (rate limit).
+1. **Section 18j — file hash reputation:** SHA256 of recent (`<30d`) `.sys` drivers in `C:\Windows\System32\drivers\` (admin only) plus recent (`<7d`) `.exe` / `.dll` / `.ps1` / `.vbs` in `%TEMP%`, `~\Downloads`, `%LOCALAPPDATA%\Temp`, `C:\Windows\Temp`. Capped at 20 files. Per-file: `[CRITICAL] N/M engines flagged`, `[OK] 0/M clean`, `[INFO] not in VT corpus`.
+2. **Section 18l — IP reputation:** All Established TCP connections via `Get-NetTCPConnection` (falls back to `netstat -ano`), filtered to public-routable IPs only (RFC1918 / link-local / loopback / multicast / CGNAT skipped). Capped at 10 unique remote IPs. Per-IP: `[CRITICAL] N malicious / S suspicious / M engines (AS owner, country)`, `[WARNING]` if suspicious-only, `[OK] 0/M clean`.
+3. **Pre-flight binary integrity** (see "Automatic pre-flight integrity check" below): runs even without `-vt` whenever `~/.vt_token` exists and network is up.
+
+Free-tier rate limit is 4 lookups/min — the script sleeps 16 s between calls. A full `-vt` run (20 hashes + 10 IPs + 4 self-check binaries = 34 lookups) takes ~9 minutes and uses 34 of your 500 daily free-tier lookups. Section 18k local hash match (always-on, offline) complements these without consuming any quota.
 
 **Threat model note:** the API key is read at script start and held in process memory only. As with `DOZESEC_TOKEN`, prefer a token scoped narrowly (free-tier VT keys cannot be scoped further; create a dedicated VT account for incident-response use and rotate after).
 

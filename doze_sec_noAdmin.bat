@@ -2649,6 +2649,24 @@ if "%VT_CHECK%"=="1" (
     )
 )
 
+if "%VT_CHECK%"=="1" (
+    echo.>> "%REPORT%"
+    echo --- [18l] VirusTotal IP Reputation --->> "%REPORT%"
+    echo  Querying VirusTotal for active TCP remote endpoints (public IPs only).>> "%REPORT%"
+    echo  Source: https://docs.virustotal.com/reference/ip-info ^| API key from %%USERPROFILE%%\.vt_token>> "%REPORT%"
+    echo  NOTE: only IP literals are submitted; connection metadata is never sent.>> "%REPORT%"
+    if exist "%SCRIPT_DIR%tools\vt_ip_check.ps1" (
+        "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\vt_ip_check.ps1">> "%REPORT%" 2>&1
+        if exist "%TEMP%\dz_iochit_18l.txt" (
+            set /a IOC_HITS+=1
+            if !EXIT_CODE! LSS 2 set "EXIT_CODE=2"
+            del "%TEMP%\dz_iochit_18l.txt" 2>nul
+        )
+    ) else (
+        echo  [INFO] tools\vt_ip_check.ps1 not found -- VT IP check skipped.>> "%REPORT%"
+    )
+)
+
 :: Section 18k: local SHA256 hash matching against ioc_hashes.txt.
 :: Always-on (offline-only, no rate limit, no API key, no network).
 :: Complements 18j (-vt) which does network reputation lookups.
