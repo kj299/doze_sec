@@ -1739,8 +1739,28 @@ echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
 echo --- UAC Config --->> "%REPORT%"
-reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v EnableLUA>> "%REPORT%" 2>nul
-reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v ConsentPromptBehaviorAdmin>> "%REPORT%" 2>nul
+:: Each value gets an individual presence check via the _FLAG pattern
+:: (mirrors the _AR_HIT/_ADFS_HIT/_SSHD_HIT idiom used elsewhere). A
+:: missing EnableLUA or ConsentPromptBehaviorAdmin is unusual on Win10/11
+:: defaults; surfacing absence as [WARNING] catches a plausible (if rare)
+:: tampering path. LocalAccountTokenFilterPolicy is normally absent --
+:: report that as [OK].
+set "_LUA_HIT="
+reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v EnableLUA >nul 2>nul && set "_LUA_HIT=1"
+if defined _LUA_HIT (
+    reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v EnableLUA>> "%REPORT%" 2>nul
+) else (
+    echo [WARNING] EnableLUA registry value MISSING -- unusual on Win10/11; investigate for tampering.>> "%REPORT%"
+)
+set "_LUA_HIT="
+set "_CPBA_HIT="
+reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v ConsentPromptBehaviorAdmin >nul 2>nul && set "_CPBA_HIT=1"
+if defined _CPBA_HIT (
+    reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v ConsentPromptBehaviorAdmin>> "%REPORT%" 2>nul
+) else (
+    echo [WARNING] ConsentPromptBehaviorAdmin registry value MISSING -- unusual on Win10/11; investigate for tampering.>> "%REPORT%"
+)
+set "_CPBA_HIT="
 reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v LocalAccountTokenFilterPolicy>> "%REPORT%" 2>nul
 if errorlevel 1 (echo [OK] LocalAccountTokenFilterPolicy not set -- default remote-admin token filtering applies.)>> "%REPORT%"
 
