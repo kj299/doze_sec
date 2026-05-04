@@ -844,9 +844,9 @@ if "%NETWORK_AVAIL%"=="1" if "%VT_SELF_SKIP%"=="0" if exist "%USERPROFILE%\.vt_t
     echo --- [INIT 9/14] VT Pre-flight Integrity Check --->> "%REPORT%"
     if exist "%SCRIPT_DIR%tools\vt_self_check.ps1" (
         "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\vt_self_check.ps1" -Binaries "%PWSH%","%SystemRoot%\System32\wbem\wmic.exe","%SystemRoot%\System32\wevtutil.exe","%SystemRoot%\System32\reg.exe" >> "%REPORT%" 2>&1
-        :: PS script exit codes: 0=clean, 1=MALICIOUS (HARD FAIL), 2=skipped/error.
-        :: Use delayed expansion since we are inside a parenthesized block;
-        :: %errorlevel% would be expanded at block-parse time, not runtime.
+        rem PS script exit codes: 0=clean, 1=MALICIOUS (HARD FAIL), 2=skipped/error.
+        rem Use delayed expansion since we are inside a parenthesized block;
+        rem percent-errorlevel-percent would expand at block-parse time, not runtime.
         if !errorlevel! equ 1 (
             echo  [CRITICAL] Pre-flight VT integrity check FAILED -- script-critical binary flagged.>> "%REPORT%"
             echo  [CRITICAL] Aborting audit. See report for details.>> "%REPORT%"
