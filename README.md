@@ -30,6 +30,9 @@ doze_sec.bat -nosrp -sdu
 :: Refresh threat intel before audit
 doze_sec.bat -updateTTP
 
+:: Include VirusTotal lookups for priority files (requires ~/.vt_token)
+doze_sec.bat -vt
+
 :: All options
 doze_sec.bat -help
 ```
@@ -44,6 +47,7 @@ doze_sec.bat -help
 | `-nosrp` | Both | Skip System Restore Point creation |
 | `-noAdmin` | noAdmin only | Run without elevation; defers admin-only checks |
 | `-updateTTP` | Admin only | Refresh ThreatLists/ via SENTINEL-X CTI skill (requires Claude Code CLI) |
+| `-vt` | Both | Section 18j: query VirusTotal for SHA256 of priority files. Requires `~/.vt_token` |
 | `-help` | Both | Show usage guide with section descriptions |
 
 ## Audit Sections
@@ -92,6 +96,7 @@ Reads structured IOC files from `ThreatLists/` and matches against the live syst
 | 18g | LOLBin command patterns | `wmic process` vs `ioc_lolbins.txt` |
 | 18h | Registry IOC check | `reg query` vs `ioc_registry.txt` |
 | 18i | TTP coverage summary | `ttp_manifest.txt` dump |
+| 18j | VirusTotal hash reputation (opt-in via `-vt`) | `Get-FileHash` SHA256 -> VT API; capped at 20 priority files; rate-limited for free tier |
 
 **Inline CTI checks:**
 - Sliver / Havoc / Brute Ratel named pipes
@@ -175,6 +180,7 @@ The HTML report features a navigation sidebar, color-coded findings (green/yello
 - Administrator privileges for full audit (optional with `-noAdmin`)
 - [smartmontools](https://www.smartmontools.org/wiki/Download) (optional, for detailed SMART data)
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (optional, for `-updateTTP`)
+- [VirusTotal API key](https://www.virustotal.com/gui/my-apikey) (optional, for `-vt`)
 
 ## CTI Skill Integration
 
@@ -187,6 +193,35 @@ doze_sec.bat -updateTTP
 Requires:
 1. Claude Code CLI installed (`npm install -g @anthropic-ai/claude-code`)
 2. The [threat-intel](https://github.com/kj299/threat-intel) repo cloned as a sibling directory
+
+## VirusTotal Hash Reputation (`-vt`)
+
+Section 18j queries the [VirusTotal v3 API](https://docs.virustotal.com/reference/file-info) for SHA256 hashes of priority files on disk and reports per-file engine consensus. Only the hash is sent — file contents are never uploaded.
+
+**Setup:**
+
+1. Get a free API key at [virustotal.com/gui/my-apikey](https://www.virustotal.com/gui/my-apikey).
+2. Save it to `%USERPROFILE%\.vt_token` (single line, no quotes, no `Bearer` prefix):
+
+   ```powershell
+   Set-Content -Path "$env:USERPROFILE\.vt_token" -Value 'your_vt_api_key_here'
+   icacls "$env:USERPROFILE\.vt_token" /inheritance:r /grant:r "$($env:USERNAME):F"
+   ```
+
+3. Run the audit with `-vt`:
+
+   ```
+   doze_sec.bat -vt
+   ```
+
+**What gets checked:**
+
+- Recent (`<30d`) `.sys` drivers in `C:\Windows\System32\drivers\` (admin only)
+- Recent (`<7d`) `.exe` / `.dll` / `.ps1` / `.vbs` in `%TEMP%`, `~\Downloads`, `%LOCALAPPDATA%\Temp`, `C:\Windows\Temp`
+
+The candidate set is capped at 20 files. Free-tier rate limit is 4 lookups/min, so the script sleeps 16 s between calls — full 20-file run takes ~5 minutes. Per-file results: `[CRITICAL] N/M engines flagged`, `[OK] 0/M clean`, `[INFO] not in VT corpus`, or `[ERROR]` for HTTP 401 (bad key) / 429 (rate limit).
+
+**Threat model note:** the API key is read at script start and held in process memory only. As with `DOZESEC_TOKEN`, prefer a token scoped narrowly (free-tier VT keys cannot be scoped further; create a dedicated VT account for incident-response use and rotate after).
 
 ## Self-Update and IOC Download from a Private Repo
 
@@ -254,7 +289,7 @@ Open coverage gaps and cleanup items surfaced by the multi-agent audit are track
 | [#9](https://github.com/kj299/doze_sec/issues/9) | Section 7 service-path allowlist bypass (Authenticode signature gating) | HIGH |
 | [#11](https://github.com/kj299/doze_sec/issues/11) | `HKCU\Wow6432Node\Run` + other-user HKU persistence enumeration | MED |
 | [#12](https://github.com/kj299/doze_sec/issues/12) | Event 4688 time-window guard (currently `-MaxEvents N` only) | MED |
-| [#14](https://github.com/kj299/doze_sec/issues/14) | `ioc_hashes.txt` consumed by a new `[18j]` file-hash IOC sub-check | MED |
+| [#14](https://github.com/kj299/doze_sec/issues/14) | Local hash matching against `ioc_hashes.txt` (complements `-vt` network check) | MED |
 | [#15](https://github.com/kj299/doze_sec/issues/15) | noAdmin self-update should refresh all 10 IOC files (currently only `ioc_hashes.txt`) | MED |
 | [#17](https://github.com/kj299/doze_sec/issues/17) | noAdmin per-section verdicts: distinguish CLEAN vs PARTIAL when checks were DEFERRED | MED |
 
