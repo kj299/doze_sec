@@ -483,9 +483,9 @@ if "%OS_BLOCK_REASON%"=="" goto :os_check_passed
 
 echo  [UNSUPPORTED] %OS_BLOCK_REASON%>> "%REPORT%"
 if "%DEV_MODE%"=="1" (
-    echo  [WARN] Unsupported OS: %OS_BLOCK_REASON%>> "%REPORT%"
-    echo  [WARN] -dev override active. Continuing on unsupported OS.>> "%REPORT%"
-    echo  [WARN] Some checks may fail or return incorrect results.>> "%REPORT%"
+    echo  [WARNING] Unsupported OS: %OS_BLOCK_REASON%>> "%REPORT%"
+    echo  [WARNING] -dev override active. Continuing on unsupported OS.>> "%REPORT%"
+    echo  [WARNING] Some checks may fail or return incorrect results.>> "%REPORT%"
     echo %C_GREEN%[INIT 4/14]%C_RESET% WARN: %OS_BLOCK_REASON% -- -dev override active, continuing.
     if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
     goto :os_check_passed
@@ -569,7 +569,7 @@ if %errorlevel% equ 0 (
     echo             Manual undo if needed: reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /f>> "%CHANGELOG%"
     echo.>> "%CHANGELOG%"
 ) else (
-    echo  [WARN] Could not create RunOnce key. Resume will not be available.>> "%REPORT%"
+    echo  [WARNING] Could not create RunOnce key. Resume will not be available.>> "%REPORT%"
     echo %C_GREEN%[INIT 8/14]%C_RESET% RunOnce key creation failed - non-fatal.
 )
 echo.>> "%REPORT%"
@@ -743,7 +743,7 @@ if %errorlevel% equ 0 (
     echo echo Boot menu settings restored.>> "%UNDO_BAT%"
     echo.>> "%UNDO_BAT%"
 ) else (
-    echo  [WARN] Could not set displaybootmenu. May already be set or bcdedit restricted.>> "%REPORT%"
+    echo  [WARNING] Could not set displaybootmenu. May already be set or bcdedit restricted.>> "%REPORT%"
     echo %C_GREEN%[INIT 11/14]%C_RESET% F8 re-enable returned non-zero - non-fatal.
 )
 :f8_done
@@ -2065,6 +2065,7 @@ wevtutil qe Security /q:"*[System[(EventID=4688)]]" /c:100 /rd:true /f:text | fi
 goto :sec17_lolbin_done
 :sec17_lolbin_noadmin
 echo  [DEFERRED - ADMIN REQUIRED] Security event log requires admin.>> "%REPORT%"
+set /a DEFERRED_COUNT+=1
 :sec17_lolbin_done
 
 echo.>> "%REPORT%"
@@ -2074,6 +2075,7 @@ wevtutil qe Security /q:"*[System[(EventID=4688)]]" /c:100 /rd:true /f:text | fi
 goto :sec17_disc_done
 :sec17_disc_noadmin
 echo  [DEFERRED - ADMIN REQUIRED] Security event log requires admin.>> "%REPORT%"
+set /a DEFERRED_COUNT+=1
 :sec17_disc_done
 
 echo.>> "%REPORT%"
@@ -2291,8 +2293,14 @@ echo $patterns=Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#
 echo $pipes=Get-ChildItem \\.\pipe\ -EA SilentlyContinue >> "%PSRUN%"
 echo $hits=@() >> "%PSRUN%"
 echo foreach($p in $patterns){try{$m=$pipes ^| Where-Object {$_.Name -match $p}; if($m){$hits+=$m}}catch{}} >> "%PSRUN%"
-echo if($hits.Count -gt 0){$hits ^| Select-Object -Unique Name; '[WARNING] Named pipe IOC matches found.'}else{'[OK] No named pipe IOC matches.'} >> "%PSRUN%"
+echo if($hits.Count -gt 0){$hits ^| Select-Object -Unique Name; '[WARNING] Named pipe IOC matches found.'; New-Item "$env:TEMP\dz_iochit_18b.txt" -Force ^| Out-Null}else{'[OK] No named pipe IOC matches.'} >> "%PSRUN%"
+del "%TEMP%\dz_iochit_18b.txt" 2>nul
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+if exist "%TEMP%\dz_iochit_18b.txt" (
+    set /a IOC_HITS+=1
+    if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+    del "%TEMP%\dz_iochit_18b.txt" 2>nul
+)
 
 echo.>> "%REPORT%"
 echo --- [18c] Service IOC Match --->> "%REPORT%"
@@ -2302,8 +2310,14 @@ echo $patterns=Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#
 echo $svcs=Get-CimInstance Win32_Service -EA SilentlyContinue >> "%PSRUN%"
 echo $hits=@() >> "%PSRUN%"
 echo foreach($p in $patterns){try{$m=$svcs ^| Where-Object {$_.Name -match $p -or $_.DisplayName -match $p}; if($m){$hits+=$m}}catch{}} >> "%PSRUN%"
-echo if($hits.Count -gt 0){$hits ^| Select-Object Name,State,PathName ^| Format-Table -AutoSize; '[WARNING] Service IOC matches found.'}else{'[OK] No service IOC matches.'} >> "%PSRUN%"
+echo if($hits.Count -gt 0){$hits ^| Select-Object Name,State,PathName ^| Format-Table -AutoSize; '[WARNING] Service IOC matches found.'; New-Item "$env:TEMP\dz_iochit_18c.txt" -Force ^| Out-Null}else{'[OK] No service IOC matches.'} >> "%PSRUN%"
+del "%TEMP%\dz_iochit_18c.txt" 2>nul
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+if exist "%TEMP%\dz_iochit_18c.txt" (
+    set /a IOC_HITS+=1
+    if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+    del "%TEMP%\dz_iochit_18c.txt" 2>nul
+)
 
 echo.>> "%REPORT%"
 echo --- [18d] Suspicious File Path IOC Check --->> "%REPORT%"
@@ -2315,8 +2329,14 @@ echo foreach($p in $paths){ >> "%PSRUN%"
 echo   $expanded=[System.Environment]::ExpandEnvironmentVariables($p.Trim()) >> "%PSRUN%"
 echo   if(Test-Path $expanded){$hits+=$expanded} >> "%PSRUN%"
 echo } >> "%PSRUN%"
-echo if($hits.Count -gt 0){'[CRITICAL] Known malware staging files found:'; $hits; '[ACTION] Quarantine these files immediately.'}else{'[OK] No known malware staging files found.'} >> "%PSRUN%"
+echo if($hits.Count -gt 0){'[CRITICAL] Known malware staging files found:'; $hits; '[ACTION] Quarantine these files immediately.'; New-Item "$env:TEMP\dz_iochit_18d.txt" -Force ^| Out-Null}else{'[OK] No known malware staging files found.'} >> "%PSRUN%"
+del "%TEMP%\dz_iochit_18d.txt" 2>nul
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+if exist "%TEMP%\dz_iochit_18d.txt" (
+    set /a IOC_HITS+=1
+    if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+    del "%TEMP%\dz_iochit_18d.txt" 2>nul
+)
 
 echo.>> "%REPORT%"
 echo --- [18e] Scheduled Task IOC Match --->> "%REPORT%"
@@ -2371,8 +2391,14 @@ echo     if($valName){$v=Get-ItemProperty $psPath -Name $valName -EA Stop; $hits
 echo     else{if(Test-Path $psPath){$hits+="$keyPath [EXISTS]"}} >> "%PSRUN%"
 echo   }catch{} >> "%PSRUN%"
 echo } >> "%PSRUN%"
-echo if($hits.Count -gt 0){'[WARNING] Suspicious registry IOCs found:'; $hits}else{'[OK] No suspicious registry IOC matches.'} >> "%PSRUN%"
+echo if($hits.Count -gt 0){'[WARNING] Suspicious registry IOCs found:'; $hits; New-Item "$env:TEMP\dz_iochit_18h.txt" -Force ^| Out-Null}else{'[OK] No suspicious registry IOC matches.'} >> "%PSRUN%"
+del "%TEMP%\dz_iochit_18h.txt" 2>nul
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+if exist "%TEMP%\dz_iochit_18h.txt" (
+    set /a IOC_HITS+=1
+    if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+    del "%TEMP%\dz_iochit_18h.txt" 2>nul
+)
 
 echo.>> "%REPORT%"
 echo --- [18i] TTP Coverage Summary --->> "%REPORT%"
@@ -2835,8 +2861,8 @@ if exist "%SUMFILE%" (
     echo.>> "%REPORT%"
     type "%SUMFILE%">> "%REPORT%"
 ) else (
-    echo  [WARN] Live summary could not run - PWSH failed to produce output.>> "%REPORT%"
-    echo  [WARN] Check PowerShell execution policy or PWSH path.>> "%REPORT%"
+    echo  [WARNING] Live summary could not run - PWSH failed to produce output.>> "%REPORT%"
+    echo  [WARNING] Check PowerShell execution policy or PWSH path.>> "%REPORT%"
     echo.
     echo  [WARN] Live summary skipped - PowerShell produced no output.
     echo  Check execution policy: Get-ExecutionPolicy -List
