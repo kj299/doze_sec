@@ -1062,7 +1062,6 @@ echo.
 
 :: ====================================================================
 set "SEC1_PREV_CODE=%EXIT_CODE%"
-set "SEC1_WARN=0"
 echo %C_CYAN%[1/18]%C_RESET% Collecting system identity and patch level...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1114,7 +1113,6 @@ if "%EXIT_CODE%"=="%SEC1_PREV_CODE%" (
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC2_PREV_CODE=%EXIT_CODE%"
-set "SEC2_WARN=0"
 echo %C_CYAN%[2/18]%C_RESET% Auditing user accounts and privileges...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1166,7 +1164,6 @@ if "%EXIT_CODE%"=="%SEC2_PREV_CODE%" (
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC3_PREV_CODE=%EXIT_CODE%"
-set "SEC3_WARN=0"
 echo %C_CYAN%[3/18]%C_RESET% Scanning network connections and configuration...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1238,7 +1235,6 @@ if "%EXIT_CODE%"=="%SEC3_PREV_CODE%" (
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC4_PREV_CODE=%EXIT_CODE%"
-set "SEC4_WARN=0"
 echo %C_CYAN%[4/18]%C_RESET% Enumerating running processes...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1299,7 +1295,6 @@ if "%EXIT_CODE%"=="%SEC4_PREV_CODE%" (
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC5_PREV_CODE=%EXIT_CODE%"
-set "SEC5_WARN=0"
 echo %C_CYAN%[5/18]%C_RESET% Checking startup and persistence locations...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1362,7 +1357,6 @@ if "%EXIT_CODE%"=="%SEC5_PREV_CODE%" (
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC6_PREV_CODE=%EXIT_CODE%"
-set "SEC6_WARN=0"
 echo %C_CYAN%[6/18]%C_RESET% Enumerating scheduled tasks...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1400,7 +1394,6 @@ if "%EXIT_CODE%"=="%SEC6_PREV_CODE%" (
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC7_PREV_CODE=%EXIT_CODE%"
-set "SEC7_WARN=0"
 echo %C_CYAN%[7/18]%C_RESET% Auditing Windows services...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1441,7 +1434,6 @@ if "%EXIT_CODE%"=="%SEC7_PREV_CODE%" (
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC8_PREV_CODE=%EXIT_CODE%"
-set "SEC8_WARN=0"
 echo %C_CYAN%[8/18]%C_RESET% Checking firewall configuration...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1487,7 +1479,6 @@ if "%EXIT_CODE%"=="%SEC8_PREV_CODE%" (
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC9_PREV_CODE=%EXIT_CODE%"
-set "SEC9_WARN=0"
 echo %C_CYAN%[9/18]%C_RESET% Checking Defender and AV configuration...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1553,7 +1544,6 @@ if "%EXIT_CODE%"=="%SEC9_PREV_CODE%" (
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC10_PREV_CODE=%EXIT_CODE%"
-set "SEC10_WARN=0"
 echo %C_CYAN%[10/18]%C_RESET% Checking SMB and remote access...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1618,7 +1608,6 @@ if "%EXIT_CODE%"=="%SEC10_PREV_CODE%" (
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC11_PREV_CODE=%EXIT_CODE%"
-set "SEC11_WARN=0"
 echo %C_CYAN%[11/18]%C_RESET% Checking PowerShell security...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1684,7 +1673,6 @@ if "%EXIT_CODE%"=="%SEC11_PREV_CODE%" (
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC12_PREV_CODE=%EXIT_CODE%"
-set "SEC12_WARN=0"
 echo %C_CYAN%[12/18]%C_RESET% Checking credential and LSASS protection...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1742,7 +1730,6 @@ if "%EXIT_CODE%"=="%SEC12_PREV_CODE%" (
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC13_PREV_CODE=%EXIT_CODE%"
-set "SEC13_WARN=0"
 echo %C_CYAN%[13/18]%C_RESET% Checking system hardening settings...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1877,7 +1864,6 @@ if "%EXIT_CODE%"=="%SEC13_PREV_CODE%" (
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC14_PREV_CODE=%EXIT_CODE%"
-set "SEC14_WARN=0"
 echo %C_CYAN%[14/18]%C_RESET% Scanning file system for suspicious files...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1929,7 +1915,6 @@ if "%EXIT_CODE%"=="%SEC14_PREV_CODE%" (
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC15_PREV_CODE=%EXIT_CODE%"
-set "SEC15_WARN=0"
 echo %C_CYAN%[15/18]%C_RESET% Auditing installed software and drivers...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1977,7 +1962,6 @@ if "%EXIT_CODE%"=="%SEC15_PREV_CODE%" (
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC16_PREV_CODE=%EXIT_CODE%"
-set "SEC16_WARN=0"
 echo %C_CYAN%[16/18]%C_RESET% Pulling Windows Event Log anomalies...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -2084,7 +2068,6 @@ if "%EXIT_CODE%"=="%SEC16_PREV_CODE%" (
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC17_PREV_CODE=%EXIT_CODE%"
-set "SEC17_WARN=0"
 echo %C_CYAN%[17/18]%C_RESET% Nation-state threat indicators from MDDR 2023...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -2297,15 +2280,15 @@ if "%EXIT_CODE%"=="%SEC17_PREV_CODE%" (
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC18_PREV_CODE=%EXIT_CODE%"
-set "SEC18_WARN=0"
 echo %C_CYAN%[18/18]%C_RESET% CTI-driven threat indicator sweep...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
-echo  [18/18] CTI-DRIVEN THREAT INDICATOR SWEEP>> "%REPORT%"
-echo  Source: SENTINEL-X Cyber Threat Intelligence Skill v3.0>> "%REPORT%"
+echo  [18/18] CTI-DRIVEN IOC SWEEP AND TTP DETECTION>> "%REPORT%"
+echo  Source: SENTINEL-X CTI Skill + MITRE ATT^&CK v15+>> "%REPORT%"
 echo  IOC Files: %SCRIPT_DIR%ThreatLists\>> "%REPORT%"
-echo  Coverage: APT, Ransomware, Credential, Supply Chain, LOLBins, C2>> "%REPORT%"
-echo  MITRE ATT^&CK v14+ mapping in ttp_manifest.txt>> "%REPORT%"
+echo  Coverage: APT, Ransomware, Credential, Supply Chain, LOLBins, C2,>> "%REPORT%"
+echo  DLL hijacking, BYOVD, AiTM phishing, COM hijacking, cloud token theft,>> "%REPORT%"
+echo  living-off-the-cloud techniques, and 2024-2026 threat landscape TTPs.>> "%REPORT%"
 echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
