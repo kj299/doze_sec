@@ -245,6 +245,21 @@ Running a PAT-bearing script on a compromised endpoint exposes the token. Prefer
 
 If those trade-offs are not acceptable, make the repo public or skip the update check entirely (the script works fine without it).
 
+## Roadmap
+
+Open coverage gaps and cleanup items surfaced by the multi-agent audit are tracked under the [`audit-deferred`](https://github.com/kj299/doze_sec/issues?q=is%3Aopen+label%3Aaudit-deferred) label. Highlights:
+
+| # | Item | Tier |
+|--|------|------|
+| [#9](https://github.com/kj299/doze_sec/issues/9) | Section 7 service-path allowlist bypass (Authenticode signature gating) | HIGH |
+| [#11](https://github.com/kj299/doze_sec/issues/11) | `HKCU\Wow6432Node\Run` + other-user HKU persistence enumeration | MED |
+| [#12](https://github.com/kj299/doze_sec/issues/12) | Event 4688 time-window guard (currently `-MaxEvents N` only) | MED |
+| [#14](https://github.com/kj299/doze_sec/issues/14) | `ioc_hashes.txt` consumed by a new `[18j]` file-hash IOC sub-check | MED |
+| [#15](https://github.com/kj299/doze_sec/issues/15) | noAdmin self-update should refresh all 10 IOC files (currently only `ioc_hashes.txt`) | MED |
+| [#17](https://github.com/kj299/doze_sec/issues/17) | noAdmin per-section verdicts: distinguish CLEAN vs PARTIAL when checks were DEFERRED | MED |
+
+Plus 6 LOW-tier cleanup items ([full list](https://github.com/kj299/doze_sec/issues?q=is%3Aopen+label%3Aaudit-deferred)).
+
 ## License
 
 For personal and organizational security use. Not for redistribution without permission.
