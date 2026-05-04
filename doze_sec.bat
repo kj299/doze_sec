@@ -840,7 +840,7 @@ echo.>> "%REPORT%"
 :: binary would invalidate every downstream finding.
 :: ====================================================================
 if "%NETWORK_AVAIL%"=="1" if "%VT_SELF_SKIP%"=="0" if exist "%USERPROFILE%\.vt_token" (
-    echo %C_GREEN%[INIT 9/14]%C_RESET% VT integrity check on critical binaries (~50s)...
+    echo %C_GREEN%[INIT 9/14]%C_RESET% VT integrity check on critical binaries ^(~50s^)...
     echo --- [INIT 9/14] VT Pre-flight Integrity Check --->> "%REPORT%"
     if exist "%SCRIPT_DIR%tools\vt_self_check.ps1" (
         "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\vt_self_check.ps1" -Binaries "%PWSH%","%SystemRoot%\System32\wbem\wmic.exe","%SystemRoot%\System32\wevtutil.exe","%SystemRoot%\System32\reg.exe" >> "%REPORT%" 2>&1
@@ -2654,7 +2654,7 @@ if "%VT_CHECK%"=="1" (
 if "%VT_CHECK%"=="1" (
     echo.>> "%REPORT%"
     echo --- [18l] VirusTotal IP Reputation --->> "%REPORT%"
-    echo  Querying VirusTotal for active TCP remote endpoints (public IPs only).>> "%REPORT%"
+    echo  Querying VirusTotal for active TCP remote endpoints ^(public IPs only^).>> "%REPORT%"
     echo  Source: https://docs.virustotal.com/reference/ip-info ^| API key from %%USERPROFILE%%\.vt_token>> "%REPORT%"
     echo  NOTE: only IP literals are submitted; connection metadata is never sent.>> "%REPORT%"
     if exist "%SCRIPT_DIR%tools\vt_ip_check.ps1" (
