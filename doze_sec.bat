@@ -2144,9 +2144,17 @@ echo   } else { Write-Output '[OK] No external PS Script Block events (audit-sel
 echo } else { Write-Output '[OK] No PS Script Block events found.' } >> "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
+:: Compute UTC ISO timestamp for 24h ago. Used by all subsequent
+:: wevtutil 4688 queries as an XPath SystemTime predicate so the
+:: results are scoped to the last 24h regardless of how many events
+:: the Security log has rotated through. Without this guard,
+:: /c:N /rd:true on a busy system could be only the last few minutes.
+for /f "usebackq" %%i in (`powershell -NoProfile -Command "(Get-Date).ToUniversalTime().AddHours(-24).ToString('yyyy-MM-ddTHH:mm:ss.fffZ')"`) do set "WEVT_24H_AGO=%%i"
+if not defined WEVT_24H_AGO set "WEVT_24H_AGO=1970-01-01T00:00:00.000Z"
+
 echo.>> "%REPORT%"
-echo --- Process Creation - Event 4688 --->> "%REPORT%"
-wevtutil qe Security /q:"*[System[(EventID=4688)]]" /c:40 /rd:true /f:text | findstr /c:"TimeCreated" /c:"Process Name" /c:"Creator Process" /c:"Command Line">> "%REPORT%" 2>&1
+echo --- Process Creation - Event 4688 (last 24h) --->> "%REPORT%"
+wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:200 /rd:true /f:text | findstr /c:"TimeCreated" /c:"Process Name" /c:"Creator Process" /c:"Command Line">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- Defender Alerts: 1116=Detected, 1117=Action --->> "%REPORT%"
@@ -2196,12 +2204,12 @@ if %errorlevel% equ 0 (
 )
 
 echo.>> "%REPORT%"
-echo --- [VOLT TYPHOON] LOLBin Abuse in Event 4688 --->> "%REPORT%"
-wevtutil qe Security /q:"*[System[(EventID=4688)]]" /c:100 /rd:true /f:text | findstr /i /c:"certutil" /c:"mshta" /c:"regsvr32" /c:"cmstp" /c:"installutil" /c:"odbcconf">> "%REPORT%" 2>&1
+echo --- [VOLT TYPHOON] LOLBin Abuse in Event 4688 (last 24h) --->> "%REPORT%"
+wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:500 /rd:true /f:text | findstr /i /c:"certutil" /c:"mshta" /c:"regsvr32" /c:"cmstp" /c:"installutil" /c:"odbcconf">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
-echo --- [VOLT TYPHOON] Discovery Commands in Event 4688 --->> "%REPORT%"
-wevtutil qe Security /q:"*[System[(EventID=4688)]]" /c:100 /rd:true /f:text | findstr /i /c:"nltest" /c:"net group" /c:"dsquery" /c:"ldifde" /c:"ntdsutil" /c:"csvde">> "%REPORT%" 2>&1
+echo --- [VOLT TYPHOON] Discovery Commands in Event 4688 (last 24h) --->> "%REPORT%"
+wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:500 /rd:true /f:text | findstr /i /c:"nltest" /c:"net group" /c:"dsquery" /c:"ldifde" /c:"ntdsutil" /c:"csvde">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- [MIDNIGHT BLIZZARD] OAuth Identity Registrations --->> "%REPORT%"
@@ -2582,8 +2590,8 @@ echo if ($hits.Count -gt 0) { '[WARNING][T1574.001] Unsigned/suspicious DLLs in 
 
 :: --- [CTI] LOLBin Download/Execute Chains (T1105+T1059) ---
 echo.>> "%REPORT%"
-echo --- [CTI][T1105+T1059] LOLBin Download Cradles in Recent Event 4688 --->> "%REPORT%"
-wevtutil qe Security /q:"*[System[(EventID=4688)]]" /c:200 /rd:true /f:text | findstr /i /c:"bitsadmin" /c:"certutil -urlcache" /c:"curl " /c:"wget" /c:"Invoke-WebRequest" /c:"Start-BitsTransfer" /c:"desktopimgdownldr" /c:"esentutl">> "%REPORT%" 2>&1
+echo --- [CTI][T1105+T1059] LOLBin Download Cradles in Event 4688 (last 24h) --->> "%REPORT%"
+wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:1000 /rd:true /f:text | findstr /i /c:"bitsadmin" /c:"certutil -urlcache" /c:"curl " /c:"wget" /c:"Invoke-WebRequest" /c:"Start-BitsTransfer" /c:"desktopimgdownldr" /c:"esentutl">> "%REPORT%" 2>&1
 
 :: --- [CTI] AMSI Bypass Artifacts in PowerShell Logs (T1562.001) ---
 echo.>> "%REPORT%"
@@ -2641,8 +2649,8 @@ echo if ($hits.Count -gt 0) { '[INFO] Recent AAD/token cache activity (correlate
 
 :: --- [CTI] Ransomware Precursors (T1490 + T1486) ---
 echo.>> "%REPORT%"
-echo --- [CTI][T1490] Ransomware Precursors - VSS/BCDEdit/Recovery Tampering --->> "%REPORT%"
-wevtutil qe Security /q:"*[System[(EventID=4688)]]" /c:200 /rd:true /f:text | findstr /i /c:"vssadmin delete" /c:"wmic shadowcopy" /c:"bcdedit /set {default} recoveryenabled no" /c:"wbadmin delete" /c:"disableshadowcopy">> "%REPORT%" 2>&1
+echo --- [CTI][T1490] Ransomware Precursors - VSS/BCDEdit/Recovery Tampering (last 24h) --->> "%REPORT%"
+wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:1000 /rd:true /f:text | findstr /i /c:"vssadmin delete" /c:"wmic shadowcopy" /c:"bcdedit /set {default} recoveryenabled no" /c:"wbadmin delete" /c:"disableshadowcopy">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- [CTI][T1486] Ransomware File Extension Survey --->> "%REPORT%"

@@ -2137,9 +2137,16 @@ echo.>> "%REPORT%"
 echo --- Scheduled Task Changes - Events 4698, 4702 --->> "%REPORT%"
 wevtutil qe Security /q:"*[System[(EventID=4698 or EventID=4702)]]" /c:20 /rd:true /f:text | findstr /c:"TimeCreated" /c:"Task Name" /c:"Subject">> "%REPORT%" 2>&1
 
+:: Compute UTC ISO timestamp for 24h ago. Used by all subsequent
+:: wevtutil 4688 queries as an XPath SystemTime predicate so the
+:: results are scoped to the last 24h regardless of how many events
+:: the Security log has rotated through.
+for /f "usebackq" %%i in (`powershell -NoProfile -Command "(Get-Date).ToUniversalTime().AddHours(-24).ToString('yyyy-MM-ddTHH:mm:ss.fffZ')"`) do set "WEVT_24H_AGO=%%i"
+if not defined WEVT_24H_AGO set "WEVT_24H_AGO=1970-01-01T00:00:00.000Z"
+
 echo.>> "%REPORT%"
-echo --- Process Creation - Event 4688 --->> "%REPORT%"
-wevtutil qe Security /q:"*[System[(EventID=4688)]]" /c:40 /rd:true /f:text | findstr /c:"TimeCreated" /c:"Process Name" /c:"Creator Process" /c:"Command Line">> "%REPORT%" 2>&1
+echo --- Process Creation - Event 4688 (last 24h) --->> "%REPORT%"
+wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:200 /rd:true /f:text | findstr /c:"TimeCreated" /c:"Process Name" /c:"Creator Process" /c:"Command Line">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- Kerberos RC4 Tickets - Event 4769 (Kerberoasting IOC) --->> "%REPORT%"
@@ -2239,7 +2246,7 @@ set /a DEFERRED_COUNT+=1
 echo.>> "%REPORT%"
 echo --- [VOLT TYPHOON] LOLBin Abuse in Event 4688 --->> "%REPORT%"
 if "%IS_ADMIN%"=="0" goto :sec17_lolbin_noadmin
-wevtutil qe Security /q:"*[System[(EventID=4688)]]" /c:100 /rd:true /f:text | findstr /i /c:"certutil" /c:"mshta" /c:"regsvr32" /c:"cmstp" /c:"installutil" /c:"odbcconf">> "%REPORT%" 2>&1
+wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:500 /rd:true /f:text | findstr /i /c:"certutil" /c:"mshta" /c:"regsvr32" /c:"cmstp" /c:"installutil" /c:"odbcconf">> "%REPORT%" 2>&1
 goto :sec17_lolbin_done
 :sec17_lolbin_noadmin
 echo  [DEFERRED - ADMIN REQUIRED] Security event log requires admin.>> "%REPORT%"
@@ -2249,7 +2256,7 @@ set /a DEFERRED_COUNT+=1
 echo.>> "%REPORT%"
 echo --- [VOLT TYPHOON] Discovery Commands in Event 4688 --->> "%REPORT%"
 if "%IS_ADMIN%"=="0" goto :sec17_disc_noadmin
-wevtutil qe Security /q:"*[System[(EventID=4688)]]" /c:100 /rd:true /f:text | findstr /i /c:"nltest" /c:"net group" /c:"dsquery" /c:"ldifde" /c:"ntdsutil" /c:"csvde">> "%REPORT%" 2>&1
+wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:500 /rd:true /f:text | findstr /i /c:"nltest" /c:"net group" /c:"dsquery" /c:"ldifde" /c:"ntdsutil" /c:"csvde">> "%REPORT%" 2>&1
 goto :sec17_disc_done
 :sec17_disc_noadmin
 echo  [DEFERRED - ADMIN REQUIRED] Security event log requires admin.>> "%REPORT%"
