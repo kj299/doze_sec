@@ -1062,6 +1062,7 @@ echo.
 
 :: ====================================================================
 set "SEC1_PREV_CODE=%EXIT_CODE%"
+set "SEC1_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[1/18]%C_RESET% Collecting system identity and patch level...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1107,12 +1108,18 @@ echo.>> "%REPORT%"
 :: ---- Section 1/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC1_PREV_CODE%" (
-    echo  [SECTION 1/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    if !DEFERRED_COUNT! GTR !SEC1_PREV_DEF! (
+        set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC1_PREV_DEF!
+        echo  [SECTION 1/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
+    ) else (
+        echo  [SECTION 1/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    )
 ) else (
     echo  [SECTION 1/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC2_PREV_CODE=%EXIT_CODE%"
+set "SEC2_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[2/18]%C_RESET% Auditing user accounts and privileges...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1158,12 +1165,18 @@ echo.>> "%REPORT%"
 :: ---- Section 2/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC2_PREV_CODE%" (
-    echo  [SECTION 2/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    if !DEFERRED_COUNT! GTR !SEC2_PREV_DEF! (
+        set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC2_PREV_DEF!
+        echo  [SECTION 2/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
+    ) else (
+        echo  [SECTION 2/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    )
 ) else (
     echo  [SECTION 2/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC3_PREV_CODE=%EXIT_CODE%"
+set "SEC3_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[3/18]%C_RESET% Scanning network connections and configuration...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1229,12 +1242,18 @@ echo.>> "%REPORT%"
 :: ---- Section 3/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC3_PREV_CODE%" (
-    echo  [SECTION 3/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    if !DEFERRED_COUNT! GTR !SEC3_PREV_DEF! (
+        set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC3_PREV_DEF!
+        echo  [SECTION 3/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
+    ) else (
+        echo  [SECTION 3/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    )
 ) else (
     echo  [SECTION 3/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC4_PREV_CODE=%EXIT_CODE%"
+set "SEC4_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[4/18]%C_RESET% Enumerating running processes...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1289,12 +1308,18 @@ echo.>> "%REPORT%"
 :: ---- Section 4/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC4_PREV_CODE%" (
-    echo  [SECTION 4/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    if !DEFERRED_COUNT! GTR !SEC4_PREV_DEF! (
+        set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC4_PREV_DEF!
+        echo  [SECTION 4/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
+    ) else (
+        echo  [SECTION 4/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    )
 ) else (
     echo  [SECTION 4/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC5_PREV_CODE=%EXIT_CODE%"
+set "SEC5_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[5/18]%C_RESET% Checking startup and persistence locations...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1351,12 +1376,18 @@ echo.>> "%REPORT%"
 :: ---- Section 5/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC5_PREV_CODE%" (
-    echo  [SECTION 5/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    if !DEFERRED_COUNT! GTR !SEC5_PREV_DEF! (
+        set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC5_PREV_DEF!
+        echo  [SECTION 5/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
+    ) else (
+        echo  [SECTION 5/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    )
 ) else (
     echo  [SECTION 5/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC6_PREV_CODE=%EXIT_CODE%"
+set "SEC6_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[6/18]%C_RESET% Enumerating scheduled tasks...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1388,12 +1419,18 @@ echo.>> "%REPORT%"
 :: ---- Section 6/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC6_PREV_CODE%" (
-    echo  [SECTION 6/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    if !DEFERRED_COUNT! GTR !SEC6_PREV_DEF! (
+        set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC6_PREV_DEF!
+        echo  [SECTION 6/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
+    ) else (
+        echo  [SECTION 6/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    )
 ) else (
     echo  [SECTION 6/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC7_PREV_CODE=%EXIT_CODE%"
+set "SEC7_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[7/18]%C_RESET% Auditing Windows services...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1428,12 +1465,18 @@ echo.>> "%REPORT%"
 :: ---- Section 7/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC7_PREV_CODE%" (
-    echo  [SECTION 7/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    if !DEFERRED_COUNT! GTR !SEC7_PREV_DEF! (
+        set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC7_PREV_DEF!
+        echo  [SECTION 7/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
+    ) else (
+        echo  [SECTION 7/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    )
 ) else (
     echo  [SECTION 7/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC8_PREV_CODE=%EXIT_CODE%"
+set "SEC8_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[8/18]%C_RESET% Checking firewall configuration...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1473,12 +1516,18 @@ echo.>> "%REPORT%"
 :: ---- Section 8/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC8_PREV_CODE%" (
-    echo  [SECTION 8/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    if !DEFERRED_COUNT! GTR !SEC8_PREV_DEF! (
+        set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC8_PREV_DEF!
+        echo  [SECTION 8/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
+    ) else (
+        echo  [SECTION 8/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    )
 ) else (
     echo  [SECTION 8/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC9_PREV_CODE=%EXIT_CODE%"
+set "SEC9_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[9/18]%C_RESET% Checking Defender and AV configuration...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1538,12 +1587,18 @@ echo.>> "%REPORT%"
 :: ---- Section 9/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC9_PREV_CODE%" (
-    echo  [SECTION 9/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    if !DEFERRED_COUNT! GTR !SEC9_PREV_DEF! (
+        set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC9_PREV_DEF!
+        echo  [SECTION 9/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
+    ) else (
+        echo  [SECTION 9/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    )
 ) else (
     echo  [SECTION 9/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC10_PREV_CODE=%EXIT_CODE%"
+set "SEC10_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[10/18]%C_RESET% Checking SMB and remote access...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1602,12 +1657,18 @@ echo.>> "%REPORT%"
 :: ---- Section 10/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC10_PREV_CODE%" (
-    echo  [SECTION 10/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    if !DEFERRED_COUNT! GTR !SEC10_PREV_DEF! (
+        set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC10_PREV_DEF!
+        echo  [SECTION 10/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
+    ) else (
+        echo  [SECTION 10/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    )
 ) else (
     echo  [SECTION 10/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC11_PREV_CODE=%EXIT_CODE%"
+set "SEC11_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[11/18]%C_RESET% Checking PowerShell security...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1667,12 +1728,18 @@ echo.>> "%REPORT%"
 :: ---- Section 11/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC11_PREV_CODE%" (
-    echo  [SECTION 11/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    if !DEFERRED_COUNT! GTR !SEC11_PREV_DEF! (
+        set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC11_PREV_DEF!
+        echo  [SECTION 11/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
+    ) else (
+        echo  [SECTION 11/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    )
 ) else (
     echo  [SECTION 11/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC12_PREV_CODE=%EXIT_CODE%"
+set "SEC12_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[12/18]%C_RESET% Checking credential and LSASS protection...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1724,12 +1791,18 @@ echo.>> "%REPORT%"
 :: ---- Section 12/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC12_PREV_CODE%" (
-    echo  [SECTION 12/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    if !DEFERRED_COUNT! GTR !SEC12_PREV_DEF! (
+        set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC12_PREV_DEF!
+        echo  [SECTION 12/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
+    ) else (
+        echo  [SECTION 12/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    )
 ) else (
     echo  [SECTION 12/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC13_PREV_CODE=%EXIT_CODE%"
+set "SEC13_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[13/18]%C_RESET% Checking system hardening settings...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1878,12 +1951,18 @@ echo.>> "%REPORT%"
 :: ---- Section 13/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC13_PREV_CODE%" (
-    echo  [SECTION 13/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    if !DEFERRED_COUNT! GTR !SEC13_PREV_DEF! (
+        set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC13_PREV_DEF!
+        echo  [SECTION 13/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
+    ) else (
+        echo  [SECTION 13/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    )
 ) else (
     echo  [SECTION 13/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC14_PREV_CODE=%EXIT_CODE%"
+set "SEC14_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[14/18]%C_RESET% Scanning file system for suspicious files...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1929,12 +2008,18 @@ echo.>> "%REPORT%"
 :: ---- Section 14/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC14_PREV_CODE%" (
-    echo  [SECTION 14/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    if !DEFERRED_COUNT! GTR !SEC14_PREV_DEF! (
+        set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC14_PREV_DEF!
+        echo  [SECTION 14/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
+    ) else (
+        echo  [SECTION 14/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    )
 ) else (
     echo  [SECTION 14/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC15_PREV_CODE=%EXIT_CODE%"
+set "SEC15_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[15/18]%C_RESET% Auditing installed software and drivers...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -1976,12 +2061,18 @@ echo.>> "%REPORT%"
 :: ---- Section 15/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC15_PREV_CODE%" (
-    echo  [SECTION 15/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    if !DEFERRED_COUNT! GTR !SEC15_PREV_DEF! (
+        set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC15_PREV_DEF!
+        echo  [SECTION 15/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
+    ) else (
+        echo  [SECTION 15/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    )
 ) else (
     echo  [SECTION 15/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC16_PREV_CODE=%EXIT_CODE%"
+set "SEC16_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[16/18]%C_RESET% Pulling Windows Event Log anomalies...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -2082,12 +2173,18 @@ echo.>> "%REPORT%"
 :: ---- Section 16/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC16_PREV_CODE%" (
-    echo  [SECTION 16/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    if !DEFERRED_COUNT! GTR !SEC16_PREV_DEF! (
+        set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC16_PREV_DEF!
+        echo  [SECTION 16/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
+    ) else (
+        echo  [SECTION 16/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    )
 ) else (
     echo  [SECTION 16/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC17_PREV_CODE=%EXIT_CODE%"
+set "SEC17_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[17/18]%C_RESET% Nation-state threat indicators from MDDR 2023...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -2294,12 +2391,18 @@ echo.>> "%REPORT%"
 :: ---- Section 17/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC17_PREV_CODE%" (
-    echo  [SECTION 17/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    if !DEFERRED_COUNT! GTR !SEC17_PREV_DEF! (
+        set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC17_PREV_DEF!
+        echo  [SECTION 17/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
+    ) else (
+        echo  [SECTION 17/18 RESULT: CLEAN -- no issues detected]>> "%REPORT%"
+    )
 ) else (
     echo  [SECTION 17/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
 set "SEC18_PREV_CODE=%EXIT_CODE%"
+set "SEC18_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[18/18]%C_RESET% CTI-driven threat indicator sweep...
 :: ====================================================================
 echo ====================================================================>> "%REPORT%"
@@ -2670,7 +2773,12 @@ echo.>> "%REPORT%"
 :: ---- Section 18/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 if "%EXIT_CODE%"=="%SEC18_PREV_CODE%" (
-    echo  [SECTION 18/18 RESULT: CLEAN -- no IOC matches detected]>> "%REPORT%"
+    if !DEFERRED_COUNT! GTR !SEC18_PREV_DEF! (
+        set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC18_PREV_DEF!
+        echo  [SECTION 18/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
+    ) else (
+        echo  [SECTION 18/18 RESULT: CLEAN -- no IOC matches detected]>> "%REPORT%"
+    )
 ) else (
     echo  [SECTION 18/18 RESULT: ISSUES FOUND -- review IOC matches above]>> "%REPORT%"
 )
