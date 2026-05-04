@@ -1573,9 +1573,19 @@ echo  MDDR 2023: DPRK actors installed RMM tools as services for C2.>> "%REPORT%
 echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
-echo --- Services with Non-Standard Paths --->> "%REPORT%"
-echo Get-CimInstance Win32_Service ^| Where-Object {$_.PathName -and $_.PathName -notmatch 'system32^|SysWOW64^|Program Files^|MpKsl^|Windows Defender^|SecurityHealth^|MsMpEng'} ^| Select-Object Name,State,StartMode,PathName ^| Format-Table -AutoSize -Wrap > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+echo --- Services Authenticode Signature Gating --->> "%REPORT%"
+echo  Per-service Authenticode signature evaluation: signer must be on the>> "%REPORT%"
+echo  vendor allowlist (\b-anchored), cert must pass revocation+expiry, and>> "%REPORT%"
+echo  binary path must not be under Temp/AppData/Downloads/Public. Replaces>> "%REPORT%"
+echo  the prior path-substring allowlist that was bypassed by installing>> "%REPORT%"
+echo  to "C:\Program Files\anything\".>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\service_signature_check.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\service_signature_check.ps1" >> "%REPORT%" 2>&1
+) else (
+    echo  [INFO] tools\service_signature_check.ps1 not found -- service signature gating skipped.>> "%REPORT%"
+    echo Get-CimInstance Win32_Service ^| Where-Object {$_.PathName -and $_.PathName -notmatch 'system32^|SysWOW64^|Program Files^|MpKsl^|Windows Defender^|SecurityHealth^|MsMpEng'} ^| Select-Object Name,State,StartMode,PathName ^| Format-Table -AutoSize -Wrap > "%PSRUN%"
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+)
 
 echo.>> "%REPORT%"
 echo --- Unquoted Service Paths with Spaces --->> "%REPORT%"

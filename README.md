@@ -67,7 +67,7 @@ Temp path check, admin detection, OS version, OS compatibility, Safe Mode, log d
 | 4 | Running processes | No | LOLBins, RMM tools, suspicious paths |
 | 5 | Startup and persistence | No | Run keys, Winlogon, IFEO debuggers |
 | 6 | Scheduled tasks | No | Malicious tasks, action-path detection (PS CSV, Task-To-Run column only) |
-| 7 | Windows services | Partial | Unsigned services, unusual accounts |
+| 7 | Windows services | Partial | Authenticode signature gating per service binary (vendor allowlist + revocation + expiry + bad-path); unusual accounts |
 | 8 | Firewall configuration | Yes | Disabled profiles, risky rules |
 | 9 | Defender and AV status | Yes | Disabled Defender, exclusions, tamper |
 | 10 | SMB, RDP, remote access | Partial | SMBv1, NLA bypass, open RDP |
@@ -293,16 +293,7 @@ If those trade-offs are not acceptable, make the repo public or skip the update 
 
 ## Roadmap
 
-Open coverage gaps and cleanup items surfaced by the multi-agent audit are tracked under the [`audit-deferred`](https://github.com/kj299/doze_sec/issues?q=is%3Aopen+label%3Aaudit-deferred) label. Highlights:
-
-| # | Item | Tier |
-|--|------|------|
-| [#9](https://github.com/kj299/doze_sec/issues/9) | Section 7 service-path allowlist bypass (Authenticode signature gating) | HIGH |
-| [#12](https://github.com/kj299/doze_sec/issues/12) | Event 4688 time-window guard (currently `-MaxEvents N` only) | MED |
-| [#15](https://github.com/kj299/doze_sec/issues/15) | noAdmin self-update should refresh all 10 IOC files (currently only `ioc_hashes.txt`) | MED |
-| [#17](https://github.com/kj299/doze_sec/issues/17) | noAdmin per-section verdicts: distinguish CLEAN vs PARTIAL when checks were DEFERRED | MED |
-
-Plus 6 LOW-tier cleanup items ([full list](https://github.com/kj299/doze_sec/issues?q=is%3Aopen+label%3Aaudit-deferred)).
+All 12 items surfaced by the multi-agent audit have been resolved (see closed [`audit-deferred`](https://github.com/kj299/doze_sec/issues?q=is%3Aclosed+label%3Aaudit-deferred) issues). New work is tracked via the regular [Issues](https://github.com/kj299/doze_sec/issues) tab.
 
 ## License
 
