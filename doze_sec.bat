@@ -614,9 +614,9 @@ if "%OS_BLOCK_REASON%"=="" goto :os_check_passed
 
 echo  [UNSUPPORTED] %OS_BLOCK_REASON%>> "%REPORT%"
 if "%DEV_MODE%"=="1" (
-    echo  [WARN] Unsupported OS: %OS_BLOCK_REASON%>> "%REPORT%"
-    echo  [WARN] -dev override active. Continuing on unsupported OS.>> "%REPORT%"
-    echo  [WARN] Some checks may fail or return incorrect results.>> "%REPORT%"
+    echo  [WARNING] Unsupported OS: %OS_BLOCK_REASON%>> "%REPORT%"
+    echo  [WARNING] -dev override active. Continuing on unsupported OS.>> "%REPORT%"
+    echo  [WARNING] Some checks may fail or return incorrect results.>> "%REPORT%"
     echo %C_GREEN%[INIT 4/14]%C_RESET% WARN: %OS_BLOCK_REASON% -- -dev override active, continuing.
     if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
     goto :os_check_passed
@@ -701,7 +701,7 @@ if %errorlevel% equ 0 (
     echo             Manual undo if needed: reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /f>> "%CHANGELOG%"
     echo.>> "%CHANGELOG%"
 ) else (
-    echo  [WARN] Could not create RunOnce key. Resume will not be available.>> "%REPORT%"
+    echo  [WARNING] Could not create RunOnce key. Resume will not be available.>> "%REPORT%"
     echo %C_GREEN%[INIT 8/14]%C_RESET% RunOnce key creation failed - non-fatal.
 )
 echo.>> "%REPORT%"
@@ -884,7 +884,7 @@ if %errorlevel% equ 0 (
     echo echo Boot menu settings restored.>> "%UNDO_BAT%"
     echo.>> "%UNDO_BAT%"
 ) else (
-    echo  [WARN] Could not set displaybootmenu. May already be set or bcdedit restricted.>> "%REPORT%"
+    echo  [WARNING] Could not set displaybootmenu. May already be set or bcdedit restricted.>> "%REPORT%"
     echo %C_GREEN%[INIT 11/14]%C_RESET% F8 re-enable returned non-zero - non-fatal.
 )
 :f8_done
@@ -2925,8 +2925,8 @@ if exist "%SUMFILE%" (
     echo.>> "%REPORT%"
     type "%SUMFILE%">> "%REPORT%"
 ) else (
-    echo  [WARN] Live summary could not run - PWSH failed to produce output.>> "%REPORT%"
-    echo  [WARN] Check PowerShell execution policy or PWSH path.>> "%REPORT%"
+    echo  [WARNING] Live summary could not run - PWSH failed to produce output.>> "%REPORT%"
+    echo  [WARNING] Check PowerShell execution policy or PWSH path.>> "%REPORT%"
     echo.
     echo  [WARN] Live summary skipped - PowerShell produced no output.
     echo  Check execution policy: Get-ExecutionPolicy -List
