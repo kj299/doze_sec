@@ -95,8 +95,22 @@ if /i "%~1"=="-sdu"        set "SKIP_THREAT_UPDATE=1"
 if /i "%~1"=="-nosrp"      set "SKIP_SRP=1"
 if /i "%~1"=="-noAdmin"    set "NO_ADMIN_MODE=1"
 if /i "%~1"=="-updateTTP"  set "UPDATE_TTP=1"
+if /i "%~1"=="-importTTP"  goto :parse_importttp_noadmin
 if /i "%~1"=="-vt"         set "VT_CHECK=1"
 if /i "%~1"=="-noVtSelf"   set "VT_SELF_SKIP=1"
+shift
+goto :parse_args
+:parse_importttp_noadmin
+:: Consume the file argument so it doesn't break later arg parsing,
+:: but do not act on it -- the sanitize+merge pipeline lives in admin.
+shift
+if "%~1"=="" (
+    echo  [ERROR] -importTTP requires a file path argument.
+    exit /b 1
+)
+echo  %C_YELLOW%[WARN]%C_RESET% -importTTP is only available in doze_sec.bat ^(admin variant^).
+echo  Re-run as admin: doze_sec.bat -importTTP "%~1"
+echo  Continuing audit without TTP merge.
 shift
 goto :parse_args
 :args_done
