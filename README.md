@@ -69,15 +69,15 @@ Temp path check, admin detection, OS version, OS compatibility, Safe Mode, log d
 | 11 | PowerShell security | Partial | Unrestricted execution, logging gaps |
 | 12 | Credential and LSASS protection | No | PPL disabled, WDigest, Credential Guard |
 | 13 | System hardening | Partial | UAC, BitLocker, SecureBoot, test signing |
-| 14 | Suspicious files | No | ADS streams, double extensions, staging dirs |
+| 14 | Suspicious files | No | ADS streams, double extensions, recent EXE/DLL/PS/VBS in user `%TEMP%` and `C:\Windows\Temp` (admin) |
 | 15 | Installed software and drivers | No | Unsigned drivers, vulnerable software |
 | 16 | Event log anomalies | Partial | Log clearing (1102), brute force (4625), lateral (4624) |
-| 17 | Nation-state threat indicators | No | MDDR 2023-2025 TTPs, portproxy, WMI persistence (SCM defaults allowlisted by Name+Query) |
+| 17 | Nation-state threat indicators | No | MDDR 2023-2025 TTPs, portproxy, WMI persistence (CommandLine + ActiveScript consumers; SCM defaults allowlisted by Name+Query) |
 | 18 | CTI-driven IOC sweep | No | SENTINEL-X file-based + inline CTI checks |
 
 ## Section 18: CTI IOC Sweep
 
-Reads structured IOC files from `ThreatLists/` and matches against the live system, then runs inline CTI checks for advanced threats.
+Reads structured IOC files from `ThreatLists/` and matches against the live system, then runs inline CTI checks for advanced threats. Both `doze_sec.bat` (admin) and `doze_sec_noAdmin.bat` execute the full 18a-18i file-based sweep; `IOC_HITS` increments per sub-check and rolls up into the live security scorecard verdict.
 
 **File-based checks (18a-18i):**
 
@@ -114,15 +114,15 @@ Plain-text IOC files. One entry per line. `#` = comment.
 
 | File | Entries | Format | Content |
 |------|:-------:|--------|---------|
-| `ioc_processes.txt` | 77 | Process name | Ransomware, C2, cred tools, RMM, APT |
+| `ioc_processes.txt` | 54 | Process name | Ransomware, C2, cred tools, recon (FP-prone RMM/admin-tool entries removed) |
 | `ioc_named_pipes.txt` | 32 | Pipe name | Cobalt Strike, Sliver, Havoc, Mythic, PsExec |
-| `ioc_services.txt` | 45 | Service name | RMM, BYOVD, fake updates, implants |
-| `ioc_registry.txt` | 49 | `HIVE\Path\|Value` | Persistence, COM hijack, defense evasion |
-| `ioc_file_paths.txt` | 57 | File path | Staging dirs, webshells, driver drops |
+| `ioc_services.txt` | 24 | Service name | C2 implants, BYOVD, ransomware (legitimate RMM/HWMonitor entries removed) |
+| `ioc_registry.txt` | 26 | `HIVE\Path\|Value` | Persistence, COM hijack, defense evasion |
+| `ioc_file_paths.txt` | 44 | File path | Staging dirs, webshells, driver drops |
 | `ioc_scheduled_tasks.txt` | 19 | Task name/path | Fake updates, APT persistence, ransomware pre-staging |
-| `ioc_domains.txt` | 55 | Domain fragment | C2 infra, tunneling, DGA TLDs |
-| `ioc_hashes.txt` | 10 | `SHA256\|Family\|Source` | BYOVD drivers, CS loaders, ransomware |
-| `ioc_lolbins.txt` | 97 | Command fragment | certutil, mshta, regsvr32, PowerShell obfuscation |
+| `ioc_domains.txt` | 21 | Domain fragment | C2 infra, tunneling (bare TLDs and legit DoH endpoints removed) |
+| `ioc_hashes.txt` | 12 | `SHA256\|Family\|Source` | BYOVD drivers, CS loaders, ransomware |
+| `ioc_lolbins.txt` | 52 | Command fragment | certutil, mshta, regsvr32, encoded PS (overbroad PS aliases removed) |
 | `ttp_manifest.txt` | 48 | `TechID\|Tactic\|Name\|Actors\|Detection` | MITRE ATT&CK v14+ mapping |
 
 ## Threat Coverage
