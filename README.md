@@ -47,7 +47,8 @@ doze_sec.bat -help
 | `-nosrp` | Both | Skip System Restore Point creation |
 | `-noAdmin` | noAdmin only | Run without elevation; defers admin-only checks |
 | `-updateTTP` | Admin only | Refresh ThreatLists/ via SENTINEL-X CTI skill (requires Claude Code CLI) |
-| `-vt` | Both | Section 18j: query VirusTotal for SHA256 of priority files. Requires `~/.vt_token` |
+| `-importTTP <file>` | Admin only | Merge TTP rows from a pipe-delimited file (offline alternative to `-updateTTP`; no Claude CLI needed) |
+| `-vt` | Both | Section 18j+18l: query VirusTotal for SHA256 of priority files + remote IP reputation. Requires `~/.vt_token` |
 | `-noVtSelf` | Both | Skip the automatic pre-flight VT integrity check on script-critical binaries (default: runs whenever `~/.vt_token` exists and network is up) |
 | `-help` | Both | Show usage guide with section descriptions |
 
@@ -197,6 +198,31 @@ doze_sec.bat -updateTTP
 Requires:
 1. Claude Code CLI installed (`npm install -g @anthropic-ai/claude-code`)
 2. The [threat-intel](https://github.com/kj299/threat-intel) repo cloned as a sibling directory
+
+## Offline TTP Import (`-importTTP`)
+
+If you can't run Claude Code (air-gapped network, policy restriction, etc.), maintain your own pipe-delimited TTP feed and import it directly:
+
+```
+doze_sec.bat -importTTP C:\path\to\my_ttps.txt
+```
+
+**File format** -- one row per line, no header, fields separated by `|`:
+
+```
+MITRE_ID|Name|Detection_Method|Detection_Value|Severity|Actor
+T1059.001|PowerShell Encoded Cmd|process name|powershell.exe|WARNING|APT29
+T1543.003|Sliver Pipe Persistence|named pipe|sliverpb_|CRITICAL|Sliver
+T1547.001|HKCU Run Persistence|registry key|HKCU\Software\Microsoft\Windows\CurrentVersion\Run|INFO|Generic
+```
+
+**`Detection_Method` must be one of**: `registry key`, `event id`, `process name`, `file path`, `named pipe`, `wmi query`. Other values cause the row to be dropped during sanitization.
+
+**`Detection_Value` is sanitized**: rows containing shell metacharacters (`"` `'` `` ` `` `$` `;` `|` `&` `<` `>` `(` `)` `{` `}` `^`), longer than 260 chars, or non-ASCII-printable are dropped before merge. Same sanitizer as `-updateTTP` -- both LLM-generated and user-supplied input is treated as untrusted.
+
+**Where TTP rows go after import**: process names append to `ThreatLists/ioc_processes.txt`, named pipes to `ioc_named_pipes.txt`, and detection commands are emitted to `%OUTDIR%\ThreatLists\ttp_generated_checks.bat` (sourced by Section 18 on subsequent runs).
+
+Source the file from any CTI feed: MISP exports, AlienVault OTX pulses, internal SOC enrichment, vendor feeds, etc. The sanitizer treats all input the same.
 
 ## VirusTotal Hash Reputation (`-vt`)
 

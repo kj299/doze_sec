@@ -11,6 +11,9 @@
 ::    -nosrp     Skip System Restore Point creation
 ::    -updateTTP Run CTI skill via Claude Code to pull latest TTPs and
 ::               auto-generate new detection blocks (requires Claude Code CLI)
+::    -importTTP <file>  Merge TTP rows from a pipe-delimited file into
+::               ThreatLists/ -- offline alternative to -updateTTP that
+::               skips the Claude CLI dependency
 ::    -vt        Query VirusTotal for SHA256 hashes of priority files
 ::               (Section 18j). Requires API key in %USERPROFILE%\.vt_token
 ::    -noVtSelf  Skip the automatic pre-flight binary integrity check
@@ -58,6 +61,7 @@ set "RESUME_MODE=0"
 set "SKIP_THREAT_UPDATE=0"
 set "SKIP_SRP=0"
 set "UPDATE_TTP=0"
+set "IMPORT_TTP_FILE="
 set "VT_CHECK=0"
 set "VT_SELF_SKIP=0"
 set "IOC_HITS=0"
@@ -88,8 +92,20 @@ if /i "%~1"=="-resume"     set "RESUME_MODE=1"
 if /i "%~1"=="-sdu"        set "SKIP_THREAT_UPDATE=1"
 if /i "%~1"=="-nosrp"      set "SKIP_SRP=1"
 if /i "%~1"=="-updateTTP"  set "UPDATE_TTP=1"
+if /i "%~1"=="-importTTP"  goto :parse_importttp
 if /i "%~1"=="-vt"         set "VT_CHECK=1"
 if /i "%~1"=="-noVtSelf"   set "VT_SELF_SKIP=1"
+shift
+goto :parse_args
+:parse_importttp
+shift
+if "%~1"=="" (
+    echo  [ERROR] -importTTP requires a file path argument.
+    echo  Example: %~nx0 -importTTP C:\path\to\ttp_feed.txt
+    exit /b 1
+)
+set "IMPORT_TTP_FILE=%~1"
+set "UPDATE_TTP=1"
 shift
 goto :parse_args
 :args_done
@@ -124,6 +140,21 @@ echo.
 echo    %C_GREEN%-updateTTP%C_RESET%   Refresh the ThreatLists/ IOC files before the audit.
 echo                 Requires network. Downloads latest indicators from the
 echo                 configured threat intelligence source.
+echo.
+echo    %C_GREEN%-importTTP%C_RESET% ^<file^>
+echo                 Merge TTP rows from a pipe-delimited file into the
+echo                 ThreatLists/ IOC files. Same sanitization and merge
+echo                 pipeline as -updateTTP but skips the Claude Code CLI
+echo                 dependency -- useful when AI LLMs are unavailable or
+echo                 you maintain your own CTI feed (MISP export, OTX
+echo                 pulse, internal SOC enrichment, etc.).
+echo                 File format (one row per line, no header):
+echo                   MITRE_ID^|Name^|Detection_Method^|Detection_Value^|Severity^|Actor
+echo                 Detection_Method must be one of: registry key, event id,
+echo                 process name, file path, named pipe, wmi query.
+echo                 Detection_Value is sanitized -- shell metacharacters
+echo                 (quotes, ;, ^|, ^&, ^<, ^>, parens, braces, ^^) cause the
+echo                 row to be dropped.
 echo.
 echo    %C_GREEN%-vt%C_RESET%          Query VirusTotal for SHA256 hashes of priority files
 echo                 (recent EXE/DLL/PS/VBS in TEMP/Downloads/AppData and
@@ -238,15 +269,52 @@ endlocal & exit /b 0
 :help_done
 
 :: ====================================================================
-:: -updateTTP HANDLER: Invoke CTI skill via Claude Code CLI
+:: -updateTTP / -importTTP HANDLER
+::   -updateTTP : invoke SENTINEL-X CTI skill via Claude Code CLI to
+::                generate fresh TTP rows
+::   -importTTP <file> : skip the LLM call and use the supplied
+::                pipe-delimited file as the TTP source
+:: Both feed into the same sanitization + IOC merge pipeline below.
 :: ====================================================================
 if "%UPDATE_TTP%"=="0" goto :skip_ttp_update
 
 echo.
 echo ====================================================================
-echo  -updateTTP: Invoking CTI Skill via Claude Code
+if defined IMPORT_TTP_FILE (
+    echo  -importTTP: Loading TTP rows from %IMPORT_TTP_FILE%
+) else (
+    echo  -updateTTP: Invoking CTI Skill via Claude Code
+)
 echo ====================================================================
 echo.
+
+:: Ensure OUTDIR is set before use (main OUTDIR set later, but -updateTTP runs early)
+if not defined OUTDIR set "OUTDIR=C:\SecurityAudit"
+if not exist "%OUTDIR%\ThreatLists" mkdir "%OUTDIR%\ThreatLists" 2>nul
+:: Compute today's date as locale-independent yyyyMMdd via PowerShell.
+:: %date% is locale-dependent (US=ddd MM/DD/YYYY, ISO=YYYY-MM-DD, DE=DD.MM.YYYY,
+:: etc.) and substring slicing produces garbage on non-US systems.
+for /f "usebackq" %%i in (`powershell -NoProfile -Command "Get-Date -Format yyyyMMdd"`) do set "TTP_TODAY=%%i"
+if not defined TTP_TODAY set "TTP_TODAY=unknown"
+set "TTP_OUTPUT=%OUTDIR%\ThreatLists\ttp_update_%TTP_TODAY%.txt"
+set "TTP_BLOCKS=%OUTDIR%\ThreatLists\ttp_generated_checks.bat"
+
+if defined IMPORT_TTP_FILE (
+    if not exist "%IMPORT_TTP_FILE%" (
+        echo  [ERROR] -importTTP file not found: %IMPORT_TTP_FILE%
+        echo  Skipping TTP merge.
+        goto :skip_ttp_update
+    )
+    copy /y "%IMPORT_TTP_FILE%" "%TTP_OUTPUT%" >nul 2>&1
+    if errorlevel 1 (
+        echo  [ERROR] Failed to copy %IMPORT_TTP_FILE% to %TTP_OUTPUT%.
+        goto :skip_ttp_update
+    )
+    echo  [OK] Loaded TTP rows from %IMPORT_TTP_FILE%. Skipping CTI skill call.
+    echo  [INFO] Output staged at: %TTP_OUTPUT%
+    goto :sanitize_ttp_output
+)
+
 echo  This will call the SENTINEL-X Cyber Threat Intelligence skill
 echo  to pull the latest TTPs and generate new detection blocks.
 echo.
@@ -258,21 +326,14 @@ if %errorlevel% neq 0 (
     echo  Install: https://docs.anthropic.com/en/docs/claude-code
     echo  Or run: npm install -g @anthropic-ai/claude-code
     echo.
+    echo  Tip: pre-stage TTP rows in a pipe-delimited file and use
+    echo       %~nx0 -importTTP ^<file^>  to skip the Claude CLI dependency.
+    echo.
     echo  Falling back to existing TTP checks.
     goto :skip_ttp_update
 )
 
 set "CTI_SKILL_PATH=%~dp0..\threat-intel\cyber_threat_skill.yaml"
-:: Ensure OUTDIR is set before use (main OUTDIR set later, but -updateTTP runs early)
-if not defined OUTDIR set "OUTDIR=C:\SecurityAudit"
-if not exist "%OUTDIR%\ThreatLists" mkdir "%OUTDIR%\ThreatLists" 2>nul
-:: Compute today's date as locale-independent yyyyMMdd via PowerShell.
-:: %date% is locale-dependent (US=ddd MM/DD/YYYY, ISO=YYYY-MM-DD, DE=DD.MM.YYYY,
-:: etc.) and substring slicing produces garbage on non-US systems.
-for /f "usebackq" %%i in (`powershell -NoProfile -Command "Get-Date -Format yyyyMMdd"`) do set "TTP_TODAY=%%i"
-if not defined TTP_TODAY set "TTP_TODAY=unknown"
-set "TTP_OUTPUT=%OUTDIR%\ThreatLists\ttp_update_%TTP_TODAY%.txt"
-set "TTP_BLOCKS=%OUTDIR%\ThreatLists\ttp_generated_checks.bat"
 
 if not exist "%CTI_SKILL_PATH%" (
     echo  [WARN] CTI skill file not found at: %CTI_SKILL_PATH%
@@ -311,16 +372,25 @@ if not exist "%TTP_OUTPUT%" (
     goto :skip_ttp_update
 )
 
+:sanitize_ttp_output
 :: ====================================================================
 :: SANITIZE CTI OUTPUT: drop any row whose Detection_Value contains
 :: shell or PowerShell metacharacters, to prevent code injection when
 :: the value is later emitted into TTP_BLOCKS or merged into the IOC
-:: source files. Metachars are expressed as [char] codes in the PS
-:: below so we never have to escape them through CMD.
+:: source files. Applies identically to LLM-generated rows (-updateTTP)
+:: and user-supplied import files (-importTTP) -- both are untrusted.
+:: Metachars are expressed as [char] codes in the PS below so we never
+:: have to escape them through CMD.
 ::   Blocked char codes: 34 39 96 36 59 124 38 60 62 40 41 123 125 94
 ::   (double/single/backtick quotes, dollar, semicolon, pipe, amp,
 ::    angle brackets, parens, braces, caret)
 :: ====================================================================
+:: Ensure IOC_GUID is set (the -importTTP path skips the earlier
+:: EXISTING_IOCS computation that sets it).
+if not defined IOC_GUID (
+    for /f "usebackq delims=" %%g in (`powershell -NoProfile -Command "[guid]::NewGuid().ToString('N')"`) do set "IOC_GUID=%%g"
+)
+if not defined IOC_GUID set "IOC_GUID=%RANDOM%%RANDOM%%RANDOM%"
 set "TTP_SANITIZER_REPORT=%TEMP%\ttp_sanitize_%IOC_GUID%.log"
 :: Note: %PWSH% is not resolved until later in setup; use plain 'powershell' here.
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$src='%TTP_OUTPUT%'; $lines=Get-Content -LiteralPath $src -ErrorAction SilentlyContinue; $allow=@('registry key','event id','process name','file path','named pipe','wmi query'); $bad=[char[]]@(34,39,96,36,59,124,38,60,62,40,41,123,125,94); $safe=New-Object System.Collections.Generic.List[string]; $drop=0; foreach($l in $lines){ if(-not $l -or $l.Trim() -eq ''){continue}; $p=$l -split '\|'; if($p.Count -ne 6){$drop++;continue}; $m=$p[2].Trim().ToLower(); $v=$p[3].Trim(); if($v.Length -eq 0 -or $v.Length -gt 260){$drop++;continue}; if($allow -notcontains $m){$drop++;continue}; if($v.IndexOfAny($bad) -ne -1){$drop++;continue}; if($v -notmatch '^[\x20-\x7E]+$'){$drop++;continue}; $safe.Add($l) }; Set-Content -LiteralPath $src -Value $safe -Encoding ASCII; Write-Output ('  [SANITIZE] Kept: '+$safe.Count+'  Dropped: '+$drop)" > "%TTP_SANITIZER_REPORT%" 2>&1
