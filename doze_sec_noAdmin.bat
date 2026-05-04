@@ -1,6 +1,6 @@
 @echo off
 :: ====================================================================
-::  WIN11 SECURITY FORENSIC AUDIT  v7.0-noAdmin
+::  WIN11 SECURITY FORENSIC AUDIT  v7.1-noAdmin
 ::  CMD-COMPATIBLE: All PowerShell runs via temp .ps1 file (-File mode).
 ::  Nation-state TTPs: Microsoft MDDR 2023.
 ::
@@ -10,7 +10,7 @@
 ::    -sdu     Skip threat intel list update from GitHub
 ::    -nosrp   Skip System Restore Point creation
 ::    -noAdmin    Run in non-admin mode (defers admin-only checks)
-::    -updateTTP  Refresh ThreatLists IOC files before audit
+::    -updateTTP  NOT AVAILABLE in noAdmin -- use doze_sec.bat -updateTTP
 ::    -help       Show usage guide, all switches, and section descriptions
 ::
 ::  EXIT CODES:
@@ -121,9 +121,10 @@ echo.
 echo    %C_GREEN%-dev%C_RESET%         Bypass the unsupported-OS check. Use on Server editions,
 echo                 Windows 8.1, or unrecognised builds for testing/research.
 echo.
-echo    %C_GREEN%-resume%C_RESET%      Skip pre-flight steps 8-14 (F8, SRP, SMART, updates).
-echo                 Used automatically by the RunOnce key if a previous run
-echo                 was interrupted by a reboot or crash.
+echo    %C_GREEN%-resume%C_RESET%      Skip pre-flight steps 8-14 (RunOnce key, network, self-update,
+echo                 F8 boot menu, SRP, disk config, SMART). Used automatically
+echo                 by the RunOnce key if a previous run was interrupted by a
+echo                 reboot or crash.
 echo.
 echo    %C_GREEN%-sdu%C_RESET%         Skip threat intel list update from the configured GitHub
 echo                 URL. Useful on air-gapped systems or slow connections.
@@ -131,9 +132,10 @@ echo.
 echo    %C_GREEN%-nosrp%C_RESET%       Skip System Restore Point creation. Saves 30-60 seconds
 echo                 if you already have a recent restore point.
 echo.
-echo    %C_GREEN%-updateTTP%C_RESET%   Refresh the ThreatLists/ IOC files before the audit.
-echo                 Requires network. Downloads latest indicators from the
-echo                 configured threat intelligence source.
+echo    %C_GREEN%-updateTTP%C_RESET%   NOT AVAILABLE in this variant. Use doze_sec.bat -updateTTP
+echo                 (admin variant) to refresh ThreatLists/ via the SENTINEL-X
+echo                 CTI skill. Passing -updateTTP to noAdmin emits a warning
+echo                 and proceeds without updating.
 echo.
 echo    %C_GREEN%-help, -h, /?, --help%C_RESET%
 echo                 Show this help screen and exit.
@@ -2080,8 +2082,6 @@ set /a DEFERRED_COUNT+=1
 
 echo.>> "%REPORT%"
 echo --- [MIDNIGHT BLIZZARD] OAuth Identity Registrations --->> "%REPORT%"
-echo $ids=reg query "HKCU\Software\Microsoft\Office\16.0\Common\Identity\Identities" /s 2^>nul > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">nul 2>&1
 reg query "HKCU\Software\Microsoft\Office\16.0\Common\Identity\Identities" /s>> "%REPORT%" 2>nul
 if %errorlevel% neq 0 echo [OK] No Office/AAD OAuth identity registrations found (Midnight Blizzard check clear).>> "%REPORT%"
 
@@ -2880,8 +2880,12 @@ if /i "%SUM_RESULT%"=="CRIT" if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
 if /i "%SUM_RESULT%"=="WARN" if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
 if exist "%SUMFILE%" del "%SUMFILE%" >nul 2>&1
 
-:: Set exit code 6 for non-admin partial audit (if no worse code already set)
-if "%IS_ADMIN%"=="0" if %EXIT_CODE% LSS 2 set "EXIT_CODE=6"
+:: Set exit code 6 for non-admin partial audit (if no worse code already set).
+:: Allow escalation from EXIT_CODE=4 (reboot pending) too, since the partial-
+:: audit signal is more actionable for the user than the reboot one. Keep the
+:: reboot-pending message in the report; the exit code now reflects "non-admin
+:: partial audit, also reboot pending" via 6 alone.
+if "%IS_ADMIN%"=="0" if %EXIT_CODE% LSS 5 set "EXIT_CODE=6"
 
 echo.
 echo %C_BOLD%====================================================================%C_RESET%

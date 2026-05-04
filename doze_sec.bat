@@ -1,6 +1,6 @@
 @echo off
 :: ====================================================================
-::  WIN11 SECURITY FORENSIC AUDIT  v7.0
+::  WIN11 SECURITY FORENSIC AUDIT  v7.1
 ::  CMD-COMPATIBLE: All PowerShell runs via temp .ps1 file (-File mode).
 ::  Nation-state TTPs: Microsoft MDDR 2023.
 ::
@@ -102,9 +102,10 @@ echo.
 echo    %C_GREEN%-dev%C_RESET%         Bypass the unsupported-OS check. Use on Server editions,
 echo                 Windows 8.1, or unrecognised builds for testing/research.
 echo.
-echo    %C_GREEN%-resume%C_RESET%      Skip pre-flight steps 8-14 (F8, SRP, SMART, updates).
-echo                 Used automatically by the RunOnce key if a previous run
-echo                 was interrupted by a reboot or crash.
+echo    %C_GREEN%-resume%C_RESET%      Skip pre-flight steps 8-14 (RunOnce key, network, self-update,
+echo                 F8 boot menu, SRP, disk config, SMART). Used automatically
+echo                 by the RunOnce key if a previous run was interrupted by a
+echo                 reboot or crash.
 echo.
 echo    %C_GREEN%-sdu%C_RESET%         Skip threat intel list update from the configured GitHub
 echo                 URL. Useful on air-gapped systems or slow connections.
@@ -2142,8 +2143,6 @@ wevtutil qe Security /q:"*[System[(EventID=4688)]]" /c:100 /rd:true /f:text | fi
 
 echo.>> "%REPORT%"
 echo --- [MIDNIGHT BLIZZARD] OAuth Identity Registrations --->> "%REPORT%"
-echo $ids=reg query "HKCU\Software\Microsoft\Office\16.0\Common\Identity\Identities" /s 2^>nul > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">nul 2>&1
 reg query "HKCU\Software\Microsoft\Office\16.0\Common\Identity\Identities" /s>> "%REPORT%" 2>nul
 if %errorlevel% neq 0 echo [OK] No Office/AAD OAuth identity registrations found (Midnight Blizzard check clear).>> "%REPORT%"
 
