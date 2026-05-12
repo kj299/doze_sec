@@ -1,19 +1,35 @@
-# scheduled_tasks_full.ps1 -- Full scheduled-task inventory without "Task To Run" truncation
+# scheduled_tasks_full.ps1 -- Scheduled-task inventory without "Task To Run" truncation
 #
-# Replaces `schtasks /query /fo LIST /v` for the Section 6 "Full Task Listing"
-# block. The LIST format truncates the "Task To Run" field at ~261 characters,
-# which silently cuts off PowerShell -EncodedCommand actions, multi-arg installer
-# wrappers, and other long command lines that an inventory must capture in full.
+# Invoked from Section 6 of doze_sec.bat and doze_sec_noAdmin.bat in three modes:
 #
-# Get-ScheduledTask returns CIM objects whose .Actions[].Execute / .Arguments /
-# .WorkingDirectory fields are not truncated. We emit one "Field: Value" record
-# block per task, mirroring the LIST format so the report layout is unchanged.
+#   -Mode Inventory   Default. Replaces `schtasks /query /fo LIST /v` for the full
+#                     inventory. Emits "Field: Value" record blocks mirroring the
+#                     LIST format but pulls Execute / Arguments / WorkingDirectory
+#                     from .Actions, which are not truncated. (schtasks LIST cuts
+#                     "Task To Run" at ~261 chars; CSV cuts it too -- only the
+#                     CIM-backed Get-ScheduledTask preserves the full string.)
 #
-# If a task has multiple Actions (multi-step task), each action is printed as
-# Execute[N] / Arguments[N] / WorkingDirectory[N].
+#   -Mode Suspicious  Tasks whose Execute or Arguments contain a path under
+#                     Temp / AppData / Downloads / Users\Public / ProgramData\update.
+#                     Replaces the prior `schtasks /query /fo CSV /v | Format-Table`
+#                     suspicious-path check which truncated user-profile paths
+#                     and Format-Table column-truncated again at console width.
+#
+#   -Mode System      Tasks running as SYSTEM (or NT AUTHORITY\SYSTEM). Replaces
+#                     the prior `schtasks /query /fo CSV /v | findstr "SYSTEM"`
+#                     which truncated the action.
+#
+# Multi-action tasks emit Execute[N] / Arguments[N] / WorkingDirectory[N].
 #
 # Usage:
 #   pwsh -NoProfile -ExecutionPolicy Bypass -File scheduled_tasks_full.ps1
+#   pwsh -NoProfile -ExecutionPolicy Bypass -File scheduled_tasks_full.ps1 -Mode Suspicious
+#   pwsh -NoProfile -ExecutionPolicy Bypass -File scheduled_tasks_full.ps1 -Mode System
+
+param(
+    [ValidateSet('Inventory','Suspicious','System')]
+    [string]$Mode = 'Inventory'
+)
 
 $ErrorActionPreference = 'Continue'
 
@@ -27,9 +43,8 @@ if (-not $tasks) {
     return
 }
 
-foreach ($t in $tasks) {
-    $info = $null
-    try { $info = $t | Get-ScheduledTaskInfo -ErrorAction Stop } catch { }
+function Format-TaskBlock {
+    param($t, $info, $actions, $triggers)
 
     $taskPath = $t.TaskPath
     $taskName = $t.TaskName
@@ -57,7 +72,6 @@ foreach ($t in $tasks) {
         Write-Output ('Number Of Missed Runs:                ' + $info.NumberOfMissedRuns)
     }
 
-    $actions = @($t.Actions)
     if ($actions.Count -eq 0) {
         Write-Output 'Actions:                              (none)'
     } else {
@@ -75,7 +89,6 @@ foreach ($t in $tasks) {
         }
     }
 
-    $triggers = @($t.Triggers)
     if ($triggers.Count -eq 0) {
         Write-Output 'Triggers:                             (none)'
     } else {
@@ -89,6 +102,69 @@ foreach ($t in $tasks) {
             Write-Output ("Trigger$sfx" + ':' + (' ' * [Math]::Max(1, 38 - ("Trigger$sfx".Length))) + "$cls Enabled=$enabled Start=$start")
         }
     }
+}
 
+# Suspicious-path regex: matches Execute or Arguments under a high-risk location.
+# Mirrors the original CMD-block pattern so semantics don't drift between modes.
+$susPattern = '\\Temp\\|\\AppData\\|\\Downloads\\|\\Users\\Public\\|\\ProgramData\\update'
+
+if ($Mode -eq 'Inventory') {
+    foreach ($t in $tasks) {
+        $info = $null
+        try { $info = $t | Get-ScheduledTaskInfo -ErrorAction Stop } catch { }
+        $actions = @($t.Actions)
+        $triggers = @($t.Triggers)
+        Format-TaskBlock $t $info $actions $triggers
+        Write-Output ''
+    }
+    return
+}
+
+if ($Mode -eq 'Suspicious') {
+    $hits = @()
+    foreach ($t in $tasks) {
+        $actions = @($t.Actions)
+        foreach ($a in $actions) {
+            $exec = $null; $argv = $null
+            try { $exec = $a.Execute } catch {}
+            try { $argv = $a.Arguments } catch {}
+            $blob = "$exec $argv"
+            if ($blob -match $susPattern) { $hits += $t; break }
+        }
+    }
+    if ($hits.Count -eq 0) {
+        Write-Output '[OK] No scheduled-task actions in Temp/AppData/Downloads/Public/ProgramData\update.'
+        return
+    }
+    Write-Output ('[CRITICAL] ' + $hits.Count + ' scheduled task(s) with actions in suspicious locations:')
     Write-Output ''
+    foreach ($t in $hits) {
+        $info = $null
+        try { $info = $t | Get-ScheduledTaskInfo -ErrorAction Stop } catch {}
+        Format-TaskBlock $t $info @($t.Actions) @($t.Triggers)
+        Write-Output ''
+    }
+    return
+}
+
+if ($Mode -eq 'System') {
+    $hits = @()
+    foreach ($t in $tasks) {
+        $uid = ''
+        try { $uid = $t.Principal.UserId } catch {}
+        if ($uid -match '(?i)(^|\\)SYSTEM$') { $hits += $t }
+    }
+    if ($hits.Count -eq 0) {
+        Write-Output '[INFO] No SYSTEM-context scheduled tasks found.'
+        return
+    }
+    Write-Output ('[INFO] ' + $hits.Count + ' scheduled task(s) running as SYSTEM:')
+    Write-Output ''
+    foreach ($t in $hits) {
+        $info = $null
+        try { $info = $t | Get-ScheduledTaskInfo -ErrorAction Stop } catch {}
+        Format-TaskBlock $t $info @($t.Actions) @($t.Triggers)
+        Write-Output ''
+    }
+    return
 }
