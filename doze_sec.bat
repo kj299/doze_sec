@@ -3177,6 +3177,11 @@ echo Write-Output '##  After running, re-run doze_sec to verify.' >> "%PSRUN%"
 echo Write-Output '######################################################################' >> "%PSRUN%"
 echo Write-Output '' >> "%PSRUN%"
 
+:: ---- Format the report: insert section terminators for unambiguous boundaries ----
+if exist "%SCRIPT_DIR%tools\report_format.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\report_format.ps1" -Report "%REPORT%" 2>nul
+)
+
 :: ---- Run PS, show on screen, append to report ----------------------
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" > "%SUMFILE%" 2>&1
 if exist "%SUMFILE%" (
