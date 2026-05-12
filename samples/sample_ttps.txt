@@ -1,0 +1,54 @@
+# Sample TTP feed for doze_sec.bat -importTTP <file>
+#
+# Format: pipe-delimited rows, one TTP per line, no header
+#   MITRE_ID | Name | Detection_Method | Detection_Value | Severity | Actor
+#
+# Detection_Method must be one of:
+#   registry key, event id, process name, file path, named pipe, wmi query
+#
+# Detection_Value gets sanitized: rows with shell metacharacters
+# ("'` $ ; | & < > ( ) { } ^), length 0 or >260, or non-ASCII-printable
+# bytes are silently dropped during merge.
+#
+# Lines starting with # are comments (ignored by the sanitizer because
+# they fail the 6-field check, which is harmless).
+#
+# Usage:
+#   doze_sec.bat -importTTP C:\path\to\sample_ttps.txt
+#
+# After import: rows with method=process name go into ThreatLists\ioc_processes.txt,
+# named pipe rows into ioc_named_pipes.txt, and detection commands are
+# emitted to %OUTDIR%\ThreatLists\ttp_generated_checks.bat for Section 18
+# pickup on subsequent runs.
+#
+# === PROCESS NAMES (rare/attacker-only binaries) ===
+T1059.001|Encoded PowerShell Cradle|process name|powershell.exe|WARNING|Generic
+T1218.005|MSHTA Remote Script Execution|process name|mshta.exe|WARNING|Generic
+T1218.011|RunDLL32 JS/VBS Execution|process name|rundll32.exe|WARNING|Generic
+#
+# === NAMED PIPES (C2 framework defaults) ===
+T1071.001|Cobalt Strike Default Pipe|named pipe|postex_|CRITICAL|Cobalt Strike
+T1071.001|Sliver Pivot Pipe|named pipe|sliverpb_|CRITICAL|Sliver
+T1071.001|Brute Ratel Badger Pipe|named pipe|b4_badger_|CRITICAL|Brute Ratel
+#
+# === REGISTRY KEYS (persistence) ===
+T1547.001|HKCU Run Persistence|registry key|HKCU\Software\Microsoft\Windows\CurrentVersion\Run|INFO|Generic
+T1547.001|HKLM Run Persistence|registry key|HKLM\Software\Microsoft\Windows\CurrentVersion\Run|INFO|Generic
+T1546.012|Image File Execution Options Debugger|registry key|HKLM\Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options|WARNING|Generic
+#
+# === FILE PATHS (staging dirs) ===
+T1105|Common Stager Path|file path|%TEMP%\update.exe|WARNING|Generic
+T1105|AppData Roaming Stager|file path|%APPDATA%\Microsoft\Office\Recent\.tmp|WARNING|Generic
+#
+# === WMI QUERIES (persistence) ===
+T1546.003|WMI Permanent Subscription|wmi query|SELECT * FROM __InstanceCreationEvent WITHIN 60|CRITICAL|APT29
+#
+# === EVENT IDs (admin only - Security log) ===
+T1078|Explicit Credential Logon|event id|4648|WARNING|Generic
+T1059.001|PowerShell ScriptBlock|event id|4104|INFO|Generic
+T1543.003|New Service Installed|event id|7045|WARNING|Generic
+#
+# === END ===
+# 15 sample TTPs above. Replace with your own CTI feed before importing
+# in production. Refresh from your source (MISP, OTX, internal SOC,
+# vendor feed) on whatever cadence makes sense for your environment.
