@@ -1633,7 +1633,11 @@ echo ====================================================================>> "%RE
 
 echo --- Full Task Listing --->> "%REPORT%"
 echo  [INFO] Complete scheduled task inventory.>> "%REPORT%"
-schtasks /query /fo LIST /v>> "%REPORT%" 2>&1
+if exist "%SCRIPT_DIR%tools\scheduled_tasks_full.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\scheduled_tasks_full.ps1">> "%REPORT%" 2>&1
+) else (
+    schtasks /query /fo LIST /v>> "%REPORT%" 2>&1
+)
 
 echo.>> "%REPORT%"
 echo --- CRITICAL: Tasks with Actions in Suspicious Paths --->> "%REPORT%"
