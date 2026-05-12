@@ -75,19 +75,32 @@ function Get-WhyMatters {
     return $null
 }
 
-# Walk the report and collect findings with their parent section context
-$currentSection = '(pre-section)'
+# Walk the report and collect findings with their parent section context.
+# Track BOTH the most recent main section header (`[N/18] TITLE` inside a
+# `=====` box) and the most recent sub-section header (`--- Title ---`).
+# Findings are tagged with `MainSection > SubSection` so the analyst sees
+# both levels of context in the summary.
+$currentMain = '(pre-section)'
+$currentSub = $null
 $findings = New-Object System.Collections.Generic.List[object]
 foreach ($L in $lines) {
+    # Main section: a bracketed [N/18] or [INIT N/14] inside a ===== box
+    if ($L -match '^\s*\[(\d+/18|INIT \d+/14)\]\s+(.+?)\s*$') {
+        $currentMain = "[$($matches[1])] $($matches[2])"
+        $currentSub = $null  # reset sub when entering a new main section
+        continue
+    }
+    # Sub-section: --- Title ---
     if ($L -match '^---\s(.+?)\s---\s*$') {
-        $currentSection = $matches[1]
+        $currentSub = $matches[1]
         continue
     }
     if ($L -match '^\s*\[(CRITICAL|WARNING)\]') {
         $sev = $matches[1]
+        $sect = if ($currentSub) { "$currentMain > $currentSub" } else { $currentMain }
         $findings.Add([pscustomobject]@{
             Severity = $sev
-            Section  = $currentSection
+            Section  = $sect
             Line     = $L.Trim()
             Why      = (Get-WhyMatters -Line $L)
         }) | Out-Null

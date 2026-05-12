@@ -97,17 +97,28 @@ try {
 } catch {
     $usedNetstat = $true
     # netstat fallback. -b would give the process but requires admin; -n -o gives PID.
+    # IPv4 lines render as "host:port". IPv6 renders as "[addr]:port". Match
+    # both shapes -- the greedy `(\S+):\d+` regex used previously captured up to
+    # the LAST colon, which mangles IPv6 addresses (everything inside the
+    # brackets was kept, including the brackets themselves, and Test-PublicIp
+    # then rejected the bracketed form).
     $netstat = & netstat -ano 2>$null
     foreach ($line in $netstat) {
-        if ($line -match '^\s*TCP\s+\S+\s+(\S+):\d+\s+ESTABLISHED\s+(\d+)') {
+        $remote = $null; $pid_ = $null
+        # IPv6: bracketed address. Match [<addr>]:<port> separately.
+        if ($line -match '^\s*TCP\s+\S+\s+\[([0-9a-fA-F:]+)\]:\d+\s+ESTABLISHED\s+(\d+)') {
             $remote = $matches[1]; $pid_ = [int]$matches[2]
-            if (-not (Test-PublicIp $remote)) { continue }
-            $procName = 'unknown'
-            $p = Get-Process -Id $pid_ -EA SilentlyContinue
-            if ($p) { $procName = $p.Name }
-            if (-not $ipToProc.ContainsKey($remote)) { $ipToProc[$remote] = New-Object System.Collections.Generic.HashSet[string] }
-            [void]$ipToProc[$remote].Add("$procName (PID $pid_)")
         }
+        # IPv4: 1-3 digits per octet. Anchor more tightly so we don't catch IPv6.
+        elseif ($line -match '^\s*TCP\s+\S+\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):\d+\s+ESTABLISHED\s+(\d+)') {
+            $remote = $matches[1]; $pid_ = [int]$matches[2]
+        } else { continue }
+        if (-not (Test-PublicIp $remote)) { continue }
+        $procName = 'unknown'
+        $p = Get-Process -Id $pid_ -EA SilentlyContinue
+        if ($p) { $procName = $p.Name }
+        if (-not $ipToProc.ContainsKey($remote)) { $ipToProc[$remote] = New-Object System.Collections.Generic.HashSet[string] }
+        [void]$ipToProc[$remote].Add("$procName (PID $pid_)")
     }
 }
 
@@ -150,26 +161,33 @@ foreach ($ip in $ips) {
             continue
         }
 
-        # Extract malicious-flagging engines for attribution
-        $malEngines = @()
+        # Extract flagging engines for attribution. Track malicious + suspicious
+        # separately so the output can show both categories with distinct tags.
+        $flagEngines = @()
         $topTierHit = $false
         if ($results) {
             foreach ($prop in $results.PSObject.Properties) {
                 $r = $prop.Value
-                if ($r.category -eq 'malicious') {
+                if ($r.category -eq 'malicious' -or $r.category -eq 'suspicious') {
                     $engine = $prop.Name
-                    $verdict = if ($r.result) { $r.result } else { 'malicious' }
-                    $malEngines += [pscustomobject]@{ Engine = $engine; Verdict = $verdict }
+                    $verdict = if ($r.result) { $r.result } else { $r.category }
+                    $flagEngines += [pscustomobject]@{
+                        Engine = $engine
+                        Verdict = $verdict
+                        Category = $r.category
+                    }
                     if ($topTier -contains $engine.ToLower()) { $topTierHit = $true }
                 }
             }
         }
 
-        # Credibility tier
+        # Credibility tier: weighted combination of malicious + suspicious counts.
+        # Malicious carries more weight than suspicious (2:1).
+        $score = ($mal * 2) + $sus
         $tier = 'LOW'
-        if ($mal -ge 5) { $tier = 'HIGH' }
-        elseif ($mal -ge 2) { $tier = 'MED' }
-        # Boost one level if a top-tier engine flagged
+        if ($score -ge 10) { $tier = 'HIGH' }       # e.g. 5 malicious, or 3 malicious + 4 suspicious
+        elseif ($score -ge 4) { $tier = 'MED' }     # e.g. 2 malicious, or 1 malicious + 2 suspicious, or 4 suspicious
+        # Boost one tier if any top-tier engine flagged (malicious OR suspicious)
         if ($topTierHit) {
             if ($tier -eq 'LOW') { $tier = 'MED' }
             elseif ($tier -eq 'MED') { $tier = 'HIGH' }
@@ -187,15 +205,17 @@ foreach ($ip in $ips) {
         "  $prefix $ip -- VT $tier credibility: $mal malicious / $sus suspicious / $tot engines$boostNote"
         "         AS$asn $owner, $country"
         "         local process(es): $procs"
-        if ($malEngines.Count -gt 0) {
-            $top3 = $malEngines | Sort-Object Engine | Select-Object -First 3
+        if ($flagEngines.Count -gt 0) {
+            # Sort: malicious before suspicious, then alphabetical within each.
+            $top3 = $flagEngines | Sort-Object @{ Expression = { if ($_.Category -eq 'malicious') { 0 } else { 1 } } }, Engine | Select-Object -First 3
             '         flagged by:'
             foreach ($e in $top3) {
-                $tag = if ($topTier -contains $e.Engine.ToLower()) { ' [top-tier]' } else { '' }
-                "           - $($e.Engine)$tag : $($e.Verdict)"
+                $tier_tag = if ($topTier -contains $e.Engine.ToLower()) { ' [top-tier]' } else { '' }
+                $cat_tag = if ($e.Category -eq 'suspicious') { ' [suspicious]' } else { '' }
+                "           - $($e.Engine)$tier_tag$cat_tag : $($e.Verdict)"
             }
-            if ($malEngines.Count -gt 3) {
-                "           ...and $($malEngines.Count - 3) more engine(s)"
+            if ($flagEngines.Count -gt 3) {
+                "           ...and $($flagEngines.Count - 3) more engine(s)"
             }
         }
 
