@@ -149,10 +149,18 @@ if ($findings.Count -eq 0) {
     $fallbackWhy = 'No specific analyst note mapped for this finding. Consult the full section body below for context.'
     foreach ($f in $top) {
         $rank++
-        # Truncate finding to 220 chars (was 160) to keep more of WMI/COM/portproxy
-        # finding payloads (which embed object names inline) in the summary.
+        # Default truncation cap of 220 chars to keep the summary block scannable.
+        # Skip truncation entirely for findings that contain a backslash -- these
+        # are Windows file paths or registry paths, and cutting them mid-string
+        # destroys the most actionable information the analyst needs (the exact
+        # path to the artifact). HTML rendering wraps long lines via the
+        # word-break CSS on `pre` and the severity divs, so a long path stays
+        # visible without horizontal scrolling.
         $shortLine = $f.Line
-        if ($shortLine.Length -gt 220) { $shortLine = $shortLine.Substring(0,217) + '...' }
+        $hasPath = ($shortLine -match '\\')
+        if (-not $hasPath -and $shortLine.Length -gt 220) {
+            $shortLine = $shortLine.Substring(0,217) + '...'
+        }
         $block.Add(" $rank. [$($f.Severity)] Section: $($f.Section)")
         $block.Add("    Finding: $shortLine")
         # Why-It-Matters text. Use the mapped explanation when present, otherwise
