@@ -3159,6 +3159,11 @@ if exist "%SCRIPT_DIR%tools\report_format.ps1" (
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\report_format.ps1" -Report "%REPORT%" 2>nul
 )
 
+:: ---- Prepend TOP FINDINGS summary so analysts see the headline issues first ----
+if exist "%SCRIPT_DIR%tools\top_findings.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\top_findings.ps1" -Report "%REPORT%" 2>nul
+)
+
 :: ---- Run PS, show on screen, append to report ----------------------
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" > "%SUMFILE%" 2>&1
 if exist "%SUMFILE%" (
