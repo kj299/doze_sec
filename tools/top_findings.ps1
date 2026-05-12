@@ -33,7 +33,13 @@ param(
 $ErrorActionPreference = 'Continue'
 
 if (-not (Test-Path -LiteralPath $Report)) { return }
-$lines = Get-Content -LiteralPath $Report
+# Detect line-ending style from raw bytes so we can preserve it on write.
+# Get-Content strips \r, so we can't infer CRLF vs LF from the parsed lines.
+$rawBytes = [System.IO.File]::ReadAllBytes($Report)
+$rawText = [System.Text.Encoding]::UTF8.GetString($rawBytes)
+$useCRLF = ($rawText -match "`r`n")
+$nl = if ($useCRLF) { "`r`n" } else { "`n" }
+$lines = $rawText -split "`r?`n"
 if (-not $lines -or $lines.Count -eq 0) { return }
 
 # Why-it-matters lookup table. Pattern -> explanation. Patterns are
@@ -58,13 +64,26 @@ $whyTable = [ordered]@{
     'BYOVD'                = 'Known vulnerable driver present on disk. Attackers load these to disable EDR from kernel mode.'
     'Security event log was CLEARED|System event log was CLEARED' = 'Event log clearing (1102/104) is a textbook anti-forensics move. Treat as evidence of recent attacker activity.'
     'COM CLSID overrides|COM Object Hijacking' = 'HKCU CLSID InprocServer32 overrides are a T1546.015 persistence technique. Often paired with DLL search-order hijacking.'
-    'flagged by:' = 'VirusTotal flagged this IP / file across multiple engines. Cross-reference with the per-IP local process owner above.'
+    '\bflagged by:\s*\d+\s*engine' = 'VirusTotal flagged this IP / file across multiple engines. Cross-reference with the per-IP local process owner above.'
     'PendingFileRenameOperations' = 'A pending file rename is queued for next reboot -- could be malware completing install or a legit installer mid-flow. Verify the queued file.'
     'WindowsUpdate requires a reboot' = 'Windows Update is pending. Run the audit after reboot for a complete picture.'
     'AppInit_DLLs set'    = 'AppInit_DLLs causes a DLL to be injected into every GUI process. Legacy persistence technique; should be empty on modern Windows.'
     'Sticky Keys'          = 'Sticky Keys shortcut at the login screen is a remote unauthenticated trigger for sethc.exe (which attackers commonly hijack to launch cmd.exe as SYSTEM).'
     'New root certificate'  = 'A new root CA cert was installed in the last 90 days. DPRK Ruby Sleet drops fake roots to MITM TLS-secured channels.'
     'KrbRelayUp|Kerberos RC4' = 'Kerberos misconfig that enables relay / ticket-forging attacks (Forest Blizzard / NTLM relay).'
+    'AutoRun.*Default|NoDriveTypeAutoRun'  = 'AutoRun for removable media is not restricted to the safe default. USB worms (Lazarus DTrack, older banking trojans) abuse this.'
+    'BitLocker.*[Dd]isabled|BitLocker.*OFF' = 'Disk encryption is off. Lost / stolen device exposes all data, and offline attacks against the OS are trivial.'
+    '[Ss]ecure ?Boot.*[Dd]isabled|SecureBoot.*OFF' = 'Secure Boot is disabled. Bootkits and pre-OS rootkits can persist below Windows defenses.'
+    'RDP enabled WITHOUT NLA|Network Level Authentication.*disabled' = 'RDP without NLA exposes the pre-auth attack surface to network-reachable adversaries (BlueKeep family).'
+    '[Aa]udit [Pp]olicy.*[Mm]issing|advaudit.*not [Ss]et' = 'Critical audit subcategory is not logging. Detection-blind for this event class going forward.'
+    'USB ?Storage.*[Ee]nabled|RemovableStorage' = 'USB mass-storage class is enabled. Data-exfil and worm-spread risk.'
+    'AlwaysInstallElevated' = 'AlwaysInstallElevated is set -- any user-launched MSI runs as SYSTEM. T1548.002 privilege escalation.'
+    'Defender.*[Dd]isabled|RealTimeProtection.*[Ff]alse|MpPreference.*[Dd]isabled' = 'Microsoft Defender real-time protection is off. Hosts running without AV/EDR are far more likely to be compromised.'
+    'PSReadLine .* history|ConsoleHost_history' = 'PowerShell command history file is readable. Often contains plaintext credentials accidentally typed into scripts.'
+    'WinRM RUNNING' = 'WinRM is listening. Combined with low-priv credentials, enables lateral movement via PSRemoting and PowerShell over WinRM.'
+    'sshd.*[Rr]unning|OpenSSH Server.*RUNNING' = 'OpenSSH Server is running on Windows. Verify authorized_keys lists are legit; check sshd_config for password-auth and root-login policy.'
+    'cert-(invalid|expired|revoked)' = 'Authenticode signing cert failed validation. Stolen-cert malware (3CX, CCleaner) is the canonical scenario.'
+    'unsigned bad-path|trusted-signer bad-path|unexpected-signer bad-path' = 'Service binary in an adversary-favored path (\Temp\, \AppData\, \Downloads\, \Public\). Investigate service install timestamp + parent process.'
 }
 
 function Get-WhyMatters {
@@ -127,28 +146,31 @@ if ($findings.Count -eq 0) {
     $sevOrder = @{ 'CRITICAL' = 0; 'WARNING' = 1 }
     $top = $findings | Sort-Object { $sevOrder[$_.Severity] } | Select-Object -First $MaxFindings
     $rank = 0
+    $fallbackWhy = 'No specific analyst note mapped for this finding. Consult the full section body below for context.'
     foreach ($f in $top) {
         $rank++
+        # Truncate finding to 220 chars (was 160) to keep more of WMI/COM/portproxy
+        # finding payloads (which embed object names inline) in the summary.
         $shortLine = $f.Line
-        if ($shortLine.Length -gt 160) { $shortLine = $shortLine.Substring(0,157) + '...' }
+        if ($shortLine.Length -gt 220) { $shortLine = $shortLine.Substring(0,217) + '...' }
         $block.Add(" $rank. [$($f.Severity)] Section: $($f.Section)")
         $block.Add("    Finding: $shortLine")
-        if ($f.Why) {
-            # Wrap "Why" text at ~75 chars per line for readability
-            $why = $f.Why
-            $wrapped = New-Object System.Collections.Generic.List[string]
-            while ($why.Length -gt 75) {
-                $split = $why.LastIndexOf(' ', 75)
-                if ($split -lt 1) { $split = 75 }
-                $wrapped.Add($why.Substring(0, $split))
-                $why = $why.Substring($split).TrimStart()
-            }
-            if ($why.Length -gt 0) { $wrapped.Add($why) }
-            $first = $true
-            foreach ($w in $wrapped) {
-                if ($first) { $block.Add("    Why it matters: $w"); $first = $false }
-                else        { $block.Add("                    $w") }
-            }
+        # Why-It-Matters text. Use the mapped explanation when present, otherwise
+        # emit a generic fallback so the analyst is never left wondering whether
+        # the absence of a note means "low severity" or "unmapped pattern".
+        $why = if ($f.Why) { $f.Why } else { $fallbackWhy }
+        $wrapped = New-Object System.Collections.Generic.List[string]
+        while ($why.Length -gt 75) {
+            $split = $why.LastIndexOf(' ', 75)
+            if ($split -lt 1) { $split = 75 }
+            $wrapped.Add($why.Substring(0, $split))
+            $why = $why.Substring($split).TrimStart()
+        }
+        if ($why.Length -gt 0) { $wrapped.Add($why) }
+        $first = $true
+        foreach ($w in $wrapped) {
+            if ($first) { $block.Add("    Why it matters: $w"); $first = $false }
+            else        { $block.Add("                    $w") }
         }
         $block.Add('')
     }
@@ -182,4 +204,6 @@ if ($prependIndex -eq 0) {
     for ($i = $prependIndex; $i -lt $lines.Count; $i++) { $newReport.Add($lines[$i]) }
 }
 
-[System.IO.File]::WriteAllLines($Report, $newReport.ToArray(), (New-Object System.Text.UTF8Encoding $false))
+# Write with preserved line endings (CRLF on Windows-generated reports).
+$bytes = [System.Text.Encoding]::UTF8.GetBytes(($newReport -join $nl) + $nl)
+[System.IO.File]::WriteAllBytes($Report, $bytes)
