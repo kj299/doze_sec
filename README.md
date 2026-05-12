@@ -224,6 +224,14 @@ T1547.001|HKCU Run Persistence|registry key|HKCU\Software\Microsoft\Windows\Curr
 
 Source the file from any CTI feed: MISP exports, AlienVault OTX pulses, internal SOC enrichment, vendor feeds, etc. The sanitizer treats all input the same.
 
+**Sample feed**: [`samples/sample_ttps.txt`](samples/sample_ttps.txt) has 15 example rows covering all six `Detection_Method` types. Use it as a smoke-test for the import pipeline:
+
+```
+doze_sec.bat -importTTP samples\sample_ttps.txt
+```
+
+Replace with your real feed before relying on the merged IOCs.
+
 ## VirusTotal Hash Reputation (`-vt`)
 
 Section 18j queries the [VirusTotal v3 API](https://docs.virustotal.com/reference/file-info) for SHA256 hashes of priority files on disk and reports per-file engine consensus. Only the hash is sent — file contents are never uploaded.
