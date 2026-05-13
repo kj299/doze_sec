@@ -1521,7 +1521,8 @@ echo  Command: powershell -File tools\scheduled_tasks_full.ps1 -Mode Suspicious>
 if exist "%SCRIPT_DIR%tools\scheduled_tasks_full.ps1" (
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\scheduled_tasks_full.ps1" -Mode Suspicious>> "%REPORT%" 2>&1
 ) else (
-    echo  [INFO] tools\scheduled_tasks_full.ps1 not found -- suspicious-path scheduled-task check skipped.>> "%REPORT%"
+    echo  [INFO] Helper missing; falling back to truncated schtasks CSV scan.>> "%REPORT%"
+    schtasks /query /fo CSV /v 2>nul | findstr /i /c:"\Temp" /c:"\AppData" /c:"\Downloads" /c:"\Users\Public" /c:"\ProgramData\update">> "%REPORT%" 2>&1
 )
 
 echo.>> "%REPORT%"
