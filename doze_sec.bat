@@ -1197,8 +1197,19 @@ if %errorlevel% equ 0 (
     for /f %%p in ('where smartctl.exe 2^>nul') do set "SMARTCTL_PATH=%%p"
 )
 
-if "%SMARTCTL_PATH%"=="" goto :smart_wmi_fallback
+:: Dispatch to native or WMI path via call -- avoids a "goto :smart_wmi_fallback"
+:: pattern that crashed on some Windows builds with "system cannot find the batch
+:: label specified". The if/else body holds only `call :label` (single token, no
+:: bare parens) so it parses cleanly; the subroutines stay at top-level scope so
+:: their existing heredocs with bare parens like `($disk in $d)` remain valid.
+if "%SMARTCTL_PATH%"=="" (
+    call :_smart_wmi_run
+) else (
+    call :_smart_native_run
+)
+goto :smart_done
 
+:_smart_native_run
 echo --- smartctl SMART Report --->> "%REPORT%"
 echo  Command: "%SMARTCTL_PATH%" --scan>> "%REPORT%"
 echo Using: %SMARTCTL_PATH%>> "%REPORT%"
@@ -1219,9 +1230,9 @@ for /l %%n in (0,1,7) do (
         )
     )
 )
+goto :eof
 
-goto :smart_done
-:smart_wmi_fallback
+:_smart_wmi_run
 echo --- WMI Disk Health (smartctl not found - WMI fallback) --->> "%REPORT%"
 echo  Command: powershell -Command "Get-CimInstance Win32_DiskDrive -EA SilentlyContinue">> "%REPORT%"
 echo For full SMART attribute data install smartmontools.>> "%REPORT%"
@@ -1259,6 +1270,7 @@ echo   if($bad -or $badpd){'warn'}else{'ok'} >> "%PSRUN%"
 echo } catch { if($bad){'warn'}else{'ok'} } >> "%PSRUN%"
 for /f "usebackq" %%a in (`%PWSH% -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" 2^>nul`) do set "WMI_HEALTH=%%a"
 if /i "%WMI_HEALTH%"=="warn" set "SMART_WARN=1"
+goto :eof
 
 :smart_done
 if "%SMART_WARN%"=="1" (
