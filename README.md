@@ -196,8 +196,10 @@ doze_sec.bat -updateTTP
 ```
 
 Requires:
-1. Claude Code CLI installed (`npm install -g @anthropic-ai/claude-code`)
+1. Claude Code CLI installed (`npm install -g @anthropic-ai/claude-code`) and authenticated via `claude /login` — no extra session/file tokens needed
 2. The [threat-intel](https://github.com/kj299/threat-intel) repo cloned somewhere the script can find `cyber_threat_skill.yaml`
+
+The skill yaml + existing IOC list are piped to `claude -p` via stdin (the documented headless context path); no `--file` flag is used.
 
 ### Skill path resolution
 
