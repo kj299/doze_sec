@@ -1,4 +1,35 @@
 @echo off
+:: -------------------- Console-output capture (closes #92) --------------------
+:: Self-re-exec via PowerShell Tee-Object so the script's full stdout/stderr
+:: lands in C:\SecurityAudit\AuditConsole_<TS>.log alongside the report. When
+:: the script crashes mid-run, this log is the only place the error message
+:: survives -- otherwise it's gone with the console window.
+::   - Skips re-exec for help variants (no point capturing help text).
+::   - Skips re-exec if DOZE_TEED is set (child guard against infinite loop).
+::   - Skips re-exec if any arg is -noConsoleLog (opt-out for callers who
+::     want raw console behavior, e.g. CI driving the script).
+:: NOTE: must run BEFORE setlocal so DOZE_TEED is in the parent process env
+:: and inherited by the PowerShell-spawned child cmd.
+if defined DOZE_TEED goto :_console_log_done
+if /i "%~1"=="-help"      goto :_console_log_done
+if /i "%~1"=="-h"         goto :_console_log_done
+if /i "%~1"=="--help"     goto :_console_log_done
+if /i "%~1"=="/?"         goto :_console_log_done
+echo " %* " | findstr /I /C:" -noConsoleLog " >nul 2>&1 && goto :_console_log_done
+if not exist "C:\SecurityAudit" mkdir "C:\SecurityAudit" >nul 2>&1
+for /f "usebackq" %%t in (`powershell -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmmss"`) do set "DOZE_LOG_TS=%%t"
+if not defined DOZE_LOG_TS set "DOZE_LOG_TS=unknown"
+set "DOZE_CONSOLE_LOG=C:\SecurityAudit\AuditConsole_%DOZE_LOG_TS%.log"
+set "DOZE_TEED=1"
+echo  [*] Console output also being captured to: %DOZE_CONSOLE_LOG%
+:: Merge stderr at CMD level (not PS level) -- PS 5.1 wraps native-exe stderr
+:: in NativeCommandError objects when 2>&1 is done inside -Command, which
+:: would clutter the log with PS diagnostic noise. CMD-side 2>&1 + CMD pipe
+:: into Tee-Object gives a clean stream.
+call "%~f0" %* 2>&1 | powershell -NoProfile -ExecutionPolicy Bypass -Command "$input | Tee-Object -FilePath '%DOZE_CONSOLE_LOG%'"
+exit /b %errorlevel%
+:_console_log_done
+:: -----------------------------------------------------------------------------
 :: ====================================================================
 ::  WIN11 SECURITY FORENSIC AUDIT  v7.1
 ::  CMD-COMPATIBLE: All PowerShell runs via temp .ps1 file (-File mode).
@@ -65,6 +96,7 @@ set "IMPORT_TTP_FILE="
 set "CTI_SKILL_SWITCH="
 set "VT_CHECK=0"
 set "VT_SELF_SKIP=0"
+set "NO_CONSOLE_LOG=0"
 set "IOC_HITS=0"
 set "NETWORK_AVAIL=0"
 set "SAFE_MODE=0"
@@ -97,6 +129,7 @@ if /i "%~1"=="-importTTP"  goto :parse_importttp
 if /i "%~1"=="-ctiSkill"   goto :parse_ctiskill
 if /i "%~1"=="-vt"         set "VT_CHECK=1"
 if /i "%~1"=="-noVtSelf"   set "VT_SELF_SKIP=1"
+if /i "%~1"=="-noConsoleLog" set "NO_CONSOLE_LOG=1"
 shift
 goto :parse_args
 :parse_importttp
@@ -194,6 +227,13 @@ echo                 exists and the network is up. Adds ~50 s to startup but
 echo                 detects tampered system binaries before any audit data
 echo                 is collected. Audit aborts with EXIT_CODE=7 if any
 echo                 binary is flagged malicious by VT.
+echo.
+echo    %C_GREEN%-noConsoleLog%C_RESET%  Skip console-output capture (default ON). By default
+echo                 the script self-tees stdout+stderr to
+echo                 C:\SecurityAudit\AuditConsole_^<timestamp^>.log so crashes
+echo                 leave a debuggable trace alongside the report. Pass this
+echo                 to opt out -- e.g. when driving the script from CI where
+echo                 the parent already captures output.
 echo.
 echo    %C_GREEN%-help, -h, /?, --help%C_RESET%
 echo                 Show this help screen and exit.
@@ -859,6 +899,11 @@ echo  HTML Report: %REPORT_HTML%>> "%REPORT%"
 echo  SMART data: %OUTDIR%\SmartData>> "%REPORT%"
 echo  Event logs: %OUTDIR%\EventExports>> "%REPORT%"
 echo  Threat IPs: %OUTDIR%\ThreatLists>> "%REPORT%"
+if defined DOZE_CONSOLE_LOG (
+    echo  Console log: %DOZE_CONSOLE_LOG%>> "%REPORT%"
+) else (
+    echo  Console log: ^(disabled via -noConsoleLog^)>> "%REPORT%"
+)
 echo.>> "%REPORT%"
 echo %C_GREEN%[INIT 6/14]%C_RESET% Log dirs: %OUTDIR%
 
