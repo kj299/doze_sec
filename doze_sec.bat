@@ -652,8 +652,13 @@ set "SCRIPT_THREATS=%~dp0ThreatLists"
 :: somewhere-else pattern the PowerShell helper exists to escape.
 :: NOTE: this runs before the main setup block sets %SCRIPT_DIR% and %PWSH%,
 :: so use %~dp0 and plain `powershell` here.
+:: Mirror IOC + manifest writes to BOTH the repo's ThreatLists (so the new
+:: rows are committable and propagate upstream) AND the audit's runtime
+:: ThreatLists at %OUTDIR%\ThreatLists (so the very next audit's IOC sweep
+:: sees them immediately, no git push + INIT 10/14 round-trip required).
+:: (closes #104)
 if exist "%~dp0tools\ttp_merge.ps1" (
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\ttp_merge.ps1" -TtpOutput "%TTP_OUTPUT%" -BlocksFile "%TTP_BLOCKS%" -ThreatListsDir "%SCRIPT_THREATS%"
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\ttp_merge.ps1" -TtpOutput "%TTP_OUTPUT%" -BlocksFile "%TTP_BLOCKS%" -ThreatListsDir "%SCRIPT_THREATS%" -AdditionalThreatListsDir "%OUTDIR%\ThreatLists"
 ) else (
     echo  [WARN] tools\ttp_merge.ps1 not found -- TTP detection blocks, IOC merge, and ttp_manifest.txt update all skipped.
 )
