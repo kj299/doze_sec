@@ -796,10 +796,13 @@ if "%SKIP_THREAT_UPDATE%"=="1" (
 )
 echo  Checking for updated threat indicator lists...>> "%REPORT%"
 echo  Mode: INCREMENTAL (new entries merged, existing preserved)>> "%REPORT%"
+:: -LocalDir points at RUNTIME ThreatLists (not repo) so freshness
+:: headers and upstream-fetched lines land in OUTDIR -- keeps the
+:: repo's ThreatLists/ clean across audit runs. (closes #106)
 if exist "%SCRIPT_DIR%tools\threat_list_sync.ps1" (
-    :: -LocalDir points at RUNTIME ThreatLists (not repo) so freshness
-    :: headers and upstream-fetched lines land in OUTDIR -- keeps the
-    :: repo's ThreatLists/ clean across audit runs. (closes #106)
+    rem inside parens use rem -- :: comments containing ) close the block
+    rem prematurely (CMD parses :: as a label inside parenthesized scopes).
+    rem closes #108
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\threat_list_sync.ps1" -BaseUrl "%UPDATE_URL%/ThreatLists" -LocalDir "%OUTDIR%\ThreatLists" -StaleDays 60>> "%REPORT%" 2>&1
 ) else (
     echo  [INFO] tools\threat_list_sync.ps1 not found -- threat list update skipped.>> "%REPORT%"

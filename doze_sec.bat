@@ -734,7 +734,9 @@ if defined DOZE_LOG_TS (
     for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value 2^>nul') do set "DT=%%I"
     :: Trim trailing whitespace/CR that wmic appends to output
     set "DT=!DT: =!"
-    :: Build timestamp - if wmic failed (DT empty), fall back to %date%/%time%
+    rem Build timestamp -- if wmic failed (DT empty), fall back to date/time.
+    rem Using rem (not ::) because :: with parens inside a parenthesized block
+    rem can break CMD's block parser. (#108)
     if defined DT (
         set "TIMESTAMP=!DT:~0,8!_!DT:~8,6!"
     )
@@ -1135,11 +1137,14 @@ if "%SKIP_THREAT_UPDATE%"=="1" (
 )
 echo  Checking for updated threat indicator lists...>> "%REPORT%"
 echo  Mode: INCREMENTAL (new entries merged, existing preserved)>> "%REPORT%"
+:: -LocalDir points at the RUNTIME ThreatLists (not the repo) so freshness
+:: headers and upstream-fetched line additions land in C:\SecurityAudit\
+:: ThreatLists -- keeping the repo's ThreatLists/ clean across audit runs.
+:: (closes #106)
 if exist "%SCRIPT_DIR%tools\threat_list_sync.ps1" (
-    :: -LocalDir points at the RUNTIME ThreatLists (not the repo) so freshness
-    :: headers and upstream-fetched line additions land in C:\SecurityAudit\
-    :: ThreatLists -- keeping the repo's ThreatLists/ clean across audit runs.
-    :: (closes #106)
+    rem inside parens use rem, not :: -- :: comments containing ) close the
+    rem block prematurely (CMD parses :: as a label, not a comment, inside
+    rem parenthesized scopes). closes #108
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\threat_list_sync.ps1" -BaseUrl "%UPDATE_URL%/ThreatLists" -LocalDir "%OUTDIR%\ThreatLists" -StaleDays 60>> "%REPORT%" 2>&1
 ) else (
     echo  [INFO] tools\threat_list_sync.ps1 not found -- threat list update skipped.>> "%REPORT%"
