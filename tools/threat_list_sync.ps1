@@ -135,6 +135,32 @@ $updated = 0
 $skipped = 0
 $staleHits = @()
 
+# Refresh / insert a "# Last verified by doze_sec: <date>" header line at the
+# top of the file. If the line already exists (any prior run), it's replaced
+# in place; otherwise prepended. Also forces LastWriteTime to now so the
+# directory listing reflects the last successful verification, not just the
+# last content change. Without this, files that have nothing new to merge
+# silently retain their original mtime for months -- making them look stale
+# even though the audit checks them on every run. (closes #102)
+function Update-VerifiedHeader {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    $headerLine = '# Last verified by doze_sec: ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+    $existing = @(Get-Content -LiteralPath $Path -EA SilentlyContinue)
+    $rewritten = New-Object System.Collections.Generic.List[string]
+    $rewritten.Add($headerLine)
+    $replaced = $false
+    foreach ($l in $existing) {
+        if (-not $replaced -and $l -match '^\s*#\s*Last verified by doze_sec\b') {
+            $replaced = $true   # drop the old header; the new one is already at position 0
+            continue
+        }
+        $rewritten.Add($l)
+    }
+    Set-Content -LiteralPath $Path -Value $rewritten -Encoding ASCII
+    try { (Get-Item -LiteralPath $Path).LastWriteTime = Get-Date } catch {}
+}
+
 foreach ($f in $files) {
     $url  = "$BaseUrl/$f"
     $dest = Join-Path $LocalDir $f
@@ -192,6 +218,11 @@ foreach ($f in $files) {
             $updated++
         }
 
+        # Refresh the "# Last verified" header and touch mtime, regardless of
+        # whether content changed -- this is the signal that the audit DID
+        # check this file in the current run. (closes #102)
+        Update-VerifiedHeader $dest
+
         # Track files whose upstream is older than the staleness threshold.
         if ($null -ne $ageDays -and $ageDays -gt $StaleDays) {
             $staleHits += [PSCustomObject]@{ File = $f; Days = $ageDays; UpstreamDate = $lm }
@@ -199,6 +230,8 @@ foreach ($f in $files) {
     } catch {
         Write-Output ('  [INFO] ' + $f + ': not available at remote URL')
         $skipped++
+        # Don't touch mtime / header when the remote fetch failed -- we don't
+        # want to claim "verified" if we couldn't compare against upstream.
     }
 }
 
