@@ -76,10 +76,21 @@ function Test-Hit {
     return $false
 }
 
+# Footgun guard: if -Path was omitted but the first positional pattern looks
+# like a file path that exists on disk, the caller likely forgot the -Path
+# flag and the file would silently be treated as a literal pattern. Fail loud.
+# (Mandatory=$true on -Path is NOT used because powershell -File hangs waiting
+# for stdin when a mandatory parameter is missing, instead of erroring cleanly.)
+if ($Path -eq '' -and $Pattern -and $Pattern.Count -gt 0 -and (Test-Path -LiteralPath $Pattern[0] -EA SilentlyContinue)) {
+    Write-Error "select_lines.ps1: -Path was omitted but the first positional argument '$($Pattern[0])' looks like an existing file. Did you forget the -Path flag?"
+    exit 2
+}
+
 if ($Path -eq '') {
     Write-Error "select_lines.ps1: -Path <file> is required."
     exit 2
 }
+
 if (-not (Test-Path -LiteralPath $Path)) { exit 1 }
 
 # Mirror findstr's exit code: 0 = at least one line emitted, 1 = none emitted.
