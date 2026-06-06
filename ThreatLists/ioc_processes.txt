@@ -1,3 +1,4 @@
+# Last verified by doze_sec: 2026-06-06 10:20:37
 # SENTINEL-X CTI -- Malicious Process Names
 # Updated: 2026-03-29 | Source: MDDR 2024-2025, CISA, Mandiant, CrowdStrike
 # Format: one process name per line (matched case-insensitive via findstr /i)
@@ -124,3 +125,17 @@ dragonforce
 dnscat2
 # CTI-AUTO Sat 06/06/2026 [T1127.001] Various
 msbuild
+# CTI-AUTO Sat 06/06/2026 [T1003.002] Various
+reg save hklm\sam
+# CTI-AUTO Sat 06/06/2026 [T1003.004] Various
+reg save hklm\security
+# CTI-AUTO Sat 06/06/2026 [T1218.003] Various
+cmstp.exe /s
+# CTI-AUTO Sat 06/06/2026 [T1218.013] Various
+mavinject.exe
+# CTI-AUTO Sat 06/06/2026 [T1218.004] Various
+installutil.exe /logfile=
+# CTI-AUTO Sat 06/06/2026 [T1218.007] Various
+msiexec /i http
+# CTI-AUTO Sat 06/06/2026 [T1218.001] Various
+hh.exe http
