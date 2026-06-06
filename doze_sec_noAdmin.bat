@@ -2326,7 +2326,7 @@ echo.>> "%REPORT%"
 echo --- Process Creation - Event 4688 (last 24h) --->> "%REPORT%"
 echo  Command: wevtutil qe Security /q:"*[System[^(EventID=4688^)]]" /c:200 /rd:true /f:text ^| select_lines.ps1 "TimeCreated" "Process Name" "Creator Process" "Command Line">> "%REPORT%"
 wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:200 /rd:true /f:text > "%TEMP%\dz_evt.tmp" 2>nul
-"%PWSH%" -NoProfile -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" "TimeCreated" "Process Name" "Creator Process" "Command Line">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" "TimeCreated" "Process Name" "Creator Process" "Command Line">> "%REPORT%" 2>&1
 del "%TEMP%\dz_evt.tmp" 2>nul
 
 echo.>> "%REPORT%"
@@ -2435,7 +2435,7 @@ echo --- [VOLT TYPHOON] LOLBin Abuse in Event 4688 --->> "%REPORT%"
 echo  Command: wevtutil qe Security /q:"*[System[^(EventID=4688^)]]" /c:500 /rd:true /f:text ^| select_lines.ps1 "certutil" "mshta" "regsvr32" "cmstp" "installutil" "odbcconf">> "%REPORT%"
 if "%IS_ADMIN%"=="0" goto :sec17_lolbin_noadmin
 wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:500 /rd:true /f:text > "%TEMP%\dz_evt.tmp" 2>nul
-"%PWSH%" -NoProfile -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" "certutil" "mshta" "regsvr32" "cmstp" "installutil" "odbcconf">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" "certutil" "mshta" "regsvr32" "cmstp" "installutil" "odbcconf">> "%REPORT%" 2>&1
 del "%TEMP%\dz_evt.tmp" 2>nul
 goto :sec17_lolbin_done
 :sec17_lolbin_noadmin
@@ -2448,7 +2448,7 @@ echo --- [VOLT TYPHOON] Discovery Commands in Event 4688 --->> "%REPORT%"
 echo  Command: wevtutil qe Security /q:"*[System[^(EventID=4688^)]]" /c:500 /rd:true /f:text ^| select_lines.ps1 "nltest" "net group" "dsquery" "ldifde" "ntdsutil" "csvde">> "%REPORT%"
 if "%IS_ADMIN%"=="0" goto :sec17_disc_noadmin
 wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:500 /rd:true /f:text > "%TEMP%\dz_evt.tmp" 2>nul
-"%PWSH%" -NoProfile -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" "nltest" "net group" "dsquery" "ldifde" "ntdsutil" "csvde">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" "nltest" "net group" "dsquery" "ldifde" "ntdsutil" "csvde">> "%REPORT%" 2>&1
 del "%TEMP%\dz_evt.tmp" 2>nul
 goto :sec17_disc_done
 :sec17_disc_noadmin
@@ -2772,7 +2772,7 @@ echo --- [18g] LOLBin Command-Line Pattern Match --->> "%REPORT%"
 echo  Command: wmic process get Name,ProcessId,CommandLine ^| select_lines.ps1 -PatternFile "%IOCDIR%\ioc_lolbins.txt">> "%REPORT%"
 echo  Matching process command lines against ioc_lolbins.txt>> "%REPORT%"
 wmic process get Name,ProcessId,CommandLine > "%TEMP%\dz_evt.tmp" 2>nul
-"%PWSH%" -NoProfile -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" -PatternFile "%IOCDIR%\ioc_lolbins.txt">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" -PatternFile "%IOCDIR%\ioc_lolbins.txt">> "%REPORT%" 2>&1
 :: Capture select_lines's exit before del overwrites errorlevel. select_lines
 :: mirrors findstr's convention: 0 = at least one match emitted, 1 = none.
 set "_SELECT_EXIT=!errorlevel!"
