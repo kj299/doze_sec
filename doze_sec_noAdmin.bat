@@ -2,20 +2,35 @@
 :: -------------------- Console-output capture (closes #92) --------------------
 :: See doze_sec.bat for full notes. Mirrors the same self-tee behavior so the
 :: noAdmin variant also leaves an AuditConsole_<TS>.log on crash.
+:: Skips re-exec: DOZE_TEED set / help flags / -noConsoleLog / no powershell.
+:: Exports DOZE_LOG_TS for artifact-filename correlation (closes #94).
+:: Captures real EXIT_CODE via DOZE_EXIT_FILE (closes #96).
+:: Cleans env vars before exit so a second run in same CMD window works (closes #95).
 if defined DOZE_TEED goto :_console_log_done
 if /i "%~1"=="-help"      goto :_console_log_done
 if /i "%~1"=="-h"         goto :_console_log_done
 if /i "%~1"=="--help"     goto :_console_log_done
 if /i "%~1"=="/?"         goto :_console_log_done
-echo " %* " | findstr /I /C:" -noConsoleLog " >nul 2>&1 && goto :_console_log_done
+for %%a in (%*) do if /i "%%~a"=="-noConsoleLog" goto :_console_log_done
+where powershell >nul 2>&1 || goto :_console_log_done
 if not exist "C:\SecurityAudit" mkdir "C:\SecurityAudit" >nul 2>&1
 for /f "usebackq" %%t in (`powershell -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmmss"`) do set "DOZE_LOG_TS=%%t"
 if not defined DOZE_LOG_TS set "DOZE_LOG_TS=unknown"
 set "DOZE_CONSOLE_LOG=C:\SecurityAudit\AuditConsole_%DOZE_LOG_TS%.log"
+set "DOZE_EXIT_FILE=%TEMP%\dz_rc_%DOZE_LOG_TS%_%RANDOM%.tmp"
 set "DOZE_TEED=1"
 echo  [*] Console output also being captured to: %DOZE_CONSOLE_LOG%
 call "%~f0" %* 2>&1 | powershell -NoProfile -ExecutionPolicy Bypass -Command "$input | Tee-Object -FilePath '%DOZE_CONSOLE_LOG%'"
-exit /b %errorlevel%
+set "DOZE_EXIT_CODE=0"
+if exist "%DOZE_EXIT_FILE%" (
+    set /p DOZE_EXIT_CODE=<"%DOZE_EXIT_FILE%"
+    del "%DOZE_EXIT_FILE%" >nul 2>&1
+)
+set "DOZE_TEED="
+set "DOZE_LOG_TS="
+set "DOZE_CONSOLE_LOG="
+set "DOZE_EXIT_FILE="
+exit /b %DOZE_EXIT_CODE%
 :_console_log_done
 :: -----------------------------------------------------------------------------
 :: ====================================================================
@@ -34,6 +49,10 @@ exit /b %errorlevel%
 ::                priority files (Section 18j). API key in %USERPROFILE%\.vt_token
 ::    -noVtSelf   Skip the automatic pre-flight binary integrity check
 ::                (which runs whenever ~/.vt_token exists and network is up)
+::    -noConsoleLog  Skip console-output capture (default ON). Without this
+::                switch, stdout+stderr are tee'd to
+::                C:\SecurityAudit\AuditConsole_<timestamp>.log so crashes
+::                leave a debuggable trace.
 ::    -help       Show usage guide, all switches, and section descriptions
 ::
 ::  EXIT CODES:
@@ -45,10 +64,12 @@ exit /b %errorlevel%
 ::    5  Script is running from the TEMP directory (not allowed)
 ::    6  Partial audit (non-admin mode, some checks deferred)
 ::
-::  OUTPUT: C:\SecurityAudit\SecurityReport_[timestamp].txt       (admin)
-::          %USERPROFILE%\SecurityAudit\SecurityReport_[...].txt  (noAdmin)
-::  SMART:  [OUTDIR]\SmartData\
-::  LOGS:   [OUTDIR]\EventExports\
+::  OUTPUT:  C:\SecurityAudit\SecurityReport_[timestamp].txt       (admin)
+::           %USERPROFILE%\SecurityAudit\SecurityReport_[...].txt  (noAdmin)
+::  SMART:   [OUTDIR]\SmartData\
+::  LOGS:    [OUTDIR]\EventExports\
+::  CONSOLE: C:\SecurityAudit\AuditConsole_[timestamp].log  (unless -noConsoleLog)
+::  THREATS: [OUTDIR]\ThreatLists\
 :: ====================================================================
 setlocal enabledelayedexpansion
 
@@ -97,6 +118,7 @@ set "NO_ADMIN_MODE=0"
 set "UPDATE_TTP=0"
 set "VT_CHECK=0"
 set "VT_SELF_SKIP=0"
+set "NO_CONSOLE_LOG=0"
 set "IOC_HITS=0"
 
 :: ====================================================================
@@ -117,6 +139,7 @@ if /i "%~1"=="-updateTTP"  set "UPDATE_TTP=1"
 if /i "%~1"=="-importTTP"  goto :parse_importttp_noadmin
 if /i "%~1"=="-vt"         set "VT_CHECK=1"
 if /i "%~1"=="-noVtSelf"   set "VT_SELF_SKIP=1"
+if /i "%~1"=="-noConsoleLog" set "NO_CONSOLE_LOG=1"
 shift
 goto :parse_args
 :parse_importttp_noadmin
@@ -193,6 +216,11 @@ echo                 exists and the network is up. Adds ~50 s to startup but
 echo                 detects tampered system binaries before any audit data
 echo                 is collected. Audit aborts with EXIT_CODE=7 if any
 echo                 binary is flagged malicious by VT.
+echo.
+echo    %C_GREEN%-noConsoleLog%C_RESET%  Skip console-output capture (default ON). By default
+echo                 the script self-tees stdout+stderr to
+echo                 C:\SecurityAudit\AuditConsole_^<timestamp^>.log so crashes
+echo                 leave a debuggable trace alongside the report.
 echo.
 echo    %C_GREEN%-help, -h, /?, --help%C_RESET%
 echo                 Show this help screen and exit.
@@ -346,27 +374,28 @@ if not exist "%OUTDIR%\EventExports" mkdir "%OUTDIR%\EventExports"
 if not exist "%OUTDIR%\ThreatLists" mkdir "%OUTDIR%\ThreatLists"
 
 :: ---- Compute TIMESTAMP first (needed by changelog, undo, and report filenames) ----
-for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value 2^>nul') do set "DT=%%I"
-:: Trim trailing whitespace/CR that wmic appends to output
-set "DT=%DT: =%"
-:: Build timestamp - if wmic failed (DT empty), fall back to %date%/%time%
-if defined DT (
-    set "TIMESTAMP=!DT:~0,8!_!DT:~8,6!"
-)
-:: Validate: wmic may have returned empty or a non-date value
-if "!TIMESTAMP!"=="__" set "TIMESTAMP="
-if "!TIMESTAMP!"=="_" set "TIMESTAMP="
-if not defined TIMESTAMP (
-    :: Fallback: parse %date% as YYYY-MM-DD or MM/DD/YYYY and %time%
-    :: This is locale-dependent but good enough for a filename
-    set "_D=!date:/=-!"
-    set "_D=!_D: =_!"
-    set "_T=!time::=-!"
-    set "_T=!_T: =0!"
-    set "TIMESTAMP=!_D!_!_T:~0,8!"
-    set "TIMESTAMP=!TIMESTAMP: =0!"
-    :: Final fallback: random-based name that at least won't collide
-    if "!TIMESTAMP!"=="__0-0-0" set "TIMESTAMP=NODATE_!RANDOM!_!RANDOM!"
+:: If invoked through the self-tee wrapper, DOZE_LOG_TS is already set in the
+:: parent process env -- reuse it so AuditConsole_<TS>.log and the other
+:: artifacts all share the same <TS>. (closes #94)
+if defined DOZE_LOG_TS (
+    set "TIMESTAMP=%DOZE_LOG_TS%"
+) else (
+    for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value 2^>nul') do set "DT=%%I"
+    set "DT=!DT: =!"
+    if defined DT (
+        set "TIMESTAMP=!DT:~0,8!_!DT:~8,6!"
+    )
+    if "!TIMESTAMP!"=="__" set "TIMESTAMP="
+    if "!TIMESTAMP!"=="_" set "TIMESTAMP="
+    if not defined TIMESTAMP (
+        set "_D=!date:/=-!"
+        set "_D=!_D: =_!"
+        set "_T=!time::=-!"
+        set "_T=!_T: =0!"
+        set "TIMESTAMP=!_D!_!_T:~0,8!"
+        set "TIMESTAMP=!TIMESTAMP: =0!"
+        if "!TIMESTAMP!"=="__0-0-0" set "TIMESTAMP=NODATE_!RANDOM!_!RANDOM!"
+    )
 )
 
 :: ---- Initialize Undo script and Change Log --------------------------
@@ -3614,5 +3643,9 @@ if exist "%REPORT_HTML%" (
 :: captured before endlocal clears all setlocal variables.
 :: Splitting them onto two lines means exit /b sees an empty var.
 :final_exit
+:: If invoked via the self-tee wrapper, write our real EXIT_CODE to the file
+:: the parent reads -- otherwise the parent's exit /b reflects Tee-Object's
+:: exit code, not ours. (closes #96)
+if defined DOZE_EXIT_FILE echo %EXIT_CODE%>"%DOZE_EXIT_FILE%" 2>nul
 endlocal & exit /b %EXIT_CODE%
 
