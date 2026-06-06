@@ -4,22 +4,44 @@
 :: lands in C:\SecurityAudit\AuditConsole_<TS>.log alongside the report. When
 :: the script crashes mid-run, this log is the only place the error message
 :: survives -- otherwise it's gone with the console window.
-::   - Skips re-exec for help variants (no point capturing help text).
-::   - Skips re-exec if DOZE_TEED is set (child guard against infinite loop).
-::   - Skips re-exec if any arg is -noConsoleLog (opt-out for callers who
-::     want raw console behavior, e.g. CI driving the script).
-:: NOTE: must run BEFORE setlocal so DOZE_TEED is in the parent process env
-:: and inherited by the PowerShell-spawned child cmd.
+::
+:: Skips re-exec for:
+::   - DOZE_TEED already set (child guard against infinite loop)
+::   - help variants (no point capturing help text)
+::   - any arg == -noConsoleLog (opt-out; CI / scripted invocations)
+::   - missing powershell.exe (would cause silent broken-pipe failure)
+::
+:: Exports DOZE_LOG_TS so the child block at the TIMESTAMP computation reuses
+:: the same value for SecurityReport / ChangeLog / Undo filenames -- all
+:: artifacts from one run share a single <TS>. (closes #94)
+::
+:: Captures the child's EXIT_CODE via DOZE_EXIT_FILE so the parent's exit /b
+:: reflects the audit's real exit code, not Tee-Object's (which is always 0).
+:: (closes #96)
+::
+:: Cleans up DOZE_TEED / DOZE_LOG_TS / DOZE_CONSOLE_LOG / DOZE_EXIT_FILE from
+:: the parent shell env on the way out so a second run in the same CMD window
+:: starts fresh. (closes #95)
+::
+:: NOTE: must run BEFORE setlocal so these env vars live in the parent process
+:: env and are inherited by the PowerShell-spawned child cmd.
 if defined DOZE_TEED goto :_console_log_done
 if /i "%~1"=="-help"      goto :_console_log_done
 if /i "%~1"=="-h"         goto :_console_log_done
 if /i "%~1"=="--help"     goto :_console_log_done
 if /i "%~1"=="/?"         goto :_console_log_done
-echo " %* " | findstr /I /C:" -noConsoleLog " >nul 2>&1 && goto :_console_log_done
+:: Iterate args explicitly so quoted ("-noConsoleLog") and tab-separated
+:: forms still opt out -- substring-matching %* with findstr was fragile.
+:: (closes #99)
+for %%a in (%*) do if /i "%%~a"=="-noConsoleLog" goto :_console_log_done
+:: Skip tee if PS missing -- the existing INIT-2 PS check will produce a
+:: clear error downstream instead of a silent broken pipe here. (closes #97)
+where powershell >nul 2>&1 || goto :_console_log_done
 if not exist "C:\SecurityAudit" mkdir "C:\SecurityAudit" >nul 2>&1
 for /f "usebackq" %%t in (`powershell -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmmss"`) do set "DOZE_LOG_TS=%%t"
 if not defined DOZE_LOG_TS set "DOZE_LOG_TS=unknown"
 set "DOZE_CONSOLE_LOG=C:\SecurityAudit\AuditConsole_%DOZE_LOG_TS%.log"
+set "DOZE_EXIT_FILE=%TEMP%\dz_rc_%DOZE_LOG_TS%_%RANDOM%.tmp"
 set "DOZE_TEED=1"
 echo  [*] Console output also being captured to: %DOZE_CONSOLE_LOG%
 :: Merge stderr at CMD level (not PS level) -- PS 5.1 wraps native-exe stderr
@@ -27,7 +49,16 @@ echo  [*] Console output also being captured to: %DOZE_CONSOLE_LOG%
 :: would clutter the log with PS diagnostic noise. CMD-side 2>&1 + CMD pipe
 :: into Tee-Object gives a clean stream.
 call "%~f0" %* 2>&1 | powershell -NoProfile -ExecutionPolicy Bypass -Command "$input | Tee-Object -FilePath '%DOZE_CONSOLE_LOG%'"
-exit /b %errorlevel%
+set "DOZE_EXIT_CODE=0"
+if exist "%DOZE_EXIT_FILE%" (
+    set /p DOZE_EXIT_CODE=<"%DOZE_EXIT_FILE%"
+    del "%DOZE_EXIT_FILE%" >nul 2>&1
+)
+set "DOZE_TEED="
+set "DOZE_LOG_TS="
+set "DOZE_CONSOLE_LOG="
+set "DOZE_EXIT_FILE="
+exit /b %DOZE_EXIT_CODE%
 :_console_log_done
 :: -----------------------------------------------------------------------------
 :: ====================================================================
@@ -49,6 +80,13 @@ exit /b %errorlevel%
 ::               (Section 18j). Requires API key in %USERPROFILE%\.vt_token
 ::    -noVtSelf  Skip the automatic pre-flight binary integrity check
 ::               (which runs whenever ~/.vt_token exists and network is up)
+::    -ctiSkill <file>  Per-run override for the SENTINEL-X CTI skill yaml
+::               path used by -updateTTP. Beats DOZESEC_CTI_SKILL env var
+::               and auto-discovery.
+::    -noConsoleLog  Skip console-output capture (default ON). Without this
+::               switch, stdout+stderr are tee'd to
+::               C:\SecurityAudit\AuditConsole_<timestamp>.log alongside the
+::               report so crashes leave a debuggable trace.
 ::
 ::  EXIT CODES:
 ::    0  Success
@@ -58,9 +96,11 @@ exit /b %errorlevel%
 ::    4  Exit pending reboot (reboot then re-run)
 ::    5  Script is running from the TEMP directory (not allowed)
 ::
-::  OUTPUT: C:\SecurityAudit\SecurityReport_[timestamp].txt
-::  SMART:  C:\SecurityAudit\SmartData\
-::  LOGS:   C:\SecurityAudit\EventExports\
+::  OUTPUT:  C:\SecurityAudit\SecurityReport_[timestamp].txt
+::  SMART:   C:\SecurityAudit\SmartData\
+::  LOGS:    C:\SecurityAudit\EventExports\
+::  CONSOLE: C:\SecurityAudit\AuditConsole_[timestamp].log  (unless -noConsoleLog)
+::  THREATS: C:\SecurityAudit\ThreatLists\
 :: ====================================================================
 setlocal enabledelayedexpansion
 
@@ -669,27 +709,34 @@ if not exist "%OUTDIR%\EventExports" mkdir "%OUTDIR%\EventExports"
 if not exist "%OUTDIR%\ThreatLists" mkdir "%OUTDIR%\ThreatLists"
 
 :: ---- Compute TIMESTAMP first (needed by changelog, undo, and report filenames) ----
-for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value 2^>nul') do set "DT=%%I"
-:: Trim trailing whitespace/CR that wmic appends to output
-set "DT=%DT: =%"
-:: Build timestamp - if wmic failed (DT empty), fall back to %date%/%time%
-if defined DT (
-    set "TIMESTAMP=!DT:~0,8!_!DT:~8,6!"
-)
-:: Validate: wmic may have returned empty or a non-date value
-if "!TIMESTAMP!"=="__" set "TIMESTAMP="
-if "!TIMESTAMP!"=="_" set "TIMESTAMP="
-if not defined TIMESTAMP (
-    :: Fallback: parse %date% as YYYY-MM-DD or MM/DD/YYYY and %time%
-    :: This is locale-dependent but good enough for a filename
-    set "_D=!date:/=-!"
-    set "_D=!_D: =_!"
-    set "_T=!time::=-!"
-    set "_T=!_T: =0!"
-    set "TIMESTAMP=!_D!_!_T:~0,8!"
-    set "TIMESTAMP=!TIMESTAMP: =0!"
-    :: Final fallback: random-based name that at least won't collide
-    if "!TIMESTAMP!"=="__0-0-0" set "TIMESTAMP=NODATE_!RANDOM!_!RANDOM!"
+:: If invoked through the self-tee wrapper, DOZE_LOG_TS is already set in the
+:: parent process env -- reuse it so AuditConsole_<TS>.log, SecurityReport_<TS>.txt,
+:: ChangeLog_<TS>.txt, and Undo_<TS>.bat all share the same <TS>. (closes #94)
+if defined DOZE_LOG_TS (
+    set "TIMESTAMP=%DOZE_LOG_TS%"
+) else (
+    for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value 2^>nul') do set "DT=%%I"
+    :: Trim trailing whitespace/CR that wmic appends to output
+    set "DT=!DT: =!"
+    :: Build timestamp - if wmic failed (DT empty), fall back to %date%/%time%
+    if defined DT (
+        set "TIMESTAMP=!DT:~0,8!_!DT:~8,6!"
+    )
+    :: Validate: wmic may have returned empty or a non-date value
+    if "!TIMESTAMP!"=="__" set "TIMESTAMP="
+    if "!TIMESTAMP!"=="_" set "TIMESTAMP="
+    if not defined TIMESTAMP (
+        :: Fallback: parse %date% as YYYY-MM-DD or MM/DD/YYYY and %time%
+        :: This is locale-dependent but good enough for a filename
+        set "_D=!date:/=-!"
+        set "_D=!_D: =_!"
+        set "_T=!time::=-!"
+        set "_T=!_T: =0!"
+        set "TIMESTAMP=!_D!_!_T:~0,8!"
+        set "TIMESTAMP=!TIMESTAMP: =0!"
+        :: Final fallback: random-based name that at least won't collide
+        if "!TIMESTAMP!"=="__0-0-0" set "TIMESTAMP=NODATE_!RANDOM!_!RANDOM!"
+    )
 )
 
 :: ---- Initialize Undo script and Change Log --------------------------
@@ -3744,5 +3791,9 @@ if exist "%REPORT_HTML%" (
 :: captured before endlocal clears all setlocal variables.
 :: Splitting them onto two lines means exit /b sees an empty var.
 :final_exit
+:: If invoked via the self-tee wrapper, write our real EXIT_CODE to the file
+:: the parent reads -- otherwise the parent's exit /b reflects Tee-Object's
+:: exit code, not ours, masking documented codes 0/2/3/4/5/7. (closes #96)
+if defined DOZE_EXIT_FILE echo %EXIT_CODE%>"%DOZE_EXIT_FILE%" 2>nul
 endlocal & exit /b %EXIT_CODE%
 

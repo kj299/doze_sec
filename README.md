@@ -50,7 +50,27 @@ doze_sec.bat -help
 | `-importTTP <file>` | Admin only | Merge TTP rows from a pipe-delimited file (offline alternative to `-updateTTP`; no Claude CLI needed) |
 | `-vt` | Both | Section 18j+18l: query VirusTotal for SHA256 of priority files + remote IP reputation. Requires `~/.vt_token` |
 | `-noVtSelf` | Both | Skip the automatic pre-flight VT integrity check on script-critical binaries (default: runs whenever `~/.vt_token` exists and network is up) |
+| `-ctiSkill <file>` | Admin only | Per-run override for the SENTINEL-X CTI skill yaml path used by `-updateTTP`. Beats `DOZESEC_CTI_SKILL` env var and auto-discovery |
+| `-noConsoleLog` | Both | Skip console-output capture (default ON). Without this switch, stdout+stderr are tee'd to `C:\SecurityAudit\AuditConsole_<TS>.log` so crashes leave a debuggable trace |
 | `-help` | Both | Show usage guide with section descriptions |
+
+## Output Files
+
+Every run produces (timestamped, so multiple runs don't clobber each other):
+
+| Path | Always | Description |
+|------|:-:|-------------|
+| `C:\SecurityAudit\SecurityReport_<TS>.txt` | yes | Text report (everything `>>`-redirected during the audit) |
+| `C:\SecurityAudit\SecurityReport_<TS>.html` | yes | HTML report (color-coded, generated at end) |
+| `C:\SecurityAudit\AuditConsole_<TS>.log` | yes (unless `-noConsoleLog`) | Full stdout+stderr console capture — primary debug source if the script crashes mid-run |
+| `C:\SecurityAudit\ChangeLog_<TS>.txt` | yes | Auto-applied configuration changes |
+| `C:\SecurityAudit\Undo_<TS>.bat` | yes | Rollback commands for the ChangeLog |
+| `C:\SecurityAudit\Remediation_<TS>.ps1` | when findings exist | Suggested remediation script (user must review + flip the gate) |
+| `C:\SecurityAudit\SmartData\` | yes | SMART disk-health snapshots |
+| `C:\SecurityAudit\EventExports\` | yes | Windows event log exports |
+| `C:\SecurityAudit\ThreatLists\` | yes | Local IOC lists + CTI manifest |
+
+All artifacts from a single run share the same `<TS>`, so they group naturally when sorted by name.
 
 ## Audit Sections
 
