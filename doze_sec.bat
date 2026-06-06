@@ -333,10 +333,19 @@ if %errorlevel% neq 0 (
     goto :skip_ttp_update
 )
 
-set "CTI_SKILL_PATH=%~dp0..\threat-intel\cyber_threat_skill.yaml"
+:: CTI skill yaml resolution. Default location is a sibling of doze_sec\
+:: ('..\threat-intel\cyber_threat_skill.yaml'); DOZESEC_CTI_SKILL overrides
+:: that for setups where the skill lives elsewhere (vendored under prompts\,
+:: a network share, etc). Follows the DOZESEC_TOKEN convention.
+if defined DOZESEC_CTI_SKILL (
+    set "CTI_SKILL_PATH=%DOZESEC_CTI_SKILL%"
+) else (
+    set "CTI_SKILL_PATH=%~dp0..\threat-intel\cyber_threat_skill.yaml"
+)
 
 if not exist "%CTI_SKILL_PATH%" (
     echo  [WARN] CTI skill file not found at: %CTI_SKILL_PATH%
+    echo  Override with: set DOZESEC_CTI_SKILL=full\path\to\cyber_threat_skill.yaml
     echo  Cannot generate TTP update. Using existing checks.
     goto :skip_ttp_update
 )
