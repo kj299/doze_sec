@@ -197,7 +197,16 @@ doze_sec.bat -updateTTP
 
 Requires:
 1. Claude Code CLI installed (`npm install -g @anthropic-ai/claude-code`)
-2. The [threat-intel](https://github.com/kj299/threat-intel) repo cloned as a sibling directory
+2. The [threat-intel](https://github.com/kj299/threat-intel) repo cloned as a sibling directory (default), or `DOZESEC_CTI_SKILL` set to an explicit `cyber_threat_skill.yaml` path
+
+If your `threat-intel\` clone lives anywhere other than a sibling of `doze_sec\`, point the script at the skill file directly:
+
+```powershell
+$env:DOZESEC_CTI_SKILL = 'C:\path\to\threat-intel\cyber_threat_skill.yaml'
+.\doze_sec.bat -updateTTP
+```
+
+The env var wins over the default path when both are valid.
 
 ## Offline TTP Import (`-importTTP`)
 
