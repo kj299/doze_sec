@@ -373,6 +373,16 @@ if not exist "%OUTDIR%\SmartData"   mkdir "%OUTDIR%\SmartData"
 if not exist "%OUTDIR%\EventExports" mkdir "%OUTDIR%\EventExports"
 if not exist "%OUTDIR%\ThreatLists" mkdir "%OUTDIR%\ThreatLists"
 
+:: Seed runtime ThreatLists from the repo's shipped baseline (closes #106).
+:: %OUTDIR%\ThreatLists is the live copy -- INIT 10/14 writes freshness
+:: headers + upstream fetches here, Section 18 reads here. The repo's
+:: ThreatLists/ stays as the shipped baseline (and is the committable
+:: destination of -updateTTP via ttp_merge.ps1's repo-side mirror; noAdmin
+:: itself doesn't expose -updateTTP).
+for %%f in (ioc_processes.txt ioc_named_pipes.txt ioc_services.txt ioc_registry.txt ioc_file_paths.txt ioc_scheduled_tasks.txt ioc_domains.txt ioc_hashes.txt ioc_lolbins.txt ttp_manifest.txt) do (
+    if not exist "%OUTDIR%\ThreatLists\%%f" if exist "%SCRIPT_DIR%ThreatLists\%%f" copy /y "%SCRIPT_DIR%ThreatLists\%%f" "%OUTDIR%\ThreatLists\" >nul 2>&1
+)
+
 :: ---- Compute TIMESTAMP first (needed by changelog, undo, and report filenames) ----
 :: If invoked through the self-tee wrapper, DOZE_LOG_TS is already set in the
 :: parent process env -- reuse it so AuditConsole_<TS>.log and the other
@@ -787,7 +797,10 @@ if "%SKIP_THREAT_UPDATE%"=="1" (
 echo  Checking for updated threat indicator lists...>> "%REPORT%"
 echo  Mode: INCREMENTAL (new entries merged, existing preserved)>> "%REPORT%"
 if exist "%SCRIPT_DIR%tools\threat_list_sync.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\threat_list_sync.ps1" -BaseUrl "%UPDATE_URL%/ThreatLists" -LocalDir "%SCRIPT_DIR%ThreatLists" -StaleDays 60>> "%REPORT%" 2>&1
+    :: -LocalDir points at RUNTIME ThreatLists (not repo) so freshness
+    :: headers and upstream-fetched lines land in OUTDIR -- keeps the
+    :: repo's ThreatLists/ clean across audit runs. (closes #106)
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\threat_list_sync.ps1" -BaseUrl "%UPDATE_URL%/ThreatLists" -LocalDir "%OUTDIR%\ThreatLists" -StaleDays 60>> "%REPORT%" 2>&1
 ) else (
     echo  [INFO] tools\threat_list_sync.ps1 not found -- threat list update skipped.>> "%REPORT%"
 )
@@ -2667,23 +2680,22 @@ echo  living-off-the-cloud techniques, and 2024-2026 threat landscape TTPs.>> "%
 echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
-:: Check if ThreatLists directory exists with IOC files
-:: Try script directory first, then output directory as fallback
-set "IOCDIR=%SCRIPT_DIR%ThreatLists"
-if not exist "%IOCDIR%\ioc_processes.txt" set "IOCDIR=%OUTDIR%\ThreatLists"
+:: Check if ThreatLists directory exists with IOC files.
+:: Runtime path is primary (freshest INIT 10/14 fetches); repo path is
+:: fallback if runtime is somehow missing. (closes #106)
+set "IOCDIR=%OUTDIR%\ThreatLists"
+if not exist "%IOCDIR%\ioc_processes.txt" set "IOCDIR=%SCRIPT_DIR%ThreatLists"
 if not exist "%IOCDIR%\ioc_processes.txt" (
     echo  [SKIP] No ThreatLists directory found at:>> "%REPORT%"
-    echo    Checked: %SCRIPT_DIR%ThreatLists\>> "%REPORT%"
     echo    Checked: %OUTDIR%\ThreatLists\>> "%REPORT%"
+    echo    Checked: %SCRIPT_DIR%ThreatLists\>> "%REPORT%"
     echo  [INFO] Place IOC files in either location or run with -updateTTP.>> "%REPORT%"
     echo %C_MAGENTA%[18/18] Skipped%C_RESET% - no IOC files found.
     goto :sec18_verdict
 )
 echo  IOC directory: %IOCDIR%>> "%REPORT%"
-
-:: Copy IOC files to output dir for reference
-if not exist "%OUTDIR%\ThreatLists" mkdir "%OUTDIR%\ThreatLists"
-copy "%IOCDIR%\*.txt" "%OUTDIR%\ThreatLists\" >nul 2>&1
+:: (No copy needed -- runtime IS the source of truth; the early seed step
+:: at OUTDIR setup pre-populated it from the repo baseline.)
 
 echo.>> "%REPORT%"
 echo --- [18a] Process IOC Match --->> "%REPORT%"
