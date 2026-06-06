@@ -47,7 +47,14 @@
 param(
     [Parameter(Mandatory=$true)] [string]$TtpOutput,
     [Parameter(Mandatory=$true)] [string]$BlocksFile,
-    [Parameter(Mandatory=$true)] [string]$ThreatListsDir
+    [Parameter(Mandatory=$true)] [string]$ThreatListsDir,
+    # Optional: when set, IOC merges and manifest appends are mirrored to
+    # this second directory as well. Use case: $ThreatListsDir is the repo
+    # path (committable) and $AdditionalThreatListsDir is the audit's
+    # runtime path (C:\SecurityAudit\ThreatLists) so new IOCs take effect
+    # on the very next audit run without waiting for a git push +
+    # INIT 10/14 fetch round-trip. (closes #104)
+    [Parameter(Mandatory=$false)] [string]$AdditionalThreatListsDir = ''
 )
 
 $ErrorActionPreference = 'Continue'
@@ -66,6 +73,21 @@ if ($rows.Count -eq 0) {
 }
 
 $today = Get-Date -Format 'ddd MM/dd/yyyy'
+
+# Build the list of directories to mirror IOC and manifest writes into.
+# Primary (always): $ThreatListsDir (typically the repo's ThreatLists/, so
+# changes are committable). Optional: $AdditionalThreatListsDir (typically
+# the audit's runtime ThreatLists/, so new IOCs take effect on the next
+# audit immediately).
+$writeDirs = New-Object System.Collections.Generic.List[string]
+$writeDirs.Add($ThreatListsDir)
+if ($AdditionalThreatListsDir -and $AdditionalThreatListsDir -ne $ThreatListsDir) {
+    if (Test-Path -LiteralPath $AdditionalThreatListsDir) {
+        $writeDirs.Add($AdditionalThreatListsDir)
+    } else {
+        Write-Output ("  [INFO] AdditionalThreatListsDir not found, skipping mirror: " + $AdditionalThreatListsDir)
+    }
+}
 
 # --- Detection-block emitter --------------------------------------------------
 # Each branch builds the literal bat lines that get appended to BlocksFile.
@@ -146,15 +168,21 @@ function Add-IocEntry {
     param([string]$Id, [string]$Actor, [string]$Method, [string]$Value)
     $rel = $iocFileMap[$Method.ToLower()]
     if (-not $rel) { return $false }
-    $path = Join-Path $ThreatListsDir $rel
-    if (-not (Test-Path -LiteralPath $path)) { return $false }
-    # Skip if the literal value already appears anywhere in the file (mirrors
-    # the inline bat's `findstr /x /c:"<value>"` exact-line check).
-    $existing = Get-Content -LiteralPath $path -EA SilentlyContinue
-    if ($existing -contains $Value) { return $false }
-    Add-Content -LiteralPath $path -Value "# CTI-AUTO $today [$Id] $Actor"
-    Add-Content -LiteralPath $path -Value $Value
-    return $true
+    $addedAny = $false
+    foreach ($dir in $writeDirs) {
+        $path = Join-Path $dir $rel
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+        # Skip if the literal value already appears anywhere in this dir's
+        # file (mirrors the inline bat's `findstr /x /c:"<value>"` exact-
+        # line check). Per-dir dedup so the two paths can diverge gracefully
+        # if one was hand-edited.
+        $existing = Get-Content -LiteralPath $path -EA SilentlyContinue
+        if ($existing -contains $Value) { continue }
+        Add-Content -LiteralPath $path -Value "# CTI-AUTO $today [$Id] $Actor"
+        Add-Content -LiteralPath $path -Value $Value
+        $addedAny = $true
+    }
+    return $addedAny
 }
 
 # --- Manifest append ---------------------------------------------------------
@@ -162,10 +190,13 @@ function Add-IocEntry {
 # coverage map reflects what -updateTTP actually pulled. Skip MITRE_IDs that
 # are already present (by line-start match on "<id>|").
 
-$manifestPath = Join-Path $ThreatListsDir 'ttp_manifest.txt'
+$manifestPaths = $writeDirs | ForEach-Object { Join-Path $_ 'ttp_manifest.txt' } | Where-Object { Test-Path -LiteralPath $_ }
+
+# Build a UNION of MITRE_IDs across all manifest paths -- if EITHER dir
+# already has the ID, we skip writing in this run to keep both convergent.
 $manifestSeenIds = @{}
-if (Test-Path -LiteralPath $manifestPath) {
-    foreach ($line in Get-Content -LiteralPath $manifestPath -EA SilentlyContinue) {
+foreach ($mp in $manifestPaths) {
+    foreach ($line in Get-Content -LiteralPath $mp -EA SilentlyContinue) {
         if ($line -match '^([A-Za-z0-9_.+\-]+)\|') {
             $manifestSeenIds[$Matches[1]] = $true
         }
@@ -174,12 +205,15 @@ if (Test-Path -LiteralPath $manifestPath) {
 
 function Add-ManifestRow {
     param([string]$Id, [string]$Name, [string]$Actor)
-    if (-not (Test-Path -LiteralPath $manifestPath)) { return $false }
     if ($manifestSeenIds.ContainsKey($Id)) { return $false }
-    Add-Content -LiteralPath $manifestPath -Value "# CTI-AUTO $today [from -updateTTP]"
-    Add-Content -LiteralPath $manifestPath -Value "$Id|CTI-AUTO|$Name|$Actor|Sec 18 CTI-auto via -updateTTP"
-    $manifestSeenIds[$Id] = $true
-    return $true
+    $addedAny = $false
+    foreach ($mp in $manifestPaths) {
+        Add-Content -LiteralPath $mp -Value "# CTI-AUTO $today [from -updateTTP]"
+        Add-Content -LiteralPath $mp -Value "$Id|CTI-AUTO|$Name|$Actor|Sec 18 CTI-auto via -updateTTP"
+        $addedAny = $true
+    }
+    if ($addedAny) { $manifestSeenIds[$Id] = $true }
+    return $addedAny
 }
 
 # --- Main loop ---------------------------------------------------------------
