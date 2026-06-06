@@ -450,70 +450,22 @@ if not exist "%TTP_BLOCKS%" (
 )
 echo :: --- Update: %date% %time% --->> "%TTP_BLOCKS%"
 
-:: Process each TTP line from the CTI output
-for /f "usebackq tokens=1-6 delims=|" %%a in ("%TTP_OUTPUT%") do (
-    :: %%a=MITRE_ID %%b=Name %%c=Detection_Method %%d=Detection_Value %%e=Severity %%f=Actor
-    if /i "%%c"=="registry key" (
-        echo echo --- [CTI-AUTO][%%a] %%b ^(%%f^) ---^>^> "%%REPORT%%">> "%TTP_BLOCKS%"
-        echo reg query "%%d"^>^> "%%REPORT%%" 2^>^&1 >> "%TTP_BLOCKS%"
-    )
-    if /i "%%c"=="event ID" (
-        echo echo --- [CTI-AUTO][%%a] %%b ^(%%f^) ---^>^> "%%REPORT%%">> "%TTP_BLOCKS%"
-        echo wevtutil qe Security /q:"*[System[(EventID=%%d)]]" /c:10 /rd:true /f:text ^| findstr /c:"TimeCreated" /c:"Account Name"^>^> "%%REPORT%%" 2^>^&1 >> "%TTP_BLOCKS%"
-    )
-    if /i "%%c"=="process name" (
-        echo echo --- [CTI-AUTO][%%a] %%b ^(%%f^) ---^>^> "%%REPORT%%">> "%TTP_BLOCKS%"
-        echo echo Get-CimInstance Win32_Process -Filter "name='%%d'" -EA SilentlyContinue ^| Select-Object Name,ProcessId,ExecutablePath ^| Format-Table -AutoSize ^> "%%PSRUN%%">> "%TTP_BLOCKS%"
-        echo "%%PWSH%%" -NoProfile -ExecutionPolicy Bypass -File "%%PSRUN%%"^>^> "%%REPORT%%" 2^>^&1 >> "%TTP_BLOCKS%"
-    )
-    if /i "%%c"=="file path" (
-        echo echo --- [CTI-AUTO][%%a] %%b ^(%%f^) ---^>^> "%%REPORT%%">> "%TTP_BLOCKS%"
-        echo if exist "%%d" ^(echo [%%e] %%b IOC found: %%d^>^> "%%REPORT%%"^) else ^(echo [OK] %%b check clear.^>^> "%%REPORT%%"^)>> "%TTP_BLOCKS%"
-    )
-    if /i "%%c"=="named pipe" (
-        echo echo --- [CTI-AUTO][%%a] %%b ^(%%f^) ---^>^> "%%REPORT%%">> "%TTP_BLOCKS%"
-        echo echo try{$p=Get-ChildItem \\.\pipe\ -EA SilentlyContinue ^| Where-Object {$_.Name -match '%%d'}; if^($p^){'[%%e] %%b pipe detected: '+^($p.Name -join ', '^)}else{'[OK] %%b pipe check clear.'}}catch{'[INFO] Pipe check unavailable.'} ^> "%%PSRUN%%">> "%TTP_BLOCKS%"
-        echo "%%PWSH%%" -NoProfile -ExecutionPolicy Bypass -File "%%PSRUN%%"^>^> "%%REPORT%%" 2^>^&1 >> "%TTP_BLOCKS%"
-    )
-    rem closes #77 -- handler for the 6th allowed Detection_Method.
-    rem Bare parens inside the echo body are escaped because CMDs
-    rem block-boundary scanner counts every paren in the for-body,
-    rem including those in echo arguments. Same fix applied to the
-    rem named-pipe handler above which had the same latent bug.
-    if /i "%%c"=="wmi query" (
-        echo echo --- [CTI-AUTO][%%a] %%b ^(%%f^) ---^>^> "%%REPORT%%">> "%TTP_BLOCKS%"
-        echo echo try{$r=Get-CimInstance -Query '%%d' -EA SilentlyContinue; if^($r^){'[%%e] %%b WMI hit: '+^($r ^| Out-String^).Trim^(^)}else{'[OK] %%b WMI check clear.'}}catch{'[INFO] WMI query failed: '+$_.Exception.Message} ^> "%%PSRUN%%">> "%TTP_BLOCKS%"
-        echo "%%PWSH%%" -NoProfile -ExecutionPolicy Bypass -File "%%PSRUN%%"^>^> "%%REPORT%%" 2^>^&1 >> "%TTP_BLOCKS%"
-    )
-)
-
-:: Merge new IOCs into ThreatLists files incrementally
 set "SCRIPT_THREATS=%~dp0ThreatLists"
-if exist "%SCRIPT_THREATS%" (
-    for /f "usebackq tokens=1-6 delims=|" %%a in ("%TTP_OUTPUT%") do (
-        if /i "%%c"=="process name" (
-            findstr /x /c:"%%d" "%SCRIPT_THREATS%\ioc_processes.txt" >nul 2>&1
-            if !errorlevel! neq 0 (
-                echo # CTI-AUTO %date% [%%a] %%f>> "%SCRIPT_THREATS%\ioc_processes.txt"
-                echo %%d>> "%SCRIPT_THREATS%\ioc_processes.txt"
-            )
-        )
-        if /i "%%c"=="named pipe" (
-            findstr /x /c:"%%d" "%SCRIPT_THREATS%\ioc_named_pipes.txt" >nul 2>&1
-            if !errorlevel! neq 0 (
-                echo # CTI-AUTO %date% [%%a] %%f>> "%SCRIPT_THREATS%\ioc_named_pipes.txt"
-                echo %%d>> "%SCRIPT_THREATS%\ioc_named_pipes.txt"
-            )
-        )
-        if /i "%%c"=="file path" (
-            findstr /x /c:"%%d" "%SCRIPT_THREATS%\ioc_file_paths.txt" >nul 2>&1
-            if !errorlevel! neq 0 (
-                echo # CTI-AUTO %date% [%%a] %%f>> "%SCRIPT_THREATS%\ioc_file_paths.txt"
-                echo %%d>> "%SCRIPT_THREATS%\ioc_file_paths.txt"
-            )
-        )
-    )
-    echo  [OK] New IOCs merged into ThreatLists/ files.
+
+:: Process each TTP row via tools/ttp_merge.ps1. Closes #77/#78/#79: emits
+:: detection blocks for all six Detection_Method types (registry key, event
+:: ID, process name, file path, named pipe, wmi query), merges values into
+:: the matching ioc_*.txt (including ioc_registry.txt -- #78), and appends
+:: a row to ttp_manifest.txt for every new MITRE_ID (#79). The inline
+:: `for /f ... do (...)` loop that lived here previously is a CMD-escape
+:: minefield (see PR #80 commit msg) and was the fix-it-once-and-it-breaks-
+:: somewhere-else pattern the PowerShell helper exists to escape.
+:: NOTE: this runs before the main setup block sets %SCRIPT_DIR% and %PWSH%,
+:: so use %~dp0 and plain `powershell` here.
+if exist "%~dp0tools\ttp_merge.ps1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\ttp_merge.ps1" -TtpOutput "%TTP_OUTPUT%" -BlocksFile "%TTP_BLOCKS%" -ThreatListsDir "%SCRIPT_THREATS%"
+) else (
+    echo  [WARN] tools\ttp_merge.ps1 not found -- TTP detection blocks, IOC merge, and ttp_manifest.txt update all skipped.
 )
 
 echo  [OK] Generated: %TTP_BLOCKS%
