@@ -681,7 +681,7 @@ if "%NETWORK_AVAIL%"=="1" if "%VT_SELF_SKIP%"=="0" if exist "%USERPROFILE%\.vt_t
 :: ====================================================================
 echo %C_GREEN%[INIT 10/14]%C_RESET% Checking for script updates...
 echo --- [INIT 10/14] Self-Update Check --->> "%REPORT%"
-echo  Command: powershell -Command "Test-Path -LiteralPath $tf^){ $token = ^(Get-Content -LiteralPath $tf -Raw -EA SilentlyContinue^).Trim^(^) } }">> "%REPORT%"
+echo  Command: Invoke-WebRequest %UPDATE_URL%/version.txt ^&^& powershell -File tools\threat_list_sync.ps1 -BaseUrl ^<URL^> -LocalDir ^<dir^> -StaleDays 60>> "%REPORT%"
 
 if "%NETWORK_AVAIL%"=="0" (
     echo  [SKIP] No network available.>> "%REPORT%"
@@ -738,43 +738,11 @@ if "%SKIP_THREAT_UPDATE%"=="1" (
 )
 echo  Checking for updated threat indicator lists...>> "%REPORT%"
 echo  Mode: INCREMENTAL (new entries merged, existing preserved)>> "%REPORT%"
-:: Mirror admin variant: refresh all 10 IOC files, not just ioc_hashes.txt.
-:: Writes incrementally to %SCRIPT_DIR%ThreatLists (with PAT support and
-:: fallback to ttp_manifest.txt). Identical logic to admin self-update.
-echo $baseUrl='%UPDATE_URL%/ThreatLists' > "%PSRUN%"
-echo $localDir='%SCRIPT_DIR%ThreatLists' >> "%PSRUN%"
-echo if(-not (Test-Path $localDir)){ try{ New-Item -ItemType Directory -Path $localDir -Force ^| Out-Null }catch{} } >> "%PSRUN%"
-echo $files=@('ioc_processes.txt','ioc_named_pipes.txt','ioc_services.txt','ioc_registry.txt','ioc_file_paths.txt','ioc_scheduled_tasks.txt','ioc_domains.txt','ioc_hashes.txt','ioc_lolbins.txt','ttp_manifest.txt') >> "%PSRUN%"
-echo $token = $env:DOZESEC_TOKEN >> "%PSRUN%"
-echo if(-not $token){ $tf = Join-Path $env:USERPROFILE '.dozesec_token'; if(Test-Path -LiteralPath $tf){ $token = (Get-Content -LiteralPath $tf -Raw -EA SilentlyContinue).Trim() } } >> "%PSRUN%"
-echo $headers = @{ 'User-Agent' = 'doze_sec' } >> "%PSRUN%"
-echo if($token){ $headers['Authorization'] = "Bearer $token" } >> "%PSRUN%"
-echo $updated=0; $skipped=0 >> "%PSRUN%"
-echo foreach($f in $files){ >> "%PSRUN%"
-echo   $url="$baseUrl/$f"; $dest=Join-Path $localDir $f >> "%PSRUN%"
-echo   try{ >> "%PSRUN%"
-echo     $remote=Invoke-WebRequest $url -UseBasicParsing -TimeoutSec 10 -Headers $headers -EA Stop >> "%PSRUN%"
-echo     $newLines=$remote.Content -split "`n" ^| ForEach-Object {$_.Trim()} ^| Where-Object {$_ -and $_ -notmatch '^\s*#'} >> "%PSRUN%"
-echo     if(Test-Path $dest){ >> "%PSRUN%"
-echo       $existing=Get-Content $dest ^| ForEach-Object {$_.Trim()} ^| Where-Object {$_ -and $_ -notmatch '^\s*#'} >> "%PSRUN%"
-echo       $added=0 >> "%PSRUN%"
-echo       foreach($line in $newLines){ >> "%PSRUN%"
-echo         if($existing -notcontains $line){ >> "%PSRUN%"
-echo           Add-Content $dest "# Added by self-update on $(Get-Date -Format yyyy-MM-dd)" >> "%PSRUN%"
-echo           Add-Content $dest $line >> "%PSRUN%"
-echo           $added++ >> "%PSRUN%"
-echo         } >> "%PSRUN%"
-echo       } >> "%PSRUN%"
-echo       if($added -gt 0){'  [OK] '+$f+': '+$added+' new entries merged'; $updated++} >> "%PSRUN%"
-echo       else{'  [OK] '+$f+': already up to date'; $skipped++} >> "%PSRUN%"
-echo     }else{ >> "%PSRUN%"
-echo       [System.IO.File]::WriteAllText($dest,$remote.Content,(New-Object System.Text.UTF8Encoding $false)) >> "%PSRUN%"
-echo       '  [OK] '+$f+': downloaded (new file)'; $updated++ >> "%PSRUN%"
-echo     } >> "%PSRUN%"
-echo   }catch{'  [INFO] '+$f+': not available at remote URL'; $skipped++} >> "%PSRUN%"
-echo } >> "%PSRUN%"
-echo "  Summary: $updated files updated, $skipped unchanged/unavailable" >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+if exist "%SCRIPT_DIR%tools\threat_list_sync.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\threat_list_sync.ps1" -BaseUrl "%UPDATE_URL%/ThreatLists" -LocalDir "%SCRIPT_DIR%ThreatLists" -StaleDays 60>> "%REPORT%" 2>&1
+) else (
+    echo  [INFO] tools\threat_list_sync.ps1 not found -- threat list update skipped.>> "%REPORT%"
+)
 :update_done
 echo.>> "%REPORT%"
 
