@@ -333,22 +333,52 @@ if %errorlevel% neq 0 (
     goto :skip_ttp_update
 )
 
-:: CTI skill yaml resolution. Default location is a sibling of doze_sec\
-:: ('..\threat-intel\cyber_threat_skill.yaml'); DOZESEC_CTI_SKILL overrides
-:: that for setups where the skill lives elsewhere (vendored under prompts\,
-:: a network share, etc). Follows the DOZESEC_TOKEN convention.
+:: CTI skill yaml resolution.
+::   1. If DOZESEC_CTI_SKILL is set, use it as-is (explicit user choice wins).
+::   2. Otherwise, walk a short list of plausible layouts and pick the first
+::      hit. The discovered path is written back into DOZESEC_CTI_SKILL so
+::      anything downstream (logging, child processes) sees one canonical
+::      value instead of recomputing the path.
+::   3. If nothing was found, name the file and list every location checked
+::      so the user can see whether their layout is missing from the list
+::      vs the file just isn't there.
+:: Follows the DOZESEC_TOKEN convention.
+set "CTI_SKILL_PATH="
 if defined DOZESEC_CTI_SKILL (
     set "CTI_SKILL_PATH=%DOZESEC_CTI_SKILL%"
 ) else (
-    set "CTI_SKILL_PATH=%~dp0..\threat-intel\cyber_threat_skill.yaml"
+    for %%P in (
+        "%~dp0..\threat-intel\cyber_threat_skill.yaml"
+        "%~dp0..\prompts\threat-intel\cyber_threat_skill.yaml"
+        "%~dp0..\skills\threat-intel\cyber_threat_skill.yaml"
+        "%~dp0threat-intel\cyber_threat_skill.yaml"
+    ) do (
+        if not defined CTI_SKILL_PATH if exist "%%~fP" (
+            set "CTI_SKILL_PATH=%%~fP"
+            set "DOZESEC_CTI_SKILL=%%~fP"
+        )
+    )
 )
 
-if not exist "%CTI_SKILL_PATH%" (
-    echo  [WARN] CTI skill file not found at: %CTI_SKILL_PATH%
+if not defined CTI_SKILL_PATH (
+    echo  [WARN] CTI skill file 'cyber_threat_skill.yaml' was not found in any expected location:
+    echo           - %~dp0..\threat-intel\cyber_threat_skill.yaml
+    echo           - %~dp0..\prompts\threat-intel\cyber_threat_skill.yaml
+    echo           - %~dp0..\skills\threat-intel\cyber_threat_skill.yaml
+    echo           - %~dp0threat-intel\cyber_threat_skill.yaml
     echo  Override with: set DOZESEC_CTI_SKILL=full\path\to\cyber_threat_skill.yaml
     echo  Cannot generate TTP update. Using existing checks.
     goto :skip_ttp_update
 )
+
+if not exist "%CTI_SKILL_PATH%" (
+    echo  [WARN] CTI skill file 'cyber_threat_skill.yaml' not found at: %CTI_SKILL_PATH%
+    echo         ^(DOZESEC_CTI_SKILL points to a missing file^)
+    echo  Cannot generate TTP update. Using existing checks.
+    goto :skip_ttp_update
+)
+
+echo  [OK] CTI skill: %CTI_SKILL_PATH%
 
 :: Collect existing IOC entries for deduplication
 :: Use a GUID for the temp filename so a same-user local attacker cannot pre-create/race the path

@@ -197,16 +197,27 @@ doze_sec.bat -updateTTP
 
 Requires:
 1. Claude Code CLI installed (`npm install -g @anthropic-ai/claude-code`)
-2. The [threat-intel](https://github.com/kj299/threat-intel) repo cloned as a sibling directory (default), or `DOZESEC_CTI_SKILL` set to an explicit `cyber_threat_skill.yaml` path
+2. The [threat-intel](https://github.com/kj299/threat-intel) repo cloned somewhere the script can find `cyber_threat_skill.yaml`
 
-If your `threat-intel\` clone lives anywhere other than a sibling of `doze_sec\`, point the script at the skill file directly:
+### Skill path resolution
+
+When `-updateTTP` runs, the script resolves `cyber_threat_skill.yaml` in this order:
+
+1. `DOZESEC_CTI_SKILL` env var, if set
+2. Auto-discovery across these layouts (first hit wins):
+   - `..\threat-intel\cyber_threat_skill.yaml` (sibling of `doze_sec\`)
+   - `..\prompts\threat-intel\cyber_threat_skill.yaml`
+   - `..\skills\threat-intel\cyber_threat_skill.yaml`
+   - `.\threat-intel\cyber_threat_skill.yaml` (vendored inside `doze_sec\`)
+
+If your layout doesn't match any of those, set the env var explicitly:
 
 ```powershell
 $env:DOZESEC_CTI_SKILL = 'C:\path\to\threat-intel\cyber_threat_skill.yaml'
 .\doze_sec.bat -updateTTP
 ```
 
-The env var wins over the default path when both are valid.
+`setx DOZESEC_CTI_SKILL "..."` persists it for future shells. When nothing resolves, the script lists every path it checked so you can see whether your location was missed by the search or the file simply isn't there.
 
 ## Offline TTP Import (`-importTTP`)
 
