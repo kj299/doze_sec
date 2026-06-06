@@ -447,9 +447,30 @@ echo  [*] Output: %TTP_OUTPUT%
 echo  [*] Mode: INCREMENTAL (merging with existing IOCs)
 echo.
 
-:: Call Claude Code with the CTI skill context to generate TTP intel
-:: The prompt instructs incremental-only output and provides existing IOCs for dedup
-claude -p "You are operating as the SENTINEL-X CTI Skill defined in this file. Today is %date%. Analyze the CURRENT threat landscape (2025-2026) for Windows 10/11 endpoints. IMPORTANT: Output ONLY NEW TTPs that are NOT already in the existing IOC list below. Do not duplicate existing detections. Output a structured list of up to 20 NEW TTPs. For each TTP provide: MITRE_ID, Name, Detection_Method (registry key, event ID, file path, process name, named pipe, or WMI query), Detection_Value (the exact IOC string), Severity (CRITICAL/WARNING/INFO), and Actor (threat group). Format as pipe-delimited CSV: MITRE_ID|Name|Detection_Method|Detection_Value|Severity|Actor. No headers, no explanation, just the data rows. EXISTING IOCs (do NOT duplicate these):" --file "%CTI_SKILL_PATH%" --file "%EXISTING_IOCS%" > "%TTP_OUTPUT%" 2>&1
+:: Build stdin payload: skill yaml + existing IOC list separated by clearly
+:: labelled sections. The earlier implementation passed both as `--file
+:: <path>` flags, but per `claude --help` and Anthropic auth docs, `--file`
+:: is for downloading server-side file RESOURCES by ID (file_abc:doc.txt
+:: format) -- engaging that path on a local file demands an undocumented
+:: CLAUDE_CODE_SESSION_ACCESS_TOKEN that normal `claude /login` users
+:: don't have. stdin pipe is the documented headless context path. (#90)
+set "CTI_STDIN=%TEMP%\dz_cti_stdin_%IOC_GUID%.txt"
+(
+    echo ==== BEGIN SENTINEL-X CTI SKILL ^(reference^) ====
+    type "%CTI_SKILL_PATH%"
+    echo.
+    echo ==== END SKILL ====
+    echo.
+    echo ==== BEGIN EXISTING IOCS ^(do NOT duplicate^) ====
+    if exist "%EXISTING_IOCS%" type "%EXISTING_IOCS%"
+    echo ==== END EXISTING IOCS ====
+) > "%CTI_STDIN%" 2>nul
+
+:: Call Claude Code with the CTI skill context + dedup list piped via stdin.
+:: Prompt references the SKILL / EXISTING IOCS sections of the stdin input.
+claude -p "You are operating as the SENTINEL-X CTI Skill provided in the SKILL section of the stdin input below. Today is %date%. Analyze the CURRENT threat landscape (2025-2026) for Windows 10/11 endpoints. IMPORTANT: Output ONLY NEW TTPs that are NOT already in the EXISTING IOCS section of the stdin input. Do not duplicate existing detections. Output a structured list of up to 20 NEW TTPs. For each TTP provide: MITRE_ID, Name, Detection_Method (registry key, event ID, file path, process name, named pipe, or WMI query), Detection_Value (the exact IOC string), Severity (CRITICAL/WARNING/INFO), and Actor (threat group). Format as pipe-delimited CSV: MITRE_ID|Name|Detection_Method|Detection_Value|Severity|Actor. No headers, no explanation, just the data rows." < "%CTI_STDIN%" > "%TTP_OUTPUT%" 2>&1
+
+if exist "%CTI_STDIN%" del "%CTI_STDIN%" >nul 2>&1
 if exist "%EXISTING_IOCS%" del "%EXISTING_IOCS%" >nul 2>&1
 
 if %errorlevel% neq 0 (
@@ -457,19 +478,18 @@ if %errorlevel% neq 0 (
     goto :skip_ttp_update
 )
 
-rem Detect specific Claude CLI auth failures that get captured into TTP_OUTPUT
-rem instead of being raised as a non-zero exit (the CLI exits 0 but writes the
-rem error message into stdout, which the sanitizer would later reject as
-rem "wrong field count" -- confusing).
+rem Defensive: if a Claude CLI version ever re-routes stdin headless calls
+rem through the resource-fetch path, the same TOKEN error would land in
+rem TTP_OUTPUT. Keep the detector but redirect users to the documented
+rem alternatives (stdin path is already in use; -importTTP bypasses the
+rem CLI entirely).
 findstr /c:"CLAUDE_CODE_SESSION_ACCESS_TOKEN" "%TTP_OUTPUT%" >nul 2>&1
 if not errorlevel 1 (
-    echo  [ERROR] Claude Code CLI requires CLAUDE_CODE_SESSION_ACCESS_TOKEN to
-    echo          be set for --file uploads. Two ways to proceed:
-    echo            ^(a^) Set the env var with your Claude Code session token, then re-run
-    echo                ^(see Anthropic Claude Code docs for how to obtain it^), or
-    echo            ^(b^) Use:  %~nx0 -importTTP ^<file^>
-    echo                to skip the Claude CLI dependency entirely. The pipe-delimited
-    echo                file feeds into the same sanitizer + IOC merge.
+    echo  [ERROR] Claude Code CLI rejected the request citing CLAUDE_CODE_SESSION_ACCESS_TOKEN.
+    echo          This script uses stdin ^(the documented headless context path^), so this
+    echo          shouldn't happen with current Claude Code releases. To proceed:
+    echo            %~nx0 -importTTP ^<file^>
+    echo          ^(skip the CLI entirely; same sanitizer + IOC merge pipeline^)
     del "%TTP_OUTPUT%" >nul 2>&1
     goto :skip_ttp_update
 )
