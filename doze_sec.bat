@@ -455,16 +455,16 @@ for /f "usebackq tokens=1-6 delims=|" %%a in ("%TTP_OUTPUT%") do (
     :: %%a=MITRE_ID %%b=Name %%c=Detection_Method %%d=Detection_Value %%e=Severity %%f=Actor
     if /i "%%c"=="registry key" (
         echo echo --- [CTI-AUTO][%%a] %%b ^(%%f^) ---^>^> "%%REPORT%%">> "%TTP_BLOCKS%"
-        echo reg query "%%d"^>^> "%%REPORT%%" 2^>^&1>> "%TTP_BLOCKS%"
+        echo reg query "%%d"^>^> "%%REPORT%%" 2^>^&1 >> "%TTP_BLOCKS%"
     )
     if /i "%%c"=="event ID" (
         echo echo --- [CTI-AUTO][%%a] %%b ^(%%f^) ---^>^> "%%REPORT%%">> "%TTP_BLOCKS%"
-        echo wevtutil qe Security /q:"*[System[(EventID=%%d)]]" /c:10 /rd:true /f:text ^| findstr /c:"TimeCreated" /c:"Account Name"^>^> "%%REPORT%%" 2^>^&1>> "%TTP_BLOCKS%"
+        echo wevtutil qe Security /q:"*[System[(EventID=%%d)]]" /c:10 /rd:true /f:text ^| findstr /c:"TimeCreated" /c:"Account Name"^>^> "%%REPORT%%" 2^>^&1 >> "%TTP_BLOCKS%"
     )
     if /i "%%c"=="process name" (
         echo echo --- [CTI-AUTO][%%a] %%b ^(%%f^) ---^>^> "%%REPORT%%">> "%TTP_BLOCKS%"
         echo echo Get-CimInstance Win32_Process -Filter "name='%%d'" -EA SilentlyContinue ^| Select-Object Name,ProcessId,ExecutablePath ^| Format-Table -AutoSize ^> "%%PSRUN%%">> "%TTP_BLOCKS%"
-        echo "%%PWSH%%" -NoProfile -ExecutionPolicy Bypass -File "%%PSRUN%%"^>^> "%%REPORT%%" 2^>^&1>> "%TTP_BLOCKS%"
+        echo "%%PWSH%%" -NoProfile -ExecutionPolicy Bypass -File "%%PSRUN%%"^>^> "%%REPORT%%" 2^>^&1 >> "%TTP_BLOCKS%"
     )
     if /i "%%c"=="file path" (
         echo echo --- [CTI-AUTO][%%a] %%b ^(%%f^) ---^>^> "%%REPORT%%">> "%TTP_BLOCKS%"
@@ -472,8 +472,18 @@ for /f "usebackq tokens=1-6 delims=|" %%a in ("%TTP_OUTPUT%") do (
     )
     if /i "%%c"=="named pipe" (
         echo echo --- [CTI-AUTO][%%a] %%b ^(%%f^) ---^>^> "%%REPORT%%">> "%TTP_BLOCKS%"
-        echo echo try{$p=Get-ChildItem \\.\pipe\ -EA SilentlyContinue ^| Where-Object {$_.Name -match '%%d'}; if($p){'[%%e] %%b pipe detected: '+($p.Name -join ', ')}else{'[OK] %%b pipe check clear.'}}catch{'[INFO] Pipe check unavailable.'} ^> "%%PSRUN%%">> "%TTP_BLOCKS%"
-        echo "%%PWSH%%" -NoProfile -ExecutionPolicy Bypass -File "%%PSRUN%%"^>^> "%%REPORT%%" 2^>^&1>> "%TTP_BLOCKS%"
+        echo echo try{$p=Get-ChildItem \\.\pipe\ -EA SilentlyContinue ^| Where-Object {$_.Name -match '%%d'}; if^($p^){'[%%e] %%b pipe detected: '+^($p.Name -join ', '^)}else{'[OK] %%b pipe check clear.'}}catch{'[INFO] Pipe check unavailable.'} ^> "%%PSRUN%%">> "%TTP_BLOCKS%"
+        echo "%%PWSH%%" -NoProfile -ExecutionPolicy Bypass -File "%%PSRUN%%"^>^> "%%REPORT%%" 2^>^&1 >> "%TTP_BLOCKS%"
+    )
+    rem closes #77 -- handler for the 6th allowed Detection_Method.
+    rem Bare parens inside the echo body are escaped because CMDs
+    rem block-boundary scanner counts every paren in the for-body,
+    rem including those in echo arguments. Same fix applied to the
+    rem named-pipe handler above which had the same latent bug.
+    if /i "%%c"=="wmi query" (
+        echo echo --- [CTI-AUTO][%%a] %%b ^(%%f^) ---^>^> "%%REPORT%%">> "%TTP_BLOCKS%"
+        echo echo try{$r=Get-CimInstance -Query '%%d' -EA SilentlyContinue; if^($r^){'[%%e] %%b WMI hit: '+^($r ^| Out-String^).Trim^(^)}else{'[OK] %%b WMI check clear.'}}catch{'[INFO] WMI query failed: '+$_.Exception.Message} ^> "%%PSRUN%%">> "%TTP_BLOCKS%"
+        echo "%%PWSH%%" -NoProfile -ExecutionPolicy Bypass -File "%%PSRUN%%"^>^> "%%REPORT%%" 2^>^&1 >> "%TTP_BLOCKS%"
     )
 )
 
