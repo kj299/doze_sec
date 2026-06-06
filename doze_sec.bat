@@ -62,6 +62,7 @@ set "SKIP_THREAT_UPDATE=0"
 set "SKIP_SRP=0"
 set "UPDATE_TTP=0"
 set "IMPORT_TTP_FILE="
+set "CTI_SKILL_SWITCH="
 set "VT_CHECK=0"
 set "VT_SELF_SKIP=0"
 set "IOC_HITS=0"
@@ -93,6 +94,7 @@ if /i "%~1"=="-sdu"        set "SKIP_THREAT_UPDATE=1"
 if /i "%~1"=="-nosrp"      set "SKIP_SRP=1"
 if /i "%~1"=="-updateTTP"  set "UPDATE_TTP=1"
 if /i "%~1"=="-importTTP"  goto :parse_importttp
+if /i "%~1"=="-ctiSkill"   goto :parse_ctiskill
 if /i "%~1"=="-vt"         set "VT_CHECK=1"
 if /i "%~1"=="-noVtSelf"   set "VT_SELF_SKIP=1"
 shift
@@ -106,6 +108,16 @@ if "%~1"=="" (
 )
 set "IMPORT_TTP_FILE=%~1"
 set "UPDATE_TTP=1"
+shift
+goto :parse_args
+:parse_ctiskill
+shift
+if "%~1"=="" (
+    echo  [ERROR] -ctiSkill requires a file path argument.
+    echo  Example: %~nx0 -updateTTP -ctiSkill C:\path\to\cyber_threat_skill.yaml
+    exit /b 1
+)
+set "CTI_SKILL_SWITCH=%~1"
 shift
 goto :parse_args
 :args_done
@@ -155,6 +167,17 @@ echo                 process name, file path, named pipe, wmi query.
 echo                 Detection_Value is sanitized -- shell metacharacters
 echo                 (quotes, ;, ^|, ^&, ^<, ^>, parens, braces, ^^) cause the
 echo                 row to be dropped.
+echo.
+echo    %C_GREEN%-ctiSkill%C_RESET% ^<file^>
+echo                 Per-run override for the SENTINEL-X CTI skill yaml location
+echo                 used by -updateTTP. Highest precedence: wins over the
+echo                 DOZESEC_CTI_SKILL env var and auto-discovery. Use this
+echo                 when your threat-intel\ clone lives somewhere the script
+echo                 doesn't auto-find ^(default search: ..\threat-intel\,
+echo                 ..\prompts\threat-intel\, ..\skills\threat-intel\,
+echo                 .\threat-intel\^). If neither switch, env var, nor
+echo                 auto-discovery resolves the file, the script prompts
+echo                 interactively.
 echo.
 echo    %C_GREEN%-vt%C_RESET%          Query VirusTotal for SHA256 hashes of priority files
 echo                 (recent EXE/DLL/PS/VBS in TEMP/Downloads/AppData and
@@ -333,20 +356,27 @@ if %errorlevel% neq 0 (
     goto :skip_ttp_update
 )
 
-:: CTI skill yaml resolution.
-::   1. If DOZESEC_CTI_SKILL is set, use it as-is (explicit user choice wins).
-::   2. Otherwise, walk a short list of plausible layouts and pick the first
-::      hit. The discovered path is written back into DOZESEC_CTI_SKILL so
-::      anything downstream (logging, child processes) sees one canonical
-::      value instead of recomputing the path.
-::   3. If nothing was found, name the file and list every location checked
-::      so the user can see whether their layout is missing from the list
-::      vs the file just isn't there.
-:: Follows the DOZESEC_TOKEN convention.
+:: CTI skill yaml resolution. Resolution order (highest to lowest):
+::   1. -ctiSkill <path> switch (this run only; doesn't persist)
+::   2. DOZESEC_CTI_SKILL env var (persists across runs via setx)
+::   3. Auto-discovery across common layouts
+::   4. Interactive prompt as last-resort fallback
+:: The discovered/supplied path is written back into DOZESEC_CTI_SKILL so
+:: anything downstream sees one canonical value. CTI_SKILL_SOURCE tracks
+:: where the path came from so the "found but missing" WARN can name the
+:: right knob to tweak.
 set "CTI_SKILL_PATH="
-if defined DOZESEC_CTI_SKILL (
+set "CTI_SKILL_SOURCE="
+
+if defined CTI_SKILL_SWITCH (
+    set "CTI_SKILL_PATH=%CTI_SKILL_SWITCH%"
+    set "CTI_SKILL_SOURCE=-ctiSkill switch"
+)
+if not defined CTI_SKILL_PATH if defined DOZESEC_CTI_SKILL (
     set "CTI_SKILL_PATH=%DOZESEC_CTI_SKILL%"
-) else (
+    set "CTI_SKILL_SOURCE=DOZESEC_CTI_SKILL env var"
+)
+if not defined CTI_SKILL_PATH (
     for %%P in (
         "%~dp0..\threat-intel\cyber_threat_skill.yaml"
         "%~dp0..\prompts\threat-intel\cyber_threat_skill.yaml"
@@ -356,29 +386,50 @@ if defined DOZESEC_CTI_SKILL (
         if not defined CTI_SKILL_PATH if exist "%%~fP" (
             set "CTI_SKILL_PATH=%%~fP"
             set "DOZESEC_CTI_SKILL=%%~fP"
+            set "CTI_SKILL_SOURCE=auto-discovery"
         )
     )
 )
 
+:: Last resort: ask the user. Candidate paths are shown relative to the
+:: script dir so the visual list is short and scannable; the absolute root
+:: is printed once underneath in case the user needs the full path.
 if not defined CTI_SKILL_PATH (
     echo  [WARN] CTI skill file 'cyber_threat_skill.yaml' was not found in any expected location:
-    echo           - %~dp0..\threat-intel\cyber_threat_skill.yaml
-    echo           - %~dp0..\prompts\threat-intel\cyber_threat_skill.yaml
-    echo           - %~dp0..\skills\threat-intel\cyber_threat_skill.yaml
-    echo           - %~dp0threat-intel\cyber_threat_skill.yaml
-    echo  Override with: set DOZESEC_CTI_SKILL=full\path\to\cyber_threat_skill.yaml
-    echo  Cannot generate TTP update. Using existing checks.
-    goto :skip_ttp_update
+    echo           - ..\threat-intel\cyber_threat_skill.yaml
+    echo           - ..\prompts\threat-intel\cyber_threat_skill.yaml
+    echo           - ..\skills\threat-intel\cyber_threat_skill.yaml
+    echo           - .\threat-intel\cyber_threat_skill.yaml
+    echo           ^(relative to: %~dp0^)
+    echo.
+    echo  Set a path now ^(or press ENTER to skip the TTP update^):
+    set "USER_CTI_PATH="
+    set /p "USER_CTI_PATH=  Path to cyber_threat_skill.yaml: "
+    if not defined USER_CTI_PATH (
+        echo  [INFO] No path provided. Skipping TTP update.
+        goto :skip_ttp_update
+    )
+    set "CTI_SKILL_PATH=!USER_CTI_PATH!"
+    set "DOZESEC_CTI_SKILL=!USER_CTI_PATH!"
+    set "CTI_SKILL_SOURCE=interactive prompt"
 )
 
 if not exist "%CTI_SKILL_PATH%" (
     echo  [WARN] CTI skill file 'cyber_threat_skill.yaml' not found at: %CTI_SKILL_PATH%
-    echo         ^(DOZESEC_CTI_SKILL points to a missing file^)
-    echo  Cannot generate TTP update. Using existing checks.
+    echo         ^(source: %CTI_SKILL_SOURCE%^)
+    echo  Cannot generate TTP update. Skipping.
     goto :skip_ttp_update
 )
 
-echo  [OK] CTI skill: %CTI_SKILL_PATH%
+echo  [OK] CTI skill: %CTI_SKILL_PATH%  ^(source: %CTI_SKILL_SOURCE%^)
+
+:: Persistence hint only after a successful interactive prompt -- no point
+:: suggesting setx for a switch/env/auto-discovery path the user already
+:: configured deliberately.
+if /i "%CTI_SKILL_SOURCE%"=="interactive prompt" (
+    echo  Tip: persist this for future runs:  setx DOZESEC_CTI_SKILL "%CTI_SKILL_PATH%"
+    echo       or per-run:                    %~nx0 -updateTTP -ctiSkill "%CTI_SKILL_PATH%"
+)
 
 :: Collect existing IOC entries for deduplication
 :: Use a GUID for the temp filename so a same-user local attacker cannot pre-create/race the path
