@@ -1,4 +1,23 @@
 @echo off
+:: -------------------- Console-output capture (closes #92) --------------------
+:: See doze_sec.bat for full notes. Mirrors the same self-tee behavior so the
+:: noAdmin variant also leaves an AuditConsole_<TS>.log on crash.
+if defined DOZE_TEED goto :_console_log_done
+if /i "%~1"=="-help"      goto :_console_log_done
+if /i "%~1"=="-h"         goto :_console_log_done
+if /i "%~1"=="--help"     goto :_console_log_done
+if /i "%~1"=="/?"         goto :_console_log_done
+echo " %* " | findstr /I /C:" -noConsoleLog " >nul 2>&1 && goto :_console_log_done
+if not exist "C:\SecurityAudit" mkdir "C:\SecurityAudit" >nul 2>&1
+for /f "usebackq" %%t in (`powershell -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmmss"`) do set "DOZE_LOG_TS=%%t"
+if not defined DOZE_LOG_TS set "DOZE_LOG_TS=unknown"
+set "DOZE_CONSOLE_LOG=C:\SecurityAudit\AuditConsole_%DOZE_LOG_TS%.log"
+set "DOZE_TEED=1"
+echo  [*] Console output also being captured to: %DOZE_CONSOLE_LOG%
+call "%~f0" %* 2>&1 | powershell -NoProfile -ExecutionPolicy Bypass -Command "$input | Tee-Object -FilePath '%DOZE_CONSOLE_LOG%'"
+exit /b %errorlevel%
+:_console_log_done
+:: -----------------------------------------------------------------------------
 :: ====================================================================
 ::  WIN11 SECURITY FORENSIC AUDIT  v7.1-noAdmin
 ::  CMD-COMPATIBLE: All PowerShell runs via temp .ps1 file (-File mode).
