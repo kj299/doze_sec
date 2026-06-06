@@ -72,6 +72,17 @@ $today = Get-Date -Format 'ddd MM/dd/yyyy'
 # Output strings use the same shapes the inline-bat handlers used in
 # doze_sec.bat lines 454-488, so existing TTP_BLOCKS files stay compatible.
 
+# Detection-block templates. Note on `^|` and bare `|`:
+#   - `event ID` runs `wevtutil ... | findstr ...` directly; the `|` IS a
+#     real pipe operator -- bare.
+#   - `process name`, `named pipe`, `wmi query` build a PowerShell command
+#     via `echo X > "%PSRUN%"`. The `|` characters in X are PART OF the
+#     PowerShell pipeline string and must reach the file as literal `|`.
+#     When CMD later executes the generated bat line `echo X | Y > Z`,
+#     a bare `|` is interpreted as a CMD pipe and CMD tries to run `Y`
+#     as a command -- so we emit `^|` (CMD escape-pipe = literal `|` in
+#     the echo argument) so the literal pipe ends up inside %PSRUN%.
+
 function Get-DetectionBlock {
     param([string]$Id, [string]$Name, [string]$Method, [string]$Value,
           [string]$Severity, [string]$Actor)
@@ -92,7 +103,7 @@ function Get-DetectionBlock {
         'process name' {
             return @(
                 $header,
-                "echo Get-CimInstance Win32_Process -Filter `"name='$Value'`" -EA SilentlyContinue | Select-Object Name,ProcessId,ExecutablePath | Format-Table -AutoSize > `"%PSRUN%`"",
+                "echo Get-CimInstance Win32_Process -Filter `"name='$Value'`" -EA SilentlyContinue ^| Select-Object Name,ProcessId,ExecutablePath ^| Format-Table -AutoSize > `"%PSRUN%`"",
                 "`"%PWSH%`" -NoProfile -ExecutionPolicy Bypass -File `"%PSRUN%`">> `"%REPORT%`" 2>&1"
             )
         }
@@ -105,14 +116,14 @@ function Get-DetectionBlock {
         'named pipe' {
             return @(
                 $header,
-                "echo try{`$p=Get-ChildItem \\.\pipe\ -EA SilentlyContinue | Where-Object {`$_.Name -match '$Value'}; if(`$p){'[$Severity] $Name pipe detected: '+(`$p.Name -join ', ')}else{'[OK] $Name pipe check clear.'}}catch{'[INFO] Pipe check unavailable.'} > `"%PSRUN%`"",
+                "echo try{`$p=Get-ChildItem \\.\pipe\ -EA SilentlyContinue ^| Where-Object {`$_.Name -match '$Value'}; if(`$p){'[$Severity] $Name pipe detected: '+(`$p.Name -join ', ')}else{'[OK] $Name pipe check clear.'}}catch{'[INFO] Pipe check unavailable.'} > `"%PSRUN%`"",
                 "`"%PWSH%`" -NoProfile -ExecutionPolicy Bypass -File `"%PSRUN%`">> `"%REPORT%`" 2>&1"
             )
         }
         'wmi query' {
             return @(
                 $header,
-                "echo try{`$r=Get-CimInstance -Query '$Value' -EA SilentlyContinue; if(`$r){'[$Severity] $Name WMI hit: '+(`$r | Out-String).Trim()}else{'[OK] $Name WMI check clear.'}}catch{'[INFO] WMI query failed: '+`$_.Exception.Message} > `"%PSRUN%`"",
+                "echo try{`$r=Get-CimInstance -Query '$Value' -EA SilentlyContinue; if(`$r){'[$Severity] $Name WMI hit: '+(`$r ^| Out-String).Trim()}else{'[OK] $Name WMI check clear.'}}catch{'[INFO] WMI query failed: '+`$_.Exception.Message} > `"%PSRUN%`"",
                 "`"%PWSH%`" -NoProfile -ExecutionPolicy Bypass -File `"%PSRUN%`">> `"%REPORT%`" 2>&1"
             )
         }
