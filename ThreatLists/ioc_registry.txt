@@ -46,3 +46,7 @@ HKLM\SYSTEM\CurrentControlSet\Services\EventLog\Security|MaxSize
 #
 # === NETWORK PROXY (MitM) ===
 HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings|AutoConfigURL
+# CTI-AUTO Sat 06/06/2026 [T1204.004] TA571
+HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU
+# CTI-AUTO Sat 06/06/2026 [T1547.004] Various
+HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\Userinit

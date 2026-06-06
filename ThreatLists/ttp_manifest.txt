@@ -74,3 +74,21 @@ T1048|Exfiltration|Exfil Over Alternative Protocol|APT29,Volt Typhoon|Sec 3 DNS 
 T1486|Impact|Data Encrypted for Impact|All ransomware|Sec 18 process IOCs
 T1490|Impact|Inhibit System Recovery|All ransomware|Sec 18 LOLBin vssadmin/bcdedit
 T1489|Impact|Service Stop|Ransomware|Sec 18 LOLBin patterns
+# CTI-AUTO Sat 06/06/2026 [from -updateTTP]
+T1555.003|CTI-AUTO|Credentials from Web Browsers|Lumma Stealer|Sec 18 CTI-auto via -updateTTP
+# CTI-AUTO Sat 06/06/2026 [from -updateTTP]
+T1204.004|CTI-AUTO|Malicious Copy and Paste|TA571|Sec 18 CTI-auto via -updateTTP
+# CTI-AUTO Sat 06/06/2026 [from -updateTTP]
+T1055|CTI-AUTO|Process Injection|TA577|Sec 18 CTI-auto via -updateTTP
+# CTI-AUTO Sat 06/06/2026 [from -updateTTP]
+T1056.001|CTI-AUTO|Keylogging|XWorm operators|Sec 18 CTI-auto via -updateTTP
+# CTI-AUTO Sat 06/06/2026 [from -updateTTP]
+T1546.003|CTI-AUTO|WMI Event Subscription Persistence|Turla|Sec 18 CTI-auto via -updateTTP
+# CTI-AUTO Sat 06/06/2026 [from -updateTTP]
+T1547.004|CTI-AUTO|Winlogon Helper DLL|Various|Sec 18 CTI-auto via -updateTTP
+# CTI-AUTO Sat 06/06/2026 [from -updateTTP]
+T1071.004|CTI-AUTO|DNS Tunneling C2|Various|Sec 18 CTI-auto via -updateTTP
+# CTI-AUTO Sat 06/06/2026 [from -updateTTP]
+T1127.001|CTI-AUTO|MSBuild Proxy Execution|Various|Sec 18 CTI-auto via -updateTTP
+# CTI-AUTO Sat 06/06/2026 [from -updateTTP]
+T1484.001|CTI-AUTO|Group Policy Modification|Akira|Sec 18 CTI-auto via -updateTTP
