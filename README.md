@@ -201,23 +201,30 @@ Requires:
 
 ### Skill path resolution
 
-When `-updateTTP` runs, the script resolves `cyber_threat_skill.yaml` in this order:
+When `-updateTTP` runs, the script resolves `cyber_threat_skill.yaml` in this order (highest precedence first):
 
-1. `DOZESEC_CTI_SKILL` env var, if set
-2. Auto-discovery across these layouts (first hit wins):
-   - `..\threat-intel\cyber_threat_skill.yaml` (sibling of `doze_sec\`)
+1. `-ctiSkill <path>` switch (per-run override, doesn't persist)
+2. `DOZESEC_CTI_SKILL` env var (persists across runs via `setx`)
+3. Auto-discovery across these layouts, relative to `doze_sec\` (first hit wins):
+   - `..\threat-intel\cyber_threat_skill.yaml` (sibling)
    - `..\prompts\threat-intel\cyber_threat_skill.yaml`
    - `..\skills\threat-intel\cyber_threat_skill.yaml`
-   - `.\threat-intel\cyber_threat_skill.yaml` (vendored inside `doze_sec\`)
+   - `.\threat-intel\cyber_threat_skill.yaml` (vendored)
+4. Interactive prompt — if all of the above miss, the script asks for a path on stdin; press ENTER to skip the update.
 
-If your layout doesn't match any of those, set the env var explicitly:
+**Per-run override (won't touch anything else):**
 
 ```powershell
-$env:DOZESEC_CTI_SKILL = 'C:\path\to\threat-intel\cyber_threat_skill.yaml'
-.\doze_sec.bat -updateTTP
+.\doze_sec.bat -updateTTP -ctiSkill 'C:\path\to\cyber_threat_skill.yaml'
 ```
 
-`setx DOZESEC_CTI_SKILL "..."` persists it for future shells. When nothing resolves, the script lists every path it checked so you can see whether your location was missed by the search or the file simply isn't there.
+**Persist for future shells:**
+
+```powershell
+setx DOZESEC_CTI_SKILL 'C:\path\to\cyber_threat_skill.yaml'
+```
+
+On success the script echoes `[OK] CTI skill: <resolved-path> (source: <where it came from>)` so you can see which knob fired. On failure it names the file, lists every path it tried, and tells you which switch/env var to use to fix it.
 
 ## Offline TTP Import (`-importTTP`)
 
