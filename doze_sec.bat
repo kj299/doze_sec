@@ -98,6 +98,7 @@ exit /b %DOZE_EXIT_CODE%
 ::    4  Exit pending reboot (reboot then re-run)
 ::    5  Script is running from the TEMP directory (not allowed)
 ::    7  Pre-flight VT integrity check failed (script-critical binary flagged)
+::    8  Audit complete -- CRITICAL findings present (vs 2 = warnings only)
 ::
 ::  OUTPUT:  C:\SecurityAudit\SecurityReport_[timestamp].txt
 ::  SMART:   C:\SecurityAudit\SmartData\
@@ -353,6 +354,7 @@ echo    3  Unsupported OS (use -dev to override)
 echo    4  Reboot pending (reboot then re-run)
 echo    5  Script ran from TEMP directory (move and re-run)
 echo    7  Pre-flight VT integrity check failed (script-critical binary)
+echo    8  Audit complete -- CRITICAL findings present (2 = warnings only)
 echo.
 echo  %C_BOLD%OUTPUT:%C_RESET%
 echo    C:\SecurityAudit\SecurityReport_[timestamp].txt
@@ -2996,9 +2998,20 @@ echo  IOC directory: %IOCDIR%>> "%REPORT%"
 
 echo.>> "%REPORT%"
 echo --- [18a] Process IOC Match --->> "%REPORT%"
-echo  Command: wmic process get Name,ProcessId,ExecutablePath ^| findstr /i /g:"%IOCDIR%\ioc_processes.txt" ^| findstr /v /c:"#">> "%REPORT%"
+echo  Command: powershell Get-CimInstance Win32_Process ^| findstr /i /g:"%IOCDIR%\ioc_processes.txt" ^| findstr /v /c:"#">> "%REPORT%"
 echo  Matching running processes against ioc_processes.txt>> "%REPORT%"
-wmic process get Name,ProcessId,ExecutablePath 2>nul | findstr /i /g:"%IOCDIR%\ioc_processes.txt" | findstr /v /c:"#">> "%REPORT%" 2>&1
+:: wmic was removed in Windows 11 24H2+; the old `wmic | findstr` pipeline
+:: printed [OK] with zero processes examined when wmic was absent. Enumerate
+:: via CIM into a temp file so a failed/empty enumeration is detectable and
+:: reported as [SKIPPED] instead of masquerading as a clean result.
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object { $_.Name+'  '+$_.ProcessId+'  '+$_.ExecutablePath }" > "%TEMP%\dz_proc18a.tmp" 2>nul
+set "_ENUM18A="
+for %%z in ("%TEMP%\dz_proc18a.tmp") do if %%~zz GTR 100 set "_ENUM18A=1"
+if defined _ENUM18A goto :sec18a_match
+echo [SKIPPED] Process enumeration failed -- running processes could not be listed; IOC match NOT performed.>> "%REPORT%"
+goto :sec18a_done
+:sec18a_match
+findstr /i /g:"%IOCDIR%\ioc_processes.txt" "%TEMP%\dz_proc18a.tmp" | findstr /v /c:"#">> "%REPORT%" 2>&1
 if %errorlevel% equ 0 (
     echo [WARNING] Process IOC matches found above. Investigate immediately.>> "%REPORT%"
     set /a IOC_HITS+=1
@@ -3006,17 +3019,20 @@ if %errorlevel% equ 0 (
 ) else (
     echo [OK] No process IOC matches.>> "%REPORT%"
 )
+:sec18a_done
+set "_ENUM18A="
+del "%TEMP%\dz_proc18a.tmp" 2>nul
 
 echo.>> "%REPORT%"
 echo --- [18b] Named Pipe IOC Match --->> "%REPORT%"
 echo  Command: powershell -Command "Get-ChildItem \\.\pipe\ -EA SilentlyContinue">> "%REPORT%"
 echo  Matching named pipes against ioc_named_pipes.txt>> "%REPORT%"
 echo $iocFile='%IOCDIR%\ioc_named_pipes.txt' > "%PSRUN%"
-echo $patterns=Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'} >> "%PSRUN%"
+echo $patterns=if(Test-Path $iocFile){Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'}} >> "%PSRUN%"
 echo $pipes=Get-ChildItem \\.\pipe\ -EA SilentlyContinue >> "%PSRUN%"
 echo $hits=@() >> "%PSRUN%"
 echo foreach($p in $patterns){try{$m=$pipes ^| Where-Object {$_.Name -match $p}; if($m){$hits+=$m}}catch{}} >> "%PSRUN%"
-echo if($hits.Count -gt 0){$hits ^| Select-Object -Unique Name; '[WARNING] Named pipe IOC matches found.'; New-Item "$env:TEMP\dz_iochit_18b.txt" -Force ^| Out-Null}else{'[OK] No named pipe IOC matches.'} >> "%PSRUN%"
+echo if(-not $patterns){'[SKIPPED] ioc_named_pipes.txt missing or empty -- named pipe IOC match NOT performed.'}elseif(-not $pipes){'[SKIPPED] Named pipe enumeration failed -- named pipe IOC match NOT performed.'}elseif($hits.Count -gt 0){$hits ^| Select-Object -Unique Name; '[WARNING] Named pipe IOC matches found.'; New-Item "$env:TEMP\dz_iochit_18b.txt" -Force ^| Out-Null}else{'[OK] No named pipe IOC matches.'} >> "%PSRUN%"
 del "%TEMP%\dz_iochit_18b.txt" 2>nul
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_iochit_18b.txt" (
@@ -3030,11 +3046,11 @@ echo --- [18c] Service IOC Match --->> "%REPORT%"
 echo  Command: powershell -Command "Get-CimInstance Win32_Service -EA SilentlyContinue">> "%REPORT%"
 echo  Matching services against ioc_services.txt>> "%REPORT%"
 echo $iocFile='%IOCDIR%\ioc_services.txt' > "%PSRUN%"
-echo $patterns=Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'} >> "%PSRUN%"
+echo $patterns=if(Test-Path $iocFile){Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'}} >> "%PSRUN%"
 echo $svcs=Get-CimInstance Win32_Service -EA SilentlyContinue >> "%PSRUN%"
 echo $hits=@() >> "%PSRUN%"
 echo foreach($p in $patterns){try{$m=$svcs ^| Where-Object {$_.Name -match $p -or $_.DisplayName -match $p}; if($m){$hits+=$m}}catch{}} >> "%PSRUN%"
-echo if($hits.Count -gt 0){$hits ^| Select-Object Name,State,PathName ^| Format-Table -AutoSize; '[WARNING] Service IOC matches found.'; New-Item "$env:TEMP\dz_iochit_18c.txt" -Force ^| Out-Null}else{'[OK] No service IOC matches.'} >> "%PSRUN%"
+echo if(-not $patterns){'[SKIPPED] ioc_services.txt missing or empty -- service IOC match NOT performed.'}elseif(-not $svcs){'[SKIPPED] Service enumeration failed -- service IOC match NOT performed.'}elseif($hits.Count -gt 0){$hits ^| Select-Object Name,State,PathName ^| Format-Table -AutoSize; '[WARNING] Service IOC matches found.'; New-Item "$env:TEMP\dz_iochit_18c.txt" -Force ^| Out-Null}else{'[OK] No service IOC matches.'} >> "%PSRUN%"
 del "%TEMP%\dz_iochit_18c.txt" 2>nul
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_iochit_18c.txt" (
@@ -3048,13 +3064,13 @@ echo --- [18d] Suspicious File Path IOC Check --->> "%REPORT%"
 echo  Command: powershell -Command "Test-Path $expanded^){$hits+=$expanded}">> "%REPORT%"
 echo  Checking for known malware staging paths from ioc_file_paths.txt>> "%REPORT%"
 echo $iocFile='%IOCDIR%\ioc_file_paths.txt' > "%PSRUN%"
-echo $paths=Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'} >> "%PSRUN%"
+echo $paths=if(Test-Path $iocFile){Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'}} >> "%PSRUN%"
 echo $hits=@() >> "%PSRUN%"
 echo foreach($p in $paths){ >> "%PSRUN%"
 echo   $expanded=[System.Environment]::ExpandEnvironmentVariables($p.Trim()) >> "%PSRUN%"
 echo   if(Test-Path $expanded){$hits+=$expanded} >> "%PSRUN%"
 echo } >> "%PSRUN%"
-echo if($hits.Count -gt 0){'[CRITICAL] Known malware staging files found:'; $hits; '[ACTION] Quarantine these files immediately.'; New-Item "$env:TEMP\dz_iochit_18d.txt" -Force ^| Out-Null}else{'[OK] No known malware staging files found.'} >> "%PSRUN%"
+echo if(-not $paths){'[SKIPPED] ioc_file_paths.txt missing or empty -- staging path check NOT performed.'}elseif($hits.Count -gt 0){'[CRITICAL] Known malware staging files found:'; $hits; '[ACTION] Quarantine these files immediately.'; New-Item "$env:TEMP\dz_iochit_18d.txt" -Force ^| Out-Null}else{'[OK] No known malware staging files found.'} >> "%PSRUN%"
 del "%TEMP%\dz_iochit_18d.txt" 2>nul
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_iochit_18d.txt" (
@@ -3083,7 +3099,17 @@ echo.>> "%REPORT%"
 echo --- [18f] DNS Cache C2 Domain Match --->> "%REPORT%"
 echo  Command: ipconfig /displaydns ^| findstr /i /g:"%IOCDIR%\ioc_domains.txt" ^| findstr /v /c:"#">> "%REPORT%"
 echo  Matching DNS cache against ioc_domains.txt>> "%REPORT%"
-ipconfig /displaydns 2>nul | findstr /i /g:"%IOCDIR%\ioc_domains.txt" | findstr /v /c:"#">> "%REPORT%" 2>&1
+:: Capture the cache to a temp file first: a failed/denied ipconfig used to
+:: feed findstr nothing and print [OK], hiding the failure. Empty file ->
+:: [SKIPPED] instead.
+ipconfig /displaydns > "%TEMP%\dz_dns18f.tmp" 2>nul
+set "_ENUM18F="
+for %%z in ("%TEMP%\dz_dns18f.tmp") do if %%~zz GTR 0 set "_ENUM18F=1"
+if defined _ENUM18F goto :sec18f_match
+echo [SKIPPED] DNS cache could not be read -- C2 domain match NOT performed.>> "%REPORT%"
+goto :sec18f_done
+:sec18f_match
+findstr /i /g:"%IOCDIR%\ioc_domains.txt" "%TEMP%\dz_dns18f.tmp" | findstr /v /c:"#">> "%REPORT%" 2>&1
 if %errorlevel% equ 0 (
     echo [WARNING] C2 domain IOC matches found in DNS cache above.>> "%REPORT%"
     set /a IOC_HITS+=1
@@ -3091,12 +3117,26 @@ if %errorlevel% equ 0 (
 ) else (
     echo [OK] No C2 domain IOC matches in DNS cache.>> "%REPORT%"
 )
+:sec18f_done
+set "_ENUM18F="
+del "%TEMP%\dz_dns18f.tmp" 2>nul
 
 echo.>> "%REPORT%"
 echo --- [18g] LOLBin Command-Line Pattern Match --->> "%REPORT%"
-echo  Command: wmic process get Name,ProcessId,CommandLine ^| select_lines.ps1 -PatternFile "%IOCDIR%\ioc_lolbins.txt">> "%REPORT%"
+echo  Command: powershell Get-CimInstance Win32_Process ^| select_lines.ps1 -PatternFile "%IOCDIR%\ioc_lolbins.txt">> "%REPORT%"
 echo  Matching process command lines against ioc_lolbins.txt>> "%REPORT%"
-wmic process get Name,ProcessId,CommandLine > "%TEMP%\dz_evt.tmp" 2>nul
+:: wmic was removed in Windows 11 24H2+; the old wmic enumeration silently
+:: produced an empty temp file there and select_lines reported no matches,
+:: so LOLBin abuse went undetected while the report said [OK]. Enumerate via
+:: CIM and report [SKIPPED] when the enumeration itself fails.
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object { $_.Name+'  '+$_.ProcessId+'  '+$_.CommandLine }" > "%TEMP%\dz_evt.tmp" 2>nul
+set "_ENUM18G="
+for %%z in ("%TEMP%\dz_evt.tmp") do if %%~zz GTR 100 set "_ENUM18G=1"
+if defined _ENUM18G goto :sec18g_match
+echo [SKIPPED] Process command-line enumeration failed -- LOLBin pattern match NOT performed.>> "%REPORT%"
+del "%TEMP%\dz_evt.tmp" 2>nul
+goto :sec18g_done
+:sec18g_match
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" -PatternFile "%IOCDIR%\ioc_lolbins.txt">> "%REPORT%" 2>&1
 :: Capture select_lines's exit before del overwrites errorlevel. select_lines
 :: mirrors findstr's convention: 0 = at least one match emitted, 1 = none.
@@ -3109,13 +3149,15 @@ if "!_SELECT_EXIT!"=="0" (
 ) else (
     echo [OK] No LOLBin abuse patterns in running processes.>> "%REPORT%"
 )
+:sec18g_done
+set "_ENUM18G="
 
 echo.>> "%REPORT%"
 echo --- [18h] Registry IOC Check --->> "%REPORT%"
 echo  Command: powershell -Command "Get-ItemProperty $psPath -Name $valName -EA Stop">> "%REPORT%"
 echo  Checking suspicious registry keys from ioc_registry.txt>> "%REPORT%"
 echo $iocFile='%IOCDIR%\ioc_registry.txt' > "%PSRUN%"
-echo $lines=Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'} >> "%PSRUN%"
+echo $lines=if(Test-Path $iocFile){Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'}} >> "%PSRUN%"
 echo $hits=@() >> "%PSRUN%"
 echo foreach($line in $lines){ >> "%PSRUN%"
 echo   $parts=$line.Split('^|'); $keyPath=$parts[0]; $valName=if($parts.Count -gt 1){$parts[1]}else{$null} >> "%PSRUN%"
@@ -3125,7 +3167,7 @@ echo     if($valName){$v=Get-ItemProperty $psPath -Name $valName -EA Stop; $hits
 echo     else{if(Test-Path $psPath){$hits+="$keyPath [EXISTS]"}} >> "%PSRUN%"
 echo   }catch{} >> "%PSRUN%"
 echo } >> "%PSRUN%"
-echo if($hits.Count -gt 0){'[WARNING] Suspicious registry IOCs found:'; $hits; New-Item "$env:TEMP\dz_iochit_18h.txt" -Force ^| Out-Null}else{'[OK] No suspicious registry IOC matches.'} >> "%PSRUN%"
+echo if(-not $lines){'[SKIPPED] ioc_registry.txt missing or empty -- registry IOC check NOT performed.'}elseif($hits.Count -gt 0){'[WARNING] Suspicious registry IOCs found:'; $hits; New-Item "$env:TEMP\dz_iochit_18h.txt" -Force ^| Out-Null}else{'[OK] No suspicious registry IOC matches.'} >> "%PSRUN%"
 del "%TEMP%\dz_iochit_18h.txt" 2>nul
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_iochit_18h.txt" (
@@ -3720,12 +3762,22 @@ if exist "%SUMCODE%" (
 set "SUM_RESULT=%SUM_RESULT: =%"
 if /i "%SUM_RESULT%"=="CRIT" if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
 if /i "%SUM_RESULT%"=="WARN" if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+:: CRIT token: separate critical findings from plain warnings so calling
+:: automation can triage on the exit code alone. 8 = audit complete,
+:: CRITICAL findings present (the dashboard's ACTION REQUIRED verdict).
+:: Outranks 2 and 4 -- the reboot-pending message stays in the report --
+:: but never the fatal/abort codes 1/3/5/7.
+if /i not "%SUM_RESULT%"=="CRIT" goto :skip_crit8
+if %EXIT_CODE% EQU 2 set "EXIT_CODE=8"
+if %EXIT_CODE% EQU 4 set "EXIT_CODE=8"
+:skip_crit8
 if exist "%SUMFILE%" del "%SUMFILE%" >nul 2>&1
 
 echo.
 echo ====================================================================
 if "%EXIT_CODE%"=="0" echo  %C_BOLD%%C_GREEN%RESULT: All checks passed.%C_RESET%
 if "%EXIT_CODE%"=="2" echo  %C_BOLD%%C_YELLOW%RESULT: Issues found. See SUMMARY at end of report.%C_RESET%
+if "%EXIT_CODE%"=="8" echo  %C_BOLD%%C_RED%RESULT: CRITICAL findings. Treat as incident response. See SUMMARY.%C_RESET%
 echo  Report : %REPORT%
 echo ====================================================================
 echo.
@@ -3738,18 +3790,20 @@ echo.
 
 echo ====================================================================>> "%REPORT%"
 (echo  EXIT CODE: %EXIT_CODE%)>> "%REPORT%"
-echo  0=Success  1=Error  2=Warning  3=UnsupportedOS  4=RebootPending  5=RanFromTEMP>> "%REPORT%"
+echo  0=Success  1=Error  2=Warning  3=UnsupportedOS  4=RebootPending  5=RanFromTEMP  7=VTIntegrityFail  8=CriticalFindings>> "%REPORT%"
 if "%EXIT_CODE%"=="0" echo  STATUS: Clean run - no fatal issues encountered.>> "%REPORT%"
 if "%EXIT_CODE%"=="1" echo  STATUS: Fatal error. Check console output above for details.>> "%REPORT%"
 if "%EXIT_CODE%"=="2" echo  STATUS: Audit complete with warnings. Review [WARNING] items in report.>> "%REPORT%"
 if "%EXIT_CODE%"=="3" echo  STATUS: Unsupported OS. Use -dev switch to override.>> "%REPORT%"
 if "%EXIT_CODE%"=="4" echo  STATUS: Reboot pending. Reboot and re-run the audit.>> "%REPORT%"
 if "%EXIT_CODE%"=="5" echo  STATUS: Script ran from TEMP directory. Move script and re-run.>> "%REPORT%"
+if "%EXIT_CODE%"=="8" echo  STATUS: Audit complete -- CRITICAL findings present. Review [CRITICAL] items NOW.>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
-:: Delete RunOnce key on clean exit (0=success, 2=warning both count as "completed")
+:: Delete RunOnce key on clean exit (0=success, 2=warning, 8=critical all count as "completed")
 if "%EXIT_CODE%"=="0" reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /f >nul 2>&1
 if "%EXIT_CODE%"=="2" reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /f >nul 2>&1
+if "%EXIT_CODE%"=="8" reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /f >nul 2>&1
 
 :: Clean up temp PS1 file
 if exist "%PSRUN%" del "%PSRUN%" >nul 2>&1
@@ -3764,6 +3818,8 @@ if "%EXIT_CODE%"=="2" echo  Exit code  : %C_YELLOW%%EXIT_CODE%%C_RESET%
 if "%EXIT_CODE%"=="3" echo  Exit code  : %C_YELLOW%%EXIT_CODE%%C_RESET%
 if "%EXIT_CODE%"=="4" echo  Exit code  : %C_YELLOW%%EXIT_CODE%%C_RESET%
 if "%EXIT_CODE%"=="5" echo  Exit code  : %C_RED%%EXIT_CODE%%C_RESET%
+if "%EXIT_CODE%"=="7" echo  Exit code  : %C_RED%%EXIT_CODE%%C_RESET%
+if "%EXIT_CODE%"=="8" echo  Exit code  : %C_RED%%EXIT_CODE%%C_RESET%
 echo  %C_DIM%0=Success  1=Error  2=Warning  3=UnsupportedOS  4=Reboot  5=TEMP%C_RESET%
 echo  Report     : %C_CYAN%%REPORT%%C_RESET%
 echo  HTML Report: %C_CYAN%%REPORT_HTML%%C_RESET%
