@@ -1,0 +1,15 @@
+name: lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  batch-comment-lint:
+    name: "Batch lint: no '::' inside ( ) blocks"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run lint_batch_comments.ps1
+        run: pwsh -NoProfile -File tools/lint_batch_comments.ps1
