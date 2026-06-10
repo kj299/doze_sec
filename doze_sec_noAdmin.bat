@@ -855,13 +855,13 @@ if %errorlevel% equ 0 (
     (echo  [CHANGED] Was: timeout=%PREV_TIMEOUT%  Now: 5)>> "%REPORT%"
     echo %C_GREEN%[INIT 11/14]%C_RESET% F8 boot menu re-enabled - 5 second timeout set.
 
-    :: Log the changes
+    rem Log the changes
     echo [CHANGED] bcdedit {bootmgr} displaybootmenu: was "%PREV_BOOTMENU%" -- set to "yes">> "%CHANGELOG%"
     echo [CHANGED] bcdedit {bootmgr} timeout: was "%PREV_TIMEOUT%" -- set to "5">> "%CHANGELOG%"
     echo.>> "%CHANGELOG%"
     set "SCRIPT_CHANGED=1"
 
-    :: Write undo commands
+    rem Write undo commands
     echo echo Restoring boot menu settings...>> "%UNDO_BAT%"
     if "%PREV_BOOTMENU%"=="absent" (
         echo bcdedit /deletevalue {bootmgr} displaybootmenu>> "%UNDO_BAT%"
@@ -3485,7 +3485,7 @@ if "%SCRIPT_CHANGED%"=="1" (
     echo  Run Undo script AS ADMINISTRATOR to reverse boot menu changes.
     echo ====================================================================
     echo.
-    :: Append changelog to report as well
+    rem Append changelog to report as well
     echo.>> "%REPORT%"
     echo ====================================================================>> "%REPORT%"
     echo  CHANGES MADE TO THIS SYSTEM BY THE AUDIT SCRIPT>> "%REPORT%"

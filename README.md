@@ -378,6 +378,20 @@ Running a PAT-bearing script on a compromised endpoint exposes the token. Prefer
 
 If those trade-offs are not acceptable, make the repo public or skip the update check entirely (the script works fine without it).
 
+## Contributing
+
+### Batch comment rule (enforced by lint)
+
+Never use `::` comments inside parenthesized blocks (`if (...)`, `for ... do (...)`, `else (...)`) — cmd.exe parses `::` as a label there, not a comment, and a `)` in the comment text closes the block prematurely (issues #35, #36, #39, #108). Use `rem` inside blocks; `::` is fine at top level.
+
+Run the lint before committing batch changes (built-in PowerShell, works on every Windows 10/11 build — no extra dependencies):
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\lint_batch_comments.ps1
+```
+
+CI runs the same check on every push and pull request. See `CLAUDE.md` for the full list of cmd.exe parsing traps this repo has hit.
+
 ## Roadmap
 
 All 12 items surfaced by the multi-agent audit have been resolved (see closed [`audit-deferred`](https://github.com/kj299/doze_sec/issues?q=is%3Aclosed+label%3Aaudit-deferred) issues). New work is tracked via the regular [Issues](https://github.com/kj299/doze_sec/issues) tab.
