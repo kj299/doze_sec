@@ -80,8 +80,10 @@ exit /b %DOZE_EXIT_CODE%
 ::               (Section 18j). Requires API key in %USERPROFILE%\.vt_token
 ::    -noVtSelf  Skip the automatic pre-flight binary integrity check
 ::               (which runs whenever ~/.vt_token exists and network is up)
-::    -ctiSkill <file>  Per-run override for the SENTINEL-X CTI skill yaml
-::               path used by -updateTTP. Beats DOZESEC_CTI_SKILL env var
+::    -ctiSkill <file>  Per-run override for the SENTINEL-X CTI skill file
+::               used by -updateTTP (threat-intel 1.2.0+: standalone\
+::               cyber-threat-intel-prompt.md; pre-1.2.0: the legacy
+::               cyber_threat_skill.yaml). Beats DOZESEC_CTI_SKILL env var
 ::               and auto-discovery.
 ::    -noConsoleLog  Skip console-output capture (default ON). Without this
 ::               switch, stdout+stderr are tee'd to
@@ -188,7 +190,7 @@ goto :parse_args
 shift
 if "%~1"=="" (
     echo  [ERROR] -ctiSkill requires a file path argument.
-    echo  Example: %~nx0 -updateTTP -ctiSkill C:\path\to\cyber_threat_skill.yaml
+    echo  Example: %~nx0 -updateTTP -ctiSkill C:\path\to\threat-intel\standalone\cyber-threat-intel-prompt.md
     exit /b 1
 )
 set "CTI_SKILL_SWITCH=%~1"
@@ -243,7 +245,7 @@ echo                 (quotes, ;, ^|, ^&, ^<, ^>, parens, braces, ^^) cause the
 echo                 row to be dropped.
 echo.
 echo    %C_GREEN%-ctiSkill%C_RESET% ^<file^>
-echo                 Per-run override for the SENTINEL-X CTI skill yaml location
+echo                 Per-run override for the SENTINEL-X CTI skill file location
 echo                 used by -updateTTP. Highest precedence: wins over the
 echo                 DOZESEC_CTI_SKILL env var and auto-discovery. Use this
 echo                 when your threat-intel\ clone lives somewhere the script
@@ -438,11 +440,17 @@ if %errorlevel% neq 0 (
     goto :skip_ttp_update
 )
 
-:: CTI skill yaml resolution. Resolution order (highest to lowest):
+:: CTI skill file resolution. Resolution order (highest to lowest):
 ::   1. -ctiSkill <path> switch (this run only; doesn't persist)
 ::   2. DOZESEC_CTI_SKILL env var (persists across runs via setx)
 ::   3. Auto-discovery across common layouts
 ::   4. Interactive prompt as last-resort fallback
+:: threat-intel 1.2.0 renamed/split the old cyber_threat_skill.yaml; the
+:: self-contained standalone\cyber-threat-intel-prompt.md is now the
+:: preferred file (it carries the full SKILL workflow plus the 1.5.0
+:: starter-first SIEM rules). Legacy yaml paths are kept as fallbacks for
+:: pre-1.2.0 clones. Do NOT point this at spec.yaml alone -- it omits the
+:: workflow and the SIEM starter rules.
 :: The discovered/supplied path is written back into DOZESEC_CTI_SKILL so
 :: anything downstream sees one canonical value. CTI_SKILL_SOURCE tracks
 :: where the path came from so the "found but missing" WARN can name the
@@ -460,6 +468,10 @@ if not defined CTI_SKILL_PATH if defined DOZESEC_CTI_SKILL (
 )
 if not defined CTI_SKILL_PATH (
     for %%P in (
+        "%~dp0..\threat-intel\standalone\cyber-threat-intel-prompt.md"
+        "%~dp0..\prompts\threat-intel\standalone\cyber-threat-intel-prompt.md"
+        "%~dp0..\skills\threat-intel\standalone\cyber-threat-intel-prompt.md"
+        "%~dp0threat-intel\standalone\cyber-threat-intel-prompt.md"
         "%~dp0..\threat-intel\cyber_threat_skill.yaml"
         "%~dp0..\prompts\threat-intel\cyber_threat_skill.yaml"
         "%~dp0..\skills\threat-intel\cyber_threat_skill.yaml"
@@ -477,16 +489,21 @@ if not defined CTI_SKILL_PATH (
 :: script dir so the visual list is short and scannable; the absolute root
 :: is printed once underneath in case the user needs the full path.
 if not defined CTI_SKILL_PATH (
-    echo  [WARN] CTI skill file 'cyber_threat_skill.yaml' was not found in any expected location:
-    echo           - ..\threat-intel\cyber_threat_skill.yaml
-    echo           - ..\prompts\threat-intel\cyber_threat_skill.yaml
-    echo           - ..\skills\threat-intel\cyber_threat_skill.yaml
-    echo           - .\threat-intel\cyber_threat_skill.yaml
+    echo  [WARN] No CTI skill file was found in any expected location:
+    echo           - ..\threat-intel\standalone\cyber-threat-intel-prompt.md   ^(threat-intel 1.2.0+^)
+    echo           - ..\prompts\threat-intel\standalone\cyber-threat-intel-prompt.md
+    echo           - ..\skills\threat-intel\standalone\cyber-threat-intel-prompt.md
+    echo           - .\threat-intel\standalone\cyber-threat-intel-prompt.md
+    echo           - the same four roots with the legacy cyber_threat_skill.yaml ^(pre-1.2.0^)
     echo           ^(relative to: %~dp0^)
+    echo.
+    echo  Tip: use the self-contained standalone\cyber-threat-intel-prompt.md.
+    echo       Do NOT point at spec.yaml alone -- it omits the SKILL workflow
+    echo       and the 1.5.0 starter-first SIEM rules.
     echo.
     echo  Set a path now ^(or press ENTER to skip the TTP update^):
     set "USER_CTI_PATH="
-    set /p "USER_CTI_PATH=  Path to cyber_threat_skill.yaml: "
+    set /p "USER_CTI_PATH=  Path to CTI skill/prompt file: "
     if not defined USER_CTI_PATH (
         echo  [INFO] No path provided. Skipping TTP update.
         goto :skip_ttp_update
@@ -497,7 +514,7 @@ if not defined CTI_SKILL_PATH (
 )
 
 if not exist "%CTI_SKILL_PATH%" (
-    echo  [WARN] CTI skill file 'cyber_threat_skill.yaml' not found at: %CTI_SKILL_PATH%
+    echo  [WARN] CTI skill file not found at: %CTI_SKILL_PATH%
     echo         ^(source: %CTI_SKILL_SOURCE%^)
     echo  Cannot generate TTP update. Skipping.
     goto :skip_ttp_update
@@ -529,7 +546,7 @@ echo  [*] Output: %TTP_OUTPUT%
 echo  [*] Mode: INCREMENTAL (merging with existing IOCs)
 echo.
 
-:: Build stdin payload: skill yaml + existing IOC list separated by clearly
+:: Build stdin payload: skill file + existing IOC list separated by clearly
 :: labelled sections. The earlier implementation passed both as `--file
 :: <path>` flags, but per `claude --help` and Anthropic auth docs, `--file`
 :: is for downloading server-side file RESOURCES by ID (file_abc:doc.txt
