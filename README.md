@@ -52,7 +52,7 @@ doze_sec.bat -help
 | `-importTTP <file>` | Admin only | Merge TTP rows from a pipe-delimited file (offline alternative to `-updateTTP`; no Claude CLI needed) |
 | `-vt` | Both | Section 18j+18l: query VirusTotal for SHA256 of priority files + remote IP reputation. Requires `~/.vt_token` |
 | `-noVtSelf` | Both | Skip the automatic pre-flight VT integrity check on script-critical binaries (default: runs whenever `~/.vt_token` exists and network is up) |
-| `-ctiSkill <file>` | Admin only | Per-run override for the SENTINEL-X CTI skill yaml path used by `-updateTTP`. Beats `DOZESEC_CTI_SKILL` env var and auto-discovery |
+| `-ctiSkill <file>` | Admin only | Per-run override for the SENTINEL-X CTI skill file used by `-updateTTP` (1.2.0+: `standalone\cyber-threat-intel-prompt.md`; pre-1.2.0: `cyber_threat_skill.yaml`). Beats `DOZESEC_CTI_SKILL` env var and auto-discovery |
 | `-noConsoleLog` | Both | Skip console-output capture (default ON). Without this switch, stdout+stderr are tee'd to `C:\SecurityAudit\AuditConsole_<TS>.log` so crashes leave a debuggable trace |
 | `-help` | Both | Show usage guide with section descriptions |
 
@@ -223,35 +223,36 @@ doze_sec.bat -updateTTP
 
 Requires:
 1. Claude Code CLI installed (`npm install -g @anthropic-ai/claude-code`) and authenticated via `claude /login` — no extra session/file tokens needed
-2. The [threat-intel](https://github.com/kj299/threat-intel) repo cloned somewhere the script can find `cyber_threat_skill.yaml`
+2. The [threat-intel](https://github.com/kj299/threat-intel) repo cloned somewhere the script can find the skill file: `standalone\cyber-threat-intel-prompt.md` (threat-intel 1.2.0+, preferred — self-contained with the full SKILL workflow and the 1.5.0 starter-first SIEM rules) or the legacy `cyber_threat_skill.yaml` (pre-1.2.0). Do **not** point the script at `spec.yaml` alone — it omits the workflow and SIEM rules.
 
-The skill yaml + existing IOC list are piped to `claude -p` via stdin (the documented headless context path); no `--file` flag is used.
+The skill file + existing IOC list are piped to `claude -p` via stdin (the documented headless context path); no `--file` flag is used.
 
 **Skill 1.5.0+ compatibility:** the skill's `delimited_batch_export` rows may carry two extra trailing fields (`Source`, `Confidence`) — the sanitizer accepts 8-field rows and trims them to the 6 fields the pipeline uses. Skill 1.5.0 also mandates concrete SIEM starter queries (at least one Splunk SPL and one Sentinel KQL, built on normalized schemas) in every response; the prompt channels them below a `==== SIEM QUERIES ====` marker and doze_sec saves that section verbatim to `<output dir>\ThreatLists\siem_queries_<yyyyMMdd>.txt` as an analyst artifact. The saved queries are never parsed or executed by the audit — SPL/KQL pipes and `<PLACEHOLDERS>` would be rejected by the row sanitizer in any case, so they cannot reach the IOC files or generated detection blocks.
 
 ### Skill path resolution
 
-When `-updateTTP` runs, the script resolves `cyber_threat_skill.yaml` in this order (highest precedence first):
+When `-updateTTP` runs, the script resolves the CTI skill file in this order (highest precedence first):
 
 1. `-ctiSkill <path>` switch (per-run override, doesn't persist)
 2. `DOZESEC_CTI_SKILL` env var (persists across runs via `setx`)
-3. Auto-discovery across these layouts, relative to `doze_sec\` (first hit wins):
-   - `..\threat-intel\cyber_threat_skill.yaml` (sibling)
-   - `..\prompts\threat-intel\cyber_threat_skill.yaml`
-   - `..\skills\threat-intel\cyber_threat_skill.yaml`
-   - `.\threat-intel\cyber_threat_skill.yaml` (vendored)
+3. Auto-discovery across these layouts, relative to `doze_sec\` (first hit wins; the 1.2.0+ standalone prompt is preferred over the legacy yaml):
+   - `..\threat-intel\standalone\cyber-threat-intel-prompt.md` (sibling)
+   - `..\prompts\threat-intel\standalone\cyber-threat-intel-prompt.md`
+   - `..\skills\threat-intel\standalone\cyber-threat-intel-prompt.md`
+   - `.\threat-intel\standalone\cyber-threat-intel-prompt.md` (vendored)
+   - the same four roots with the legacy `cyber_threat_skill.yaml` (pre-1.2.0 clones)
 4. Interactive prompt — if all of the above miss, the script asks for a path on stdin; press ENTER to skip the update.
 
 **Per-run override (won't touch anything else):**
 
 ```powershell
-.\doze_sec.bat -updateTTP -ctiSkill 'C:\path\to\cyber_threat_skill.yaml'
+.\doze_sec.bat -updateTTP -ctiSkill 'C:\path\to\threat-intel\standalone\cyber-threat-intel-prompt.md'
 ```
 
 **Persist for future shells:**
 
 ```powershell
-setx DOZESEC_CTI_SKILL 'C:\path\to\cyber_threat_skill.yaml'
+setx DOZESEC_CTI_SKILL 'C:\path\to\threat-intel\standalone\cyber-threat-intel-prompt.md'
 ```
 
 On success the script echoes `[OK] CTI skill: <resolved-path> (source: <where it came from>)` so you can see which knob fired. On failure it names the file, lists every path it tried, and tells you which switch/env var to use to fix it.

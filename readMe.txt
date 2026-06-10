@@ -57,8 +57,10 @@ COMMAND-LINE SWITCHES
                 ThreatLists/ -- offline alternative to -updateTTP, no
                 Claude CLI needed. (doze_sec.bat only)
 
-  -ctiSkill <file>  Per-run override for the CTI skill yaml path used by
-                -updateTTP. (doze_sec.bat only)
+  -ctiSkill <file>  Per-run override for the CTI skill file used by
+                -updateTTP. threat-intel 1.2.0+ uses
+                standalone\cyber-threat-intel-prompt.md; older clones
+                use the legacy cyber_threat_skill.yaml. (doze_sec.bat only)
 
   -vt           Query VirusTotal for SHA256 hashes of priority files
                 (Section 18j) and remote IP reputation (Section 18l).
