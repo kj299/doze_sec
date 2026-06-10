@@ -92,11 +92,11 @@ Temp path check, admin detection, OS version, OS compatibility, Safe Mode, log d
 | 6 | Scheduled tasks | No | Malicious tasks, action-path detection (PS CSV, Task-To-Run column only) |
 | 7 | Windows services | Partial | Authenticode signature gating per service binary (vendor allowlist + revocation + expiry + bad-path); unusual accounts |
 | 8 | Firewall configuration | Yes | Disabled profiles, risky rules |
-| 9 | Defender and AV status | Yes | Disabled Defender, exclusions, tamper |
+| 9 | Defender and AV status | Yes | Disabled Defender, exclusions, tamper; ASR rules audit (per-rule mode + key-rule warnings) |
 | 10 | SMB, RDP, remote access | Partial | SMBv1, NLA bypass, open RDP |
 | 11 | PowerShell security | Partial | Unrestricted execution, logging gaps |
 | 12 | Credential and LSASS protection | No | PPL disabled, WDigest, Credential Guard |
-| 13 | System hardening | Partial | UAC, BitLocker, SecureBoot, test signing |
+| 13 | System hardening | Partial | UAC, BitLocker, SecureBoot, test signing; Office macro policy (VBAWarnings, MOTW macro block), Mark-of-the-Web preservation, SmartScreen |
 | 14 | Suspicious files | No | ADS streams, double extensions, recent EXE/DLL/PS/VBS in user `%TEMP%` and `C:\Windows\Temp` (admin) |
 | 15 | Installed software and drivers | No | Unsigned drivers, vulnerable software |
 | 16 | Event log anomalies | Partial | Log clearing (1102), brute force (4625), lateral (4624) |

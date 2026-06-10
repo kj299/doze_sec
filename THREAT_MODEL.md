@@ -27,11 +27,11 @@ the primary audit sections.
 
 | Tactic | Coverage | Where |
 |---|---|---|
-| Initial Access | Partial — artifacts, not prevention | S1 (patch level), S14 (HTML smuggling, Downloads), S18 AiTM token cache |
+| Initial Access | Partial — artifacts, not prevention | S1 (patch level), S13 (Office macro policy, MOTW, SmartScreen state), S14 (HTML smuggling, Downloads), S18 AiTM token cache |
 | Execution | Yes | S4 (processes, LOLBins), S11 (PowerShell), S16 (4688), S18g |
 | Persistence | Strong | S5 (Run/Winlogon/IFEO/AppInit/Active Setup), S6 (tasks), S7 (services), S17 (WMI subscriptions), S18 (COM hijack, registry IOCs) |
 | Privilege Escalation | Yes | S13 (UAC, accessibility binaries T1546.008), S16 (4672/4732) |
-| Defense Evasion | Strong | S9 (Defender tamper/exclusions), S18 (AMSI bypass, BYOVD drivers), S16 (1102 log clear) |
+| Defense Evasion | Strong | S9 (Defender tamper/exclusions, ASR rule state), S18 (AMSI bypass, BYOVD drivers), S16 (1102 log clear) |
 | Credential Access | Strong | S12 (LSASS PPL, WDigest, NTLM, Credential Guard), S16 (4769 Kerberoast, 4776), S18 (browser/cloud cred stores) |
 | Discovery | Yes | S17 (4688 discovery commands: nltest, dsquery, ntdsutil) |
 | Lateral Movement | Yes | S10 (SMBv1, RDP/NLA, WinRM, sshd), S17/S18 (PsExec pipes, portproxy) |
@@ -55,7 +55,7 @@ endpoint footprint to audit; they are out of scope by nature.
 | LOLBin abuse | Strong | 52 command-line patterns + Event 4688 download-cradle sweep |
 | BYOVD / EDR killers | Strong | Known vulnerable drivers by name and SHA256 |
 | Supply chain | Partial | Installed-software inventory, driver/service Authenticode gating, rogue root certs, VT hash reputation — cannot vet vendor build pipelines |
-| Phishing / social engineering | Partial | Detects artifacts (HTML smuggling, AiTM token-cache touches, staged payloads); cannot stop a user clicking |
+| Phishing / social engineering | Partial | Detects artifacts (HTML smuggling, AiTM token-cache touches, staged payloads) and audits the macro/MOTW/SmartScreen/ASR settings that blunt malicious attachments; cannot stop a user clicking |
 | Cloud / identity token theft | Partial | Azure/AWS/GCP/kubectl credential-file presence and recency; tenant-side (Entra/M365) auditing is out of scope |
 | Network MitM / rogue infra | Limited | hosts file, ARP table, portproxy, DNS cache; no traffic capture, no router/SOHO visibility |
 | Rootkits / firmware | Limited | Secure Boot state, driver signing, known BYOVD names/hashes; no UEFI/firmware scanning — a kernel rootkit can defeat user-mode auditing |
@@ -111,8 +111,12 @@ and 13 verify exactly that.
 
 Found during the v7.1 coverage review; tracked for future work:
 
-- Attack Surface Reduction (ASR) rule state and Office macro policy
-  (`VBAWarnings`, Mark-of-the-Web handling) are not explicitly audited.
+- ~~Attack Surface Reduction (ASR) rule state and Office macro policy
+  (`VBAWarnings`, Mark-of-the-Web handling) are not explicitly audited.~~
+  **Closed:** Section 9 now audits all 19 documented ASR rules by name and
+  mode and warns when key rules are not in Block mode; Section 13 audits
+  per-app `VBAWarnings` and `blockcontentexecutionfrominternet`,
+  `SaveZoneInformation` (MOTW preservation), and SmartScreen state.
 - Exit code does not distinguish `[CRITICAL]` from `[WARNING]` (both
   roll up to 2); calling automation cannot triage on exit code alone.
 - Browser extensions are not inventoried (only credential-store access

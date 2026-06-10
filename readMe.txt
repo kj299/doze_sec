@@ -127,11 +127,12 @@ AUDIT SECTIONS (18 total)
     6.  Scheduled tasks
     7.  Windows services audit (partial without admin)
     8.  Firewall configuration *
-    9.  Windows Defender and AV status *
+    9.  Windows Defender and AV status, ASR rules audit *
     10. SMB, RDP, and remote access (partial without admin)
     11. PowerShell security (partial without admin)
     12. Credential and LSASS protection
-    13. System hardening (UAC, BitLocker*, SecureBoot*, drivers*)
+    13. System hardening (UAC, BitLocker*, SecureBoot*, drivers*,
+        Office macro policy, Mark-of-the-Web, SmartScreen)
     14. Suspicious files and file system anomalies
     15. Installed software and driver audit
     16. Windows Event Log anomalies (partial without admin)
