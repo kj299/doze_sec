@@ -48,7 +48,10 @@ COMMAND-LINE SWITCHES
 
   -updateTTP    Refresh ThreatLists/ IOC files before the audit via the
                 SENTINEL-X CTI skill. (doze_sec.bat only; requires the
-                Claude Code CLI)
+                Claude Code CLI). With skill 1.5.0+, SIEM starter queries
+                (SPL/KQL) from the skill are saved verbatim to
+                ThreatLists\siem_queries_[date].txt for analysts -- they
+                are never executed by the audit.
 
   -importTTP <file>  Merge TTP rows from a pipe-delimited file into
                 ThreatLists/ -- offline alternative to -updateTTP, no

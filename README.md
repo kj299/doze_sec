@@ -227,6 +227,8 @@ Requires:
 
 The skill yaml + existing IOC list are piped to `claude -p` via stdin (the documented headless context path); no `--file` flag is used.
 
+**Skill 1.5.0+ compatibility:** the skill's `delimited_batch_export` rows may carry two extra trailing fields (`Source`, `Confidence`) — the sanitizer accepts 8-field rows and trims them to the 6 fields the pipeline uses. Skill 1.5.0 also mandates concrete SIEM starter queries (at least one Splunk SPL and one Sentinel KQL, built on normalized schemas) in every response; the prompt channels them below a `==== SIEM QUERIES ====` marker and doze_sec saves that section verbatim to `<output dir>\ThreatLists\siem_queries_<yyyyMMdd>.txt` as an analyst artifact. The saved queries are never parsed or executed by the audit — SPL/KQL pipes and `<PLACEHOLDERS>` would be rejected by the row sanitizer in any case, so they cannot reach the IOC files or generated detection blocks.
+
 ### Skill path resolution
 
 When `-updateTTP` runs, the script resolves `cyber_threat_skill.yaml` in this order (highest precedence first):
