@@ -149,7 +149,7 @@ Lines starting with # are comments.
   ioc_domains.txt          C2 domain patterns and suspicious TLDs
   ioc_hashes.txt           SHA256 hashes of known malware (BYOVD, ransomware)
   ioc_lolbins.txt          LOLBin command-line abuse patterns
-  ttp_manifest.txt         MITRE ATT&CK v14+ technique map (48 techniques)
+  ttp_manifest.txt         MITRE ATT&CK v14+ technique map (77 techniques)
 
 
 THREAT COVERAGE
