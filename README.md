@@ -201,7 +201,7 @@ C:\SecurityAudit\
 
 The HTML report features a navigation sidebar, color-coded findings (green/yellow/red), collapsible detail sections, and a dashboard with CRITICAL/WARNING/PASSED/INFO counts.
 
-**Non-admin mode:** Same structure under `%USERPROFILE%\SecurityAudit\`
+**Non-admin mode:** Same structure under `%USERPROFILE%\SecurityAudit\` — except `AuditConsole_<TS>.log`, which is always written to `C:\SecurityAudit\` (the console-capture wrapper runs before the output directory is selected; standard users can create that directory on a default Windows ACL)
 
 ## Requirements
 

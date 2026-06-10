@@ -46,7 +46,28 @@ COMMAND-LINE SWITCHES
 
   -nosrp        Skip System Restore Point creation. Saves 30-60 seconds.
 
-  -updateTTP    Refresh ThreatLists/ IOC files before the audit.
+  -updateTTP    Refresh ThreatLists/ IOC files before the audit via the
+                SENTINEL-X CTI skill. (doze_sec.bat only; requires the
+                Claude Code CLI)
+
+  -importTTP <file>  Merge TTP rows from a pipe-delimited file into
+                ThreatLists/ -- offline alternative to -updateTTP, no
+                Claude CLI needed. (doze_sec.bat only)
+
+  -ctiSkill <file>  Per-run override for the CTI skill yaml path used by
+                -updateTTP. (doze_sec.bat only)
+
+  -vt           Query VirusTotal for SHA256 hashes of priority files
+                (Section 18j) and remote IP reputation (Section 18l).
+                Requires an API key in %USERPROFILE%\.vt_token.
+
+  -noVtSelf     Skip the automatic pre-flight VT integrity check on
+                script-critical binaries (default: runs whenever
+                ~/.vt_token exists and the network is up).
+
+  -noConsoleLog Skip console-output capture. By default stdout+stderr
+                are tee'd to C:\SecurityAudit\AuditConsole_[timestamp].log
+                so crashes leave a debuggable trace.
 
   -help         Show full usage guide with section descriptions.
   -h, /?, --help  (aliases)
@@ -61,6 +82,7 @@ EXIT CODES
   4   Reboot pending - reboot the system, then re-run
   5   Ran from TEMP directory - move the script and re-run
   6   Partial audit - non-admin mode, some checks deferred
+  7   Pre-flight VT integrity check failed - script-critical binary flagged
 
 
 OUTPUT FILES
@@ -77,7 +99,8 @@ OUTPUT FILES
   Non-admin mode:
     %USERPROFILE%\SecurityAudit\SecurityReport_[timestamp].txt
     %USERPROFILE%\SecurityAudit\SecurityReport_[timestamp].html
-    (same subdirectory structure)
+    (same subdirectory structure; AuditConsole_[timestamp].log is always
+    written to C:\SecurityAudit\ regardless of mode)
 
   The HTML report opens automatically after the audit completes. It features
   a dark-theme dashboard with CRITICAL/WARNING/PASSED/INFO counts, a
@@ -123,7 +146,7 @@ SECTION 18: CTI-DRIVEN IOC SWEEP
 Section 18 reads structured IOC files from ThreatLists/ and matches them
 against the live system. It works fully without admin.
 
-  Sub-checks:
+  Sub-checks (file-based, run on every audit):
     18a  Process name IOC match
     18b  Named pipe IOC match (C2 frameworks)
     18c  Service IOC match
@@ -133,6 +156,16 @@ against the live system. It works fully without admin.
     18g  LOLBin command-line pattern match
     18h  Suspicious registry key check
     18i  MITRE ATT&CK TTP coverage summary
+    18k  Local SHA256 hash IOC match (offline, always-on)
+
+  Sub-checks (VirusTotal, opt-in via -vt + API key):
+    18j  VirusTotal file hash reputation (priority files)
+    18l  VirusTotal IP reputation (active remote connections)
+
+  Plus inline CTI checks: DLL search-order hijacking, BYOVD vulnerable
+  drivers, AMSI bypass artifacts, ransomware precursors and file
+  extensions, COM object hijacking, browser/cloud credential access,
+  AiTM token cache artifacts, OpenSSH lateral-movement surface, and more.
 
 
 THREATLISTS/ IOC FILES
@@ -151,6 +184,9 @@ Lines starting with # are comments.
   ioc_lolbins.txt          LOLBin command-line abuse patterns
   ttp_manifest.txt         MITRE ATT&CK v14+ technique map (77 techniques)
 
+  Entry counts per file are listed in README.md (ThreatLists/ section),
+  along with the command to re-derive them from the live files.
+
 
 THREAT COVERAGE
 --------------------------------------------------------------------------------
@@ -165,10 +201,11 @@ THREAT COVERAGE
 
   Credential Theft:
     BYOVD drivers, Mimikatz variants, Kerberoasting, NTLM relay,
-    LSASS dumping, Pass-the-Hash
+    LSASS dumping, Pass-the-Hash, DPAPI abuse
 
   C2 Frameworks:
-    Cobalt Strike, Sliver, Brute Ratel, Havoc, Mythic, Nighthawk
+    Cobalt Strike, Sliver, Brute Ratel, Havoc, Mythic, Nighthawk,
+    PoshC2, Merlin
 
   Supply Chain:
     Trojanized packages, compromised update mechanisms
@@ -186,6 +223,10 @@ REQUIREMENTS
   - Administrator privileges for full audit (optional with -noAdmin)
   - smartmontools (optional, for detailed SMART data):
     https://www.smartmontools.org/wiki/Download
+  - Claude Code CLI (optional, for -updateTTP):
+    npm install -g @anthropic-ai/claude-code
+  - VirusTotal API key (optional, for -vt and the pre-flight integrity
+    check): https://www.virustotal.com/gui/my-apikey
 
 
 CONSOLE COLOR SCHEME
@@ -222,13 +263,45 @@ KNOWN LIMITATIONS
   - System Restore Point creation fails in Safe Mode on Windows 10.
     This is a known Microsoft bug with no workaround.
 
+  - VirusTotal checks (-vt) are opt-in, need an API key, and are
+    rate-limited on the free tier (4 lookups/min) -- a full -vt run adds
+    several minutes. The pre-flight integrity check aborts the audit
+    with exit code 7 if a script-critical binary is flagged malicious.
+
+  - Threat indicator lists age. INIT 10/14 warns when upstream lists are
+    more than 60 days old; refresh with -updateTTP (Claude CLI) or
+    -importTTP (offline file).
+
+  - The audit is point-in-time detection, not real-time protection.
+    See THREAT_MODEL.md for the full coverage matrix, non-goals, and
+    inherent limitations.
+
+
+DOCUMENTATION
+--------------------------------------------------------------------------------
+  README.md         Canonical documentation: switches, output files,
+                    IOC entry counts, CTI skill integration, private-repo
+                    tokens, VirusTotal setup, contributing + lint rule.
+  THREAT_MODEL.md   What the tool protects against and what it does not:
+                    coverage by MITRE ATT&CK tactic and threat class,
+                    non-goals, inherent limitations, known gaps.
+  CLAUDE.md         Developer notes: cmd.exe parsing traps, the rem-only-
+                    inside-parens rule (enforced by CI lint), conventions.
+
+  Contributors: run the batch lint before committing .bat changes:
+    powershell -NoProfile -ExecutionPolicy Bypass -File tools\lint_batch_comments.ps1
+
 
 PROJECT STRUCTURE
 --------------------------------------------------------------------------------
   doze_sec/
     doze_sec.bat              Main audit script (requires admin)
     doze_sec_noAdmin.bat      Adaptive audit (admin or non-admin)
-    readMe.txt                This file
+    readMe.txt                This file (quick plain-text guide)
+    README.md                 Canonical documentation
+    THREAT_MODEL.md           Coverage matrices, non-goals, limitations
+    CLAUDE.md                 Developer / contributor notes
+    version.txt               Current version (7.1)
     ThreatLists/
       ioc_processes.txt       Process name IOCs
       ioc_named_pipes.txt     Named pipe IOCs
@@ -240,6 +313,20 @@ PROJECT STRUCTURE
       ioc_hashes.txt          SHA256 hash IOCs
       ioc_lolbins.txt         LOLBin pattern IOCs
       ttp_manifest.txt        MITRE ATT&CK TTP manifest
+    tools/
+      threat_list_sync.ps1    INIT 10/14 incremental IOC list sync
+      ttp_merge.ps1           -updateTTP / -importTTP merge engine
+      vt_check.ps1            Section 18j VirusTotal hash reputation
+      vt_ip_check.ps1         Section 18l VirusTotal IP reputation
+      vt_self_check.ps1       Pre-flight binary integrity check
+      ioc_hash_check.ps1      Section 18k offline hash IOC match
+      service_signature_check.ps1  Section 7 Authenticode gating
+      scheduled_tasks_full.ps1     Section 6 full task inventory
+      report_format.ps1 / top_findings.ps1 / select_lines.ps1
+                              Report formatting helpers
+      lint_batch_comments.ps1 Batch comment lint (run by CI)
+    .github/workflows/
+      lint.yml                CI: batch comment lint on every push/PR
 
 
 LICENSE
