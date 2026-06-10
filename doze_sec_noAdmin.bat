@@ -63,6 +63,7 @@ exit /b %DOZE_EXIT_CODE%
 ::    4  Exit pending reboot (reboot then re-run)
 ::    5  Script is running from the TEMP directory (not allowed)
 ::    6  Partial audit (non-admin mode, some checks deferred)
+::    7  Pre-flight VT integrity check failed (script-critical binary flagged)
 ::
 ::  OUTPUT:  C:\SecurityAudit\SecurityReport_[timestamp].txt       (admin)
 ::           %USERPROFILE%\SecurityAudit\SecurityReport_[...].txt  (noAdmin)
@@ -305,6 +306,7 @@ echo    3  Unsupported OS (use -dev to override)
 echo    4  Reboot pending (reboot then re-run)
 echo    5  Script ran from TEMP directory (move and re-run)
 echo    6  Partial audit (non-admin mode, some checks deferred)
+echo    7  Pre-flight VT integrity check failed (script-critical binary)
 echo.
 echo  %C_BOLD%OUTPUT:%C_RESET%
 echo    Admin mode:    C:\SecurityAudit\SecurityReport_[timestamp].txt
