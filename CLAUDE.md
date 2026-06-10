@@ -1,6 +1,8 @@
 # doze_sec — repo guidance
 
-Windows 10/11 security audit tool. Main deliverables are two large cmd.exe
+Windows 10/11 security audit tool. Scope, coverage matrices, non-goals, and
+known detection gaps are defined in THREAT_MODEL.md — keep it (and the
+README coverage counts) in sync when adding or removing detections. Main deliverables are two large cmd.exe
 batch scripts (`doze_sec.bat`, `doze_sec_noAdmin.bat`) plus PowerShell helpers
 in `tools/`. Target platform: every Windows 10 and Windows 11 build — assume
 only built-in Windows PowerShell 5.1 and cmd.exe. Do not use `pwsh`-only

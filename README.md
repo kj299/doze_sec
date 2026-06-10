@@ -2,7 +2,9 @@
 
 Windows 10/11 security forensic audit tool with SENTINEL-X CTI integration.
 
-**Version 7.1** | 18-section audit | 48 MITRE ATT&CK techniques | 10 IOC categories
+**Version 7.1** | 18-section audit | 77 MITRE ATT&CK techniques | 10 IOC categories
+
+Detection-and-response aid, not real-time protection — see [THREAT_MODEL.md](THREAT_MODEL.md) for exactly what is and is not covered.
 
 ## What It Does
 
@@ -143,16 +145,18 @@ Plain-text IOC files. One entry per line. `#` = comment.
 
 | File | Entries | Format | Content |
 |------|:-------:|--------|---------|
-| `ioc_processes.txt` | 54 | Process name | Ransomware, C2, cred tools, recon (FP-prone RMM/admin-tool entries removed) |
+| `ioc_processes.txt` | 77 | Process name | Ransomware, C2, cred tools, recon (FP-prone RMM/admin-tool entries removed) |
 | `ioc_named_pipes.txt` | 32 | Pipe name | Cobalt Strike, Sliver, Havoc, Mythic, PsExec |
 | `ioc_services.txt` | 24 | Service name | C2 implants, BYOVD, ransomware (legitimate RMM/HWMonitor entries removed) |
-| `ioc_registry.txt` | 26 | `HIVE\Path\|Value` | Persistence, COM hijack, defense evasion |
-| `ioc_file_paths.txt` | 44 | File path | Staging dirs, webshells, driver drops |
+| `ioc_registry.txt` | 37 | `HIVE\Path\|Value` | Persistence, COM hijack, defense evasion |
+| `ioc_file_paths.txt` | 46 | File path | Staging dirs, webshells, driver drops |
 | `ioc_scheduled_tasks.txt` | 19 | Task name/path | Fake updates, APT persistence, ransomware pre-staging |
 | `ioc_domains.txt` | 21 | Domain fragment | C2 infra, tunneling (bare TLDs and legit DoH endpoints removed) |
 | `ioc_hashes.txt` | 12 | `SHA256\|Family\|Source` | BYOVD drivers, CS loaders, ransomware |
 | `ioc_lolbins.txt` | 52 | Command fragment | certutil, mshta, regsvr32, encoded PS (overbroad PS aliases removed) |
-| `ttp_manifest.txt` | 48 | `TechID\|Tactic\|Name\|Actors\|Detection` | MITRE ATT&CK v14+ mapping |
+| `ttp_manifest.txt` | 77 | `TechID\|Tactic\|Name\|Actors\|Detection` | MITRE ATT&CK v14+ mapping |
+
+Counts are for the shipped baseline (`-updateTTP` grows the runtime copies). Re-derive anytime: `grep -cv "^#" ThreatLists/<file>` (or PowerShell `(Get-Content <file> | Where-Object {$_ -notmatch '^\s*(#|$)'}).Count`).
 
 ## Threat Coverage
 
@@ -165,6 +169,8 @@ Plain-text IOC files. One entry per line. `#` = comment.
 **C2 Frameworks:** Cobalt Strike, Sliver, Brute Ratel, Havoc, Mythic, Nighthawk, PoshC2, Merlin
 
 **LOLBins:** certutil, mshta, regsvr32, rundll32, msiexec, bitsadmin, cmstp, installutil, wmic, forfiles, cscript
+
+Full tactic-by-tactic and threat-class coverage matrices — including explicit non-goals, inherent limitations, and known gaps — are in [THREAT_MODEL.md](THREAT_MODEL.md).
 
 ## Exit Codes
 
