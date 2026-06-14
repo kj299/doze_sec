@@ -137,8 +137,17 @@ Found during the v7.1 coverage review; tracked for future work:
   on failure (no longer wmic-dependent — removed in Win11 24H2+, the
   same false-clean class); Section 9 Defender exclusion checks report
   `[SKIPPED]` when `Get-MpPreference` fails (Defender off / third-party
-  AV) instead of "no exclusions". Still open (lower-severity
-  `Get-* -EA SilentlyContinue` false-cleans): Section 3 proxy, Section 5
-  Run-key/IFEO enumeration, Section 7 unquoted-service scan, Section 14
-  ADS scan, and Section 17 RMM/Cobalt-Strike-pipe/WMI-subscription
-  checks — each prints `[OK]` if its enumeration throws.
+  AV) instead of "no exclusions". A follow-up extended `[SKIPPED]` to the
+  genuine false-cleans in the rest of the audit body: Section 5 IFEO
+  debugger-hijack scan, Section 7 unquoted-service-path scan, Section 14
+  Temp ADS scan, the Cobalt-Strike and next-gen-C2 named-pipe checks
+  (catch now emits `[SKIPPED]` so it counts in the COVERAGE NOTE), and
+  the three Section 17 WMI permanent-subscription checks (which also
+  fail closed if `Get-WMIObject` is unavailable, e.g. under PowerShell
+  7). Checks intentionally left as plain `[OK]` because an empty result
+  is genuinely correct, not a masked failure: Section 3 proxy (Internet
+  Settings keys are always present), the Section 5 HKEY_USERS Run-key
+  walk (informational, per-subkey `Test-Path` guarded), and the Section
+  17 RMM running/installed checks (`Get-Process`/Uninstall-key empties
+  mean "not present"). Probes elsewhere may still degrade silently, but
+  the high-value verdict checks across Sections 4-18 now fail visibly.
