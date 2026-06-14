@@ -1734,9 +1734,13 @@ echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
 echo --- All Processes: PID, PPID, Name, Path --->> "%REPORT%"
-echo  Command: powershell -Command "Get-Process">> "%REPORT%"
+echo  Command: powershell -Command "Get-CimInstance Win32_Process (single bulk query)">> "%REPORT%"
 echo  [INFO] Complete process tree for forensic analysis.>> "%REPORT%"
-echo Get-Process ^| Select-Object Id,@{N='PPID';E={(Get-CimInstance -ClassName Win32_Process -Filter ('ProcessId='+$_.Id) -EA SilentlyContinue).ParentProcessId}},Name,Path ^| Sort-Object Name ^| Format-Table -AutoSize > "%PSRUN%"
+rem One bulk Win32_Process query carries ProcessId/ParentProcessId/Name/Path.
+rem The previous version called Get-CimInstance once PER process to resolve the
+rem parent PID (N+1 WMI round-trips) -- on a host with hundreds of processes
+rem that took minutes and looked like a hang. (perf fix)
+echo Get-CimInstance Win32_Process -EA SilentlyContinue ^| Select-Object @{N='Id';E={$_.ProcessId}},@{N='PPID';E={$_.ParentProcessId}},Name,@{N='Path';E={$_.ExecutablePath}} ^| Sort-Object Name ^| Format-Table -AutoSize > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
