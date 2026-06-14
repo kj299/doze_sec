@@ -893,18 +893,26 @@ echo ====================================================================>> "%RE
 echo.>> "%REPORT%"
 echo --- [INIT 3/14] Windows and IE Version Detection --->> "%REPORT%"
 
-for /f "tokens=2 delims==" %%a in ('wmic os get BuildNumber /value 2^>nul') do (
-    if not "%%a"=="" set "OS_BUILD=%%a"
+:: Primary: PowerShell Get-CimInstance -- works on all Win10/11 including
+:: 24H2+, where wmic is removed. One call emits Build|Version|ProductType.
+echo $o=Get-CimInstance Win32_OperatingSystem -EA SilentlyContinue; if($o){('{0}^|{1}^|{2}' -f $o.BuildNumber,$o.Version,$o.ProductType)} > "%PSRUN%"
+for /f "usebackq tokens=1,2,3 delims=|" %%a in (`%PWSH% -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" 2^>nul`) do (
+    set "OS_BUILD=%%a"
+    set "OS_VER=%%b"
+    set "OS_PTYPE=%%c"
 )
-for /f "tokens=2 delims==" %%a in ('wmic os get Version /value 2^>nul') do (
-    if not "%%a"=="" set "OS_VER=%%a"
-)
-for /f "tokens=2 delims==" %%a in ('wmic os get ProductType /value 2^>nul') do (
-    if not "%%a"=="" set "OS_PTYPE=%%a"
-)
+:: Fallback: wmic, for older hosts where CIM is somehow unavailable. On 24H2+
+:: this is a harmless no-op (wmic absent -> loop body never runs).
+if not defined OS_BUILD for /f "tokens=2 delims==" %%a in ('wmic os get BuildNumber /value 2^>nul') do if not "%%a"=="" set "OS_BUILD=%%a"
+if not defined OS_VER for /f "tokens=2 delims==" %%a in ('wmic os get Version /value 2^>nul') do if not "%%a"=="" set "OS_VER=%%a"
+if not defined OS_PTYPE for /f "tokens=2 delims==" %%a in ('wmic os get ProductType /value 2^>nul') do if not "%%a"=="" set "OS_PTYPE=%%a"
 :: Strip trailing whitespace / carriage returns
 set "OS_BUILD=%OS_BUILD: =%"
 set "OS_PTYPE=%OS_PTYPE: =%"
+:: If BOTH CIM and wmic failed, OS_BUILD is empty and the `if %OS_BUILD% GEQ ...`
+:: ladder below is a cmd syntax error. Default to 0 so WIN_GEN stays 'unknown'
+:: and INIT 4 blocks as unsupported (fail safe, not fail open).
+if not defined OS_BUILD set "OS_BUILD=0"
 
 :: IE version - try svcVersion first, then Version key
 for /f "tokens=3" %%a in ('reg query "HKLM\SOFTWARE\Microsoft\Internet Explorer" /v svcVersion 2^>nul') do set "IE_VER=%%a"
@@ -970,8 +978,13 @@ echo.>> "%REPORT%"
 :: ====================================================================
 echo %C_GREEN%[INIT 5/14]%C_RESET% Detecting boot mode...
 echo --- [INIT 5/14] Safe Mode Detection --->> "%REPORT%"
-echo  Command: wmic computersystem get BootupState /value ^| findstr /i "safe">> "%REPORT%"
-wmic computersystem get BootupState /value 2>nul | findstr /i "safe" >nul 2>&1
+echo  Command: powershell "(Get-CimInstance Win32_ComputerSystem^).BootupState"  [wmic fallback]>> "%REPORT%"
+:: Primary: CIM (works on 24H2+ where wmic is gone); wmic fallback for older hosts.
+set "BOOTSTATE="
+echo (Get-CimInstance Win32_ComputerSystem -EA SilentlyContinue).BootupState > "%PSRUN%"
+for /f "usebackq delims=" %%a in (`%PWSH% -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" 2^>nul`) do set "BOOTSTATE=%%a"
+if not defined BOOTSTATE for /f "tokens=2 delims==" %%a in ('wmic computersystem get BootupState /value 2^>nul') do set "BOOTSTATE=%%a"
+echo %BOOTSTATE%| findstr /i "safe" >nul 2>&1
 if %errorlevel% equ 0 (
     set "SAFE_MODE=1"
     echo  [INFO] Running in Safe Mode.>> "%REPORT%"
@@ -2929,15 +2942,21 @@ echo $r = @(Get-ChildItem Cert:\LocalMachine\Root ^| Where-Object {$_.NotBefore 
 
 echo.>> "%REPORT%"
 echo --- [VOLT TYPHOON] VPN Client Processes --->> "%REPORT%"
-echo  Command: wmic process get Name,ProcessId,ExecutablePath>> "%REPORT%"
-wmic process get Name,ProcessId,ExecutablePath > "%TEMP%\dz_pipe.tmp" 2>nul
-if errorlevel 1 (
-    echo [INFO] wmic unavailable -- VPN client process check skipped.>> "%REPORT%"
-) else (
-    findstr /i /c:"FortiClient" /c:"GlobalProtect" /c:"pulse" /c:"ivanti" /c:"vpnclient" "%TEMP%\dz_pipe.tmp">> "%REPORT%"
-    if errorlevel 1 echo [OK] No targeted VPN client processes running.>> "%REPORT%"
-)
+echo  Command: Get-CimInstance Win32_Process ^| findstr /i vpn-client-names>> "%REPORT%"
+:: CIM instead of wmic (removed on 24H2+) so this actually runs on current
+:: Windows; [SKIPPED] only if process enumeration genuinely fails.
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object { $_.Name+'  '+$_.ProcessId+'  '+$_.ExecutablePath }" > "%TEMP%\dz_pipe.tmp" 2>nul
+set "_ENUMVPN="
+for %%z in ("%TEMP%\dz_pipe.tmp") do if %%~zz GTR 100 set "_ENUMVPN=1"
+if not defined _ENUMVPN goto :sec17_vpn_skip
+findstr /i /c:"FortiClient" /c:"GlobalProtect" /c:"pulse" /c:"ivanti" /c:"vpnclient" "%TEMP%\dz_pipe.tmp">> "%REPORT%"
+if errorlevel 1 echo [OK] No targeted VPN client processes running.>> "%REPORT%"
+goto :sec17_vpn_done
+:sec17_vpn_skip
+echo [SKIPPED] Process enumeration failed -- VPN client check NOT performed.>> "%REPORT%"
+:sec17_vpn_done
 del "%TEMP%\dz_pipe.tmp" 2>nul
+set "_ENUMVPN="
 echo.>> "%REPORT%"
 
 echo --- [LINEN/VIOLET TYPHOON] Accessibility Login-Screen Backdoor (T1546.008) --->> "%REPORT%"
