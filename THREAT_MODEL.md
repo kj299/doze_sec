@@ -93,6 +93,16 @@ and 13 verify exactly that.
   flushed) leaves no cache entry.
 - **VirusTotal checks are opt-in** (`-vt` + API key) and rate-limited on
   the free tier.
+- **User-profile path heuristic is signature-gated to cut false positives**:
+  scheduled tasks and processes whose binary lives under `%AppData%` are
+  flagged `[CRITICAL]` only when that binary is *not* validly
+  Authenticode-signed; validly-signed per-user updaters (Brave, Chrome,
+  Zoom, Teams) are reported `[INFO]` instead. `\Temp\`, `\Downloads\`,
+  `\Users\Public\`, and `\ProgramData\update` stay `[CRITICAL]` regardless
+  of signature. Trade-off: malware that runs validly-signed (stolen or
+  abused cert) from `%AppData%` is downgraded to `[INFO]` — Section 18's
+  IOC hash/name sweeps and the cert-validation checks remain the backstop
+  for that case.
 - **Trust anchor**: the audit runs on the host it inspects. INIT 9/14's
   VirusTotal self-integrity pre-flight hash-checks the binaries the audit
   depends on, but a sufficiently privileged implant can lie to any

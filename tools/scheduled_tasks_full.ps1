@@ -121,27 +121,78 @@ if ($Mode -eq 'Inventory') {
 }
 
 if ($Mode -eq 'Suspicious') {
-    $hits = @()
+    # Hard-suspicious locations: no legitimate reason for a persistent task to
+    # launch a binary from here, so flag CRITICAL regardless of signature.
+    $hardPattern = '\\Temp\\|\\Downloads\\|\\Users\\Public\\|\\ProgramData\\update'
+    # %AppData% (Local/Roaming) is where legitimate per-user app updaters live
+    # (Brave, Chrome, Zoom, Teams). Flag CRITICAL only when the binary there is
+    # NOT validly Authenticode-signed; validly-signed ones are downgraded to
+    # [INFO] to avoid burying real findings under known-good updater noise.
+    $appDataPattern = '\\AppData\\'
+
+    $crit = @()   # unsigned/untrusted, or any hard-suspicious path
+    $info = @()   # validly-signed binary under %AppData% (legit per-user updater)
+
     foreach ($t in $tasks) {
-        $actions = @($t.Actions)
-        foreach ($a in $actions) {
+        $matchedExec = $null
+        $isHard = $false
+        $isAppData = $false
+        foreach ($a in @($t.Actions)) {
             $exec = $null; $argv = $null
             try { $exec = $a.Execute } catch {}
             try { $argv = $a.Arguments } catch {}
             $blob = "$exec $argv"
-            if ($blob -match $susPattern) { $hits += $t; break }
+            if ($blob -match $hardPattern) { $isHard = $true; if ($exec) { $matchedExec = $exec }; break }
+            if ($blob -match $appDataPattern) { $isAppData = $true; if ($exec) { $matchedExec = $exec } }
         }
+        if (-not ($isHard -or $isAppData)) { continue }
+        if ($isHard) { $crit += $t; continue }
+
+        # AppData-only match: signature-gate the executable.
+        $signed = $false; $signer = ''
+        if ($matchedExec) {
+            $clean = [Environment]::ExpandEnvironmentVariables($matchedExec.Trim('"'))
+            try {
+                $sig = Get-AuthenticodeSignature -LiteralPath $clean -ErrorAction Stop
+                if ($sig.Status -eq 'Valid') {
+                    $signed = $true
+                    if ($sig.SignerCertificate) { $signer = ((($sig.SignerCertificate.Subject -split ',')[0]) -replace '^CN=','').Trim() }
+                }
+            } catch {}
+        }
+        if ($signed) { $info += [pscustomobject]@{ Task = $t; Signer = $signer } }
+        else { $crit += $t }
     }
-    if ($hits.Count -eq 0) {
+
+    $marker = Join-Path $env:TEMP 'dz_susptask_crit.txt'
+    if (Test-Path -LiteralPath $marker) { Remove-Item -LiteralPath $marker -Force -EA SilentlyContinue }
+
+    if ($crit.Count -eq 0 -and $info.Count -eq 0) {
         Write-Output '[OK] No scheduled-task actions in Temp/AppData/Downloads/Public/ProgramData\update.'
         return
     }
-    Write-Output ('[CRITICAL] ' + $hits.Count + ' scheduled task(s) with actions in suspicious locations:')
-    Write-Output ''
-    foreach ($t in $hits) {
-        $info = $null
-        try { $info = $t | Get-ScheduledTaskInfo -ErrorAction Stop } catch {}
-        Format-TaskBlock $t $info @($t.Actions) @($t.Triggers)
+
+    if ($crit.Count -gt 0) {
+        $cnames = @($crit | ForEach-Object { $_.TaskName } | Sort-Object -Unique)
+        Write-Output ('[CRITICAL] ' + $crit.Count + ' scheduled task(s) with actions in suspicious locations (unsigned, or under Temp/Downloads/Public): ' + ($cnames -join '; '))
+        # Marker so the live-summary dashboard reports the SAME count/verdict
+        # instead of re-deriving it with different (looser) logic.
+        try { Set-Content -LiteralPath $marker -Value ([string]$crit.Count) -Encoding ASCII -ErrorAction SilentlyContinue } catch {}
+        Write-Output ''
+        foreach ($t in $crit) {
+            $info2 = $null
+            try { $info2 = $t | Get-ScheduledTaskInfo -ErrorAction Stop } catch {}
+            Format-TaskBlock $t $info2 @($t.Actions) @($t.Triggers)
+            Write-Output ''
+        }
+    }
+
+    if ($info.Count -gt 0) {
+        $inames = @($info | ForEach-Object { $_.Task.TaskName } | Sort-Object -Unique)
+        Write-Output ('[INFO] ' + $info.Count + ' validly-signed task(s) under %AppData% (legitimate per-user updaters; not flagged): ' + ($inames -join '; '))
+        foreach ($e in $info) {
+            Write-Output ('        - ' + ($e.Task.TaskPath.TrimEnd('\') + '\' + $e.Task.TaskName) + '  [signer: ' + $e.Signer + ']')
+        }
         Write-Output ''
     }
     return
