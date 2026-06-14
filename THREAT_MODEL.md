@@ -51,7 +51,7 @@ endpoint footprint to audit; they are out of scope by nature.
 | Nation-state APT | Strong | 12 named groups (Volt/Salt/Flax/Linen/Violet Typhoon, Forest/Midnight Blizzard, Sandstorms, Lazarus/DPRK Sleets, APT29, Scattered Spider) |
 | C2 frameworks | Strong | Cobalt Strike, Sliver, Brute Ratel, Havoc, Mythic, Nighthawk, PoshC2, Merlin — pipes, domains, hashes, IP reputation |
 | Credential theft | Strong | Mimikatz/LSASS/PtH/Kerberoast/NTLM-relay detection plus hardening-state audit |
-| Infostealers / loaders | Good | Process IOCs (Lumma, StealC, Rhadamanthys, DarkGate, PikaBOT, Latrodectus, HijackLoader), browser cred-store access |
+| Infostealers / loaders | Good | Process IOCs (Lumma, StealC, Rhadamanthys, DarkGate, PikaBOT, Latrodectus, HijackLoader), browser cred-store access, malicious browser-extension inventory (T1176) |
 | LOLBin abuse | Strong | 52 command-line patterns + Event 4688 download-cradle sweep |
 | BYOVD / EDR killers | Strong | Known vulnerable drivers by name and SHA256 |
 | Supply chain | Partial | Installed-software inventory, driver/service Authenticode gating, rogue root certs, VT hash reputation — cannot vet vendor build pipelines |
@@ -124,8 +124,13 @@ Found during the v7.1 coverage review; tracked for future work:
   roll up to 2); calling automation cannot triage on exit code alone.~~
   **Closed:** exit code 8 = audit complete with CRITICAL findings
   (the dashboard's ACTION REQUIRED verdict); 2 remains warnings-only.
-- Browser extensions are not inventoried (only credential-store access
-  times).
+- ~~Browser extensions are not inventoried (only credential-store access
+  times).~~ **Closed:** Section 15 runs `tools/browser_extensions.ps1`
+  (MITRE T1176) — inventories Chrome/Edge/Brave/Vivaldi/Firefox extensions
+  for the current user and flags sideloaded/developer-mode/non-store
+  add-ons, malware-favored permissions (nativeMessaging, debugger, proxy,
+  *Capture), broad host access combined with interception permissions, and
+  policy force-installs; a locked/corrupt profile reports `[SKIPPED]`.
 - No active resolution probe for C2 domains (cache-only by design — an
   active probe would itself generate suspicious traffic; needs care).
 - ~~Sub-check failures suppressed by `-ErrorAction SilentlyContinue` could

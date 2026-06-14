@@ -2441,6 +2441,23 @@ echo [INFO] sigverif.txt not found. Run: sigverif.exe as admin.>> "%REPORT%"
 :sigtxtdone
 echo.>> "%REPORT%"
 
+echo --- Browser Extensions (T1176 - cred theft / session hijack via add-ons) --->> "%REPORT%"
+echo  Command: powershell -File tools\browser_extensions.ps1  [Chrome/Edge/Brave/Vivaldi/Firefox]>> "%REPORT%"
+echo  Inventories installed extensions; flags sideloaded/dev-mode, malware-favored>> "%REPORT%"
+echo  permissions, and policy force-installs. [SKIPPED] if a profile is locked.>> "%REPORT%"
+echo  Runs fully without admin (reads the current user's own browser profiles).>> "%REPORT%"
+del "%TEMP%\dz_browserext_hit.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\browser_extensions.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\browser_extensions.ps1">> "%REPORT%" 2>&1
+) else (
+    echo  [INFO] tools\browser_extensions.ps1 not found -- browser extension inventory skipped.>> "%REPORT%"
+)
+if exist "%TEMP%\dz_browserext_hit.txt" (
+    if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+    del "%TEMP%\dz_browserext_hit.txt" 2>nul
+)
+echo.>> "%REPORT%"
+
 :: ====================================================================
 
 :: ---- Section 15/18 verdict -----------------------------------------------

@@ -141,7 +141,7 @@ AUDIT SECTIONS (18 total)
     13. System hardening (UAC, BitLocker*, SecureBoot*, drivers*,
         Office macro policy, Mark-of-the-Web, SmartScreen)
     14. Suspicious files and file system anomalies
-    15. Installed software and driver audit
+    15. Installed software and driver audit + browser-extension inventory
     16. Windows Event Log anomalies (partial without admin)
     17. Nation-state threat indicators (MDDR 2023-2025)
     18. CTI-driven IOC sweep (SENTINEL-X threat intelligence)
@@ -330,6 +330,7 @@ PROJECT STRUCTURE
       ioc_hash_check.ps1      Section 18k offline hash IOC match
       service_signature_check.ps1  Section 7 Authenticode gating
       scheduled_tasks_full.ps1     Section 6 full task inventory
+      browser_extensions.ps1       Section 15 browser-extension inventory (T1176)
       report_format.ps1 / top_findings.ps1 / select_lines.ps1
                               Report formatting helpers
       lint_batch_comments.ps1 Batch comment lint (run by CI)

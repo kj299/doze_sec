@@ -98,7 +98,7 @@ Temp path check, admin detection, OS version, OS compatibility, Safe Mode, log d
 | 12 | Credential and LSASS protection | No | PPL disabled, WDigest, Credential Guard |
 | 13 | System hardening | Partial | UAC, BitLocker, SecureBoot, test signing; Office macro policy (VBAWarnings, MOTW macro block), Mark-of-the-Web preservation, SmartScreen |
 | 14 | Suspicious files | No | ADS streams, double extensions, recent EXE/DLL/PS/VBS in user `%TEMP%` and `C:\Windows\Temp` (admin) |
-| 15 | Installed software and drivers | No | Unsigned drivers, vulnerable software |
+| 15 | Installed software and drivers | No | Unsigned drivers, vulnerable software; browser-extension inventory (T1176) — flags sideloaded/dev-mode, malware-favored permissions, policy force-installs across Chrome/Edge/Brave/Vivaldi/Firefox |
 | 16 | Event log anomalies | Partial | Log clearing (1102), brute force (4625), lateral (4624) |
 | 17 | Nation-state threat indicators | No | MDDR 2023-2025 TTPs, portproxy, WMI persistence (CommandLine + ActiveScript consumers; SCM defaults allowlisted by Name+Query) |
 | 18 | CTI-driven IOC sweep | No | SENTINEL-X file-based + inline CTI checks |
