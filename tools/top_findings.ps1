@@ -102,6 +102,7 @@ function Get-WhyMatters {
 $currentMain = '(pre-section)'
 $currentSub = $null
 $findings = New-Object System.Collections.Generic.List[object]
+$skipped = 0
 foreach ($L in $lines) {
     # Main section: a bracketed [N/18] or [INIT N/14] inside a ===== box
     if ($L -match '^\s*\[(\d+/18|INIT \d+/14)\]\s+(.+?)\s*$') {
@@ -112,6 +113,10 @@ foreach ($L in $lines) {
     # Sub-section: --- Title ---
     if ($L -match '^---\s(.+?)\s---\s*$') {
         $currentSub = $matches[1]
+        continue
+    }
+    if ($L -match '^\s*\[SKIPPED\]') {
+        $skipped++
         continue
     }
     if ($L -match '^\s*\[(CRITICAL|WARNING)\]') {
@@ -186,6 +191,18 @@ if ($findings.Count -eq 0) {
         $block.Add(" ...$($findings.Count - $MaxFindings) more finding(s) below. Full detail in the per-section body.")
         $block.Add('')
     }
+    $block.Add('====================================================================')
+    $block.Add('')
+}
+
+# Coverage transparency: checks that could not run announce themselves with
+# [SKIPPED] lines. Surface the count here so a "CLEAN" verdict is never read
+# as full coverage when parts of the audit silently could not execute.
+if ($skipped -gt 0) {
+    $block.Add(" COVERAGE NOTE: $skipped check(s) reported [SKIPPED] and were NOT performed.")
+    $block.Add(' The verdict above covers only the checks that ran. Search the report')
+    $block.Add(' for [SKIPPED] to see which checks were missed and why.')
+    $block.Add('')
     $block.Add('====================================================================')
     $block.Add('')
 }

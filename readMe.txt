@@ -88,6 +88,8 @@ EXIT CODES
   5   Ran from TEMP directory - move the script and re-run
   6   Partial audit - non-admin mode, some checks deferred
   7   Pre-flight VT integrity check failed - script-critical binary flagged
+  8   Audit complete - CRITICAL findings present (2 = warnings only;
+      treat 8 as an incident-response trigger)
 
 
 OUTPUT FILES

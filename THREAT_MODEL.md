@@ -83,9 +83,12 @@ and 13 verify exactly that.
 - **Admin vs non-admin**: `doze_sec_noAdmin.bat` defers Security-event-log
   and several deep checks (`[DEFERRED]`, exit code 6). Full coverage
   requires the admin variant.
-- **Graceful degradation can be silent**: several PowerShell probes use
-  `-ErrorAction SilentlyContinue`; on a locked-down host a sub-check can
-  come back empty rather than failed.
+- **Graceful degradation can be silent outside Section 18**: Section 18's
+  file-based IOC sub-checks now report `[SKIPPED]` (with a COVERAGE NOTE
+  count in TOP FINDINGS) when an IOC list is missing or an enumeration
+  fails, but probes in other sections still use
+  `-ErrorAction SilentlyContinue` and can come back empty rather than
+  failed on a locked-down host.
 - **DNS check is cache-only**: a C2 domain never resolved on the host (or
   flushed) leaves no cache entry.
 - **VirusTotal checks are opt-in** (`-vt` + API key) and rate-limited on
@@ -117,11 +120,19 @@ Found during the v7.1 coverage review; tracked for future work:
   mode and warns when key rules are not in Block mode; Section 13 audits
   per-app `VBAWarnings` and `blockcontentexecutionfrominternet`,
   `SaveZoneInformation` (MOTW preservation), and SmartScreen state.
-- Exit code does not distinguish `[CRITICAL]` from `[WARNING]` (both
-  roll up to 2); calling automation cannot triage on exit code alone.
+- ~~Exit code does not distinguish `[CRITICAL]` from `[WARNING]` (both
+  roll up to 2); calling automation cannot triage on exit code alone.~~
+  **Closed:** exit code 8 = audit complete with CRITICAL findings
+  (the dashboard's ACTION REQUIRED verdict); 2 remains warnings-only.
 - Browser extensions are not inventoried (only credential-store access
   times).
 - No active resolution probe for C2 domains (cache-only by design — an
   active probe would itself generate suspicious traffic; needs care).
-- Sub-check failures suppressed by `-ErrorAction SilentlyContinue` could
-  be surfaced as `[SKIPPED]` instead of appearing clean.
+- ~~Sub-check failures suppressed by `-ErrorAction SilentlyContinue` could
+  be surfaced as `[SKIPPED]` instead of appearing clean.~~
+  **Closed for Section 18** (the highest-stakes surface): missing IOC
+  lists and failed process/pipe/service/DNS enumerations now emit
+  `[SKIPPED]`, TOP FINDINGS carries a skipped-count COVERAGE NOTE, and
+  18a/18g no longer depend on wmic (removed in Win11 24H2+ — previously
+  a false-clean). Probes in Sections 1-17 may still degrade silently;
+  extending `[SKIPPED]` there remains open.

@@ -184,6 +184,11 @@ Full tactic-by-tactic and threat-class coverage matrices — including explicit 
 | 5 | Running from TEMP directory (move script) | Both |
 | 6 | Partial audit - non-admin, checks deferred | noAdmin only |
 | 7 | Pre-flight VT integrity check FAILED (script-critical binary flagged) | Both |
+| 8 | Audit complete - CRITICAL findings present (2 = warnings only) | Both |
+
+Code 8 fires when the live-summary verdict is ACTION REQUIRED (at least one CRITICAL check). It outranks 2, 4, and 6 — critical findings are the most actionable signal — but never the fatal/abort codes 1, 3, 5, 7. Automation can treat 0 as clean, 2/6 as review, 8 as incident-response trigger.
+
+Checks that cannot run (missing IOC list, failed process/pipe/service/DNS enumeration) now report `[SKIPPED]` in the report instead of looking clean, and the TOP FINDINGS block carries a COVERAGE NOTE with the skipped count.
 
 ## Output
 
