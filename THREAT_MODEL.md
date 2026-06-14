@@ -131,8 +131,29 @@ Found during the v7.1 coverage review; tracked for future work:
   add-ons, malware-favored permissions (nativeMessaging, debugger, proxy,
   *Capture), broad host access combined with interception permissions, and
   policy force-installs; a locked/corrupt profile reports `[SKIPPED]`.
-- No active resolution probe for C2 domains (cache-only by design — an
-  active probe would itself generate suspicious traffic; needs care).
+- **Active DNS probing for C2 domains — open design decision (deferred).**
+  - *Today:* Section 18f checks for known-bad C2 domains by reading the
+    machine's local DNS resolver cache (`ipconfig /displaydns`). It only
+    sees domains the host has *already* looked up recently; cache entries
+    expire (TTL) and a reboot/flush clears them.
+  - *Gap:* a C2 domain the host never resolved, or resolved long enough
+    ago that the entry aged out, leaves no cache evidence — so 18f can
+    report clean while the indicator was simply never observable that way.
+  - *Possible fix ("active probe"):* have the audit itself resolve each
+    IOC domain (e.g. `Resolve-DnsName <domain>`) to learn whether it
+    currently resolves and to what IP, instead of waiting to catch it in
+    the cache.
+  - *Why it's deferred, not just unimplemented:* actively resolving a list
+    of known-malicious domains generates outbound DNS queries *from the
+    audited host to attacker-controlled infrastructure*. That can tip off
+    an operator that the host is being investigated, and it trips the
+    organization's own network IDS/DNS-monitoring (the audit would
+    manufacture the very "host contacted C2" alert it is supposed to find).
+  - *Decision needed before building it:* whether to resolve only against
+    a trusted local/internal resolver, gate it behind an explicit opt-in
+    switch (like `-vt`), and/or restrict it to sinkhole-safe lookups —
+    versus leaving detection cache-only. Until that is decided, 18f stays
+    cache-only by design.
 - ~~Sub-check failures suppressed by `-ErrorAction SilentlyContinue` could
   be surfaced as `[SKIPPED]` instead of appearing clean.~~
   **Closed for Section 18 and the highest-severity Section 1-17 sites:**
