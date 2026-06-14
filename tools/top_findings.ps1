@@ -60,7 +60,11 @@ $whyTable = [ordered]@{
     'Suspicious process paths|Suspicious paths' = 'Process running from \Temp\, \AppData\, \Downloads\, \Public\, or \Recycle -- attacker-favored staging directory.'
     'IFEO Debugger hijack' = 'Image File Execution Options Debugger redirect = accessibility-binary hijack (T1546.008). SYSTEM shell on login screen via Shift x5.'
     'testsigning.*[Yy]es|Test.Signing.*[Ee]nabled' = 'testsigning=yes allows unsigned kernel driver loads. Often used by BYOVD (Bring Your Own Vulnerable Driver) adversaries.'
-    'Service .* failed Authenticode'    = 'Service binary failed Authenticode gating. Unsigned / unexpected-signer / bad-path services are common T1543.003 persistence indicators.'
+    'Service .* failed Authenticode|service\(s\) failed Authenticode'    = 'Service binary failed Authenticode gating. Unsigned / unexpected-signer / bad-path services are common T1543.003 persistence indicators -- review the listed binaries against known-good vendors.'
+    'scheduled task\(s\) with actions in suspicious locations|Tasks with Actions in Suspicious' = 'A scheduled task launches a binary from \Temp\, \AppData\, \Downloads\, \Public\, or \ProgramData\update. Unsigned binaries here are a common persistence TTP (T1053.005); validly-signed per-user updaters (Brave/Zoom/Chrome) are downgraded to [INFO].'
+    'IOC category matches found' = 'One or more Section 18 CTI sub-checks matched a known-bad indicator (process / pipe / service / file / DNS / LOLBin / registry / hash). Review the per-sub-check [WARNING]/[CRITICAL] lines in Section 18.'
+    'Suspicious registry IOCs found' = 'A registry value matched the ioc_registry.txt threat list (persistence Run keys, COM hijack, defense-evasion toggles). Cross-check the listed key against the IOC source and recent changes.'
+    'Non-standard entries found in HOSTS' = 'The HOSTS file has entries beyond localhost. Malware uses HOSTS to blackhole security/AV update domains or redirect traffic (DNS hijacking). Review each non-localhost line.'
     'BYOVD'                = 'Known vulnerable driver present on disk. Attackers load these to disable EDR from kernel mode.'
     'Security event log was CLEARED|System event log was CLEARED' = 'Event log clearing (1102/104) is a textbook anti-forensics move. Treat as evidence of recent attacker activity.'
     'COM CLSID overrides|COM Object Hijacking' = 'HKCU CLSID InprocServer32 overrides are a T1546.015 persistence technique. Often paired with DLL search-order hijacking.'
@@ -103,7 +107,8 @@ $currentMain = '(pre-section)'
 $currentSub = $null
 $findings = New-Object System.Collections.Generic.List[object]
 $skipped = 0
-foreach ($L in $lines) {
+for ($li = 0; $li -lt $lines.Count; $li++) {
+    $L = $lines[$li]
     # Main section: a bracketed [N/18] or [INIT N/14] inside a ===== box
     if ($L -match '^\s*\[(\d+/18|INIT \d+/14)\]\s+(.+?)\s*$') {
         $currentMain = "[$($matches[1])] $($matches[2])"
@@ -122,11 +127,30 @@ foreach ($L in $lines) {
     if ($L -match '^\s*\[(CRITICAL|WARNING)\]') {
         $sev = $matches[1]
         $sect = if ($currentSub) { "$currentMain > $currentSub" } else { $currentMain }
+        # When the finding line ends in ':' it promises a list of the matched
+        # items (tasks, registry hits, services, etc.). Capture up to 6 of the
+        # immediately-following non-blank lines so the TOP FINDINGS summary
+        # shows WHICH items matched, not just a dangling header. Stop at a
+        # blank line, a divider, a Command: echo, or the next finding/section.
+        $detail = New-Object System.Collections.Generic.List[string]
+        if ($L.TrimEnd().EndsWith(':')) {
+            for ($dj = $li + 1; $dj -lt $lines.Count -and $detail.Count -lt 6; $dj++) {
+                $dl = $lines[$dj]
+                if ($dl.Trim() -eq '') { break }
+                if ($dl -match '^\s*\[(CRITICAL|WARNING|OK|INFO|SKIPPED)\]') { break }
+                if ($dl -match '^={3,}') { break }
+                if ($dl -match '^---\s.+\s---\s*$') { break }
+                if ($dl -match '^\s*\[(\d+/18|INIT \d+/14)\]') { break }
+                if ($dl -match '^\s*Command:') { break }
+                $detail.Add($dl.TrimEnd())
+            }
+        }
         $findings.Add([pscustomobject]@{
             Severity = $sev
             Section  = $sect
             Line     = $L.Trim()
             Why      = (Get-WhyMatters -Line $L)
+            Detail   = @($detail.ToArray())
         }) | Out-Null
     }
 }
@@ -168,6 +192,17 @@ if ($findings.Count -eq 0) {
         }
         $block.Add(" $rank. [$($f.Severity)] Section: $($f.Section)")
         $block.Add("    Finding: $shortLine")
+        # Detail lines (the actual matched items) for list-style findings, so
+        # the analyst sees WHICH tasks/keys/services matched without scrolling
+        # to the full section body.
+        if ($f.Detail -and @($f.Detail).Count -gt 0) {
+            foreach ($d in @($f.Detail)) {
+                $dd = $d.Trim()
+                if ($dd -eq '') { continue }
+                if ($dd.Length -gt 110) { $dd = $dd.Substring(0,107) + '...' }
+                $block.Add("      - $dd")
+            }
+        }
         # Why-It-Matters text. Use the mapped explanation when present, otherwise
         # emit a generic fallback so the analyst is never left wondering whether
         # the absence of a note means "low severity" or "unmapped pattern".

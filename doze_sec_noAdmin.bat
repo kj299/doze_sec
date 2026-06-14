@@ -1600,6 +1600,8 @@ if exist "%SCRIPT_DIR%tools\scheduled_tasks_full.ps1" (
 echo.>> "%REPORT%"
 echo --- CRITICAL: Tasks with Actions in Suspicious Paths --->> "%REPORT%"
 echo  Command: powershell -File tools\scheduled_tasks_full.ps1 -Mode Suspicious>> "%REPORT%"
+rem Clear any stale dashboard marker so the live summary reflects THIS run.
+del "%TEMP%\dz_susptask_crit.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\scheduled_tasks_full.ps1" (
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\scheduled_tasks_full.ps1" -Mode Suspicious>> "%REPORT%" 2>&1
 ) else (
@@ -3412,7 +3414,7 @@ echo ck 'INFO' 'netsh portproxy check deferred (requires admin)' >> "%PSRUN%"
 echo } >> "%PSRUN%"
 echo try{$pipes=Get-ChildItem \\.\pipe\ -EA Stop^|Where-Object{$_.Name -match 'postex_^|msagent_^|MSSE-^|metsvc'};if($pipes){ck 'CRIT' ('Cobalt Strike named pipes detected: '+@($pipes).Count) ('Pipes: '+($pipes.Name -join ', ')+'. Active C2. See Section 17.')}else{ck 'PASS' 'No Cobalt Strike default named pipes detected'}}catch{ck 'INFO' 'Named pipe check unavailable (non-fatal)'} >> "%PSRUN%"
 echo $subs=@(Get-WMIObject -Namespace root\subscription -Class __EventFilter -EA SilentlyContinue ^| Where-Object { -not ( ($_.Name -eq 'SCM Event Log Filter' -and $_.Query -like '*MSFT_SCMEventLogEvent*') -or ($_.Name -in @('BVTConsumer','BVTFilter','RmAssistEventLog')) ) });if($subs.Count -gt 0){ck 'CRIT' ('Non-default WMI EventFilter subscriptions present: '+$subs.Count) 'Stealthy reboot-persistent implant. See Section 17. Remove: Get-WMIObject -NS root\subscription -Class __EventFilter ^| Remove-WMIObject'}else{ck 'PASS' 'No non-default WMI permanent EventFilter subscriptions'} >> "%PSRUN%"
-echo $sus=@(Get-CimInstance Win32_Process -EA SilentlyContinue^|Where-Object{$_.ExecutablePath -match '\\Temp\\^|\\AppData\\^|\\Downloads\\^|\\Users\\Public\\'});if($sus.Count -gt 0){ck 'CRIT' ('Processes from suspicious paths: '+$sus.Count) ('Names: '+(($sus^|Select-Object -Exp Name^|Sort-Object -Unique) -join ', ')+'. See Section 4.')}else{ck 'PASS' 'No processes running from Temp / AppData / Downloads'} >> "%PSRUN%"
+echo $sus=@(Get-CimInstance Win32_Process -EA SilentlyContinue^|Where-Object{$_.ExecutablePath -match '\\Temp\\^|\\AppData\\^|\\Downloads\\^|\\Users\\Public\\'});$susP=@($sus^|Select-Object -Exp ExecutablePath^|Sort-Object -Unique);$critP=@($susP^|Where-Object{ ($_ -match '\\Temp\\^|\\Downloads\\^|\\Users\\Public\\') -or ((Get-AuthenticodeSignature $_ -EA SilentlyContinue).Status -ne 'Valid') });if($critP.Count -gt 0){ck 'CRIT' ('Unsigned/untrusted processes from user-profile paths: '+$critP.Count) ('Files: '+(($critP^|ForEach-Object{Split-Path $_ -Leaf}^|Sort-Object -Unique) -join ', ')+'. See Section 4.')}elseif($susP.Count -gt 0){ck 'INFO' ('Processes from user-profile paths, all validly signed: '+$susP.Count) (($susP^|ForEach-Object{Split-Path $_ -Leaf}^|Sort-Object -Unique) -join ', ')}else{ck 'PASS' 'No processes running from Temp / AppData / Downloads'} >> "%PSRUN%"
 echo. >> "%PSRUN%"
 
 :: ===== CREDENTIAL PROTECTION =========================================
@@ -3469,7 +3471,7 @@ echo sec 'PERSISTENCE INTEGRITY  (Sections 5, 6, 7)' >> "%PSRUN%"
 echo $ui=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name Userinit -EA SilentlyContinue).Userinit;if($ui -match '^C:\\Windows\\[Ss]ystem32\\userinit\.exe,?\s*$'){ck 'PASS' ('Winlogon Userinit clean: '+$ui.Trim())}else{ck 'CRIT' ('Winlogon Userinit MODIFIED: '+$ui) 'Expected: C:\Windows\system32\userinit.exe, -- malware hijacks this at every login'} >> "%PSRUN%"
 echo $sh=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name Shell -EA SilentlyContinue).Shell;if($sh -match '^explorer\.exe$'){ck 'PASS' 'Winlogon Shell clean (explorer.exe)'}else{ck 'CRIT' ('Winlogon Shell MODIFIED: '+$sh) 'Expected: explorer.exe only. Fix via regedit: HKLM\...\Winlogon\Shell'} >> "%PSRUN%"
 echo $ai=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows' -Name AppInit_DLLs -EA SilentlyContinue).AppInit_DLLs;if([string]::IsNullOrWhiteSpace($ai)){ck 'PASS' 'AppInit_DLLs empty (no injected DLL)'}else{ck 'CRIT' ('AppInit_DLLs set: '+$ai) 'DLL loads into every GUI process. Clear AppInit_DLLs in HKLM\...\Windows immediately.'} >> "%PSRUN%"
-echo $tsk=schtasks /query /fo CSV /v 2^>$null^|Select-String '\\Temp\\^|\\AppData\\';if($tsk){ck 'WARN' "Tasks running from Temp/AppData: $(@($tsk).Count) matches" 'Strong IOC. Review task details in Section 6.'}else{ck 'PASS' 'No scheduled tasks running from Temp or AppData'} >> "%PSRUN%"
+echo $m=Join-Path $env:TEMP 'dz_susptask_crit.txt';if(Test-Path $m){$n=(Get-Content $m -EA SilentlyContinue^|Select-Object -First 1);ck 'CRIT' ("Scheduled task(s) in suspicious locations, unsigned or hard-path: $n") 'See Section 6 for the task list and signer status.'}else{ck 'PASS' 'No unsigned scheduled tasks in suspicious locations'} >> "%PSRUN%"
 echo. >> "%PSRUN%"
 
 :: ===== ACCESSIBILITY BINARY INTEGRITY (T1546.008) ====================
