@@ -130,9 +130,15 @@ Found during the v7.1 coverage review; tracked for future work:
   active probe would itself generate suspicious traffic; needs care).
 - ~~Sub-check failures suppressed by `-ErrorAction SilentlyContinue` could
   be surfaced as `[SKIPPED]` instead of appearing clean.~~
-  **Closed for Section 18** (the highest-stakes surface): missing IOC
-  lists and failed process/pipe/service/DNS enumerations now emit
-  `[SKIPPED]`, TOP FINDINGS carries a skipped-count COVERAGE NOTE, and
-  18a/18g no longer depend on wmic (removed in Win11 24H2+ — previously
-  a false-clean). Probes in Sections 1-17 may still degrade silently;
-  extending `[SKIPPED]` there remains open.
+  **Closed for Section 18 and the highest-severity Section 1-17 sites:**
+  Section 18's missing-IOC-list and failed process/pipe/service/DNS
+  enumerations emit `[SKIPPED]` with a TOP FINDINGS COVERAGE NOTE;
+  Section 4 (process/LOLBin/RMM) now enumerates via CIM with `[SKIPPED]`
+  on failure (no longer wmic-dependent — removed in Win11 24H2+, the
+  same false-clean class); Section 9 Defender exclusion checks report
+  `[SKIPPED]` when `Get-MpPreference` fails (Defender off / third-party
+  AV) instead of "no exclusions". Still open (lower-severity
+  `Get-* -EA SilentlyContinue` false-cleans): Section 3 proxy, Section 5
+  Run-key/IFEO enumeration, Section 7 unquoted-service scan, Section 14
+  ADS scan, and Section 17 RMM/Cobalt-Strike-pipe/WMI-subscription
+  checks — each prints `[OK]` if its enumeration throws.

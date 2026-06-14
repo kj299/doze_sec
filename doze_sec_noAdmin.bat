@@ -1396,35 +1396,57 @@ echo Get-CimInstance Win32_Process -EA SilentlyContinue ^| Select-Object Name,Pr
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
+echo --- Running-process enumeration for the checks below --->> "%REPORT%"
+:: wmic was removed in Windows 11 24H2+; the old `wmic process | findstr`
+:: checks printed [OK] over zero processes when wmic was absent (false clean,
+:: same class as the Section 18a/18g fix). Enumerate once via CIM; if it
+:: fails, the three checks below report [SKIPPED] instead of a fake [OK].
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object { $_.Name+'  '+$_.ProcessId+'  '+$_.ExecutablePath+'  '+$_.CommandLine }" > "%TEMP%\dz_proc4.tmp" 2>nul
+set "_ENUM4="
+for %%z in ("%TEMP%\dz_proc4.tmp") do if %%~zz GTR 100 set "_ENUM4=1"
+
+echo.>> "%REPORT%"
 echo --- HIGH SUSPICION: Processes from Temp, AppData, Downloads, Public --->> "%REPORT%"
-echo  Command: wmic process get Name,ProcessId,ExecutablePath ^| findstr /i /c:"\Temp\" /c:"\AppData\" /c:"\Downloads\" /c:"\Recycle" /c:"\Users\Public">> "%REPORT%"
+echo  Command: Get-CimInstance Win32_Process ^| findstr /i /c:"\Temp\" /c:"\AppData\" /c:"\Downloads\" /c:"\Recycle" /c:"\Users\Public">> "%REPORT%"
 :: \ProgramData\ removed -- legitimate vendor agents (Dropbox, OneDrive, Cisco
 :: AnyConnect, EDR/AV) routinely run from there. Section 18a IOC sweep catches
 :: known-bad ProgramData process names against ioc_processes.txt.
-wmic process get Name,ProcessId,ExecutablePath | findstr /i /c:"\Temp\" /c:"\AppData\" /c:"\Downloads\" /c:"\Recycle" /c:"\Users\Public">> "%REPORT%" 2>&1
+if not defined _ENUM4 goto :sec4_susp_skip
+findstr /i /c:"\Temp\" /c:"\AppData\" /c:"\Downloads\" /c:"\Recycle" /c:"\Users\Public" "%TEMP%\dz_proc4.tmp">> "%REPORT%" 2>&1
 if %errorlevel% equ 0 (
     echo [WARNING] Suspicious process paths found above. Investigate now.>> "%REPORT%"
     if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
 ) else (
     echo [OK] No processes from suspicious locations.>> "%REPORT%"
 )
+goto :sec4_susp_done
+:sec4_susp_skip
+echo [SKIPPED] Process enumeration failed -- suspicious-path check NOT performed.>> "%REPORT%"
+:sec4_susp_done
 
 echo.>> "%REPORT%"
 echo --- LOLBin Processes (mshta, certutil, regsvr32, cmstp, wscript) --->> "%REPORT%"
-echo  Command: wmic process get Name,ProcessId,ExecutablePath,CommandLine>> "%REPORT%"
-wmic process get Name,ProcessId,ExecutablePath,CommandLine > "%TEMP%\dz_pipe.tmp" 2>nul
-if errorlevel 1 (
-    echo [INFO] wmic unavailable -- LOLBin process check skipped.>> "%REPORT%"
-) else (
-    findstr /i /c:"mshta" /c:"regsvr32" /c:"certutil" /c:"cmstp" /c:"wscript" /c:"cscript" /c:"msiexec" /c:"installutil" "%TEMP%\dz_pipe.tmp">> "%REPORT%"
-    if errorlevel 1 echo [OK] No LOLBin processes currently running.>> "%REPORT%"
-)
-del "%TEMP%\dz_pipe.tmp" 2>nul
+echo  Command: Get-CimInstance Win32_Process ^| findstr /i lolbin-names>> "%REPORT%"
+if not defined _ENUM4 goto :sec4_lol_skip
+findstr /i /c:"mshta" /c:"regsvr32" /c:"certutil" /c:"cmstp" /c:"wscript" /c:"cscript" /c:"msiexec" /c:"installutil" "%TEMP%\dz_proc4.tmp">> "%REPORT%"
+if errorlevel 1 echo [OK] No LOLBin processes currently running.>> "%REPORT%"
+goto :sec4_lol_done
+:sec4_lol_skip
+echo [SKIPPED] Process enumeration failed -- LOLBin process check NOT performed.>> "%REPORT%"
+:sec4_lol_done
 
 echo.>> "%REPORT%"
 echo --- Remote Monitoring and Management Tools (DPRK/Iran C2 vector) --->> "%REPORT%"
-echo  Command: wmic process get Name,ProcessId,ExecutablePath ^| findstr /i /c:"ScreenConnect" /c:"AnyDesk" /c:"TeamViewer" /c:"Ammyy" /c:"RustDesk" /c:"Splashtop" /c:"Atera" /c:"Kaseya" /c:"ConnectWise">> "%REPORT%"
-wmic process get Name,ProcessId,ExecutablePath | findstr /i /c:"ScreenConnect" /c:"AnyDesk" /c:"TeamViewer" /c:"Ammyy" /c:"RustDesk" /c:"Splashtop" /c:"Atera" /c:"Kaseya" /c:"ConnectWise">> "%REPORT%" 2>&1
+echo  Command: Get-CimInstance Win32_Process ^| findstr /i rmm-names>> "%REPORT%"
+if not defined _ENUM4 goto :sec4_rmm_skip
+findstr /i /c:"ScreenConnect" /c:"AnyDesk" /c:"TeamViewer" /c:"Ammyy" /c:"RustDesk" /c:"Splashtop" /c:"Atera" /c:"Kaseya" /c:"ConnectWise" "%TEMP%\dz_proc4.tmp">> "%REPORT%" 2>&1
+if errorlevel 1 echo [OK] No common RMM tools running.>> "%REPORT%"
+goto :sec4_rmm_done
+:sec4_rmm_skip
+echo [SKIPPED] Process enumeration failed -- RMM tool check NOT performed.>> "%REPORT%"
+:sec4_rmm_done
+del "%TEMP%\dz_proc4.tmp" 2>nul
+set "_ENUM4="
 echo.>> "%REPORT%"
 
 :: ====================================================================
@@ -1747,19 +1769,19 @@ echo Get-MpPreference ^| Select-Object DisableRealtimeMonitoring,DisableBehavior
 echo.>> "%REPORT%"
 echo --- CRITICAL: Exclusion Paths --->> "%REPORT%"
 echo  Command: powershell -Command "Get-MpPreference^).ExclusionPath">> "%REPORT%"
-echo $e=(Get-MpPreference).ExclusionPath; if($e){'[WARNING] Exclusion paths found:'; $e}else{'[OK] No path exclusions.'} > "%PSRUN%"
+echo $ok=$true; try{$e=(Get-MpPreference -EA Stop).ExclusionPath}catch{$ok=$false}; if(-not $ok){'[SKIPPED] Get-MpPreference failed -- path-exclusion check NOT performed (Defender disabled or third-party AV?).'}elseif($e){'[WARNING] Exclusion paths found:'; $e}else{'[OK] No path exclusions.'} > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- CRITICAL: Exclusion Processes --->> "%REPORT%"
 echo  Command: powershell -Command "Get-MpPreference^).ExclusionProcess">> "%REPORT%"
-echo $e=(Get-MpPreference).ExclusionProcess; if($e){'[WARNING] Exclusion processes found:'; $e}else{'[OK] No process exclusions.'} > "%PSRUN%"
+echo $ok=$true; try{$e=(Get-MpPreference -EA Stop).ExclusionProcess}catch{$ok=$false}; if(-not $ok){'[SKIPPED] Get-MpPreference failed -- process-exclusion check NOT performed (Defender disabled or third-party AV?).'}elseif($e){'[WARNING] Exclusion processes found:'; $e}else{'[OK] No process exclusions.'} > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- CRITICAL: Exclusion Extensions --->> "%REPORT%"
 echo  Command: powershell -Command "Get-MpPreference^).ExclusionExtension">> "%REPORT%"
-echo $e=(Get-MpPreference).ExclusionExtension; if($e){'[WARNING] Exclusion extensions found:'; $e}else{'[OK] No extension exclusions.'} > "%PSRUN%"
+echo $ok=$true; try{$e=(Get-MpPreference -EA Stop).ExclusionExtension}catch{$ok=$false}; if(-not $ok){'[SKIPPED] Get-MpPreference failed -- extension-exclusion check NOT performed (Defender disabled or third-party AV?).'}elseif($e){'[WARNING] Exclusion extensions found:'; $e}else{'[OK] No extension exclusions.'} > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
