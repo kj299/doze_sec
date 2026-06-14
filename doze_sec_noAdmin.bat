@@ -1534,7 +1534,7 @@ reg query "HKLM\SOFTWARE\Wow6432Node\Microsoft\Windows NT\CurrentVersion\Windows
 echo.>> "%REPORT%"
 echo --- IFEO Debugger Hijacking --->> "%REPORT%"
 echo  Command: powershell -Command "Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options'">> "%REPORT%"
-echo $hits=Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options' ^| ForEach-Object {$d=Get-ItemProperty $_.PSPath -Name Debugger -EA SilentlyContinue; if($d){'[IFEO HIT] '+$_.PSChildName+' =^> '+$d.Debugger}}; if($hits){$hits}else{'[OK] No IFEO Debugger hijacks.'} > "%PSRUN%"
+echo $ok=$true; try{$hits=Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options' -EA Stop ^| ForEach-Object {$d=Get-ItemProperty $_.PSPath -Name Debugger -EA SilentlyContinue; if($d){'[IFEO HIT] '+$_.PSChildName+' =^> '+$d.Debugger}}}catch{$ok=$false}; if(-not $ok){'[SKIPPED] IFEO key enumeration failed -- debugger-hijack check NOT performed.'}elseif($hits){$hits}else{'[OK] No IFEO Debugger hijacks.'} > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
@@ -1648,7 +1648,7 @@ if exist "%SCRIPT_DIR%tools\service_signature_check.ps1" (
 echo.>> "%REPORT%"
 echo --- Unquoted Service Paths with Spaces --->> "%REPORT%"
 echo  Command: powershell -Command "Get-CimInstance Win32_Service">> "%REPORT%"
-echo $v=Get-CimInstance Win32_Service ^| Where-Object {$_.PathName -and $_.PathName -notmatch '^\x22' -and $_.PathName -match ' ' -and $_.PathName -notmatch '^^[A-Za-z]:\\Windows\\'}; if($v){$v ^| Select-Object Name,StartMode,PathName ^| Format-Table -AutoSize -Wrap}else{'[OK] No unquoted service paths found.'} > "%PSRUN%"
+echo $ok=$true; try{$v=Get-CimInstance Win32_Service -EA Stop ^| Where-Object {$_.PathName -and $_.PathName -notmatch '^\x22' -and $_.PathName -match ' ' -and $_.PathName -notmatch '^^[A-Za-z]:\\Windows\\'}}catch{$ok=$false}; if(-not $ok){'[SKIPPED] Get-CimInstance Win32_Service failed -- unquoted-path check NOT performed.'}elseif($v){$v ^| Select-Object Name,StartMode,PathName ^| Format-Table -AutoSize -Wrap}else{'[OK] No unquoted service paths found.'} > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
@@ -2361,7 +2361,7 @@ dir "%APPDATA%" /s /a /b 2>nul | findstr /i /c:".exe" /c:".dll">> "%REPORT%" 2>&
 echo.>> "%REPORT%"
 echo --- NTFS Alternate Data Streams in Temp --->> "%REPORT%"
 echo  Command: powershell -Command "Get-ChildItem -Path $env:TEMP -Recurse -EA SilentlyContinue">> "%REPORT%"
-echo $f=$false; Get-ChildItem -Path $env:TEMP -Recurse -EA SilentlyContinue ^| ForEach-Object {try{$s=Get-Item $_.FullName -Stream * -EA Stop ^| Where-Object {$_.Stream -ne ':$DATA' -and $_.Stream -ne 'Zone.Identifier'}; if($s){$f=$true;'[ADS FOUND] '+$_.FullName+' :: '+($s.Stream -join ', ')}}catch{}}; if(-not $f){'[OK] No suspicious ADS in Temp.'} > "%PSRUN%"
+echo $f=$false; if(-not (Test-Path $env:TEMP)){'[SKIPPED] TEMP path unavailable -- ADS check NOT performed.'}else{Get-ChildItem -Path $env:TEMP -Recurse -EA SilentlyContinue ^| ForEach-Object {try{$s=Get-Item $_.FullName -Stream * -EA Stop ^| Where-Object {$_.Stream -ne ':$DATA' -and $_.Stream -ne 'Zone.Identifier'}; if($s){$f=$true;'[ADS FOUND] '+$_.FullName+' :: '+($s.Stream -join ', ')}}catch{}}; if(-not $f){'[OK] No suspicious ADS in Temp.'}} > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
@@ -2722,17 +2722,17 @@ echo if(-not $found){'[OK] No unexpected RMM software found.'} >> "%PSRUN%"
 echo.>> "%REPORT%"
 echo --- [ALL ACTORS] Cobalt Strike Named Pipes (MDDR: most abused C2 tool) --->> "%REPORT%"
 echo  Command: powershell -Command "Get-ChildItem \\.\pipe\ -EA SilentlyContinue">> "%REPORT%"
-echo try{$pipes=Get-ChildItem \\.\pipe\ -EA SilentlyContinue ^| Where-Object {$_.Name -match 'postex_^|msagent_^|MSSE-^|metsvc^|beacon^|cobaltstrike^|status_'}; if($pipes){$pipes ^| Select-Object Name; '[WARNING] Possible Cobalt Strike pipes detected.'}else{'[OK] No Cobalt Strike default named pipes.'}}catch{'[INFO] Named pipe enumeration unavailable.'} > "%PSRUN%"
+echo try{$pipes=Get-ChildItem \\.\pipe\ -EA SilentlyContinue ^| Where-Object {$_.Name -match 'postex_^|msagent_^|MSSE-^|metsvc^|beacon^|cobaltstrike^|status_'}; if($pipes){$pipes ^| Select-Object Name; '[WARNING] Possible Cobalt Strike pipes detected.'}else{'[OK] No Cobalt Strike default named pipes.'}}catch{'[SKIPPED] Named pipe enumeration failed -- Cobalt Strike pipe check NOT performed.'} > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- [ALL ACTORS] WMI Permanent Subscriptions (stealthy persistence) --->> "%REPORT%"
 echo  Command: powershell -Command "Get-WMIObject -Namespace root\subscription -Class __EventFilter -EA SilentlyContinue">> "%REPORT%"
-echo $subs=@(Get-WMIObject -Namespace root\subscription -Class __EventFilter -EA SilentlyContinue ^| Where-Object { -not ( ($_.Name -eq 'SCM Event Log Filter' -and $_.Query -like '*MSFT_SCMEventLogEvent*') -or ($_.Name -in @('BVTConsumer','BVTFilter','RmAssistEventLog')) ) }); if($subs.Count -gt 0){'[WARNING] Non-default WMI EventFilters found:'; $subs ^| Select-Object Name,Query ^| Format-Table -AutoSize}else{'[OK] No non-default WMI EventFilter subscriptions (default Microsoft filters allowlisted).'} > "%PSRUN%"
+echo $ok=$true; try{$subs=@(Get-WMIObject -Namespace root\subscription -Class __EventFilter -EA Stop ^| Where-Object { -not ( ($_.Name -eq 'SCM Event Log Filter' -and $_.Query -like '*MSFT_SCMEventLogEvent*') -or ($_.Name -in @('BVTConsumer','BVTFilter','RmAssistEventLog')) ) })}catch{$ok=$false}; if(-not $ok){'[SKIPPED] WMI subscription query failed -- EventFilter check NOT performed.'}elseif($subs.Count -gt 0){'[WARNING] Non-default WMI EventFilters found:'; $subs ^| Select-Object Name,Query ^| Format-Table -AutoSize}else{'[OK] No non-default WMI EventFilter subscriptions (default Microsoft filters allowlisted).'} > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
-echo $cons=Get-WMIObject -Namespace root\subscription -Class CommandLineEventConsumer -EA SilentlyContinue; if($cons){'[WARNING] WMI CommandLine Consumers found:'; $cons ^| Select-Object Name,CommandLineTemplate ^| Format-Table -AutoSize}else{'[OK] No WMI CommandLineEventConsumer.'} > "%PSRUN%"
+echo $ok=$true; try{$cons=Get-WMIObject -Namespace root\subscription -Class CommandLineEventConsumer -EA Stop}catch{$ok=$false}; if(-not $ok){'[SKIPPED] WMI subscription query failed -- CommandLineEventConsumer check NOT performed.'}elseif($cons){'[WARNING] WMI CommandLine Consumers found:'; $cons ^| Select-Object Name,CommandLineTemplate ^| Format-Table -AutoSize}else{'[OK] No WMI CommandLineEventConsumer.'} > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
-echo $acons=Get-WMIObject -Namespace root\subscription -Class ActiveScriptEventConsumer -EA SilentlyContinue; if($acons){'[WARNING] WMI ActiveScript (VBScript/JScript) Consumers found:'; $acons ^| Select-Object Name,ScriptingEngine,@{n='ScriptText';e={if($_.ScriptText.Length -gt 200){$_.ScriptText.Substring(0,200)+'...[truncated]'}else{$_.ScriptText}}} ^| Format-List}else{'[OK] No WMI ActiveScriptEventConsumer.'} > "%PSRUN%"
+echo $ok=$true; try{$acons=Get-WMIObject -Namespace root\subscription -Class ActiveScriptEventConsumer -EA Stop}catch{$ok=$false}; if(-not $ok){'[SKIPPED] WMI subscription query failed -- ActiveScriptEventConsumer check NOT performed.'}elseif($acons){'[WARNING] WMI ActiveScript (VBScript/JScript) Consumers found:'; $acons ^| Select-Object Name,ScriptingEngine,@{n='ScriptText';e={if($_.ScriptText.Length -gt 200){$_.ScriptText.Substring(0,200)+'...[truncated]'}else{$_.ScriptText}}} ^| Format-List}else{'[OK] No WMI ActiveScriptEventConsumer.'} > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
@@ -3115,7 +3115,7 @@ echo.>> "%REPORT%"
 echo.>> "%REPORT%"
 echo --- [CTI] Sliver / Havoc / Brute Ratel C2 Named Pipes --->> "%REPORT%"
 echo  Command: powershell -Command "Get-ChildItem \\.\pipe\ -EA SilentlyContinue">> "%REPORT%"
-echo try{$pipes=Get-ChildItem \\.\pipe\ -EA SilentlyContinue ^| Where-Object {$_.Name -match 'sliverpb^|havoc^|bruteratel^|badger_^|b4_^|_krbtgt^|dcetest^|systemd-^|svc_pivot'}; if($pipes){$pipes ^| Select-Object Name; '[WARNING] Possible next-gen C2 named pipes detected.'}else{'[OK] No Sliver/Havoc/BruteRatel default pipes.'}}catch{'[INFO] Pipe enumeration unavailable.'} > "%PSRUN%"
+echo try{$pipes=Get-ChildItem \\.\pipe\ -EA SilentlyContinue ^| Where-Object {$_.Name -match 'sliverpb^|havoc^|bruteratel^|badger_^|b4_^|_krbtgt^|dcetest^|systemd-^|svc_pivot'}; if($pipes){$pipes ^| Select-Object Name; '[WARNING] Possible next-gen C2 named pipes detected.'}else{'[OK] No Sliver/Havoc/BruteRatel default pipes.'}}catch{'[SKIPPED] Named pipe enumeration failed -- next-gen C2 pipe check NOT performed.'} > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 :: --- [CTI] DLL Search Order Hijacking (T1574.001) ---
