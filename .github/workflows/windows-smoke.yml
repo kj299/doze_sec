@@ -122,15 +122,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run the full audit; fail on hang (timeout) or fatal error
+      - name: Run the full audit; fail on hang (timeout), fatal error, or early exit
         shell: cmd
         run: |
           call doze_sec.bat -dev -sdu -nosrp
           set RC=%ERRORLEVEL%
           echo doze_sec.bat exit code: %RC%
-          if not exist "C:\SecurityAudit\SecurityReport_*.txt" ( echo NO REPORT PRODUCED & exit /b 1 )
           if "%RC%"=="1" ( echo FATAL ERROR exit code 1 & exit /b 1 )
-          echo Completed end-to-end without hang or fatal error.
+          set "REP="
+          for %%R in ("C:\SecurityAudit\SecurityReport_*.txt") do set "REP=%%R"
+          if not defined REP ( echo NO REPORT PRODUCED & exit /b 1 )
+          rem A hang is caught by the job timeout; this catches an EARLY EXIT
+          rem (e.g. a parse error mid-audit) that still left a partial report:
+          rem the exit handler's "EXIT CODE:" line and the [18/18] banner only
+          rem exist if the audit actually ran to the end.
+          findstr /c:"EXIT CODE:" "%REP%" >nul || ( echo AUDIT DID NOT REACH EXIT HANDLER -- early exit or crash & exit /b 1 )
+          findstr /c:"[18/18]" "%REP%" >nul || ( echo AUDIT DID NOT REACH SECTION 18 -- early exit & exit /b 1 )
+          echo Completed end-to-end through Section 18 and the exit handler.
           exit /b 0
 
       - name: Upload the audit artifacts for inspection
