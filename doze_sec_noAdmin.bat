@@ -593,10 +593,14 @@ if "%OS_BLOCK_REASON%"=="" goto :os_check_passed
 
 echo  [UNSUPPORTED] %OS_BLOCK_REASON%>> "%REPORT%"
 if "%DEV_MODE%"=="1" (
-    echo  [WARNING] Unsupported OS: %OS_BLOCK_REASON%>> "%REPORT%"
+    rem Use delayed expansion: OS_BLOCK_REASON can contain ( ) (e.g. "Server OS
+    rem (ProductType 3)"). %var% expands at block-parse time, so a ) in the
+    rem value would close this if-block early ("- was unexpected at this time"
+    rem on Server editions). !var! expands at run time and stays inside echo.
+    echo  [WARNING] Unsupported OS: !OS_BLOCK_REASON!>> "%REPORT%"
     echo  [WARNING] -dev override active. Continuing on unsupported OS.>> "%REPORT%"
     echo  [WARNING] Some checks may fail or return incorrect results.>> "%REPORT%"
-    echo %C_GREEN%[INIT 4/14]%C_RESET% WARN: %OS_BLOCK_REASON% -- -dev override active, continuing.
+    echo %C_GREEN%[INIT 4/14]%C_RESET% WARN: !OS_BLOCK_REASON! -- -dev override active, continuing.
     if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
     goto :os_check_passed
 )
