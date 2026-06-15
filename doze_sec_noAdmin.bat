@@ -1418,7 +1418,12 @@ echo --- Running-process enumeration for the checks below --->> "%REPORT%"
 :: checks printed [OK] over zero processes when wmic was absent (false clean,
 :: same class as the Section 18a/18g fix). Enumerate once via CIM; if it
 :: fails, the three checks below report [SKIPPED] instead of a fake [OK].
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object { $_.Name+'  '+$_.ProcessId+'  '+$_.ExecutablePath+'  '+$_.CommandLine }" > "%TEMP%\dz_proc4.tmp" 2>nul
+:: NOTE: ExecutablePath only -- do NOT add CommandLine here. findstr (below)
+:: hangs / goes pathological on lines over ~8KB, and full command lines
+:: (Electron apps, the self-tee powershell line) blow past that. The three
+:: checks below match process NAMES and PATH fragments, not args. Command-
+:: line abuse patterns are handled in Section 18g via select_lines.ps1.
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object { $_.Name+'  '+$_.ProcessId+'  '+$_.ExecutablePath }" > "%TEMP%\dz_proc4.tmp" 2>nul
 set "_ENUM4="
 for %%z in ("%TEMP%\dz_proc4.tmp") do if %%~zz GTR 100 set "_ENUM4=1"
 
