@@ -30,9 +30,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Note: every step ends with `exit 0`. The helpers legitimately return a
+      # non-zero exit code (e.g. select_lines.ps1 returns 1 for "no match",
+      # mirroring findstr); GitHub's powershell shell would otherwise propagate
+      # that leaked $LASTEXITCODE as a step failure. Assertion failures still
+      # `exit 1` before reaching the final `exit 0`, and ErrorActionPreference
+      # = Stop fails the step on any thrown error.
       - name: Parse every helper with the Windows PowerShell 5.1 parser
         shell: powershell
         run: |
+          $ErrorActionPreference = 'Stop'
           $bad = @()
           Get-ChildItem tools\*.ps1 | ForEach-Object {
             $errs = $null
@@ -41,25 +48,31 @@ jobs:
           }
           if ($bad) { $bad | ForEach-Object { Write-Host "PARSE ERROR  $_" }; exit 1 }
           Write-Host "All tools/*.ps1 parse clean under Windows PowerShell $($PSVersionTable.PSVersion)"
+          exit 0
 
       - name: scheduled_tasks_full.ps1 (real Get-ScheduledTask + Authenticode)
         shell: powershell
         run: |
+          $ErrorActionPreference = 'Stop'
           foreach ($m in 'Inventory','Suspicious','System') {
             .\tools\scheduled_tasks_full.ps1 -Mode $m | Out-Null
             if ($LASTEXITCODE -gt 1) { Write-Host "scheduled_tasks_full -Mode $m exit $LASTEXITCODE"; exit 1 }
           }
           Write-Host "scheduled_tasks_full OK (all three modes)"
+          exit 0
 
       - name: browser_extensions.ps1 (real profile enumeration)
         shell: powershell
         run: |
+          $ErrorActionPreference = 'Stop'
           .\tools\browser_extensions.ps1 | Out-Null
           Write-Host "browser_extensions OK"
+          exit 0
 
       - name: select_lines.ps1 incl. a 20,000-char line (findstr would hang)
         shell: powershell
         run: |
+          $ErrorActionPreference = 'Stop'
           $f = Join-Path $env:TEMP 'dz_ci_proc.tmp'
           'brave.exe  1  C:\Users\x\AppData\Local\BraveSoftware\Brave-Browser\Application\brave.exe' | Set-Content $f
           ('giant.exe  2  C:\Windows\giant.exe ' + ('x' * 20000)) | Add-Content $f
@@ -69,10 +82,12 @@ jobs:
           .\tools\select_lines.ps1 -Path $f "ScreenConnect" "AnyDesk" | Out-Null
           if ($LASTEXITCODE -ne 1) { Write-Host "expected no RMM match (exit 1), got $LASTEXITCODE"; exit 1 }
           Write-Host "select_lines OK (matched through a 20KB line, no hang)"
+          exit 0
 
       - name: top_findings.ps1 + report_format.ps1 on a sample report
         shell: powershell
         run: |
+          $ErrorActionPreference = 'Stop'
           $r = Join-Path $env:TEMP 'dz_ci_report.txt'
           $lines = @(
             '===================================================================='
@@ -90,12 +105,15 @@ jobs:
           if (-not (Select-String -LiteralPath $r -Pattern 'TOP FINDINGS' -Quiet)) { Write-Host "top_findings did not prepend its block"; exit 1 }
           .\tools\report_format.ps1 -Report $r | Out-Null
           Write-Host "top_findings + report_format OK"
+          exit 0
 
       - name: ioc_hash_check.ps1 (real Get-FileHash, capped)
         shell: powershell
         run: |
+          $ErrorActionPreference = 'Stop'
           .\tools\ioc_hash_check.ps1 -IocFile ThreatLists\ioc_hashes.txt -MaxFiles 3 | Out-Null
           Write-Host "ioc_hash_check OK"
+          exit 0
 
   full-run:
     name: "doze_sec.bat end-to-end (hang guard, hard timeout)"
