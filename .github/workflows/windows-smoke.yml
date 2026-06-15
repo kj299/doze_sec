@@ -1,0 +1,124 @@
+name: windows-smoke
+
+# Real-Windows smoke tests. The lint workflow runs on Linux/pwsh and the
+# author develops on Linux, so neither can exercise cmd.exe end-to-end,
+# Windows PowerShell 5.1 runtime behavior, real WMI/CIM, findstr, or detect
+# a runtime HANG. These jobs close that gap by running on a genuine Windows
+# runner (Windows Server 2022 + built-in Windows PowerShell 5.1).
+#
+# Job 1 (helpers-ps51): parses every tools/*.ps1 with the 5.1 language parser
+# and executes the read-only ones against real WMI/CIM/scheduled-tasks/
+# Authenticode/Get-FileHash -- catching 5.1-only and WMI issues a Linux/pwsh
+# box cannot see. Includes a 20,000-char-line select_lines.ps1 case (the
+# exact shape that hangs findstr).
+#
+# Job 2 (full-run): runs doze_sec.bat end-to-end under a hard timeout. A hang
+# (e.g. the Section 4 findstr-on-long-lines regression) makes the job exceed
+# its timeout and FAIL, instead of silently shipping. -dev bypasses the
+# Server-edition OS gate; -sdu/-nosrp skip the network threat-list pull and
+# the restore point.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  helpers-ps51:
+    name: "tools/*.ps1 on Windows PowerShell 5.1 (real WMI/CIM)"
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse every helper with the Windows PowerShell 5.1 parser
+        shell: powershell
+        run: |
+          $bad = @()
+          Get-ChildItem tools\*.ps1 | ForEach-Object {
+            $errs = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$errs)
+            if ($errs) { $bad += "$($_.Name): $($errs[0].Message)" }
+          }
+          if ($bad) { $bad | ForEach-Object { Write-Host "PARSE ERROR  $_" }; exit 1 }
+          Write-Host "All tools/*.ps1 parse clean under Windows PowerShell $($PSVersionTable.PSVersion)"
+
+      - name: scheduled_tasks_full.ps1 (real Get-ScheduledTask + Authenticode)
+        shell: powershell
+        run: |
+          foreach ($m in 'Inventory','Suspicious','System') {
+            .\tools\scheduled_tasks_full.ps1 -Mode $m | Out-Null
+            if ($LASTEXITCODE -gt 1) { Write-Host "scheduled_tasks_full -Mode $m exit $LASTEXITCODE"; exit 1 }
+          }
+          Write-Host "scheduled_tasks_full OK (all three modes)"
+
+      - name: browser_extensions.ps1 (real profile enumeration)
+        shell: powershell
+        run: |
+          .\tools\browser_extensions.ps1 | Out-Null
+          Write-Host "browser_extensions OK"
+
+      - name: select_lines.ps1 incl. a 20,000-char line (findstr would hang)
+        shell: powershell
+        run: |
+          $f = Join-Path $env:TEMP 'dz_ci_proc.tmp'
+          'brave.exe  1  C:\Users\x\AppData\Local\BraveSoftware\Brave-Browser\Application\brave.exe' | Set-Content $f
+          ('giant.exe  2  C:\Windows\giant.exe ' + ('x' * 20000)) | Add-Content $f
+          'mshta.exe  3  C:\Windows\System32\mshta.exe' | Add-Content $f
+          .\tools\select_lines.ps1 -Path $f "\AppData\" | Out-Null
+          if ($LASTEXITCODE -ne 0) { Write-Host "expected AppData match (exit 0), got $LASTEXITCODE"; exit 1 }
+          .\tools\select_lines.ps1 -Path $f "ScreenConnect" "AnyDesk" | Out-Null
+          if ($LASTEXITCODE -ne 1) { Write-Host "expected no RMM match (exit 1), got $LASTEXITCODE"; exit 1 }
+          Write-Host "select_lines OK (matched through a 20KB line, no hang)"
+
+      - name: top_findings.ps1 + report_format.ps1 on a sample report
+        shell: powershell
+        run: |
+          $r = Join-Path $env:TEMP 'dz_ci_report.txt'
+          $lines = @(
+            '===================================================================='
+            ' [6/18] SCHEDULED TASKS'
+            '===================================================================='
+            '--- CRITICAL: Tasks with Actions in Suspicious Paths ---'
+            '[CRITICAL] 1 scheduled task(s) with actions in suspicious locations: EvilTask'
+            '===================================================================='
+            ' [1/18] SYSTEM IDENTITY AND PATCH LEVEL'
+            '===================================================================='
+            '[OK] placeholder line'
+          )
+          $lines | Set-Content -LiteralPath $r -Encoding UTF8
+          .\tools\top_findings.ps1 -Report $r
+          if (-not (Select-String -LiteralPath $r -Pattern 'TOP FINDINGS' -Quiet)) { Write-Host "top_findings did not prepend its block"; exit 1 }
+          .\tools\report_format.ps1 -Report $r | Out-Null
+          Write-Host "top_findings + report_format OK"
+
+      - name: ioc_hash_check.ps1 (real Get-FileHash, capped)
+        shell: powershell
+        run: |
+          .\tools\ioc_hash_check.ps1 -IocFile ThreatLists\ioc_hashes.txt -MaxFiles 3 | Out-Null
+          Write-Host "ioc_hash_check OK"
+
+  full-run:
+    name: "doze_sec.bat end-to-end (hang guard, hard timeout)"
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the full audit; fail on hang (timeout) or fatal error
+        shell: cmd
+        run: |
+          call doze_sec.bat -dev -sdu -nosrp
+          set RC=%ERRORLEVEL%
+          echo doze_sec.bat exit code: %RC%
+          if not exist "C:\SecurityAudit\SecurityReport_*.txt" ( echo NO REPORT PRODUCED & exit /b 1 )
+          if "%RC%"=="1" ( echo FATAL ERROR exit code 1 & exit /b 1 )
+          echo Completed end-to-end without hang or fatal error.
+          exit /b 0
+
+      - name: Upload the audit artifacts for inspection
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: securityaudit-output
+          path: C:\SecurityAudit\*
+          if-no-files-found: ignore
