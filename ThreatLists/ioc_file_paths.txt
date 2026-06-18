@@ -61,7 +61,3 @@ C:\inetpub\wwwroot\aspnet_client\system_web\cmd.aspx
 %TEMP%\plink.exe
 %TEMP%\ligolo-agent.exe
 %APPDATA%\ngrok\ngrok.exe
-# CTI-AUTO Sat 06/06/2026 [T1546.013] Various
-Microsoft.PowerShell_profile.ps1
-# CTI-AUTO Sat 06/06/2026 [T1505.003] Various
-inetpub\wwwroot\*.aspx

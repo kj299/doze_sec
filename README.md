@@ -149,7 +149,7 @@ Plain-text IOC files. One entry per line. `#` = comment.
 | `ioc_named_pipes.txt` | 32 | Pipe name | Cobalt Strike, Sliver, Havoc, Mythic, PsExec |
 | `ioc_services.txt` | 24 | Service name | C2 implants, BYOVD, ransomware (legitimate RMM/HWMonitor entries removed) |
 | `ioc_registry.txt` | 37 | `HIVE\Path\|Value` | Persistence, COM hijack, defense evasion |
-| `ioc_file_paths.txt` | 46 | File path | Staging dirs, webshells, driver drops |
+| `ioc_file_paths.txt` | 44 | File path | Staging dirs, webshells, driver drops |
 | `ioc_scheduled_tasks.txt` | 19 | Task name/path | Fake updates, APT persistence, ransomware pre-staging |
 | `ioc_domains.txt` | 21 | Domain fragment | C2 infra, tunneling (bare TLDs and legit DoH endpoints removed) |
 | `ioc_hashes.txt` | 12 | `SHA256\|Family\|Source` | BYOVD drivers, CS loaders, ransomware |
