@@ -54,6 +54,22 @@ $notablePerms  = @('webRequest','webRequestBlocking','declarativeNetRequest',
                    'declarativeNetRequestWithHostAccess','cookies','management','clipboardRead','privacy')
 $broadHosts = @('<all_urls>','*://*/*','http://*/*','https://*/*','*://*')
 
+# Vendor built-in component extensions (shipped inside Microsoft Edge / Google
+# Chrome). They are "not from the web store" BY DESIGN, so the non-store signal
+# alone flags every one of them and floods the report. These fixed, documented
+# IDs are trusted built-ins -> never flagged.
+$builtinIds = @(
+    'mhjfbmdgcfjbbpaeojofohoefgiehjai',  # Edge/Chrome built-in PDF Viewer
+    'nkeimhogjdpnpccoofpliimaahmaaome',  # Microsoft Edge built-in component
+    'ncbjelpjchkpbikbpkcchkhkblodoama',  # Edge WebRTC internals component
+    'ndcpkimcihhghdcddljkfmmjccdmcmof',  # Edge Copilot Bridge
+    'ihmafllikibpmigkcoadcmckbfhibefp',  # Edge Feedback
+    'iglcjdemknebjbklcgkfaebgojjphkec',  # Microsoft Store (Edge)
+    'jmjflgjpcpepeafmmgdpfkogkghcpiha',  # Edge built-in component
+    'nmmhkkegccagdldgiimedpiccmgmieda',  # Google Chrome built-in (payments)
+    'mfehgcgbbipciilhngfkfduckiieefnc'   # Edge built-in component
+)
+
 function Test-BroadHost {
     param($hosts)
     foreach ($h in @($hosts)) {
@@ -64,19 +80,33 @@ function Test-BroadHost {
 
 function Emit-Extension {
     param($tag, $name, $ver, $id, $nonStoreReason, $perms, $hosts)
+    # Trusted vendor built-in (Edge/Chrome component) -> never flag.
+    if ($builtinIds -contains $id) {
+        $script:okCount++
+        Write-Output ("[OK] $tag  $name v$ver ($id)  [vendor built-in component]")
+        return
+    }
     $high    = @($perms | Where-Object { $highRiskPerms -contains $_ })
     $notable = @($perms | Where-Object { $notablePerms  -contains $_ })
     $broad   = Test-BroadHost $hosts
 
-    $reasons = @()
-    if ($nonStoreReason)   { $reasons += $nonStoreReason }
-    if ($high.Count -gt 0) { $reasons += ('malware-favored perms: ' + ($high -join ',')) }
-    if ($broad -and $notable.Count -gt 0) { $reasons += ('broad host access + ' + ($notable -join ',')) }
+    # A non-store / sideloaded origin alone is noteworthy but NOT alarming --
+    # browsers ship many non-store built-ins, so flagging on that signal alone
+    # floods the report. Escalate to [WARNING] only when the extension also
+    # wields a malware-favored capability, or broad host access paired with an
+    # interception permission. A lone non-store origin is surfaced at [INFO].
+    $warnReasons = @()
+    if ($high.Count -gt 0) { $warnReasons += ('malware-favored perms: ' + ($high -join ',')) }
+    if ($broad -and $notable.Count -gt 0) { $warnReasons += ('broad host access + ' + ($notable -join ',')) }
 
-    if ($reasons.Count -gt 0) {
+    if ($warnReasons.Count -gt 0) {
+        if ($nonStoreReason) { $warnReasons = @($nonStoreReason) + $warnReasons }
         $script:warnCount++
         Write-Output ("[WARNING] $tag  $name v$ver ($id)")
-        Write-Output ('            -> ' + ($reasons -join '; '))
+        Write-Output ('            -> ' + ($warnReasons -join '; '))
+    } elseif ($nonStoreReason) {
+        $script:okCount++
+        Write-Output ("[INFO] $tag  $name v$ver ($id)  -> $nonStoreReason (no risky capability)")
     } else {
         $script:okCount++
         $ctx = @()

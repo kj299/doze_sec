@@ -3708,7 +3708,7 @@ echo.
 echo %C_BOLD%%C_WHITE%====================================================================
 echo  AUDIT COMPLETE%C_RESET%
 echo  Exit code  : %EXIT_CODE%
-echo  %C_DIM%0=Success  1=Error  2=Warning  3=UnsupportedOS  4=Reboot  5=TEMP  6=PartialNoAdmin%C_RESET%
+echo  %C_DIM%0=Success  1=Error  2=Warning  3=UnsupportedOS  4=Reboot  5=TEMP  6=PartialNoAdmin  7=VTfail  8=Critical%C_RESET%
 echo  Report     : %C_WHITE%%REPORT%%C_RESET%
 if exist "%REPORT_HTML%" echo  HTML Report: %C_WHITE%%REPORT_HTML%%C_RESET%
 if exist "%REMEDIATION%" (
