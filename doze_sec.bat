@@ -3892,7 +3892,7 @@ if "%EXIT_CODE%"=="4" echo  Exit code  : %C_YELLOW%%EXIT_CODE%%C_RESET%
 if "%EXIT_CODE%"=="5" echo  Exit code  : %C_RED%%EXIT_CODE%%C_RESET%
 if "%EXIT_CODE%"=="7" echo  Exit code  : %C_RED%%EXIT_CODE%%C_RESET%
 if "%EXIT_CODE%"=="8" echo  Exit code  : %C_RED%%EXIT_CODE%%C_RESET%
-echo  %C_DIM%0=Success  1=Error  2=Warning  3=UnsupportedOS  4=Reboot  5=TEMP%C_RESET%
+echo  %C_DIM%0=Success  1=Error  2=Warning  3=UnsupportedOS  4=Reboot  5=TEMP  7=VTfail  8=Critical%C_RESET%
 echo  Report     : %C_CYAN%%REPORT%%C_RESET%
 echo  HTML Report: %C_CYAN%%REPORT_HTML%%C_RESET%
 if exist "%REMEDIATION%" (
