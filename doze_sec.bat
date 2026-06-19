@@ -3232,10 +3232,10 @@ echo $iocFile='%IOCDIR%\ioc_registry.txt' > "%PSRUN%"
 echo $lines=if(Test-Path $iocFile){Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'}} >> "%PSRUN%"
 echo $hits=@() >> "%PSRUN%"
 echo foreach($line in $lines){ >> "%PSRUN%"
-echo   $parts=$line.Split('^|'); $keyPath=$parts[0]; $valName=if($parts.Count -gt 1){$parts[1]}else{$null} >> "%PSRUN%"
+echo   $parts=$line.Split('^|'); $keyPath=$parts[0]; $valName=if($parts.Count -gt 1){$parts[1]}else{$null}; $badVal=if($parts.Count -gt 2){$parts[2]}else{$null} >> "%PSRUN%"
 echo   $psPath=$keyPath -replace '^HKLM\\','HKLM:\' -replace '^HKCU\\','HKCU:\' >> "%PSRUN%"
 echo   try{ >> "%PSRUN%"
-echo     if($valName){$v=Get-ItemProperty $psPath -Name $valName -EA Stop; $hits+="$keyPath\$valName = $($v.$valName)"} >> "%PSRUN%"
+echo     if($valName){$v=Get-ItemProperty $psPath -Name $valName -EA Stop; $cur="$($v.$valName)"; if($badVal){if($cur -eq $badVal){$hits+="$keyPath\$valName = $cur"}}else{$hits+="$keyPath\$valName = $cur"}} >> "%PSRUN%"
 echo     else{if(Test-Path $psPath){$hits+="$keyPath [EXISTS]"}} >> "%PSRUN%"
 echo   }catch{} >> "%PSRUN%"
 echo } >> "%PSRUN%"
@@ -3862,7 +3862,7 @@ echo.
 
 echo ====================================================================>> "%REPORT%"
 (echo  EXIT CODE: %EXIT_CODE%)>> "%REPORT%"
-echo  0=Success  1=Error  2=Warning  3=UnsupportedOS  4=RebootPending  5=RanFromTEMP  7=VTIntegrityFail  8=CriticalFindings>> "%REPORT%"
+echo  0=Success  1=Error  2=Warning  3=UnsupportedOS  4=RebootPending  5=RanFromTEMP  6=PartialNoAdmin  7=VTIntegrityFail  8=CriticalFindings>> "%REPORT%"
 if "%EXIT_CODE%"=="0" echo  STATUS: Clean run - no fatal issues encountered.>> "%REPORT%"
 if "%EXIT_CODE%"=="1" echo  STATUS: Fatal error. Check console output above for details.>> "%REPORT%"
 if "%EXIT_CODE%"=="2" echo  STATUS: Audit complete with warnings. Review [WARNING] items in report.>> "%REPORT%"
@@ -3892,7 +3892,7 @@ if "%EXIT_CODE%"=="4" echo  Exit code  : %C_YELLOW%%EXIT_CODE%%C_RESET%
 if "%EXIT_CODE%"=="5" echo  Exit code  : %C_RED%%EXIT_CODE%%C_RESET%
 if "%EXIT_CODE%"=="7" echo  Exit code  : %C_RED%%EXIT_CODE%%C_RESET%
 if "%EXIT_CODE%"=="8" echo  Exit code  : %C_RED%%EXIT_CODE%%C_RESET%
-echo  %C_DIM%0=Success  1=Error  2=Warning  3=UnsupportedOS  4=Reboot  5=TEMP  7=VTfail  8=Critical%C_RESET%
+echo  %C_DIM%0=Success  1=Error  2=Warning  3=UnsupportedOS  4=Reboot  5=TEMP  6=PartialNoAdmin  7=VTfail  8=Critical%C_RESET%
 echo  Report     : %C_CYAN%%REPORT%%C_RESET%
 echo  HTML Report: %C_CYAN%%REPORT_HTML%%C_RESET%
 if exist "%REMEDIATION%" (

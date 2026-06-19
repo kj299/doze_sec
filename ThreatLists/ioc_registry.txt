@@ -1,7 +1,12 @@
 # Last verified by doze_sec: 2026-06-06 10:20:38
 # SENTINEL-X CTI -- Suspicious Registry Keys/Values
 # Updated: 2026-03-29 | Source: MDDR 2024-2025, MITRE ATT&CK
-# Format: HIVE\KEY\PATH|ValueName (pipe-delimited, reg query each)
+# Format: HIVE\KEY\PATH|ValueName|BadValue (pipe-delimited)
+#   - HIVE\KEY|ValueName|BadValue : fire ONLY when the value equals BadValue
+#     (use for security-state values, so a hardened setting is not flagged).
+#   - HIVE\KEY|ValueName           : fire when the value exists at all
+#     (use for value NAMES that should never legitimately be present).
+#   - HIVE\KEY|                    : fire when the key exists ([EXISTS]).
 # Lines starting with # are comments
 #
 # === PERSISTENCE: Run Keys (unusual entries) ===
@@ -21,51 +26,28 @@ HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon|System
 HKCU\SOFTWARE\Classes\CLSID\{b5f8350b-0548-48b1-a6ee-88bd00b4a5e7}|
 HKCU\SOFTWARE\Classes\CLSID\{BCDE0395-E52F-467C-8E3D-C4579291692E}|
 #
-# === DEFENSE EVASION: Disable Defender via Registry ===
-HKLM\SOFTWARE\Policies\Microsoft\Windows Defender|DisableAntiSpyware
-HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection|DisableRealtimeMonitoring
-HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection|DisableBehaviorMonitoring
-HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection|DisableIOAVProtection
-HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Spynet|SpynetReporting
+# === DEFENSE EVASION: Disable Defender via Registry (bad value = 1 disabled) ===
+HKLM\SOFTWARE\Policies\Microsoft\Windows Defender|DisableAntiSpyware|1
+HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection|DisableRealtimeMonitoring|1
+HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection|DisableBehaviorMonitoring|1
+HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection|DisableIOAVProtection|1
+HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Spynet|SpynetReporting|0
 #
 # === UAC BYPASS ===
-HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System|EnableLUA
+HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System|EnableLUA|0
 HKCU\SOFTWARE\Classes\ms-settings\Shell\Open\command|
 HKCU\SOFTWARE\Classes\mscfile\Shell\Open\command|
 #
-# === CREDENTIAL ACCESS ===
-HKLM\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest|UseLogonCredential
-HKLM\SYSTEM\CurrentControlSet\Control\Lsa|DisableRestrictedAdmin
+# === CREDENTIAL ACCESS (bad value = 1 enabled) ===
+HKLM\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest|UseLogonCredential|1
+HKLM\SYSTEM\CurrentControlSet\Control\Lsa|DisableRestrictedAdmin|1
 #
 # === PORTPROXY (Volt Typhoon) ===
 HKLM\SYSTEM\CurrentControlSet\Services\PortProxy\v4tov4\tcp|
 #
-# === DISABLE SECURITY FEATURES ===
-HKLM\SYSTEM\CurrentControlSet\Control\Lsa|RunAsPPL
-HKLM\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging|EnableScriptBlockLogging
-HKLM\SYSTEM\CurrentControlSet\Services\EventLog\Security|MaxSize
+# === DISABLE SECURITY FEATURES (bad value = disabled state) ===
+HKLM\SYSTEM\CurrentControlSet\Control\Lsa|RunAsPPL|0
+HKLM\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging|EnableScriptBlockLogging|0
 #
 # === NETWORK PROXY (MitM) ===
 HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings|AutoConfigURL
-# CTI-AUTO Sat 06/06/2026 [T1204.004] TA571
-HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU
-# CTI-AUTO Sat 06/06/2026 [T1547.004] Various
-HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\Userinit
-# CTI-AUTO Sat 06/06/2026 [T1556.002] Various
-HKLM\SYSTEM\CurrentControlSet\Control\Lsa\Notification Packages
-# CTI-AUTO Sat 06/06/2026 [T1547.005] Various
-HKLM\SYSTEM\CurrentControlSet\Control\Lsa\Security Packages
-# CTI-AUTO Sat 06/06/2026 [T1546.012] Various
-HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SilentProcessExit
-# CTI-AUTO Sat 06/06/2026 [T1037.001] Various
-HKCU\Environment\UserInitMprLogonScript
-# CTI-AUTO Sat 06/06/2026 [T1505.005] Various
-HKLM\SYSTEM\CurrentControlSet\Services\TermService\Parameters\ServiceDll
-# CTI-AUTO Sat 06/06/2026 [T1547.010] Various
-HKLM\SYSTEM\CurrentControlSet\Control\Print\Monitors
-# CTI-AUTO Sat 06/06/2026 [T1547.014] Various
-HKLM\SOFTWARE\Microsoft\Active Setup\Installed Components
-# CTI-AUTO Sat 06/06/2026 [T1546.007] Various
-HKLM\SOFTWARE\Microsoft\NetSh
-# CTI-AUTO Sat 06/06/2026 [T1546.011] Various
-HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Custom
