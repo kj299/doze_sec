@@ -400,6 +400,13 @@ echo.
 :: Ensure OUTDIR is set before use (main OUTDIR set later, but -updateTTP runs early)
 if not defined OUTDIR set "OUTDIR=C:\SecurityAudit"
 if not exist "%OUTDIR%\ThreatLists" mkdir "%OUTDIR%\ThreatLists" 2>nul
+:: Seed the runtime ThreatLists from the shipped baseline BEFORE merging, so
+:: -updateTTP appends new IOCs to the runtime copy (never the git checkout).
+:: Per-file copy-if-missing -- mirrors the main seeding at INIT time and is
+:: idempotent, so hand-edited runtime files are preserved.
+for %%f in (ioc_processes.txt ioc_named_pipes.txt ioc_services.txt ioc_registry.txt ioc_file_paths.txt ioc_scheduled_tasks.txt ioc_domains.txt ioc_hashes.txt ioc_lolbins.txt ttp_manifest.txt) do (
+    if not exist "%OUTDIR%\ThreatLists\%%f" if exist "%~dp0ThreatLists\%%f" copy /y "%~dp0ThreatLists\%%f" "%OUTDIR%\ThreatLists\" >nul 2>&1
+)
 :: Compute today's date as locale-independent yyyyMMdd via PowerShell.
 :: %date% is locale-dependent (US=ddd MM/DD/YYYY, ISO=YYYY-MM-DD, DE=DD.MM.YYYY,
 :: etc.) and substring slicing produces garbage on non-US systems.
@@ -669,8 +676,6 @@ if not exist "%TTP_BLOCKS%" (
 )
 echo :: --- Update: %date% %time% --->> "%TTP_BLOCKS%"
 
-set "SCRIPT_THREATS=%~dp0ThreatLists"
-
 :: Process each TTP row via tools/ttp_merge.ps1. Closes #77/#78/#79: emits
 :: detection blocks for all six Detection_Method types (registry key, event
 :: ID, process name, file path, named pipe, wmi query), merges values into
@@ -681,13 +686,15 @@ set "SCRIPT_THREATS=%~dp0ThreatLists"
 :: somewhere-else pattern the PowerShell helper exists to escape.
 :: NOTE: this runs before the main setup block sets %SCRIPT_DIR% and %PWSH%,
 :: so use %~dp0 and plain `powershell` here.
-:: Mirror IOC + manifest writes to BOTH the repo's ThreatLists (so the new
-:: rows are committable and propagate upstream) AND the audit's runtime
-:: ThreatLists at %OUTDIR%\ThreatLists (so the very next audit's IOC sweep
-:: sees them immediately, no git push + INIT 10/14 round-trip required).
-:: (closes #104)
+:: Write IOC + manifest merges ONLY to the audit's runtime ThreatLists at
+:: %OUTDIR%\ThreatLists (seeded just above), so the next IOC sweep sees them
+:: immediately. The repo's shipped ThreatLists/ is a hand-curated baseline and
+:: is deliberately NOT written here -- earlier builds mirrored writes back into
+:: the checkout, which dirtied `git pull` and let non-discriminating CTI-AUTO
+:: indicators leak into the committed baseline. Curation now lives upstream
+:: (the threat-intel skill), not in -updateTTP's runtime output.
 if exist "%~dp0tools\ttp_merge.ps1" (
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\ttp_merge.ps1" -TtpOutput "%TTP_OUTPUT%" -BlocksFile "%TTP_BLOCKS%" -ThreatListsDir "%SCRIPT_THREATS%" -AdditionalThreatListsDir "%OUTDIR%\ThreatLists"
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\ttp_merge.ps1" -TtpOutput "%TTP_OUTPUT%" -BlocksFile "%TTP_BLOCKS%" -ThreatListsDir "%OUTDIR%\ThreatLists"
 ) else (
     echo  [WARN] tools\ttp_merge.ps1 not found -- TTP detection blocks, IOC merge, and ttp_manifest.txt update all skipped.
 )
@@ -745,8 +752,8 @@ if not exist "%OUTDIR%\ThreatLists" mkdir "%OUTDIR%\ThreatLists"
 :: Seed runtime ThreatLists from the repo's shipped baseline (closes #106).
 :: %OUTDIR%\ThreatLists is the live copy from this run forward -- INIT 10/14
 :: writes freshness headers + upstream fetches here, Section 18 reads here.
-:: The repo's ThreatLists/ stays as the shipped baseline (and is the destination
-:: of -updateTTP's committable writes via ttp_merge.ps1's repo-side mirror).
+:: The repo's ThreatLists/ stays as the read-only shipped baseline; -updateTTP
+:: writes its merges only to %OUTDIR%\ThreatLists, never back into the checkout.
 :: This copy is per-file so users can hand-edit individual runtime files
 :: without them being overwritten on subsequent runs.
 for %%f in (ioc_processes.txt ioc_named_pipes.txt ioc_services.txt ioc_registry.txt ioc_file_paths.txt ioc_scheduled_tasks.txt ioc_domains.txt ioc_hashes.txt ioc_lolbins.txt ttp_manifest.txt) do (
