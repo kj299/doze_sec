@@ -47,13 +47,15 @@
 param(
     [Parameter(Mandatory=$true)] [string]$TtpOutput,
     [Parameter(Mandatory=$true)] [string]$BlocksFile,
+    # Primary write target. doze_sec passes the audit's RUNTIME ThreatLists
+    # (C:\SecurityAudit\ThreatLists) here so merges take effect on the next
+    # IOC sweep. It deliberately does NOT pass the repo's shipped ThreatLists/
+    # -- that baseline is hand-curated and must not be dirtied by runtime
+    # appends (curation lives upstream in the threat-intel skill).
     [Parameter(Mandatory=$true)] [string]$ThreatListsDir,
-    # Optional: when set, IOC merges and manifest appends are mirrored to
-    # this second directory as well. Use case: $ThreatListsDir is the repo
-    # path (committable) and $AdditionalThreatListsDir is the audit's
-    # runtime path (C:\SecurityAudit\ThreatLists) so new IOCs take effect
-    # on the very next audit run without waiting for a git push +
-    # INIT 10/14 fetch round-trip. (closes #104)
+    # Optional second mirror target (legacy; unused by doze_sec.bat). When set,
+    # IOC merges and manifest appends are written here too. Kept for callers
+    # that still want to mirror into a second directory.
     [Parameter(Mandatory=$false)] [string]$AdditionalThreatListsDir = ''
 )
 
