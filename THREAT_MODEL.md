@@ -13,8 +13,8 @@ user a safe, reviewable path to fix it. The protection chain it supports:
    Secure Boot, BitLocker, SmartScreen. doze_sec *audits that these are on
    and untampered* (Sections 8, 9, 13) rather than duplicating them.
 2. **Detection** is doze_sec's core job: 14 pre-flight checks + 18 audit
-   sections + a CTI-driven IOC sweep (Section 18) covering 77 MITRE ATT&CK
-   techniques and 320 indicators across 10 IOC categories.
+   sections + a CTI-driven IOC sweep (Section 18) covering 48 MITRE ATT&CK
+   techniques and 283 indicators across 10 IOC categories.
 3. **Response** is user-gated by design: a severity-sorted report (text +
    HTML), a suggested remediation script behind an explicit
    I-read-and-understand gate, and an undo script for the few changes the

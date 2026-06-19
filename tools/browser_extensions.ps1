@@ -67,7 +67,15 @@ $builtinIds = @(
     'iglcjdemknebjbklcgkfaebgojjphkec',  # Microsoft Store (Edge)
     'jmjflgjpcpepeafmmgdpfkogkghcpiha',  # Edge built-in component
     'nmmhkkegccagdldgiimedpiccmgmieda',  # Google Chrome built-in (payments)
-    'mfehgcgbbipciilhngfkfduckiieefnc'   # Edge built-in component
+    'mfehgcgbbipciilhngfkfduckiieefnc',  # Edge built-in component
+    'ahfgeienlihckogmohjhadlkjgocpleb',  # Chrome/Edge/Brave Web Store (component)
+    'fignfifoniblkonapihmkfakmlgkbkcf',  # Google Network Speech
+    'neajdppkdcdipfabeoofebfddakdcjhd',  # Google Network Speech (Edge variant)
+    'dgiklkfkllikcanfonkcabmbdfmgleag',  # Edge Clipboard component
+    'epdpgaljfdjmcemiaplofbiholoaepem',  # Edge Suppress Consent Prompt component
+    'fikbjbembnmfhppjfnmfkahdhfohhjmg',  # Edge Media Internals Services component
+    'jdiccldimpdaibmpdkjnbmckianbfold',  # Microsoft Voices (Edge)
+    'mnojpmjdmbbfmejpflffifhffcmidifd'   # Brave built-in component
 )
 
 function Test-BroadHost {
