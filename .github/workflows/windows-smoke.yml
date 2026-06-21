@@ -107,6 +107,40 @@ jobs:
           Write-Host "top_findings + report_format OK"
           exit 0
 
+      - name: report_html.ps1 surfaces a Findings Index with section links
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $r = Join-Path $env:TEMP 'dz_ci_html_report.txt'
+          $h = Join-Path $env:TEMP 'dz_ci_html_report.html'
+          $lines = @(
+            '===================================================================='
+            ' [18/18] CTI-DRIVEN IOC SWEEP'
+            '===================================================================='
+            '[CRITICAL] Known malware staging files found: C:\x\evil.exe'
+            '######################################################################'
+            '##  SECURITY AUDIT SUMMARY  --  CITEST'
+            '##  ACTION REQUIRED  --  1 CRITICAL  /  2 WARNING  /  5 PASSED'
+            '######################################################################'
+            '  --- CTI IOC SWEEP  (Section 18 - SENTINEL-X) -----------------------'
+            '  [!! CRITICAL !!]  CTI IOC sweep: 1 category matches found'
+            '                     Fix: Review Section 18 for specific IOC matches.'
+            '  --- SYSTEM HARDENING  (Section 13) ---------------------------------'
+            '  [  WARNING   ]  BitLocker OFF for C:'
+            '  [    OK      ]  UAC on with prompt'
+            '  NEXT STEPS -- CRITICAL issues found:'
+          )
+          $lines | Set-Content -LiteralPath $r -Encoding UTF8
+          .\tools\report_html.ps1 -Report $r -HtmlPath $h
+          if (-not (Test-Path $h)) { Write-Host 'report_html produced no HTML'; exit 1 }
+          $html = Get-Content -LiteralPath $h -Raw
+          if ($html -notmatch 'Findings Index') { Write-Host 'no Findings Index panel'; exit 1 }
+          if ($html -notmatch 'CTI IOC sweep: 1 category matches found') { Write-Host 'critical finding not surfaced'; exit 1 }
+          if ($html -notmatch 'href="#sec18"') { Write-Host 'critical not linked to its section'; exit 1 }
+          if ($html -notmatch '<div class="card card-crit"><h3>1</h3>') { Write-Host 'dashboard crit count not taken from verdict line'; exit 1 }
+          Write-Host 'report_html OK (Findings Index, section link, verdict-based counts)'
+          exit 0
+
       - name: ioc_hash_check.ps1 (real Get-FileHash, capped)
         shell: powershell
         run: |
