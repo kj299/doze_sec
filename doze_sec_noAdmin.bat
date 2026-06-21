@@ -867,39 +867,57 @@ if exist "%TEMP%\bcd_snap_%TIMESTAMP%.txt" (
     del "%TEMP%\bcd_snap_%TIMESTAMP%.txt" >nul 2>&1
 )
 
-bcdedit /set {bootmgr} displaybootmenu yes >nul 2>&1
-if %errorlevel% equ 0 (
-    echo  [OK] Boot menu re-enabled - bcdedit displaybootmenu=yes.>> "%REPORT%"
-    echo  [CHANGED] Was: displaybootmenu=%PREV_BOOTMENU%  Now: yes>> "%REPORT%"
-    bcdedit /timeout 5 >nul 2>&1
-    echo  [OK] Boot timeout set to 5 seconds.>> "%REPORT%"
-    (echo  [CHANGED] Was: timeout=%PREV_TIMEOUT%  Now: 5)>> "%REPORT%"
-    echo %C_GREEN%[INIT 11/14]%C_RESET% F8 boot menu re-enabled - 5 second timeout set.
+rem Apply ONLY the settings that are not already at the desired value, so the
+rem changelog and undo script record real modifications -- not phantom
+rem "[CHANGED]" entries on machines where the boot menu is already enabled.
+set "BOOTMENU_CHANGED=0"
+set "TIMEOUT_CHANGED=0"
 
-    rem Log the changes
-    echo [CHANGED] bcdedit {bootmgr} displaybootmenu: was "%PREV_BOOTMENU%" -- set to "yes">> "%CHANGELOG%"
-    echo [CHANGED] bcdedit {bootmgr} timeout: was "%PREV_TIMEOUT%" -- set to "5">> "%CHANGELOG%"
-    echo.>> "%CHANGELOG%"
-    set "SCRIPT_CHANGED=1"
-
-    rem Write undo commands
-    echo echo Restoring boot menu settings...>> "%UNDO_BAT%"
-    if "%PREV_BOOTMENU%"=="absent" (
-        echo bcdedit /deletevalue {bootmgr} displaybootmenu>> "%UNDO_BAT%"
+if /i not "%PREV_BOOTMENU%"=="yes" (
+    bcdedit /set {bootmgr} displaybootmenu yes >nul 2>&1
+    if !errorlevel! equ 0 (
+        set "BOOTMENU_CHANGED=1"
     ) else (
-        echo bcdedit /set {bootmgr} displaybootmenu %PREV_BOOTMENU%>> "%UNDO_BAT%"
+        echo  [WARNING] Could not set displaybootmenu. bcdedit may be restricted.>> "%REPORT%"
+        echo %C_GREEN%[INIT 11/14]%C_RESET% displaybootmenu set returned non-zero - non-fatal.
     )
-    if "%PREV_TIMEOUT%"=="absent" (
-        echo bcdedit /deletevalue {bootmgr} timeout>> "%UNDO_BAT%"
-    ) else (
-        (echo bcdedit /timeout %PREV_TIMEOUT%)>> "%UNDO_BAT%"
-    )
-    echo echo Boot menu settings restored.>> "%UNDO_BAT%"
-    echo.>> "%UNDO_BAT%"
-) else (
-    echo  [WARNING] Could not set displaybootmenu. May already be set or bcdedit restricted.>> "%REPORT%"
-    echo %C_GREEN%[INIT 11/14]%C_RESET% F8 re-enable returned non-zero - non-fatal.
 )
+
+if not "%PREV_TIMEOUT%"=="5" (
+    bcdedit /timeout 5 >nul 2>&1
+    if !errorlevel! equ 0 (
+        set "TIMEOUT_CHANGED=1"
+    ) else (
+        echo  [WARNING] Could not set boot timeout. bcdedit may be restricted.>> "%REPORT%"
+    )
+)
+
+if "!BOOTMENU_CHANGED!"=="1" (
+    echo  [CHANGED] displaybootmenu: was %PREV_BOOTMENU% -- set to yes>> "%REPORT%"
+    echo [CHANGED] bcdedit {bootmgr} displaybootmenu: was "%PREV_BOOTMENU%" -- set to "yes">> "%CHANGELOG%"
+)
+if "!TIMEOUT_CHANGED!"=="1" (
+    echo  [CHANGED] timeout: was %PREV_TIMEOUT% -- set to 5>> "%REPORT%"
+    echo [CHANGED] bcdedit {bootmgr} timeout: was "%PREV_TIMEOUT%" -- set to "5">> "%CHANGELOG%"
+)
+
+if "!BOOTMENU_CHANGED!"=="0" if "!TIMEOUT_CHANGED!"=="0" (
+    echo  [OK] Boot menu already enabled ^(displaybootmenu=yes, timeout=5^) -- no change made.>> "%REPORT%"
+    echo %C_GREEN%[INIT 11/14]%C_RESET% F8 boot menu already enabled - no change needed.
+    goto :f8_done
+)
+
+rem At least one real change -- finalize the changelog, undo script, and flag.
+echo.>> "%CHANGELOG%"
+set "SCRIPT_CHANGED=1"
+echo echo Restoring boot menu settings...>> "%UNDO_BAT%"
+if "!BOOTMENU_CHANGED!"=="1" if "%PREV_BOOTMENU%"=="absent" echo bcdedit /deletevalue {bootmgr} displaybootmenu>> "%UNDO_BAT%"
+if "!BOOTMENU_CHANGED!"=="1" if not "%PREV_BOOTMENU%"=="absent" echo bcdedit /set {bootmgr} displaybootmenu %PREV_BOOTMENU%>> "%UNDO_BAT%"
+if "!TIMEOUT_CHANGED!"=="1" if "%PREV_TIMEOUT%"=="absent" echo bcdedit /deletevalue {bootmgr} timeout>> "%UNDO_BAT%"
+if "!TIMEOUT_CHANGED!"=="1" if not "%PREV_TIMEOUT%"=="absent" (echo bcdedit /timeout %PREV_TIMEOUT%)>> "%UNDO_BAT%"
+echo echo Boot menu settings restored.>> "%UNDO_BAT%"
+echo.>> "%UNDO_BAT%"
+echo %C_GREEN%[INIT 11/14]%C_RESET% F8 boot menu re-enabled - only changed settings logged.
 :f8_done
 echo.>> "%REPORT%"
 
