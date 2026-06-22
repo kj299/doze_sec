@@ -1,6 +1,6 @@
 ================================================================================
   doze_sec - Windows Security Forensic Audit Tool
-  Version 7.1 | SENTINEL-X CTI Integration | HTML Report Output
+  Version 7.2 | SENTINEL-X CTI Integration | HTML Report Output
 ================================================================================
 
 WHAT IT DOES
@@ -309,7 +309,7 @@ PROJECT STRUCTURE
     README.md                 Canonical documentation
     THREAT_MODEL.md           Coverage matrices, non-goals, limitations
     CLAUDE.md                 Developer / contributor notes
-    version.txt               Current version (7.1)
+    version.txt               Current version (7.2)
     ThreatLists/
       ioc_processes.txt       Process name IOCs
       ioc_named_pipes.txt     Named pipe IOCs
