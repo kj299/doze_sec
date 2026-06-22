@@ -149,6 +149,27 @@ jobs:
           Write-Host "ioc_hash_check OK"
           exit 0
 
+      # Server runners have System Protection off, so Checkpoint-Computer
+      # cannot create a real restore point. That's the point of THIS test:
+      # in a no-op run, srp_check.ps1 must (1) execute without parser/runtime
+      # errors and (2) NOT write the marker file. Writing it incorrectly is
+      # exactly the trust-bug we're guarding against -- it'd cause doze_sec to
+      # log a phantom "[CREATED]" entry in every change log.
+      - name: srp_check.ps1 runs cleanly and does NOT mark on a no-op
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $m = Join-Path $env:TEMP 'dz_ci_srp_marker.txt'
+          if (Test-Path $m) { Remove-Item $m -Force }
+          .\tools\srp_check.ps1 -Description 'doze_sec CI selftest' -MarkerFile $m | Out-Null
+          if (Test-Path $m) {
+            Write-Host "srp_check FAILED: marker file was written despite no new restore point being created"
+            Remove-Item $m -Force
+            exit 1
+          }
+          Write-Host "srp_check OK (no marker on no-op)"
+          exit 0
+
   full-run:
     name: "doze_sec.bat end-to-end (hang guard, hard timeout)"
     runs-on: windows-latest

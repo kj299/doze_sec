@@ -1352,24 +1352,13 @@ if "%WIN_GEN%"=="Win7" (
 
 echo  Creating... (can take 30-60 seconds)
 del "%TEMP%\dz_srp_created.txt" 2>nul
-echo $beforeMax = 0 > "%PSRUN%"
-echo try { $bp = @(Get-ComputerRestorePoint -EA Stop); if ($bp) { $beforeMax = ($bp ^| Measure-Object -Property SequenceNumber -Maximum).Maximum } } catch {} >> "%PSRUN%"
-echo Try { >> "%PSRUN%"
-echo   Enable-ComputerRestore -Drive "$env:SystemDrive\" -EA SilentlyContinue >> "%PSRUN%"
-echo   Checkpoint-Computer -Description "Pre-WIN11-Security-Audit-v%SCRIPT_VERSION%" -RestorePointType "MODIFY_SETTINGS" -EA Stop >> "%PSRUN%"
-echo } Catch { >> "%PSRUN%"
-echo   Write-Output ("  [WARN] SRP failed: "+$_.Exception.Message) >> "%PSRUN%"
-echo   Write-Output "       To fix: Control Panel ^> System ^> System Protection ^> Configure ^> Enable" >> "%PSRUN%"
-echo } >> "%PSRUN%"
-echo $afterMax = 0 >> "%PSRUN%"
-echo try { $ap = @(Get-ComputerRestorePoint -EA Stop); if ($ap) { $afterMax = ($ap ^| Measure-Object -Property SequenceNumber -Maximum).Maximum } } catch {} >> "%PSRUN%"
-echo if ($afterMax -gt $beforeMax) { Write-Output "  [OK] System Restore Point created successfully."; New-Item "$env:TEMP\dz_srp_created.txt" -Force ^| Out-Null } else { Write-Output "  [INFO] No new restore point created -- Windows allows only one per 24h, or System Protection is off. Existing restore points are unaffected." } >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\srp_check.ps1" -Description "Pre-WIN11-Security-Audit-v%SCRIPT_VERSION%" -MarkerFile "%TEMP%\dz_srp_created.txt">> "%REPORT%" 2>&1
 
 rem Log the restore point to the changelog ONLY if one was actually created.
-rem Windows throttles restore points to one per 24h, so re-running would
-rem otherwise record a phantom [CREATED] every time. The PS above writes the
-rem marker file only when a new point really appeared (afterMax ^> beforeMax).
+rem srp_check.ps1 writes the marker only when Get-ComputerRestorePoint's max
+rem SequenceNumber actually increased -- Windows throttles restore points to
+rem one per 24h, so on a re-run the marker (and therefore the [CREATED] log
+rem entry) is correctly absent.
 if exist "%TEMP%\dz_srp_created.txt" (
     echo [CREATED] System Restore Point: "Pre-WIN11-Security-Audit-v%SCRIPT_VERSION%">> "%CHANGELOG%"
     echo           This is a safety net -- it lets you roll back any changes made AFTER this point.>> "%CHANGELOG%"
