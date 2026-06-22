@@ -2,7 +2,7 @@
 
 Windows 10/11 security forensic audit tool with SENTINEL-X CTI integration.
 
-**Version 7.1** | 18-section audit | 48 MITRE ATT&CK techniques | 10 IOC categories
+**Version 7.2** | 18-section audit | 48 MITRE ATT&CK techniques | 10 IOC categories
 
 Detection-and-response aid, not real-time protection — see [THREAT_MODEL.md](THREAT_MODEL.md) for exactly what is and is not covered.
 

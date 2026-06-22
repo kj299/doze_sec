@@ -34,7 +34,7 @@ exit /b %DOZE_EXIT_CODE%
 :_console_log_done
 :: -----------------------------------------------------------------------------
 :: ====================================================================
-::  WIN11 SECURITY FORENSIC AUDIT  v7.1-noAdmin
+::  WIN11 SECURITY FORENSIC AUDIT  v7.2-noAdmin
 ::  CMD-COMPATIBLE: All PowerShell runs via temp .ps1 file (-File mode).
 ::  Nation-state TTPs: Microsoft MDDR 2023.
 ::
@@ -89,7 +89,7 @@ set "C_BOLD=%ESC%[1m"
 set "C_DIM=%ESC%[2m"
 
 :: ---- Script identity and config ----
-set "SCRIPT_VERSION=7.1-noAdmin"
+set "SCRIPT_VERSION=7.2-noAdmin"
 set "SCRIPT_NAME=WIN11_SecurityAudit"
 set "SCRIPT_PATH=%~dp0%~nx0"
 :: Set UPDATE_URL to your GitHub raw base URL to enable self-update checks.
@@ -963,24 +963,35 @@ if "%WIN_GEN%"=="Win7" (
 )
 
 echo  Creating... (can take 30-60 seconds)
-echo Try { > "%PSRUN%"
+del "%TEMP%\dz_srp_created.txt" 2>nul
+echo $beforeMax = 0 > "%PSRUN%"
+echo try { $bp = @(Get-ComputerRestorePoint -EA Stop); if ($bp) { $beforeMax = ($bp ^| Measure-Object -Property SequenceNumber -Maximum).Maximum } } catch {} >> "%PSRUN%"
+echo Try { >> "%PSRUN%"
 echo   Enable-ComputerRestore -Drive "$env:SystemDrive\" -EA SilentlyContinue >> "%PSRUN%"
 echo   Checkpoint-Computer -Description "Pre-WIN11-Security-Audit-v%SCRIPT_VERSION%" -RestorePointType "MODIFY_SETTINGS" -EA Stop >> "%PSRUN%"
-echo   Write-Output "  [OK] System Restore Point created successfully." >> "%PSRUN%"
 echo } Catch { >> "%PSRUN%"
 echo   Write-Output ("  [WARN] SRP failed: "+$_.Exception.Message) >> "%PSRUN%"
 echo   Write-Output "       To fix: Control Panel ^> System ^> System Protection ^> Configure ^> Enable" >> "%PSRUN%"
 echo } >> "%PSRUN%"
+echo $afterMax = 0 >> "%PSRUN%"
+echo try { $ap = @(Get-ComputerRestorePoint -EA Stop); if ($ap) { $afterMax = ($ap ^| Measure-Object -Property SequenceNumber -Maximum).Maximum } } catch {} >> "%PSRUN%"
+echo if ($afterMax -gt $beforeMax) { Write-Output "  [OK] System Restore Point created successfully."; New-Item "$env:TEMP\dz_srp_created.txt" -Force ^| Out-Null } else { Write-Output "  [INFO] No new restore point created -- Windows allows only one per 24h, or System Protection is off. Existing restore points are unaffected." } >> "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
-:: Log SRP to changelog (SRP is a safety net -- cannot be undone but is always desirable)
-echo [CREATED] System Restore Point: "Pre-WIN11-Security-Audit-v%SCRIPT_VERSION%">> "%CHANGELOG%"
-echo           This is a safety net -- it lets you roll back any changes made AFTER this point.>> "%CHANGELOG%"
-echo           Undo (if desired): Control Panel ^> System ^> System Protection ^> System Restore>> "%CHANGELOG%"
-(echo           Select the restore point named Pre-WIN11-Security-Audit-v%SCRIPT_VERSION%)>> "%CHANGELOG%"
-echo           NOTE: This is intentional and recommended. Only remove it if you are certain.>> "%CHANGELOG%"
-echo.>> "%CHANGELOG%"
-set "SCRIPT_CHANGED=1"
+rem Log the restore point to the changelog ONLY if one was actually created.
+rem Windows throttles restore points to one per 24h, so re-running would
+rem otherwise record a phantom [CREATED] every time. The PS above writes the
+rem marker file only when a new point really appeared (afterMax ^> beforeMax).
+if exist "%TEMP%\dz_srp_created.txt" (
+    echo [CREATED] System Restore Point: "Pre-WIN11-Security-Audit-v%SCRIPT_VERSION%">> "%CHANGELOG%"
+    echo           This is a safety net -- it lets you roll back any changes made AFTER this point.>> "%CHANGELOG%"
+    echo           Undo (if desired): Control Panel ^> System ^> System Protection ^> System Restore>> "%CHANGELOG%"
+    (echo           Select the restore point named Pre-WIN11-Security-Audit-v%SCRIPT_VERSION%)>> "%CHANGELOG%"
+    echo           NOTE: This is intentional and recommended. Only remove it if you are certain.>> "%CHANGELOG%"
+    echo.>> "%CHANGELOG%"
+    set "SCRIPT_CHANGED=1"
+    del "%TEMP%\dz_srp_created.txt" 2>nul
+)
 :srp_done
 echo.>> "%REPORT%"
 

@@ -62,7 +62,7 @@ exit /b %DOZE_EXIT_CODE%
 :_console_log_done
 :: -----------------------------------------------------------------------------
 :: ====================================================================
-::  WIN11 SECURITY FORENSIC AUDIT  v7.1
+::  WIN11 SECURITY FORENSIC AUDIT  v7.2
 ::  CMD-COMPATIBLE: All PowerShell runs via temp .ps1 file (-File mode).
 ::  Nation-state TTPs: Microsoft MDDR 2023.
 ::
@@ -109,7 +109,7 @@ exit /b %DOZE_EXIT_CODE%
 setlocal enabledelayedexpansion
 
 :: ---- Script identity and config ----
-set "SCRIPT_VERSION=7.1"
+set "SCRIPT_VERSION=7.2"
 set "SCRIPT_NAME=WIN11_SecurityAudit"
 set "SCRIPT_PATH=%~dp0%~nx0"
 :: Set UPDATE_URL to your GitHub raw base URL to enable self-update checks.
@@ -136,6 +136,7 @@ set "RESUME_MODE=0"
 set "SKIP_THREAT_UPDATE=0"
 set "SKIP_SRP=0"
 set "UPDATE_TTP=0"
+set "RESET_TTP=0"
 set "IMPORT_TTP_FILE="
 set "CTI_SKILL_SWITCH="
 set "VT_CHECK=0"
@@ -169,6 +170,7 @@ if /i "%~1"=="-resume"     set "RESUME_MODE=1"
 if /i "%~1"=="-sdu"        set "SKIP_THREAT_UPDATE=1"
 if /i "%~1"=="-nosrp"      set "SKIP_SRP=1"
 if /i "%~1"=="-updateTTP"  set "UPDATE_TTP=1"
+if /i "%~1"=="-resetTTP"   set "RESET_TTP=1"
 if /i "%~1"=="-importTTP"  goto :parse_importttp
 if /i "%~1"=="-ctiSkill"   goto :parse_ctiskill
 if /i "%~1"=="-vt"         set "VT_CHECK=1"
@@ -229,6 +231,12 @@ echo.
 echo    %C_GREEN%-updateTTP%C_RESET%   Refresh the ThreatLists/ IOC files before the audit.
 echo                 Requires network. Downloads latest indicators from the
 echo                 configured threat intelligence source.
+echo.
+echo    %C_GREEN%-resetTTP%C_RESET%    Restore the runtime ThreatLists ^(C:\SecurityAudit^)
+echo                 to the pristine shipped baseline before the audit.
+echo                 Clears runtime ioc_*.txt / ttp_manifest.txt so a prior
+echo                 -updateTTP pull cannot leave stale indicators behind.
+echo                 Combine with -updateTTP for a clean slate then fresh pull.
 echo.
 echo    %C_GREEN%-importTTP%C_RESET% ^<file^>
 echo                 Merge TTP rows from a pipe-delimited file into the
@@ -376,6 +384,32 @@ echo  ====================================================================
 echo.
 endlocal & exit /b 0
 :help_done
+
+:: ====================================================================
+:: -resetTTP HANDLER
+::   Deletes the runtime ThreatList copies in %OUTDIR%\ThreatLists so the
+::   seeding below re-copies the pristine shipped baseline. Use after a bad
+::   -updateTTP pull left non-discriminating indicators in the runtime lists.
+::   Runs BEFORE the -updateTTP handler so "-resetTTP -updateTTP" means
+::   clean slate, then fresh pull.
+:: ====================================================================
+if "%RESET_TTP%"=="0" goto :skip_reset_ttp
+if not defined OUTDIR set "OUTDIR=C:\SecurityAudit"
+echo.
+echo ====================================================================
+echo  -resetTTP: Restoring runtime ThreatLists to the shipped baseline
+echo ====================================================================
+if exist "%OUTDIR%\ThreatLists" (
+    del /q "%OUTDIR%\ThreatLists\ioc_*.txt" 2>nul
+    del /q "%OUTDIR%\ThreatLists\ttp_manifest.txt" 2>nul
+    del /q "%OUTDIR%\ThreatLists\ttp_generated_checks.bat" 2>nul
+    del /q "%OUTDIR%\ThreatLists\ttp_update_*.txt" 2>nul
+    echo  [OK] Runtime IOC lists cleared -- the shipped baseline will be re-seeded.
+) else (
+    echo  [OK] No runtime ThreatLists directory yet -- nothing to reset.
+)
+echo.
+:skip_reset_ttp
 
 :: ====================================================================
 :: -updateTTP / -importTTP HANDLER
@@ -1317,24 +1351,35 @@ if "%WIN_GEN%"=="Win7" (
 )
 
 echo  Creating... (can take 30-60 seconds)
-echo Try { > "%PSRUN%"
+del "%TEMP%\dz_srp_created.txt" 2>nul
+echo $beforeMax = 0 > "%PSRUN%"
+echo try { $bp = @(Get-ComputerRestorePoint -EA Stop); if ($bp) { $beforeMax = ($bp ^| Measure-Object -Property SequenceNumber -Maximum).Maximum } } catch {} >> "%PSRUN%"
+echo Try { >> "%PSRUN%"
 echo   Enable-ComputerRestore -Drive "$env:SystemDrive\" -EA SilentlyContinue >> "%PSRUN%"
 echo   Checkpoint-Computer -Description "Pre-WIN11-Security-Audit-v%SCRIPT_VERSION%" -RestorePointType "MODIFY_SETTINGS" -EA Stop >> "%PSRUN%"
-echo   Write-Output "  [OK] System Restore Point created successfully." >> "%PSRUN%"
 echo } Catch { >> "%PSRUN%"
 echo   Write-Output ("  [WARN] SRP failed: "+$_.Exception.Message) >> "%PSRUN%"
 echo   Write-Output "       To fix: Control Panel ^> System ^> System Protection ^> Configure ^> Enable" >> "%PSRUN%"
 echo } >> "%PSRUN%"
+echo $afterMax = 0 >> "%PSRUN%"
+echo try { $ap = @(Get-ComputerRestorePoint -EA Stop); if ($ap) { $afterMax = ($ap ^| Measure-Object -Property SequenceNumber -Maximum).Maximum } } catch {} >> "%PSRUN%"
+echo if ($afterMax -gt $beforeMax) { Write-Output "  [OK] System Restore Point created successfully."; New-Item "$env:TEMP\dz_srp_created.txt" -Force ^| Out-Null } else { Write-Output "  [INFO] No new restore point created -- Windows allows only one per 24h, or System Protection is off. Existing restore points are unaffected." } >> "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
-:: Log SRP to changelog (SRP is a safety net -- cannot be undone but is always desirable)
-echo [CREATED] System Restore Point: "Pre-WIN11-Security-Audit-v%SCRIPT_VERSION%">> "%CHANGELOG%"
-echo           This is a safety net -- it lets you roll back any changes made AFTER this point.>> "%CHANGELOG%"
-echo           Undo (if desired): Control Panel ^> System ^> System Protection ^> System Restore>> "%CHANGELOG%"
-(echo           Select the restore point named Pre-WIN11-Security-Audit-v%SCRIPT_VERSION%)>> "%CHANGELOG%"
-echo           NOTE: This is intentional and recommended. Only remove it if you are certain.>> "%CHANGELOG%"
-echo.>> "%CHANGELOG%"
-set "SCRIPT_CHANGED=1"
+rem Log the restore point to the changelog ONLY if one was actually created.
+rem Windows throttles restore points to one per 24h, so re-running would
+rem otherwise record a phantom [CREATED] every time. The PS above writes the
+rem marker file only when a new point really appeared (afterMax ^> beforeMax).
+if exist "%TEMP%\dz_srp_created.txt" (
+    echo [CREATED] System Restore Point: "Pre-WIN11-Security-Audit-v%SCRIPT_VERSION%">> "%CHANGELOG%"
+    echo           This is a safety net -- it lets you roll back any changes made AFTER this point.>> "%CHANGELOG%"
+    echo           Undo (if desired): Control Panel ^> System ^> System Protection ^> System Restore>> "%CHANGELOG%"
+    (echo           Select the restore point named Pre-WIN11-Security-Audit-v%SCRIPT_VERSION%)>> "%CHANGELOG%"
+    echo           NOTE: This is intentional and recommended. Only remove it if you are certain.>> "%CHANGELOG%"
+    echo.>> "%CHANGELOG%"
+    set "SCRIPT_CHANGED=1"
+    del "%TEMP%\dz_srp_created.txt" 2>nul
+)
 :srp_done
 echo.>> "%REPORT%"
 
