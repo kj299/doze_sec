@@ -51,6 +51,17 @@ only changes actually made.
 `ioc_processes` 77→54, `ioc_registry` 37→25, `ttp_manifest` / techniques 77→48,
 total indicators 320→283 (README / THREAT_MODEL / readMe).
 
+### Hardening — extract risky inline PowerShell from the INIT path
+The crash class behind the INIT 12 and HTML regressions is PowerShell built by
+echoing lines into a temp file: a single mis-escaped cmd metacharacter aborts
+the whole audit. Extracted the remaining nested INIT-path blocks into
+CI-tested `tools/*.ps1` (no cmd escaping):
+`self_update_check.ps1` (INIT 10 self-update), `disk_info.ps1` (INIT 13 VM /
+SSD / disk-detail / free-space), `smart_health.ps1` (INIT 14 WMI health
+fallback), alongside the earlier `report_html.ps1` and `srp_check.ps1`. The
+helpers-ps51 CI job now parses and executes all of them. Behavior is
+unchanged; this only removes the escaping hazard.
+
 ## 7.1 and earlier
 
 See the git history. 7.1 introduced the SENTINEL-X CTI integration, the HTML

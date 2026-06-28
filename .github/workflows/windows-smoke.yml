@@ -149,6 +149,30 @@ jobs:
           Write-Host "ioc_hash_check OK"
           exit 0
 
+      - name: INIT-path extractions (self_update_check / disk_info / smart_health)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # self_update_check: an unreachable URL must hit the catch path,
+          # emit an [INFO] line, and never throw.
+          $u = .\tools\self_update_check.ps1 -LocalVer '7.2' -RemoteUrl 'http://127.0.0.1:0/version.txt' -DownloadUrl 'http://x/y.bat' | Out-String
+          if ($u -notmatch '\[INFO\]|version') { Write-Host "self_update_check produced no status line"; exit 1 }
+          # disk_info: each mode runs against real CIM / Get-PhysicalDisk.
+          $vm = (.\tools\disk_info.ps1 -Mode VmFlag).Trim()
+          if ($vm -ne 'yes_vm' -and $vm -ne 'no') { Write-Host "VmFlag unexpected: '$vm'"; exit 1 }
+          $ssd = (.\tools\disk_info.ps1 -Mode SsdFlag).Trim()
+          if ($ssd -ne 'yes_ssd' -and $ssd -ne 'no') { Write-Host "SsdFlag unexpected: '$ssd'"; exit 1 }
+          .\tools\disk_info.ps1 -Mode VmReport | Out-Null
+          .\tools\disk_info.ps1 -Mode DiskDetail | Out-Null
+          $free = (.\tools\disk_info.ps1 -Mode FreeSpace -SystemDrive $env:SystemDrive | Out-String).Trim()
+          if ($free -notmatch '^\d+$') { Write-Host "FreeSpace not numeric: '$free'"; exit 1 }
+          # smart_health: report runs; flag must be warn/ok.
+          .\tools\smart_health.ps1 -Mode Report | Out-Null
+          $h = (.\tools\smart_health.ps1 -Mode Flag).Trim()
+          if ($h -ne 'warn' -and $h -ne 'ok') { Write-Host "smart_health Flag unexpected: '$h'"; exit 1 }
+          Write-Host "INIT-path extractions OK (self_update_check, disk_info x5, smart_health x2)"
+          exit 0
+
       # Server runners have System Protection off, so Checkpoint-Computer
       # cannot create a real restore point. That's the point of THIS test:
       # in a no-op run, srp_check.ps1 must (1) execute without parser/runtime
