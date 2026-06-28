@@ -50,7 +50,22 @@ runtime hang. `windows-smoke.yml` runs on a real `windows-latest` runner:
   executes the read-only ones (scheduled tasks, browser extensions,
   `select_lines.ps1` incl. a 20,000-char line, `top_findings`,
   `report_format`, `report_html` (asserts the Findings Index + section
-  links), `ioc_hash_check`) against real WMI/CIM/Authenticode.
+  links), `ioc_hash_check`, `srp_check`, and the INIT-path extractions
+  `self_update_check` / `disk_info` / `smart_health`) against real
+  WMI/CIM/Authenticode.
+
+## INIT-path PowerShell: prefer tools/*.ps1 over inline echo-built PSRUN
+
+Building PowerShell by echoing lines into `%PSRUN%` and running it is a
+recurring crash source: any mis-escaped `(` `)` `{` `}` `|` `<` `>` `&`
+makes cmd.exe abort the whole audit (": was unexpected at this time"). This
+bit INIT 12 (SRP) and the HTML report. When a block has nesting (try/catch,
+calculated properties `@{N=..;E={..}}`, if/elseif chains), put it in a
+`tools/*.ps1` with a `-Mode`/param contract and call it — the script has NO
+cmd escaping and is parsed+executed by the helpers-ps51 CI job. Already
+extracted: `report_html`, `srp_check`, `self_update_check`, `disk_info`,
+`smart_health`. Simple single-value one-liners (e.g. `(Get-CimInstance
+...).Prop`) can stay inline.
 - **full-run**: runs `doze_sec.bat -dev -sdu -nosrp` end-to-end under a
   20-minute timeout. A hang (e.g. findstr on multi-KB lines) blows the
   timeout and fails the job; output is uploaded as an artifact.

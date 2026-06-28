@@ -1183,39 +1183,8 @@ if %errorlevel% equ 0 (
 )
 
 echo  Fetching remote version from: %UPDATE_URL%/version.txt>> "%REPORT%"
-echo $localVer='%SCRIPT_VERSION%' > "%PSRUN%"
-echo $remoteUrl='%UPDATE_URL%/version.txt' >> "%PSRUN%"
-:: Load GitHub PAT for private repo access. Priority: env var -^> token file.
-:: To set: $env:DOZESEC_TOKEN = 'github_pat_xxx'  or write PAT to %USERPROFILE%\.dozesec_token
-echo $token = $env:DOZESEC_TOKEN >> "%PSRUN%"
-echo if(-not $token){ $tf = Join-Path $env:USERPROFILE '.dozesec_token'; if(Test-Path -LiteralPath $tf){ $token = (Get-Content -LiteralPath $tf -Raw -EA SilentlyContinue).Trim() } } >> "%PSRUN%"
-echo $headers = @{ 'User-Agent' = 'doze_sec' } >> "%PSRUN%"
-echo if($token){ $headers['Authorization'] = "Bearer $token" } >> "%PSRUN%"
-echo try { >> "%PSRUN%"
-echo   $remoteVer=(Invoke-WebRequest $remoteUrl -UseBasicParsing -TimeoutSec 10 -Headers $headers -EA Stop).Content.Trim() >> "%PSRUN%"
-echo   Write-Output ('  Remote version : '+$remoteVer) >> "%PSRUN%"
-echo   Write-Output ('  Local version  : '+$localVer) >> "%PSRUN%"
-echo   $rv = $remoteVer -replace '[^^0-9.]','' >> "%PSRUN%"
-echo   $lv = $localVer -replace '[^^0-9.]','' >> "%PSRUN%"
-echo   $rv = $rv.Trim('.'); $lv = $lv.Trim('.') >> "%PSRUN%"
-echo   if([version]$rv -gt [version]$lv) { >> "%PSRUN%"
-echo     Write-Output '[UPDATE AVAILABLE] A newer version exists. Download from:' >> "%PSRUN%"
-echo     Write-Output ('  %UPDATE_URL%/%SCRIPT_NAME%.bat') >> "%PSRUN%"
-echo     Write-Output 'Verify SHA256 hash after downloading before running.' >> "%PSRUN%"
-echo   } else { >> "%PSRUN%"
-echo     Write-Output '[OK] Script is current (no update required).' >> "%PSRUN%"
-echo   } >> "%PSRUN%"
-echo } catch { >> "%PSRUN%"
-echo   $sc=$null; try{ $sc=[int]$_.Exception.Response.StatusCode }catch{} >> "%PSRUN%"
-echo   if($sc -eq 401){ Write-Output '  [INFO] Update check: authentication failed (HTTP 401). GitHub PAT is invalid, expired, or lacks Contents:Read on this repo.' } >> "%PSRUN%"
-echo   elseif($sc -eq 403){ Write-Output '  [INFO] Update check: forbidden (HTTP 403). Token may be rate-limited or scope-restricted.' } >> "%PSRUN%"
-echo   elseif($sc -eq 404 -and $token){ Write-Output '  [INFO] Update check: 404 even with token. PAT does not grant access to this repo; verify it is scoped to kj299/doze_sec.' } >> "%PSRUN%"
-echo   elseif($sc -eq 404){ Write-Output '  [INFO] Update check: 404 (repo is private and no GitHub PAT found). Set $env:DOZESEC_TOKEN or write PAT to %USERPROFILE%\.dozesec_token. Self-update disabled; this is not a scan failure.' } >> "%PSRUN%"
-echo   elseif($sc){ Write-Output ('  [INFO] Update check failed (HTTP '+$sc+'): '+$_.Exception.Message) } >> "%PSRUN%"
-echo   else{ Write-Output ('  [INFO] Update check failed: '+$_.Exception.Message) } >> "%PSRUN%"
-echo } >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\self_update_check.ps1" -LocalVer "%SCRIPT_VERSION%" -RemoteUrl "%UPDATE_URL%/version.txt" -DownloadUrl "%UPDATE_URL%/%SCRIPT_NAME%.bat">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\self_update_check.ps1" -LocalVer "%SCRIPT_VERSION%" -RemoteUrl "%UPDATE_URL%/version.txt" -DownloadUrl "%UPDATE_URL%/%SCRIPT_NAME%.bat"
 
 :: Threat intel list update (use -sdu to skip)
 if "%SKIP_THREAT_UPDATE%"=="1" (
@@ -1381,28 +1350,15 @@ echo  Command: powershell -Command "Get-CimInstance Win32_ComputerSystem -EA Sil
 echo  Determines: SSD/HDD/VM/error. Sets SKIP_DEFRAG flag accordingly.>> "%REPORT%"
 echo  SKIP_DEFRAG values: no=HDD, yes_ssd=SSD, yes_vm=VirtualDisk, yes_error=SmartCTL error>> "%REPORT%"
 
-:: VM detection
-echo $cs=Get-CimInstance Win32_ComputerSystem -EA SilentlyContinue > "%PSRUN%"
-echo if($cs) { >> "%PSRUN%"
-echo   Write-Output ('Manufacturer: '+$cs.Manufacturer+'  Model: '+$cs.Model) >> "%PSRUN%"
-echo   if($cs.Manufacturer -match 'VMware^|QEMU^|Xen^|Bochs^|Parallels^|innotek' -or $cs.Model -match 'Virtual^|VMware^|VirtualBox^|KVM^|HVM domU') { >> "%PSRUN%"
-echo     Write-Output '[VM DETECTED] Running inside a virtual machine. Defrag will be skipped.' >> "%PSRUN%"
-echo   } else { >> "%PSRUN%"
-echo     Write-Output '[OK] Physical hardware (not a known VM hypervisor).' >> "%PSRUN%"
-echo   } >> "%PSRUN%"
-echo } >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+:: VM detection (report) -- extracted to tools\disk_info.ps1 (no cmd escaping)
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\disk_info.ps1" -Mode VmReport>> "%REPORT%" 2>&1
 
 :: Get a single word output to set SKIP_DEFRAG variable in cmd
-echo $cs=Get-CimInstance Win32_ComputerSystem -EA SilentlyContinue > "%PSRUN%"
-echo if($cs -and ($cs.Manufacturer -match 'VMware^|QEMU^|Xen^|Bochs^|Parallels^|innotek' -or $cs.Model -match 'Virtual^|VMware^|VirtualBox^|KVM^|HVM domU')){'yes_vm'}else{'no'} >> "%PSRUN%"
-for /f "usebackq" %%a in (`%PWSH% -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" 2^>nul`) do set "VM_CHECK=%%a"
+for /f "usebackq" %%a in (`%PWSH% -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\disk_info.ps1" -Mode VmFlag 2^>nul`) do set "VM_CHECK=%%a"
 if /i "%VM_CHECK%"=="yes_vm" set "SKIP_DEFRAG=yes_vm"
 
 :: SSD detection
-echo $d=Get-PhysicalDisk -EA SilentlyContinue ^| Where-Object {$_.MediaType -eq 'SSD'} > "%PSRUN%"
-echo if($d){'yes_ssd'}else{'no'} >> "%PSRUN%"
-for /f "usebackq" %%a in (`%PWSH% -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" 2^>nul`) do set "SSD_CHECK=%%a"
+for /f "usebackq" %%a in (`%PWSH% -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\disk_info.ps1" -Mode SsdFlag 2^>nul`) do set "SSD_CHECK=%%a"
 if /i "%SSD_CHECK%"=="yes_ssd" set "SKIP_DEFRAG=yes_ssd"
 
 echo.>> "%REPORT%"
@@ -1413,20 +1369,13 @@ echo  no=HDD (defrag OK)  yes_ssd=SSD (skip defrag)  yes_vm=VM (skip defrag)>> "
 echo.>> "%REPORT%"
 echo --- Physical Disk Details --->> "%REPORT%"
 echo  Command: powershell -Command "Get-PhysicalDisk -EA SilentlyContinue">> "%REPORT%"
-echo $pd=Get-PhysicalDisk -EA SilentlyContinue > "%PSRUN%"
-echo if($pd){ >> "%PSRUN%"
-echo   $pd ^| Select-Object FriendlyName,MediaType,BusType,@{N='SizeGB';E={[math]::Round($_.Size/1GB,1)}},OperationalStatus,HealthStatus ^| Format-Table -AutoSize >> "%PSRUN%"
-echo } else { >> "%PSRUN%"
-echo   Get-CimInstance Win32_DiskDrive ^| Select-Object Model,MediaType,Status,@{N='SizeGB';E={[math]::Round($_.Size/1GB,1)}} ^| Format-Table -AutoSize >> "%PSRUN%"
-echo } >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\disk_info.ps1" -Mode DiskDetail>> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- Free Space on System Drive Before Audit --->> "%REPORT%"
 echo  Command: powershell -Command "Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='%SystemDrive%'" -EA SilentlyContinue^).FreeSpace">> "%REPORT%"
-:: Primary: PowerShell Get-CimInstance (works on all Win10/11 including 24H2+)
-echo (Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='%SystemDrive%'" -EA SilentlyContinue).FreeSpace > "%PSRUN%"
-for /f "usebackq" %%a in (`%PWSH% -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" 2^>nul`) do (
+:: Primary: PowerShell Get-CimInstance via tools\disk_info.ps1 (works on all Win10/11 incl. 24H2+)
+for /f "usebackq" %%a in (`%PWSH% -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\disk_info.ps1" -Mode FreeSpace -SystemDrive "%SystemDrive%" 2^>nul`) do (
     if not "%%a"=="" if not "%%a"=="0" set "FREE_BEFORE=%%a"
 )
 :: Fallback: wmic (for older systems where CIM may not be available)
@@ -1503,38 +1452,10 @@ echo --- WMI Disk Health (smartctl not found - WMI fallback) --->> "%REPORT%"
 echo  Command: powershell -Command "Get-CimInstance Win32_DiskDrive -EA SilentlyContinue">> "%REPORT%"
 echo For full SMART attribute data install smartmontools.>> "%REPORT%"
 echo.>> "%REPORT%"
-echo $warn=$false > "%PSRUN%"
-echo $d=Get-CimInstance Win32_DiskDrive -EA SilentlyContinue >> "%PSRUN%"
-echo foreach($disk in $d) { >> "%PSRUN%"
-echo   $gb=[math]::Round($disk.Size/1GB,1) >> "%PSRUN%"
-echo   Write-Output ('Drive: '+$disk.Model+'  Size: '+$gb+'GB  Status: '+$disk.Status) >> "%PSRUN%"
-echo   if($disk.Status -and $disk.Status -notmatch '^OK$') { >> "%PSRUN%"
-echo     $warn=$true >> "%PSRUN%"
-echo     Write-Output ('[WARNING] '+$disk.Model+' reports status: '+$disk.Status) >> "%PSRUN%"
-echo   } >> "%PSRUN%"
-echo } >> "%PSRUN%"
-echo try { >> "%PSRUN%"
-echo   $pd=Get-PhysicalDisk -EA Stop >> "%PSRUN%"
-echo   $pd ^| Select-Object FriendlyName,MediaType,HealthStatus,OperationalStatus ^| Format-Table -AutoSize >> "%PSRUN%"
-echo   $bad=$pd ^| Where-Object {$_.HealthStatus -ne 'Healthy'} >> "%PSRUN%"
-echo   if($bad) { >> "%PSRUN%"
-echo     $warn=$true >> "%PSRUN%"
-echo     Write-Output '[WARNING] Unhealthy physical disk detected. Check above for details.' >> "%PSRUN%"
-echo   } else { >> "%PSRUN%"
-echo     Write-Output '[OK] All physical disks report Healthy status.' >> "%PSRUN%"
-echo   } >> "%PSRUN%"
-echo } catch {} >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\smart_health.ps1" -Mode Report>> "%REPORT%" 2>&1
 
 :: Capture WMI health status for SMART_WARN flag
-echo $d=Get-CimInstance Win32_DiskDrive -EA SilentlyContinue > "%PSRUN%"
-echo $bad=$d ^| Where-Object {$_.Status -and $_.Status -notmatch '^OK$'} >> "%PSRUN%"
-echo try { >> "%PSRUN%"
-echo   $pd=Get-PhysicalDisk -EA Stop >> "%PSRUN%"
-echo   $badpd=$pd ^| Where-Object {$_.HealthStatus -ne 'Healthy'} >> "%PSRUN%"
-echo   if($bad -or $badpd){'warn'}else{'ok'} >> "%PSRUN%"
-echo } catch { if($bad){'warn'}else{'ok'} } >> "%PSRUN%"
-for /f "usebackq" %%a in (`%PWSH% -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" 2^>nul`) do set "WMI_HEALTH=%%a"
+for /f "usebackq" %%a in (`%PWSH% -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\smart_health.ps1" -Mode Flag 2^>nul`) do set "WMI_HEALTH=%%a"
 if /i "%WMI_HEALTH%"=="warn" set "SMART_WARN=1"
 goto :eof
 
