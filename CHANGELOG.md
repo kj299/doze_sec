@@ -18,7 +18,9 @@ signature of malware blackholing update/AV traffic via a DNS or HOSTS hijack
 so it sends no outbound queries to malicious infrastructure. That
 higher-fidelity but OPSEC-risky variant remains deferred (see THREAT_MODEL.md).
 Off by default; gated like `-vt`. A blackhole signature raises the exit code to
-WARNING. The new script is parsed and executed by the helpers-ps51 CI job.
+WARNING and is surfaced as a finding in the live summary + HTML Findings Index
+(under ACTIVE COMPROMISE INDICATORS), not just buried in the Section 3 body. The
+new script is parsed and executed by the helpers-ps51 CI job.
 
 ## 7.2
 
