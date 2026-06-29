@@ -120,6 +120,7 @@ set "NO_ADMIN_MODE=0"
 set "UPDATE_TTP=0"
 set "VT_CHECK=0"
 set "DNS_PROBE=0"
+set "DNSPROBE_STATE="
 set "VT_SELF_SKIP=0"
 set "NO_CONSOLE_LOG=0"
 set "IOC_HITS=0"
@@ -1313,8 +1314,11 @@ if "%DNS_PROBE%"=="1" (
     del "%TEMP%\dz_dnsprobe_warn.txt" 2>nul
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\dns_probe.ps1">> "%REPORT%" 2>&1
     if exist "%TEMP%\dz_dnsprobe_warn.txt" (
+        set "DNSPROBE_STATE=warn"
         if !EXIT_CODE! LSS 2 set "EXIT_CODE=2"
         del "%TEMP%\dz_dnsprobe_warn.txt" 2>nul
+    ) else (
+        set "DNSPROBE_STATE=clean"
     )
 ) else (
     echo  [INFO] Skipped -- enable with -dnsprobe. Resolves only legitimate update/security domains ^(never C2 IOCs^) to detect DNS/HOSTS blackholing.>> "%REPORT%"
@@ -3391,6 +3395,8 @@ echo } >> "%PSRUN%"
 echo try{$pipes=Get-ChildItem \\.\pipe\ -EA Stop^|Where-Object{$_.Name -match 'postex_^|msagent_^|MSSE-^|metsvc'};if($pipes){ck 'CRIT' ('Cobalt Strike named pipes detected: '+@($pipes).Count) ('Pipes: '+($pipes.Name -join ', ')+'. Active C2. See Section 17.')}else{ck 'PASS' 'No Cobalt Strike default named pipes detected'}}catch{ck 'INFO' 'Named pipe check unavailable (non-fatal)'} >> "%PSRUN%"
 echo $subs=@(Get-WMIObject -Namespace root\subscription -Class __EventFilter -EA SilentlyContinue ^| Where-Object { -not ( ($_.Name -eq 'SCM Event Log Filter' -and $_.Query -like '*MSFT_SCMEventLogEvent*') -or ($_.Name -in @('BVTConsumer','BVTFilter','RmAssistEventLog')) ) });if($subs.Count -gt 0){ck 'CRIT' ('Non-default WMI EventFilter subscriptions present: '+$subs.Count) 'Stealthy reboot-persistent implant. See Section 17. Remove: Get-WMIObject -NS root\subscription -Class __EventFilter ^| Remove-WMIObject'}else{ck 'PASS' 'No non-default WMI permanent EventFilter subscriptions'} >> "%PSRUN%"
 echo $sus=@(Get-CimInstance Win32_Process -EA SilentlyContinue^|Where-Object{$_.ExecutablePath -match '\\Temp\\^|\\AppData\\^|\\Downloads\\^|\\Users\\Public\\'});$susP=@($sus^|Select-Object -Exp ExecutablePath^|Sort-Object -Unique);$critP=@($susP^|Where-Object{ ($_ -match '\\Temp\\^|\\Downloads\\^|\\Users\\Public\\') -or ((Get-AuthenticodeSignature $_ -EA SilentlyContinue).Status -ne 'Valid') });if($critP.Count -gt 0){ck 'CRIT' ('Unsigned/untrusted processes from user-profile paths: '+$critP.Count) ('Files: '+(($critP^|ForEach-Object{Split-Path $_ -Leaf}^|Sort-Object -Unique) -join ', ')+'. See Section 4.')}elseif($susP.Count -gt 0){ck 'INFO' ('Processes from user-profile paths, all validly signed: '+$susP.Count) (($susP^|ForEach-Object{Split-Path $_ -Leaf}^|Sort-Object -Unique) -join ', ')}else{ck 'PASS' 'No processes running from Temp / AppData / Downloads'} >> "%PSRUN%"
+if "%DNSPROBE_STATE%"=="warn" echo ck 'WARN' 'DNS/HOSTS blackhole of update/security domains' 'A legitimate Windows/Defender/update domain did not resolve to a public IP -- see the Section 3 -dnsprobe output. T1562.001 defense evasion.' >> "%PSRUN%"
+if "%DNSPROBE_STATE%"=="clean" echo ck 'PASS' 'DNS integrity probe clean -- update/security domains resolve normally' >> "%PSRUN%"
 echo. >> "%PSRUN%"
 
 :: ===== CREDENTIAL PROTECTION =========================================
