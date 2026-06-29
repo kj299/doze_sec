@@ -4,6 +4,22 @@ All notable changes to doze_sec are recorded here. This is the project release
 history; the per-run `ChangeLog_<timestamp>.txt` files under `C:\SecurityAudit`
 are a separate, machine-specific record of changes each audit made.
 
+## 7.3
+
+### New: `-dnsprobe` active DNS integrity probe (opt-in)
+Adds an opt-in active DNS check (Section 3, `tools/dns_probe.ps1`). When
+`-dnsprobe` is passed, the audit resolves a fixed list of **legitimate**
+Windows / Defender / connectivity domains and flags any that fail to resolve
+or resolve to a non-public IP (0.0.0.0 / loopback / private / link-local) — the
+signature of malware blackholing update/AV traffic via a DNS or HOSTS hijack
+(T1562.001). It also inventories the configured DNS resolvers.
+
+**Safe by design:** it never resolves attacker / `ioc_domains.txt` C2 entries,
+so it sends no outbound queries to malicious infrastructure. That
+higher-fidelity but OPSEC-risky variant remains deferred (see THREAT_MODEL.md).
+Off by default; gated like `-vt`. A blackhole signature raises the exit code to
+WARNING. The new script is parsed and executed by the helpers-ps51 CI job.
+
 ## 7.2
 
 Accuracy and trust release. Every change below makes the tool report reality

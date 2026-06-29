@@ -2,7 +2,7 @@
 
 Windows 10/11 security forensic audit tool with SENTINEL-X CTI integration.
 
-**Version 7.2** | 18-section audit | 48 MITRE ATT&CK techniques | 10 IOC categories
+**Version 7.3** | 18-section audit | 48 MITRE ATT&CK techniques | 10 IOC categories
 
 Detection-and-response aid, not real-time protection — see [THREAT_MODEL.md](THREAT_MODEL.md) for exactly what is and is not covered.
 
@@ -51,6 +51,7 @@ doze_sec.bat -help
 | `-updateTTP` | Admin only | Refresh ThreatLists/ via SENTINEL-X CTI skill (requires Claude Code CLI) |
 | `-importTTP <file>` | Admin only | Merge TTP rows from a pipe-delimited file (offline alternative to `-updateTTP`; no Claude CLI needed) |
 | `-vt` | Both | Section 18j+18l: query VirusTotal for SHA256 of priority files + remote IP reputation. Requires `~/.vt_token` |
+| `-dnsprobe` | Both | Section 3: active DNS integrity probe. Resolves a fixed list of **legitimate** update/security domains and flags DNS/HOSTS blackholing (T1562.001). Never resolves attacker/C2 domains. Off by default |
 | `-noVtSelf` | Both | Skip the automatic pre-flight VT integrity check on script-critical binaries (default: runs whenever `~/.vt_token` exists and network is up) |
 | `-ctiSkill <file>` | Admin only | Per-run override for the SENTINEL-X CTI skill file used by `-updateTTP` (1.2.0+: `standalone\cyber-threat-intel-prompt.md`; pre-1.2.0: `cyber_threat_skill.yaml`). Beats `DOZESEC_CTI_SKILL` env var and auto-discovery |
 | `-noConsoleLog` | Both | Skip console-output capture (default ON). Without this switch, stdout+stderr are tee'd to `C:\SecurityAudit\AuditConsole_<TS>.log` so crashes leave a debuggable trace |
