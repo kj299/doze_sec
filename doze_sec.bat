@@ -1342,8 +1342,8 @@ rem entry) is correctly absent.
 if exist "%TEMP%\dz_srp_created.txt" (
     echo [CREATED] System Restore Point: "Pre-WIN11-Security-Audit-v%SCRIPT_VERSION%">> "%CHANGELOG%"
     echo           This is a safety net -- it lets you roll back any changes made AFTER this point.>> "%CHANGELOG%"
-    echo           Undo (if desired): Control Panel ^> System ^> System Protection ^> System Restore>> "%CHANGELOG%"
-    (echo           Select the restore point named Pre-WIN11-Security-Audit-v%SCRIPT_VERSION%)>> "%CHANGELOG%"
+    echo           Undo ^(if desired^): Control Panel ^> System ^> System Protection ^> System Restore>> "%CHANGELOG%"
+    echo           Select the restore point named Pre-WIN11-Security-Audit-v%SCRIPT_VERSION%>> "%CHANGELOG%"
     echo           NOTE: This is intentional and recommended. Only remove it if you are certain.>> "%CHANGELOG%"
     echo.>> "%CHANGELOG%"
     set "SCRIPT_CHANGED=1"
