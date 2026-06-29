@@ -64,8 +64,8 @@ calculated properties `@{N=..;E={..}}`, if/elseif chains), put it in a
 `tools/*.ps1` with a `-Mode`/param contract and call it — the script has NO
 cmd escaping and is parsed+executed by the helpers-ps51 CI job. Already
 extracted: `report_html`, `srp_check`, `self_update_check`, `disk_info`,
-`smart_health`. Simple single-value one-liners (e.g. `(Get-CimInstance
-...).Prop`) can stay inline.
+`smart_health`, `dns_probe`. Simple single-value one-liners (e.g.
+`(Get-CimInstance ...).Prop`) can stay inline.
 - **full-run**: runs `doze_sec.bat -dev -sdu -nosrp` end-to-end under a
   20-minute timeout. A hang (e.g. findstr on multi-KB lines) blows the
   timeout and fails the job; output is uploaded as an artifact.

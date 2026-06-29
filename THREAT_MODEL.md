@@ -141,29 +141,30 @@ Found during the v7.1 coverage review; tracked for future work:
   add-ons, malware-favored permissions (nativeMessaging, debugger, proxy,
   *Capture), broad host access combined with interception permissions, and
   policy force-installs; a locked/corrupt profile reports `[SKIPPED]`.
-- **Active DNS probing for C2 domains — open design decision (deferred).**
-  - *Today:* Section 18f checks for known-bad C2 domains by reading the
-    machine's local DNS resolver cache (`ipconfig /displaydns`). It only
-    sees domains the host has *already* looked up recently; cache entries
-    expire (TTL) and a reboot/flush clears them.
-  - *Gap:* a C2 domain the host never resolved, or resolved long enough
-    ago that the entry aged out, leaves no cache evidence — so 18f can
-    report clean while the indicator was simply never observable that way.
-  - *Possible fix ("active probe"):* have the audit itself resolve each
-    IOC domain (e.g. `Resolve-DnsName <domain>`) to learn whether it
-    currently resolves and to what IP, instead of waiting to catch it in
-    the cache.
-  - *Why it's deferred, not just unimplemented:* actively resolving a list
-    of known-malicious domains generates outbound DNS queries *from the
-    audited host to attacker-controlled infrastructure*. That can tip off
-    an operator that the host is being investigated, and it trips the
-    organization's own network IDS/DNS-monitoring (the audit would
+- **Active DNS probing — split into a safe half (shipped) and a risky half
+  (still deferred by design).**
+  - *Cache-only baseline:* Section 18f checks for known-bad C2 domains by
+    reading the machine's local DNS resolver cache (`ipconfig /displaydns`).
+    It only sees domains the host has *already* looked up recently; cache
+    entries expire (TTL) and a reboot/flush clears them — so a C2 domain
+    never resolved, or aged out, leaves no cache evidence.
+  - *Safe active probe — SHIPPED behind `-dnsprobe` (Section 3,
+    `tools/dns_probe.ps1`):* the audit actively resolves a fixed list of
+    *legitimate* Windows/Defender/connectivity domains and flags any that
+    fail to resolve or resolve to a non-public IP — the signature of malware
+    blackholing update/AV traffic via a DNS or HOSTS hijack (T1562.001). It
+    queries only known-good infrastructure, so it sends **no** outbound
+    lookups to attacker domains. Off by default; opt-in like `-vt`.
+  - *Risky active probe — still DEFERRED by design:* resolving the
+    `ioc_domains.txt` C2 entries themselves would generate outbound DNS
+    queries *from the audited host to attacker-controlled infrastructure*.
+    That can tip off an operator that the host is being investigated and
+    trips the organization's own network IDS/DNS-monitoring (the audit would
     manufacture the very "host contacted C2" alert it is supposed to find).
-  - *Decision needed before building it:* whether to resolve only against
-    a trusted local/internal resolver, gate it behind an explicit opt-in
-    switch (like `-vt`), and/or restrict it to sinkhole-safe lookups —
-    versus leaving detection cache-only. Until that is decided, 18f stays
-    cache-only by design.
+    Not implemented; if ever built it must be its own explicit opt-in,
+    ideally resolved only against a trusted internal resolver or restricted
+    to sinkhole-safe lookups. Until then, C2-domain detection stays
+    cache-only (18f) by design.
 - ~~Sub-check failures suppressed by `-ErrorAction SilentlyContinue` could
   be surfaced as `[SKIPPED]` instead of appearing clean.~~
   **Closed for Section 18 and the highest-severity Section 1-17 sites:**

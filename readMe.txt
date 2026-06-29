@@ -1,6 +1,6 @@
 ================================================================================
   doze_sec - Windows Security Forensic Audit Tool
-  Version 7.2 | SENTINEL-X CTI Integration | HTML Report Output
+  Version 7.3 | SENTINEL-X CTI Integration | HTML Report Output
 ================================================================================
 
 WHAT IT DOES
@@ -65,6 +65,13 @@ COMMAND-LINE SWITCHES
   -vt           Query VirusTotal for SHA256 hashes of priority files
                 (Section 18j) and remote IP reputation (Section 18l).
                 Requires an API key in %USERPROFILE%\.vt_token.
+
+  -dnsprobe     Active DNS integrity probe (Section 3). Actively resolves
+                a fixed list of LEGITIMATE Windows/Defender/connectivity
+                domains and flags any that fail to resolve or resolve to a
+                non-public IP -- the signature of malware blackholing
+                update/AV traffic via DNS/HOSTS hijack (T1562.001). Safe:
+                never resolves attacker/C2 domains. Off by default.
 
   -noVtSelf     Skip the automatic pre-flight VT integrity check on
                 script-critical binaries (default: runs whenever
@@ -309,7 +316,7 @@ PROJECT STRUCTURE
     README.md                 Canonical documentation
     THREAT_MODEL.md           Coverage matrices, non-goals, limitations
     CLAUDE.md                 Developer / contributor notes
-    version.txt               Current version (7.2)
+    version.txt               Current version (7.3)
     ThreatLists/
       ioc_processes.txt       Process name IOCs
       ioc_named_pipes.txt     Named pipe IOCs

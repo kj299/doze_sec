@@ -62,7 +62,7 @@ exit /b %DOZE_EXIT_CODE%
 :_console_log_done
 :: -----------------------------------------------------------------------------
 :: ====================================================================
-::  WIN11 SECURITY FORENSIC AUDIT  v7.2
+::  WIN11 SECURITY FORENSIC AUDIT  v7.3
 ::  CMD-COMPATIBLE: All PowerShell runs via temp .ps1 file (-File mode).
 ::  Nation-state TTPs: Microsoft MDDR 2023.
 ::
@@ -109,7 +109,7 @@ exit /b %DOZE_EXIT_CODE%
 setlocal enabledelayedexpansion
 
 :: ---- Script identity and config ----
-set "SCRIPT_VERSION=7.2"
+set "SCRIPT_VERSION=7.3"
 set "SCRIPT_NAME=WIN11_SecurityAudit"
 set "SCRIPT_PATH=%~dp0%~nx0"
 :: Set UPDATE_URL to your GitHub raw base URL to enable self-update checks.
@@ -140,6 +140,7 @@ set "RESET_TTP=0"
 set "IMPORT_TTP_FILE="
 set "CTI_SKILL_SWITCH="
 set "VT_CHECK=0"
+set "DNS_PROBE=0"
 set "VT_SELF_SKIP=0"
 set "NO_CONSOLE_LOG=0"
 set "IOC_HITS=0"
@@ -174,6 +175,7 @@ if /i "%~1"=="-resetTTP"   set "RESET_TTP=1"
 if /i "%~1"=="-importTTP"  goto :parse_importttp
 if /i "%~1"=="-ctiSkill"   goto :parse_ctiskill
 if /i "%~1"=="-vt"         set "VT_CHECK=1"
+if /i "%~1"=="-dnsprobe"   set "DNS_PROBE=1"
 if /i "%~1"=="-noVtSelf"   set "VT_SELF_SKIP=1"
 if /i "%~1"=="-noConsoleLog" set "NO_CONSOLE_LOG=1"
 shift
@@ -271,6 +273,14 @@ echo                 key in %%USERPROFILE%%\.vt_token (single line, no quotes).
 echo                 Capped at 20 files; free-tier rate limit ~16 s/file
 echo                 (~5 min for the full set). Only hashes are sent; file
 echo                 contents are never uploaded.
+echo.
+echo    %C_GREEN%-dnsprobe%C_RESET%    Active DNS integrity probe (Section 3). Resolves a
+echo                 fixed list of LEGITIMATE Windows/Defender/connectivity
+echo                 domains and flags any that fail to resolve or resolve to
+echo                 a non-public IP -- the signature of malware blackholing
+echo                 update/AV traffic via DNS/HOSTS hijack (T1562.001).
+echo                 SAFE: never resolves attacker/C2 IOC domains, so it sends
+echo                 no queries to malicious infrastructure. Off by default.
 echo.
 echo    %C_GREEN%-noVtSelf%C_RESET%    Skip the automatic pre-flight VT integrity check on
 echo                 the script-critical binaries (PWSH, wmic, wevtutil, reg).
@@ -1676,6 +1686,20 @@ if !errorlevel! equ 0 (
     echo  [WARNING] Non-standard entries found in HOSTS file. Review for DNS hijacking.>> "%REPORT%"
 ) else (
     echo  [OK] HOSTS file contains only standard entries.>> "%REPORT%"
+)
+
+echo.>> "%REPORT%"
+echo --- DNS Integrity Probe (active resolution of legitimate update/security domains) --->> "%REPORT%"
+if "%DNS_PROBE%"=="1" (
+    echo %C_GREEN%[3/18]%C_RESET% DNS integrity probe via -dnsprobe...
+    del "%TEMP%\dz_dnsprobe_warn.txt" 2>nul
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\dns_probe.ps1">> "%REPORT%" 2>&1
+    if exist "%TEMP%\dz_dnsprobe_warn.txt" (
+        if !EXIT_CODE! LSS 2 set "EXIT_CODE=2"
+        del "%TEMP%\dz_dnsprobe_warn.txt" 2>nul
+    )
+) else (
+    echo  [INFO] Skipped -- enable with -dnsprobe. Resolves only legitimate update/security domains ^(never C2 IOCs^) to detect DNS/HOSTS blackholing.>> "%REPORT%"
 )
 
 echo.>> "%REPORT%"

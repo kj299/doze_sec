@@ -173,6 +173,22 @@ jobs:
           Write-Host "INIT-path extractions OK (self_update_check, disk_info x5, smart_health x2)"
           exit 0
 
+      - name: dns_probe.ps1 (active DNS integrity probe, -dnsprobe)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $marker = Join-Path $env:TEMP 'dz_ci_dnsprobe.txt'
+          if (Test-Path $marker) { Remove-Item $marker -Force }
+          $out = .\tools\dns_probe.ps1 -MarkerFile $marker | Out-String
+          # Lenient on network variance: just require recognizable probe output
+          # (per-domain '->' lines, or the all-clear / blackhole summary).
+          if ($out -notmatch '->|security/update domains|did not resolve') {
+            Write-Host "dns_probe produced no recognizable output:"; Write-Host $out; exit 1
+          }
+          Write-Host "dns_probe OK"
+          Write-Host $out
+          exit 0
+
       # Server runners have System Protection off, so Checkpoint-Computer
       # cannot create a real restore point. That's the point of THIS test:
       # in a no-op run, srp_check.ps1 must (1) execute without parser/runtime
