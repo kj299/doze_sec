@@ -28,6 +28,15 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
+# powershell.exe -File binds a cmd-side comma list (-Binaries "a","b","c") as
+# ONE [string[]] element containing literal commas -- no array splitting is
+# performed for -File arguments. Split here so both binding shapes work. The
+# call sites pass fixed system-binary paths, which never contain commas.
+$Binaries = @($Binaries |
+    ForEach-Object { $_ -split ',' } |
+    ForEach-Object { $_.Trim().Trim('"') } |
+    Where-Object { $_ })
+
 if (-not $Binaries -or $Binaries.Count -eq 0) {
     '[INFO] VT self-check: no binaries supplied -- nothing to verify.'
     exit 2

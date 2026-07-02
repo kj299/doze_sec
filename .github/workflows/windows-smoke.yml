@@ -237,6 +237,69 @@ jobs:
           echo INIT 12 if-exist block OK ^(cmd.exe parse and run^)
           exit /b 0
 
+      # Section 4 suspicious-path patterns cross the cmd -> powershell.exe -File
+      # argv boundary. A trailing UNdoubled backslash before the closing quote
+      # ("\Temp\") is parsed by .NET argv rules as an escaped literal quote,
+      # fusing the patterns into one garbage string -- a silent false negative
+      # for the flagship malware-in-Temp check. This step runs the EXACT bat
+      # invocation (doubled backslashes) from cmd and asserts both a hit and a
+      # miss, so any regression in the quoting breaks CI instead of the check.
+      - name: select_lines.ps1 argv quoting (Temp/AppData patterns match from cmd)
+        shell: cmd
+        run: |
+          echo evil.exe  666  C:\Users\x\AppData\Local\Temp\evil.exe> "%TEMP%\dz_ci_argv.tmp"
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools\select_lines.ps1 -Path "%TEMP%\dz_ci_argv.tmp" "\Temp\\" "\AppData\\" "\Downloads\\" "\Recycle" "\Users\Public" >nul
+          if not "%ERRORLEVEL%"=="0" ( echo FAILED: \Temp\ path did not match -- argv quoting regressed & exit /b 1 )
+          echo winword.exe  777  C:\Program Files\Microsoft Office\winword.exe> "%TEMP%\dz_ci_argv.tmp"
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools\select_lines.ps1 -Path "%TEMP%\dz_ci_argv.tmp" "\Temp\\" "\AppData\\" "\Downloads\\" "\Recycle" "\Users\Public" >nul
+          if not "%ERRORLEVEL%"=="1" ( echo FAILED: benign path matched -- patterns are corrupt & exit /b 1 )
+          echo select_lines argv quoting OK ^(hit on \Temp\, miss on benign^)
+          exit /b 0
+
+      # Guard the bat files themselves: the suspicious-path call sites must
+      # keep the doubled-backslash form, and BOTH 18e scheduled-task IOC
+      # matchers must keep [regex]::Escape (the fix was once applied to only
+      # one of the two scripts, silently killing 6 backslash-path IOCs in the
+      # other).
+      - name: bat call sites keep argv/regex fixes in BOTH scripts
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($f in 'doze_sec.bat','doze_sec_noAdmin.bat') {
+            if (-not (Select-String -Path $f -SimpleMatch '"\Temp\\" "\AppData\\" "\Downloads\\"' -Quiet)) {
+              Write-Host "FAILED: $f lost the doubled-backslash suspicious-path patterns"; exit 1
+            }
+            if (-not (Select-String -Path $f -SimpleMatch '[regex]::Escape($p.Trim())' -Quiet)) {
+              Write-Host "FAILED: $f lost [regex]::Escape in the 18e scheduled-task IOC matcher"; exit 1
+            }
+          }
+          # Every active scheduled-task IOC must be usable as an escaped literal.
+          $bad = @(Get-Content ThreatLists\ioc_scheduled_tasks.txt | Where-Object { $_ -and $_ -notmatch '^\s*#' } | Where-Object {
+            try { [void]('probe' -match [regex]::Escape($_.Trim())); $false } catch { $true }
+          })
+          if ($bad) { Write-Host "FAILED: unusable IOC pattern(s): $($bad -join ', ')"; exit 1 }
+          Write-Host 'argv/regex fix guards OK (both bats, all task IOCs escape-safe)'
+          exit 0
+
+      # vt_self_check.ps1 is called from the bats as -Binaries "a","b","c".
+      # powershell.exe -File binds that as ONE comma-joined string, which the
+      # script must split -- before this was fixed, zero binaries resolved and
+      # the VT integrity gate silently verified nothing. Run the EXACT bat-style
+      # call from cmd with a dummy token and assert all four binaries resolve
+      # (the dummy key then 401s and exits 2, which is fine -- resolution
+      # happens before any network call).
+      - name: vt_self_check.ps1 resolves comma-bound -Binaries from cmd
+        shell: cmd
+        run: |
+          mkdir "%TEMP%\dz_vt_home" 2>nul
+          echo dummy-token-for-binding-test> "%TEMP%\dz_vt_home\.vt_token"
+          set "USERPROFILE=%TEMP%\dz_vt_home"
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools\vt_self_check.ps1 -SleepSeconds 0 -TimeoutSeconds 5 -Binaries "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe","%SystemRoot%\System32\wevtutil.exe","%SystemRoot%\System32\reg.exe","%SystemRoot%\System32\findstr.exe"> "%TEMP%\dz_vt_out.txt" 2>&1
+          findstr /c:"no resolvable binaries" "%TEMP%\dz_vt_out.txt" >nul && ( echo FAILED: comma-bound -Binaries did not split -- VT gate is dead again & type "%TEMP%\dz_vt_out.txt" & exit /b 1 )
+          findstr /c:"verifying 4" "%TEMP%\dz_vt_out.txt" >nul || ( echo FAILED: expected all 4 binaries to resolve & type "%TEMP%\dz_vt_out.txt" & exit /b 1 )
+          echo vt_self_check comma-binding OK ^(4/4 binaries resolved^)
+          exit /b 0
+
   full-run:
     name: "doze_sec.bat end-to-end (hang guard, hard timeout)"
     runs-on: windows-latest

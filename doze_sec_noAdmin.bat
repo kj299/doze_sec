@@ -1404,13 +1404,19 @@ echo  Command: Get-CimInstance Win32_Process ^| select_lines.ps1 \Temp\ \AppData
 :: \ProgramData\ removed -- legitimate vendor agents (Dropbox, OneDrive, Cisco
 :: AnyConnect, EDR/AV) routinely run from there. Section 18a IOC sweep catches
 :: known-bad ProgramData process names against ioc_processes.txt.
+:: Trailing backslashes before a closing quote MUST be doubled ("\Temp\\"):
+:: .NET argv parsing treats \" as an escaped literal quote, so "\Temp\" does
+:: not close the argument and the patterns fuse into one garbage string that
+:: never matches -- a silent false-negative for this whole check.
 if not defined _ENUM4 goto :sec4_susp_skip
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_proc4.tmp" "\Temp\" "\AppData\" "\Downloads\" "\Recycle" "\Users\Public">> "%REPORT%" 2>&1
-if %errorlevel% equ 0 (
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_proc4.tmp" "\Temp\\" "\AppData\\" "\Downloads\\" "\Recycle" "\Users\Public">> "%REPORT%" 2>&1
+if errorlevel 2 (
+    echo [SKIPPED] select_lines.ps1 helper error -- suspicious-path check NOT performed.>> "%REPORT%"
+) else if errorlevel 1 (
+    echo [OK] No processes from suspicious locations.>> "%REPORT%"
+) else (
     echo [WARNING] Suspicious process paths found above. Investigate now.>> "%REPORT%"
     if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
-) else (
-    echo [OK] No processes from suspicious locations.>> "%REPORT%"
 )
 goto :sec4_susp_done
 :sec4_susp_skip
@@ -1421,8 +1427,10 @@ echo.>> "%REPORT%"
 echo --- LOLBin Processes (mshta, certutil, regsvr32, cmstp, wscript) --->> "%REPORT%"
 echo  Command: Get-CimInstance Win32_Process ^| select_lines.ps1 mshta regsvr32 certutil ...>> "%REPORT%"
 if not defined _ENUM4 goto :sec4_lol_skip
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_proc4.tmp" "mshta" "regsvr32" "certutil" "cmstp" "wscript" "cscript" "msiexec" "installutil">> "%REPORT%"
-if errorlevel 1 echo [OK] No LOLBin processes currently running.>> "%REPORT%"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_proc4.tmp" "mshta" "regsvr32" "certutil" "cmstp" "wscript" "cscript" "msiexec" "installutil">> "%REPORT%" 2>&1
+if errorlevel 2 (
+    echo [SKIPPED] select_lines.ps1 helper error -- LOLBin process check NOT performed.>> "%REPORT%"
+) else if errorlevel 1 echo [OK] No LOLBin processes currently running.>> "%REPORT%"
 goto :sec4_lol_done
 :sec4_lol_skip
 echo [SKIPPED] Process enumeration failed -- LOLBin process check NOT performed.>> "%REPORT%"
@@ -1433,7 +1441,9 @@ echo --- Remote Monitoring and Management Tools (DPRK/Iran C2 vector) --->> "%RE
 echo  Command: Get-CimInstance Win32_Process ^| select_lines.ps1 ScreenConnect AnyDesk TeamViewer ...>> "%REPORT%"
 if not defined _ENUM4 goto :sec4_rmm_skip
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_proc4.tmp" "ScreenConnect" "AnyDesk" "TeamViewer" "Ammyy" "RustDesk" "Splashtop" "Atera" "Kaseya" "ConnectWise">> "%REPORT%" 2>&1
-if errorlevel 1 echo [OK] No common RMM tools running.>> "%REPORT%"
+if errorlevel 2 (
+    echo [SKIPPED] select_lines.ps1 helper error -- RMM tool check NOT performed.>> "%REPORT%"
+) else if errorlevel 1 echo [OK] No common RMM tools running.>> "%REPORT%"
 goto :sec4_rmm_done
 :sec4_rmm_skip
 echo [SKIPPED] Process enumeration failed -- RMM tool check NOT performed.>> "%REPORT%"
