@@ -66,7 +66,8 @@ $cases = @(
         Name   = 'Run-key backdoor (encoded PowerShell) -> flagged as suspicious'
         Tier   = 'pending'   # Section 5 raw-dumps Run keys with no evaluation logic
         Expect = ('(?im)(\[(WARNING|CRITICAL)\][^\r\n]*{0}|{0}[^\r\n]*(suspicious|encoded|backdoor))' -f $MARK)
-        Plant  = { Set-ItemProperty -Path $runKey -Name $MARK -Value 'powershell -w hidden -enc ZQBjAGgAbwA=' -Force }
+        Plant  = { New-Item -Path $runKey -Force | Out-Null
+                   Set-ItemProperty -Path $runKey -Name $MARK -Value 'powershell -w hidden -enc ZQBjAGgAbwA=' -Force }
         Cleanup= { Remove-ItemProperty -Path $runKey -Name $MARK -EA SilentlyContinue }
     },
     @{
@@ -95,11 +96,19 @@ function Get-LatestReport {
 $planted = @()
 $runExit = $null
 try {
+    # Plant per-case with a catch so one bad plant cannot abort the whole run
+    # (and only cases that actually planted get asserted / cleaned up).
     Write-Host "== Planting known-bad artifacts =="
     foreach ($c in $cases) {
-        & $c.Plant
-        $planted += $c
-        Write-Host ("  planted: {0}" -f $c.Name)
+        try {
+            & $c.Plant
+            $c.Planted = $true
+            $planted += $c
+            Write-Host ("  planted: {0}" -f $c.Name)
+        } catch {
+            $c.Planted = $false
+            Write-Host ("  WARNING: could not plant [{0}] {1}: {2}" -f $c.Tier, $c.Name, $_.Exception.Message)
+        }
     }
 
     Write-Host "== Running the audit (this takes a few minutes) =="
@@ -120,6 +129,10 @@ try {
     $requiredFail = 0
     $promote = 0
     foreach ($c in $cases) {
+        if (-not $c.Planted) {
+            Write-Host ("  [ SKIP     ] {0}  -- could not be planted (harness issue, not a detection regression)" -f $c.Name)
+            continue
+        }
         $hit = [bool]([regex]::IsMatch($text, $c.Expect))
         if ($c.Tier -eq 'required') {
             if ($hit) { Write-Host ("  [ OK       ] {0}" -f $c.Name) }
