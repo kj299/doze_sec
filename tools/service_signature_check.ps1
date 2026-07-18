@@ -29,11 +29,30 @@ $trusted = '\bMicrosoft\b|\bAdobe\b|\bBrave\b|\bGoogle\b|\bMozilla\b|\bWinSCP\b|
 function Get-ServiceBinaryPath {
     param([string]$PathName)
     if (-not $PathName) { return $null }
-    $p = $PathName.Trim()
+    # ImagePath forms seen in the wild: quoted, unquoted with arguments,
+    # %SystemRoot%-style env vars (REG_EXPAND_SZ), and NT-native \??\ /
+    # \SystemRoot\ prefixes. Normalize before parsing, or a legitimate
+    # service gets misread and flagged 'no-file' (false alarm).
+    $p = [Environment]::ExpandEnvironmentVariables($PathName.Trim())
+    if ($p -match '^\\\?\?\\') { $p = $p.Substring(4) }
+    if ($p -match '^\\SystemRoot\\') { $p = Join-Path $env:SystemRoot $p.Substring(12) }
     if ($p.StartsWith('"')) {
         $endQuote = $p.IndexOf('"', 1)
         if ($endQuote -gt 0) { return $p.Substring(1, $endQuote - 1) }
         return $p.Substring(1)
+    }
+    # Unquoted path, possibly with arguments AND spaces in the path itself
+    # (the classic unquoted-service-path case: C:\Program Files\App\svc.exe
+    # -flag). Resolve the way the SCM does: try each space-delimited prefix,
+    # first existing file wins, also with an implied .exe extension.
+    # Splitting at the first space misparsed these as "C:\Program" and
+    # flagged signed vendor services as 'no-file'.
+    $candidate = $null
+    foreach ($t in ($p -split ' ')) {
+        $candidate = if ($null -eq $candidate) { $t } else { "$candidate $t" }
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+        if ($candidate -notmatch '\.[Ee][Xx][Ee]$' -and
+            (Test-Path -LiteralPath ($candidate + '.exe') -PathType Leaf)) { return $candidate + '.exe' }
     }
     return ($p -split '\s+', 2)[0]
 }

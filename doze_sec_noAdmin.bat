@@ -3216,6 +3216,8 @@ echo.>> "%REPORT%"
 echo --- [CTI][T1562.001] AMSI Bypass Patterns in PowerShell Event 4104 --->> "%REPORT%"
 echo  Command: powershell -Command "Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-PowerShell/Operational'">> "%REPORT%"
 echo $evts = Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-PowerShell/Operational';Id=4104} -MaxEvents 500 -EA SilentlyContinue > "%PSRUN%"
+echo $skip = 'AuditPS_\d{8}_\d{6}\.ps1^|doze_sec_noAdmin\.bat^|doze_sec\.bat' >> "%PSRUN%"
+echo if ($evts) { $evts = @($evts ^| Where-Object { $pth = if($_.Properties.Count -ge 5){[string]$_.Properties[4].Value}else{''}; $pth -notmatch $skip }) } >> "%PSRUN%"
 echo $amsi = @('AmsiUtils','amsiInitFailed','AmsiScanBuffer','SetProtectedState','Reflection.Assembly','System.Management.Automation.AmsiUtils','amsiscanbuffer','amsi.dll','Unmanaged.*amsi') >> "%PSRUN%"
 echo $hits = @() >> "%PSRUN%"
 echo if ($evts) { >> "%PSRUN%"
@@ -3225,7 +3227,7 @@ echo       if ($e.Message -match $p) { $hits += ('['+$e.TimeCreated+'] Pattern: 
 echo     } >> "%PSRUN%"
 echo   } >> "%PSRUN%"
 echo } >> "%PSRUN%"
-echo if ($hits.Count -gt 0) { '[WARNING][T1562.001] AMSI bypass attempts detected in PS logs:'; $hits ^| Select-Object -First 10 ^| ForEach-Object { '  '+$_ } } else { '[OK] No AMSI bypass patterns in recent PowerShell Script Block logs.' } >> "%PSRUN%"
+echo if ($hits.Count -gt 0) { '[WARNING][T1562.001] AMSI bypass attempts detected in PS logs:'; $hits ^| Select-Object -First 10 ^| ForEach-Object { '  '+$_ } } else { '[OK] No AMSI bypass patterns in recent PowerShell Script Block logs (audit-self events filtered).' } >> "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 :: --- [CTI] Credential Access via DPAPI (T1555.003 / T1555.004) ---
@@ -3543,7 +3545,7 @@ echo. >> "%PSRUN%"
 :: ===== ATTACK SURFACE ================================================
 echo sec 'ATTACK SURFACE  (Sections 8, 10, 11)' >> "%PSRUN%"
 echo if($isAdmin -eq '1'){ >> "%PSRUN%"
-echo $fwOn=(netsh advfirewall show allprofiles 2^>$null^|Select-String 'State\s+ON').Count;if($fwOn -ge 3){ck 'PASS' 'All three firewall profiles enabled - Domain, Private, Public'}else{ck 'CRIT' "Firewall DISABLED on $(3-$fwOn) profiles" 'Fix: netsh advfirewall set allprofiles state on'} >> "%PSRUN%"
+echo $fwp=@(Get-NetFirewallProfile -EA SilentlyContinue);$fwOff=@($fwp^|Where-Object{-not $_.Enabled});if($fwp.Count -eq 0){ck 'INFO' 'Firewall state unavailable via Get-NetFirewallProfile -- see Section 8'}elseif($fwOff.Count -eq 0){ck 'PASS' 'All firewall profiles enabled - Domain, Private, Public'}else{ck 'CRIT' "Firewall DISABLED on $($fwOff.Count) profile(s): $($fwOff.Name -join ', ')" 'Fix: Set-NetFirewallProfile -All -Enabled True'} >> "%PSRUN%"
 echo $s1=(Get-SmbServerConfiguration -EA SilentlyContinue).EnableSMB1Protocol;if($s1 -eq $false){ck 'PASS' 'SMBv1 disabled (EternalBlue not exploitable)'}elseif($s1 -eq $true){ck 'CRIT' 'SMBv1 ENABLED (EternalBlue CVE-2017-0144)' 'Run: Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart'}else{ck 'INFO' 'SMBv1 state unavailable -- see Section 10'} >> "%PSRUN%"
 echo }else{ >> "%PSRUN%"
 echo ck 'INFO' 'Firewall status check deferred (requires admin)' >> "%PSRUN%"

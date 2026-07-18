@@ -8,7 +8,9 @@
 #
 # TWO TIERS:
 #   required -- detections that work today. A required case that STOPS firing
-#               is a regression and FAILS the job (exit 1).
+#               is a regression and FAILS the job (exit 1). Cases with
+#               Invert=$true are FALSE-POSITIVE guards: they plant a benign
+#               state and fail the job if the audit flags it anyway.
 #   pending  -- gaps the code review found, tracked in issue #138 (Run-key
 #               backdoor has no detection logic, Section 2 never evaluates the
 #               Guest account, IFEO on a non-accessibility binary is printed
@@ -43,6 +45,9 @@ $hostsPath = Join-Path $env:SystemRoot 'System32\drivers\etc\hosts'
 $wdigestKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest'
 $runKey     = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $ifeoKey    = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\notepad.exe'
+$sblKey     = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging'
+$fpSvcName  = 'dz_selftest_fp_svc'
+$fpSvcDir   = 'C:\Program Files\dz selftest fp'
 
 # Each case: Name, Tier, Plant/Cleanup script blocks, and Expect -- a regex that
 # must appear in the final report text for the detection to count as firing.
@@ -85,6 +90,35 @@ $cases = @(
         Expect = '(?im)\[(WARNING|CRITICAL)\][^\r\n]*guest'
         Plant  = { & net user guest /active:yes | Out-Null }
         Cleanup= { & net user guest /active:no  | Out-Null }
+    },
+    # ---- False-positive guards: plant a BENIGN state, assert NOT flagged ----
+    @{
+        Name   = 'ScriptBlockLogging ON -> audit must NOT flag its own AMSI scan'
+        Tier   = 'required'
+        Invert = $true       # regex must be ABSENT from the report
+        # With 4104 logging on, the audit's own script blocks contain the AMSI
+        # pattern list; without the self-exclusion filter the CTI section
+        # reported the audit itself as an AMSI bypass on every hardened host.
+        Expect = '(?im)\[WARNING\]\[T1562\.001\] AMSI bypass attempts'
+        Plant  = { New-Item -Path $sblKey -Force | Out-Null
+                   Set-ItemProperty -Path $sblKey -Name EnableScriptBlockLogging -Value 1 -Type DWord -Force }
+        Cleanup= { Remove-ItemProperty -Path $sblKey -Name EnableScriptBlockLogging -EA SilentlyContinue }
+    },
+    @{
+        Name   = 'Signed service at unquoted spaced path -> must NOT be "no-file"'
+        Tier   = 'required'
+        Invert = $true
+        # The old parser split the unquoted PathName at the first space
+        # ("C:\Program"), failed to find the binary, and reported signed
+        # vendor services as no-file. (The unquoted path itself is still
+        # legitimately listed by the unquoted-service-path check.)
+        Expect = ('(?im){0}[^\r\n]*no-file' -f $fpSvcName)
+        Plant  = { New-Item -ItemType Directory -Path $fpSvcDir -Force | Out-Null
+                   Copy-Item (Join-Path $env:SystemRoot 'System32\cmd.exe') (Join-Path $fpSvcDir 'dzsvc.exe') -Force
+                   $r = & sc.exe create $fpSvcName 'binPath=' "$fpSvcDir\dzsvc.exe" 'start=' 'demand'
+                   if ($LASTEXITCODE -ne 0) { throw ("sc create failed: {0}" -f ($r -join ' ')) } }
+        Cleanup= { & sc.exe delete $fpSvcName | Out-Null
+                   Remove-Item -LiteralPath $fpSvcDir -Recurse -Force -EA SilentlyContinue }
     }
 )
 
@@ -142,13 +176,17 @@ try {
             Write-Host ("  [ SKIP     ] {0}  -- could not be planted (harness issue, not a detection regression)" -f $c.Name)
             continue
         }
-        $hit = [bool]([regex]::IsMatch($text, $c.Expect))
+        $hit  = [bool]([regex]::IsMatch($text, $c.Expect))
+        # Invert cases plant a BENIGN state: the pattern must be ABSENT
+        # (false-positive guard); a match means the audit cried wolf.
+        $pass = if ($c.Invert) { -not $hit } else { $hit }
         if ($c.Tier -eq 'required') {
-            if ($hit) { Write-Host ("  [ OK       ] {0}" -f $c.Name) }
-            else      { Write-Host ("  [ REGRESS  ] {0}  -- required detection no longer fires" -f $c.Name); $requiredFail++ }
+            if ($pass) { Write-Host ("  [ OK       ] {0}" -f $c.Name) }
+            elseif ($c.Invert) { Write-Host ("  [ REGRESS  ] {0}  -- false positive fired on a benign state" -f $c.Name); $requiredFail++ }
+            else       { Write-Host ("  [ REGRESS  ] {0}  -- required detection no longer fires" -f $c.Name); $requiredFail++ }
         } else {
-            if ($hit) { Write-Host ("  [ PROMOTE  ] {0}  -- now detected; move to the required tier" -f $c.Name); $promote++ }
-            else      { Write-Host ("  [ gap      ] {0}  -- still a known gap (see code review)" -f $c.Name) }
+            if ($pass) { Write-Host ("  [ PROMOTE  ] {0}  -- now detected; move to the required tier" -f $c.Name); $promote++ }
+            else       { Write-Host ("  [ gap      ] {0}  -- still a known gap (see code review)" -f $c.Name) }
         }
     }
 
@@ -156,6 +194,28 @@ try {
     Write-Host "== Report integrity =="
     if ($badName) { Write-Host ("  [ REGRESS  ] report filename lacks a valid timestamp: '{0}' -- timestamp derivation broke (see the wmic-less fallback fix)" -f $report.Name); $requiredFail++ }
     else          { Write-Host ("  [ OK       ] report filename timestamp is well-formed ({0})" -f $report.Name) }
+
+    # False-positive guard with a dynamic expectation: the summary's firewall
+    # verdict must agree with what Get-NetFirewallProfile actually reports.
+    # The old netsh text-scrape said "Firewall DISABLED" on any non-English
+    # Windows (localized State strings); comparing against ground truth
+    # catches any such divergence on whatever state this runner is in.
+    Write-Host ""
+    Write-Host "== False-positive guards (ground truth) =="
+    $fwp = @(Get-NetFirewallProfile -EA SilentlyContinue)
+    if ($fwp.Count -gt 0) {
+        $fwAllOn = (@($fwp | Where-Object { -not $_.Enabled }).Count -eq 0)
+        $saysOn  = [bool]([regex]::IsMatch($text, 'All firewall profiles enabled'))
+        $saysOff = [bool]([regex]::IsMatch($text, 'Firewall DISABLED on'))
+        if (($fwAllOn -and $saysOn -and -not $saysOff) -or (-not $fwAllOn -and $saysOff -and -not $saysOn)) {
+            Write-Host ("  [ OK       ] firewall verdict matches Get-NetFirewallProfile ground truth (all profiles on: {0})" -f $fwAllOn)
+        } else {
+            Write-Host ("  [ REGRESS  ] firewall verdict disagrees with ground truth (all on: {0}; report says PASS: {1}, CRIT: {2})" -f $fwAllOn, $saysOn, $saysOff)
+            $requiredFail++
+        }
+    } else {
+        Write-Host "  [ SKIP     ] Get-NetFirewallProfile unavailable on this host -- consistency check skipped"
+    }
 
     # Exit-code architecture (code-review W1-W3): a planted CRITICAL (WDigest=1)
     # must drive the process exit code to 8. PROMOTED to required 2026-07-18

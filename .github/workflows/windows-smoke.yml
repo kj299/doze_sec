@@ -149,6 +149,21 @@ jobs:
           Write-Host "ioc_hash_check OK"
           exit 0
 
+      - name: service_signature_check.ps1 (real services + Authenticode; svchost must resolve)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = .\tools\service_signature_check.ps1
+          $out | Select-Object -First 5 | Write-Host
+          # The path parser must never misresolve well-known Windows services:
+          # a "no-file" verdict for any svchost/system32 service means the
+          # ImagePath normalization regressed (env vars, \SystemRoot\, unquoted
+          # spaces). These services exist on every runner image.
+          $bad = $out | Where-Object { $_ -match '\b(WinDefend|EventLog|Schedule|BITS|Dhcp|Dnscache)\b' -and $_ -match 'no-file' }
+          if ($bad) { $bad | Write-Host; throw "service_signature_check misresolved a well-known service path (no-file)" }
+          Write-Host "service_signature_check OK"
+          exit 0
+
       - name: INIT-path extractions (self_update_check / disk_info / smart_health)
         shell: powershell
         run: |
