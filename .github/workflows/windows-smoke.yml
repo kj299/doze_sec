@@ -41,13 +41,13 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $bad = @()
-          Get-ChildItem tools\*.ps1 | ForEach-Object {
+          Get-ChildItem tools\*.ps1, tests\*.ps1 | ForEach-Object {
             $errs = $null
             [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$errs)
             if ($errs) { $bad += "$($_.Name): $($errs[0].Message)" }
           }
           if ($bad) { $bad | ForEach-Object { Write-Host "PARSE ERROR  $_" }; exit 1 }
-          Write-Host "All tools/*.ps1 parse clean under Windows PowerShell $($PSVersionTable.PSVersion)"
+          Write-Host "All tools/*.ps1 + tests/*.ps1 parse clean under Windows PowerShell $($PSVersionTable.PSVersion)"
           exit 0
 
       - name: scheduled_tasks_full.ps1 (real Get-ScheduledTask + Authenticode)
@@ -331,5 +331,34 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: securityaudit-output
+          path: C:\SecurityAudit\*
+          if-no-files-found: ignore
+
+  # Detection-regression harness. full-run above proves the audit COMPLETES;
+  # this proves it DETECTS. It plants known-bad artifacts (WDigest=1, a HOSTS
+  # hijack, a Run-key backdoor, an IFEO Debugger on notepad, an enabled Guest
+  # account), runs the audit, and asserts the report flags them. Detections
+  # that work today are "required" (a regression fails the job); the gaps the
+  # code review found are "pending" and never fail the job -- they flip to
+  # required as the fixes land. Every artifact is removed in a finally block.
+  detection-selftest:
+    name: "detection regression harness (plant known-bad -> assert verdict)"
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Plant indicators, run the audit, assert detections, clean up
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\tests\detection_selftest.ps1 -BatPath .\doze_sec.bat
+          exit $LASTEXITCODE
+
+      - name: Upload the selftest audit artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: detection-selftest-output
           path: C:\SecurityAudit\*
           if-no-files-found: ignore

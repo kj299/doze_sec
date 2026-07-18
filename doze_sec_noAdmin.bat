@@ -366,11 +366,29 @@ echo  This is not allowed. Move the script to a permanent location
 echo  such as your Desktop or C:\Tools\ and run it from there.
 echo.
 set "EXIT_CODE=5"
-:: Stub file vars for early exit so :end_script code never writes to empty path
-if not defined CHANGELOG set "CHANGELOG=NUL"
-if not defined UNDO_BAT  set "UNDO_BAT=NUL"
-goto :end_script
+goto :fatal_preinit_exit
 :tempcheck_done
+
+:: Refuse to run without the tools\ folder next to the script. A stray copy
+:: of this .bat (e.g. one shadowing from C:\Windows\System32 when invoked by
+:: bare name in an elevated prompt) has no helpers: every tools\*.ps1 call
+:: fails, INIT 13 parses PowerShell's error banner as data ("Free: Copyright
+:: bytes"), and the HTML report never generates. Fail loudly instead.
+if exist "%SCRIPT_DIR%tools\select_lines.ps1" goto :toolscheck_done
+echo.
+echo  %C_RED%[EXIT 1]%C_RESET% No tools\ folder found next to this script:
+echo     %SCRIPT_DIR%
+echo  doze_sec needs its tools\ and ThreatLists\ folders in the SAME
+echo  directory as the .bat. Two common causes:
+echo    - a stray copy of this script is shadowing the real one (e.g. in
+echo      C:\Windows\System32); delete the stray copy, then run from the checkout.
+echo    - you downloaded only the .bat; get the full release instead.
+echo  Then run from the script's own directory, e.g.:
+echo     cd /d C:\path\to\doze_sec ^&^& doze_sec_noAdmin.bat -noAdmin
+echo.
+set "EXIT_CODE=1"
+goto :fatal_preinit_exit
+:toolscheck_done
 
 :: ====================================================================
 :: EARLY PATH AND POWERSHELL SETUP
@@ -462,7 +480,7 @@ if %errorlevel% equ 0 (
     ) else (
         echo %C_RED%[FATAL]%C_RESET% PowerShell not found. Cannot continue.
         set "EXIT_CODE=1"
-        goto :end_script
+        goto :fatal_preinit_exit
     )
 )
 
@@ -482,7 +500,7 @@ if %errorlevel% equ 0 (
         echo  Or re-run with -noAdmin for a partial audit.
         echo.
         set "EXIT_CODE=1"
-        goto :end_script
+        goto :fatal_preinit_exit
     )
     echo %C_GREEN%[INIT 2/14]%C_RESET% Running WITHOUT admin - limited audit mode
     echo %C_GREEN%[INIT 2/14]%C_RESET% Sections requiring admin will be marked [DEFERRED]
@@ -1306,6 +1324,12 @@ echo.>> "%REPORT%"
 echo --- HOSTS File (SAFE: only 127.0.0.1 and ::1 localhost entries) --->> "%REPORT%"
 echo  Command: type "%WINDIR%\System32\drivers\etc\hosts">> "%REPORT%"
 type "%WINDIR%\System32\drivers\etc\hosts">> "%REPORT%" 2>&1
+type "%WINDIR%\System32\drivers\etc\hosts" 2>nul | findstr /v /r "^#" | findstr /v /r "^$" | findstr /v /c:"127.0.0.1" /c:"::1" | findstr /r "[0-9]" >nul 2>&1
+if !errorlevel! equ 0 (
+    echo  [WARNING] Non-standard entries found in HOSTS file. Review for DNS hijacking.>> "%REPORT%"
+) else (
+    echo  [OK] HOSTS file contains only standard entries.>> "%REPORT%"
+)
 
 echo.>> "%REPORT%"
 echo --- DNS Integrity Probe (active resolution of legitimate update/security domains) --->> "%REPORT%"
@@ -2348,6 +2372,21 @@ forfiles /p "%TEMP%" /s /d -7 /m "*.ps1" /c "cmd /c echo @path @fdate @ftime">> 
 forfiles /p "%TEMP%" /s /d -7 /m "*.vbs" /c "cmd /c echo @path @fdate @ftime">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
+echo --- Executables in System Temp (C:\Windows\Temp, Last 7 Days) --->> "%REPORT%"
+echo  Command: forfiles /p "%WINDIR%\Temp" /s /d -7 /m "*.exe" /c "cmd /c echo @path @fdate @ftime">> "%REPORT%"
+echo  Catches SYSTEM-context staging (post-priv-esc payload drops).>> "%REPORT%"
+if "%IS_ADMIN%"=="0" goto :sec14_systemp_noadmin
+forfiles /p "%WINDIR%\Temp" /s /d -7 /m "*.exe" /c "cmd /c echo @path @fdate @ftime">> "%REPORT%" 2>&1
+forfiles /p "%WINDIR%\Temp" /s /d -7 /m "*.dll" /c "cmd /c echo @path @fdate @ftime">> "%REPORT%" 2>&1
+forfiles /p "%WINDIR%\Temp" /s /d -7 /m "*.ps1" /c "cmd /c echo @path @fdate @ftime">> "%REPORT%" 2>&1
+forfiles /p "%WINDIR%\Temp" /s /d -7 /m "*.vbs" /c "cmd /c echo @path @fdate @ftime">> "%REPORT%" 2>&1
+goto :sec14_systemp_done
+:sec14_systemp_noadmin
+echo  [DEFERRED - ADMIN REQUIRED] Listing %WINDIR%\Temp requires administrator privileges.>> "%REPORT%"
+set /a DEFERRED_COUNT+=1
+:sec14_systemp_done
+
+echo.>> "%REPORT%"
 echo --- HTML Smuggling: Large HTML/HTA in Downloads (Midnight Blizzard) --->> "%REPORT%"
 echo  Command: powershell -Command "Get-ChildItem -Path ^([System.Environment]::GetFolderPath^('UserProfile'^)+'\Downloads'^) -Recurse -Include '*.html','*.htm','*.hta' -EA SilentlyContinue">> "%REPORT%"
 echo Get-ChildItem -Path ([System.Environment]::GetFolderPath('UserProfile')+'\Downloads') -Recurse -Include '*.html','*.htm','*.hta' -EA SilentlyContinue ^| Where-Object {$_.Length -gt 200000} ^| Select-Object FullName,@{N='SizeKB';E={[math]::Round($_.Length/1024,1)}},LastWriteTime ^| Format-Table -AutoSize > "%PSRUN%"
@@ -3167,6 +3206,37 @@ echo } >> "%PSRUN%"
 echo if ($hits.Count -gt 0) { '[WARNING][T1574.001] Unsigned/suspicious DLLs in system paths:'; $hits ^| ForEach-Object { '  '+$_ } } else { '[OK] No suspicious unsigned DLLs found in system paths.' } >> "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
+:: --- [CTI] LOLBin Download/Execute Chains (T1105+T1059) ---
+echo.>> "%REPORT%"
+echo --- [CTI][T1105+T1059] LOLBin Download Cradles in Event 4688 (last 24h) --->> "%REPORT%"
+echo  Command: wevtutil qe Security /q:"*[System[^(EventID=4688^)]]" /c:1000 /rd:true /f:text ^| select_lines.ps1 "bitsadmin" "certutil -urlcache" "curl " "wget" "Invoke-WebRequest" "Start-BitsTransfer" "desktopimgdownldr" "esentutl">> "%REPORT%"
+if "%IS_ADMIN%"=="0" goto :cti_lolbin4688_noadmin
+wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:1000 /rd:true /f:text > "%TEMP%\dz_evt.tmp" 2>nul
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" "bitsadmin" "certutil -urlcache" "curl " "wget" "Invoke-WebRequest" "Start-BitsTransfer" "desktopimgdownldr" "esentutl">> "%REPORT%" 2>&1
+del "%TEMP%\dz_evt.tmp" 2>nul
+goto :cti_lolbin4688_done
+:cti_lolbin4688_noadmin
+echo  [DEFERRED - ADMIN REQUIRED] Security event log requires admin.>> "%REPORT%"
+set /a DEFERRED_COUNT+=1
+:cti_lolbin4688_done
+
+:: --- [CTI] AMSI Bypass Artifacts in PowerShell Logs (T1562.001) ---
+echo.>> "%REPORT%"
+echo --- [CTI][T1562.001] AMSI Bypass Patterns in PowerShell Event 4104 --->> "%REPORT%"
+echo  Command: powershell -Command "Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-PowerShell/Operational'">> "%REPORT%"
+echo $evts = Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-PowerShell/Operational';Id=4104} -MaxEvents 500 -EA SilentlyContinue > "%PSRUN%"
+echo $amsi = @('AmsiUtils','amsiInitFailed','AmsiScanBuffer','SetProtectedState','Reflection.Assembly','System.Management.Automation.AmsiUtils','amsiscanbuffer','amsi.dll','Unmanaged.*amsi') >> "%PSRUN%"
+echo $hits = @() >> "%PSRUN%"
+echo if ($evts) { >> "%PSRUN%"
+echo   foreach ($e in $evts) { >> "%PSRUN%"
+echo     foreach ($p in $amsi) { >> "%PSRUN%"
+echo       if ($e.Message -match $p) { $hits += ('['+$e.TimeCreated+'] Pattern: '+$p); break } >> "%PSRUN%"
+echo     } >> "%PSRUN%"
+echo   } >> "%PSRUN%"
+echo } >> "%PSRUN%"
+echo if ($hits.Count -gt 0) { '[WARNING][T1562.001] AMSI bypass attempts detected in PS logs:'; $hits ^| Select-Object -First 10 ^| ForEach-Object { '  '+$_ } } else { '[OK] No AMSI bypass patterns in recent PowerShell Script Block logs.' } >> "%PSRUN%"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+
 :: --- [CTI] Credential Access via DPAPI (T1555.003 / T1555.004) ---
 echo.>> "%REPORT%"
 echo --- [CTI][T1555.003] Browser Credential Store Access (DPAPI) --->> "%REPORT%"
@@ -3207,6 +3277,20 @@ echo } >> "%PSRUN%"
 echo if ($hits.Count -gt 0) { '[INFO] Recent AAD/token cache activity (correlate with login events):'; $hits ^| ForEach-Object { '  '+$_ } } else { '[OK] No unusual recent token cache modifications.' } >> "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
+:: --- [CTI] Ransomware Precursors (T1490) ---
+echo.>> "%REPORT%"
+echo --- [CTI][T1490] Ransomware Precursors - VSS/BCDEdit/Recovery Tampering (last 24h) --->> "%REPORT%"
+echo  Command: wevtutil qe Security /q:"*[System[^(EventID=4688^)]]" /c:1000 /rd:true /f:text ^| select_lines.ps1 "vssadmin delete" "wmic shadowcopy" "bcdedit /set {default} recoveryenabled no" "wbadmin delete" "disableshadowcopy">> "%REPORT%"
+if "%IS_ADMIN%"=="0" goto :cti_ransom4688_noadmin
+wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:1000 /rd:true /f:text > "%TEMP%\dz_evt.tmp" 2>nul
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" "vssadmin delete" "wmic shadowcopy" "bcdedit /set {default} recoveryenabled no" "wbadmin delete" "disableshadowcopy">> "%REPORT%" 2>&1
+del "%TEMP%\dz_evt.tmp" 2>nul
+goto :cti_ransom4688_done
+:cti_ransom4688_noadmin
+echo  [DEFERRED - ADMIN REQUIRED] Security event log requires admin.>> "%REPORT%"
+set /a DEFERRED_COUNT+=1
+:cti_ransom4688_done
+
 :: --- [CTI] Ransomware File Extension Survey (T1486) ---
 echo.>> "%REPORT%"
 echo --- [CTI][T1486] Ransomware File Extension Survey --->> "%REPORT%"
@@ -3236,6 +3320,23 @@ echo   $f = Join-Path $drvDir $drv >> "%PSRUN%"
 echo   if (Test-Path $f) { $hits += $f } >> "%PSRUN%"
 echo } >> "%PSRUN%"
 echo if ($hits.Count -gt 0) { '[CRITICAL][T1562.001] Known BYOVD (vulnerable driver) files present:'; $hits ^| ForEach-Object { '  '+$_ }; '[WARNING] Attackers use these to disable EDR/AV from kernel. Remove immediately.' } else { '[OK] No known BYOVD exploit drivers found in drivers directory.' } >> "%PSRUN%"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+
+:: --- [CTI] Suspicious Service Creation - Event 7045 Anomalies ---
+echo.>> "%REPORT%"
+echo --- [CTI][T1543.003] Suspicious Service Installs (Event 7045 from Temp/Public) --->> "%REPORT%"
+echo  Command: powershell -Command "Get-WinEvent -FilterHashtable @{LogName='System'">> "%REPORT%"
+echo $evts = Get-WinEvent -FilterHashtable @{LogName='System';Id=7045} -MaxEvents 50 -EA SilentlyContinue > "%PSRUN%"
+echo $hits = @() >> "%PSRUN%"
+echo if ($evts) { >> "%PSRUN%"
+echo   foreach ($e in $evts) { >> "%PSRUN%"
+echo     $msg = $e.Message >> "%PSRUN%"
+echo     if ($msg -match '\\Temp\\^|\\AppData\\^|\\Users\\Public\\^|\\Downloads\\^|cmd\.exe^|powershell^|mshta^|regsvr32') { >> "%PSRUN%"
+echo       $hits += '['+$e.TimeCreated+'] '+($msg -replace '[\r\n]+',' ' ^| Select-Object -First 1) >> "%PSRUN%"
+echo     } >> "%PSRUN%"
+echo   } >> "%PSRUN%"
+echo } >> "%PSRUN%"
+echo if ($hits.Count -gt 0) { '[WARNING][T1543.003] Suspicious service installations found:'; $hits ^| Select-Object -First 10 ^| ForEach-Object { '  '+$_ } } else { '[OK] No suspicious service installations in recent Event 7045 logs.' } >> "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 :: --- [CTI] COM Object Hijacking (T1546.015) ---
@@ -3298,6 +3399,18 @@ echo } >> "%PSRUN%"
 echo if ($found.Count -gt 0) { '[INFO] Cloud CLI credential files present (verify these are expected):'; $found ^| ForEach-Object { '  '+$_ } } else { '[OK] No cloud CLI credential files found (no cloud attack surface from local tokens).' } >> "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
+:: --- [CTI] Explicit Credential Logon - Event 4648 (T1078) ---
+echo.>> "%REPORT%"
+echo --- [CTI][T1078] Explicit Credential Logons - Event 4648 --->> "%REPORT%"
+echo  Command: wevtutil qe Security /q:"*[System[^(EventID=4648^)]]" /c:20 /rd:true /f:text ^| findstr /c:"TimeCreated" /c:"Subject:" /c:"Account Name" /c:"Target Server">> "%REPORT%"
+if "%IS_ADMIN%"=="0" goto :cti_4648_noadmin
+wevtutil qe Security /q:"*[System[(EventID=4648)]]" /c:20 /rd:true /f:text | findstr /c:"TimeCreated" /c:"Subject:" /c:"Account Name" /c:"Target Server">> "%REPORT%" 2>&1
+goto :cti_4648_done
+:cti_4648_noadmin
+echo  [DEFERRED - ADMIN REQUIRED] Security event log requires admin.>> "%REPORT%"
+set /a DEFERRED_COUNT+=1
+:cti_4648_done
+
 :: --- [CTI] SSH Server (OpenSSH) Enabled Check ---
 echo.>> "%REPORT%"
 echo --- [CTI] OpenSSH Server Lateral Movement Surface --->> "%REPORT%"
@@ -3317,6 +3430,15 @@ echo   '[OK] OpenSSH Server not installed.' >> "%PSRUN%"
 echo } >> "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 echo.>> "%REPORT%"
+
+:: --- [CTI-AUTO] Execute auto-generated TTP blocks from -updateTTP ---
+set "TTP_BLOCKS=%OUTDIR%\ThreatLists\ttp_generated_checks.bat"
+if exist "%TTP_BLOCKS%" (
+    echo.>> "%REPORT%"
+    echo --- Executing auto-generated CTI detection blocks --->> "%REPORT%"
+    echo %C_CYAN%[18/18]%C_RESET% Running auto-generated TTP checks from SENTINEL-X...
+    call "%TTP_BLOCKS%"
+)
 
 :sec18_verdict
 :: ---- Section 18/18 verdict -----------------------------------------------
@@ -3766,6 +3888,22 @@ if exist "%REPORT_HTML%" (
 :: If invoked via the self-tee wrapper, write our real EXIT_CODE to the file
 :: the parent reads -- otherwise the parent's exit /b reflects Tee-Object's
 :: exit code, not ours. (closes #96)
+if defined DOZE_EXIT_FILE echo %EXIT_CODE%>"%DOZE_EXIT_FILE%" 2>nul
+endlocal & exit /b %EXIT_CODE%
+
+:: ====================================================================
+:: MINIMAL EXIT for pre-audit guard failures (ran-from-TEMP, missing
+:: tools\ folder, PowerShell absent, non-admin without -noAdmin). At these
+:: points no usable report exists yet, so the full :end_script handler must
+:: NOT run: it would invoke report_html.ps1 with %PWSH% undefined (an
+:: empty-quoted command) and hit `start "" notepad "%REPORT%"` -- and because
+:: `if exist "NUL"` is always true in cmd, a stubbed REPORT=NUL used to pop
+:: Notepad on the NUL device. This handler skips all of that: it just records
+:: the code for the self-tee parent and exits. Placed after :final_exit so it
+:: is never reached by fall-through.
+:fatal_preinit_exit
+echo.
+echo  Exit code: %EXIT_CODE% -- audit did not run.
 if defined DOZE_EXIT_FILE echo %EXIT_CODE%>"%DOZE_EXIT_FILE%" 2>nul
 endlocal & exit /b %EXIT_CODE%
 
