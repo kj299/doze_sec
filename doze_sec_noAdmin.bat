@@ -367,10 +367,32 @@ echo  such as your Desktop or C:\Tools\ and run it from there.
 echo.
 set "EXIT_CODE=5"
 :: Stub file vars for early exit so :end_script code never writes to empty path
+if not defined REPORT    set "REPORT=NUL"
 if not defined CHANGELOG set "CHANGELOG=NUL"
 if not defined UNDO_BAT  set "UNDO_BAT=NUL"
 goto :end_script
 :tempcheck_done
+
+:: Refuse to run without the tools\ folder next to the script. A stray copy
+:: of this .bat (e.g. one shadowing from C:\Windows\System32 when invoked by
+:: bare name in an elevated prompt) has no helpers: every tools\*.ps1 call
+:: fails, INIT 13 parses PowerShell's error banner as data ("Free: Copyright
+:: bytes"), and the HTML report never generates. Fail loudly instead.
+if exist "%SCRIPT_DIR%tools\select_lines.ps1" goto :toolscheck_done
+echo.
+echo  %C_RED%[EXIT 1]%C_RESET% No tools\ folder found next to this script:
+echo     %SCRIPT_DIR%
+echo  You are likely running a stray copy of this script instead of the
+echo  real one in its checkout. Delete the stray copy and run the script
+echo  from its own directory, e.g.:
+echo     cd /d C:\path\to\doze_sec ^&^& doze_sec_noAdmin.bat -noAdmin
+echo.
+set "EXIT_CODE=1"
+if not defined REPORT    set "REPORT=NUL"
+if not defined CHANGELOG set "CHANGELOG=NUL"
+if not defined UNDO_BAT  set "UNDO_BAT=NUL"
+goto :end_script
+:toolscheck_done
 
 :: ====================================================================
 :: EARLY PATH AND POWERSHELL SETUP
