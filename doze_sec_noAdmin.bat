@@ -366,11 +366,7 @@ echo  This is not allowed. Move the script to a permanent location
 echo  such as your Desktop or C:\Tools\ and run it from there.
 echo.
 set "EXIT_CODE=5"
-:: Stub file vars for early exit so :end_script code never writes to empty path
-if not defined REPORT    set "REPORT=NUL"
-if not defined CHANGELOG set "CHANGELOG=NUL"
-if not defined UNDO_BAT  set "UNDO_BAT=NUL"
-goto :end_script
+goto :fatal_preinit_exit
 :tempcheck_done
 
 :: Refuse to run without the tools\ folder next to the script. A stray copy
@@ -382,16 +378,16 @@ if exist "%SCRIPT_DIR%tools\select_lines.ps1" goto :toolscheck_done
 echo.
 echo  %C_RED%[EXIT 1]%C_RESET% No tools\ folder found next to this script:
 echo     %SCRIPT_DIR%
-echo  You are likely running a stray copy of this script instead of the
-echo  real one in its checkout. Delete the stray copy and run the script
-echo  from its own directory, e.g.:
+echo  doze_sec needs its tools\ and ThreatLists\ folders in the SAME
+echo  directory as the .bat. Two common causes:
+echo    - a stray copy of this script is shadowing the real one (e.g. in
+echo      C:\Windows\System32); delete the stray copy, then run from the checkout.
+echo    - you downloaded only the .bat; get the full release instead.
+echo  Then run from the script's own directory, e.g.:
 echo     cd /d C:\path\to\doze_sec ^&^& doze_sec_noAdmin.bat -noAdmin
 echo.
 set "EXIT_CODE=1"
-if not defined REPORT    set "REPORT=NUL"
-if not defined CHANGELOG set "CHANGELOG=NUL"
-if not defined UNDO_BAT  set "UNDO_BAT=NUL"
-goto :end_script
+goto :fatal_preinit_exit
 :toolscheck_done
 
 :: ====================================================================
@@ -484,7 +480,7 @@ if %errorlevel% equ 0 (
     ) else (
         echo %C_RED%[FATAL]%C_RESET% PowerShell not found. Cannot continue.
         set "EXIT_CODE=1"
-        goto :end_script
+        goto :fatal_preinit_exit
     )
 )
 
@@ -504,7 +500,7 @@ if %errorlevel% equ 0 (
         echo  Or re-run with -noAdmin for a partial audit.
         echo.
         set "EXIT_CODE=1"
-        goto :end_script
+        goto :fatal_preinit_exit
     )
     echo %C_GREEN%[INIT 2/14]%C_RESET% Running WITHOUT admin - limited audit mode
     echo %C_GREEN%[INIT 2/14]%C_RESET% Sections requiring admin will be marked [DEFERRED]
@@ -3892,6 +3888,22 @@ if exist "%REPORT_HTML%" (
 :: If invoked via the self-tee wrapper, write our real EXIT_CODE to the file
 :: the parent reads -- otherwise the parent's exit /b reflects Tee-Object's
 :: exit code, not ours. (closes #96)
+if defined DOZE_EXIT_FILE echo %EXIT_CODE%>"%DOZE_EXIT_FILE%" 2>nul
+endlocal & exit /b %EXIT_CODE%
+
+:: ====================================================================
+:: MINIMAL EXIT for pre-audit guard failures (ran-from-TEMP, missing
+:: tools\ folder, PowerShell absent, non-admin without -noAdmin). At these
+:: points no usable report exists yet, so the full :end_script handler must
+:: NOT run: it would invoke report_html.ps1 with %PWSH% undefined (an
+:: empty-quoted command) and hit `start "" notepad "%REPORT%"` -- and because
+:: `if exist "NUL"` is always true in cmd, a stubbed REPORT=NUL used to pop
+:: Notepad on the NUL device. This handler skips all of that: it just records
+:: the code for the self-tee parent and exits. Placed after :final_exit so it
+:: is never reached by fall-through.
+:fatal_preinit_exit
+echo.
+echo  Exit code: %EXIT_CODE% -- audit did not run.
 if defined DOZE_EXIT_FILE echo %EXIT_CODE%>"%DOZE_EXIT_FILE%" 2>nul
 endlocal & exit /b %EXIT_CODE%
 
