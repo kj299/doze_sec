@@ -422,22 +422,13 @@ for %%f in (ioc_processes.txt ioc_named_pipes.txt ioc_services.txt ioc_registry.
 if defined DOZE_LOG_TS (
     set "TIMESTAMP=%DOZE_LOG_TS%"
 ) else (
-    for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value 2^>nul') do set "DT=%%I"
-    set "DT=!DT: =!"
-    if defined DT (
-        set "TIMESTAMP=!DT:~0,8!_!DT:~8,6!"
-    )
-    if "!TIMESTAMP!"=="__" set "TIMESTAMP="
-    if "!TIMESTAMP!"=="_" set "TIMESTAMP="
-    if not defined TIMESTAMP (
-        set "_D=!date:/=-!"
-        set "_D=!_D: =_!"
-        set "_T=!time::=-!"
-        set "_T=!_T: =0!"
-        set "TIMESTAMP=!_D!_!_T:~0,8!"
-        set "TIMESTAMP=!TIMESTAMP: =0!"
-        if "!TIMESTAMP!"=="__0-0-0" set "TIMESTAMP=NODATE_!RANDOM!_!RANDOM!"
-    )
+    rem Locale-independent timestamp, same source as the self-tee wrapper
+    rem above. The old wmic derivation is gone: wmic does not exist on
+    rem Win11 24H2+ / Server 2025, and the date/time slicing fallback was
+    rem locale-dependent and mangled the filename on such systems.
+    for /f "usebackq" %%t in (`powershell -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmmss" 2^>nul`) do set "TIMESTAMP=%%t"
+    rem Last-ditch fallback: a collision-resistant name rather than garbage.
+    if not defined TIMESTAMP set "TIMESTAMP=NODATE_!RANDOM!_!RANDOM!"
 )
 
 :: ---- Initialize Undo script and Change Log --------------------------
