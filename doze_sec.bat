@@ -830,30 +830,13 @@ for %%f in (ioc_processes.txt ioc_named_pipes.txt ioc_services.txt ioc_registry.
 if defined DOZE_LOG_TS (
     set "TIMESTAMP=%DOZE_LOG_TS%"
 ) else (
-    for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value 2^>nul') do set "DT=%%I"
-    rem Trim trailing whitespace/CR that wmic appends to output
-    set "DT=!DT: =!"
-    rem Build timestamp -- if wmic failed (DT empty), fall back to date/time.
-    rem Using rem (not ::) because :: with parens inside a parenthesized block
-    rem can break CMD's block parser. (#108)
-    if defined DT (
-        set "TIMESTAMP=!DT:~0,8!_!DT:~8,6!"
-    )
-    rem Validate: wmic may have returned empty or a non-date value
-    if "!TIMESTAMP!"=="__" set "TIMESTAMP="
-    if "!TIMESTAMP!"=="_" set "TIMESTAMP="
-    if not defined TIMESTAMP (
-        rem Fallback: parse date as YYYY-MM-DD or MM/DD/YYYY plus time.
-        rem This is locale-dependent but good enough for a filename.
-        set "_D=!date:/=-!"
-        set "_D=!_D: =_!"
-        set "_T=!time::=-!"
-        set "_T=!_T: =0!"
-        set "TIMESTAMP=!_D!_!_T:~0,8!"
-        set "TIMESTAMP=!TIMESTAMP: =0!"
-        rem Final fallback: random-based name that at least won't collide
-        if "!TIMESTAMP!"=="__0-0-0" set "TIMESTAMP=NODATE_!RANDOM!_!RANDOM!"
-    )
+    rem Locale-independent timestamp, same source as the self-tee wrapper
+    rem above. The old wmic derivation is gone: wmic does not exist on
+    rem Win11 24H2+ / Server 2025, and the date/time slicing fallback was
+    rem locale-dependent and mangled the filename on such systems.
+    for /f "usebackq" %%t in (`powershell -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmmss" 2^>nul`) do set "TIMESTAMP=%%t"
+    rem Last-ditch fallback: a collision-resistant name rather than garbage.
+    if not defined TIMESTAMP set "TIMESTAMP=NODATE_!RANDOM!_!RANDOM!"
 )
 
 :: ---- Initialize Undo script and Change Log --------------------------

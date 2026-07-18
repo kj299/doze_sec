@@ -9,13 +9,14 @@
 # TWO TIERS:
 #   required -- detections that work today. A required case that STOPS firing
 #               is a regression and FAILS the job (exit 1).
-#   pending  -- gaps the code review found (Run-key backdoor has no detection
-#               logic, Section 2 never evaluates the Guest account, IFEO on a
-#               non-accessibility binary is printed but never escalated, and
-#               CRITICAL severity depends on a single fragile summary block).
-#               A pending case NEVER fails the job. When a fix lands and the
-#               case starts passing, the harness says "PROMOTE" -- move it to
-#               the required tier so it can never regress again.
+#   pending  -- gaps the code review found, tracked in issue #138 (Run-key
+#               backdoor has no detection logic, Section 2 never evaluates the
+#               Guest account, IFEO on a non-accessibility binary is printed
+#               but never escalated). A pending case NEVER fails the job. When
+#               a fix lands and the case starts passing, the harness says
+#               "PROMOTE" -- move it to the required tier so it can never
+#               regress again. (Exit code 8 on planted CRITICAL and the
+#               report-filename timestamp were promoted to required 2026-07-18.)
 #
 # This is the safety net for the exit-code/finding-model rework: it lets that
 # change proceed knowing the detections that work today keep working, and it
@@ -124,6 +125,14 @@ try {
     $text = Get-Content -LiteralPath $report.FullName -Raw
     Write-Host ("  report: {0}" -f $report.FullName)
 
+    # REQUIRED: the report filename must carry a real timestamp. On wmic-less
+    # systems (Win11 24H2+/Server 2025) the old fallback produced garbage like
+    # "SecurityReport_ =_.txt"; the wildcard match above would happily accept
+    # that, so assert the shape explicitly. (NODATE_* is the script's
+    # last-ditch fallback for a broken PowerShell -- on this runner PowerShell
+    # provably works, so NODATE here would also be a regression.)
+    $badName = $report.Name -notmatch '^SecurityReport_\d{8}_\d{6}\.txt$'
+
     Write-Host ""
     Write-Host "== Detection scoreboard =="
     $requiredFail = 0
@@ -143,16 +152,21 @@ try {
         }
     }
 
+    Write-Host ""
+    Write-Host "== Report integrity =="
+    if ($badName) { Write-Host ("  [ REGRESS  ] report filename lacks a valid timestamp: '{0}' -- timestamp derivation broke (see the wmic-less fallback fix)" -f $report.Name); $requiredFail++ }
+    else          { Write-Host ("  [ OK       ] report filename timestamp is well-formed ({0})" -f $report.Name) }
+
     # Exit-code architecture (code-review W1-W3): a planted CRITICAL (WDigest=1)
-    # should drive the process exit code to 8. Today CRITICAL comes only from a
-    # fragile end-of-run summary block, so treat 8 as pending and "not clean" as
-    # required.
+    # must drive the process exit code to 8. PROMOTED to required 2026-07-18
+    # after it fired on CI -- the path is exactly the fragile summary block W3
+    # warns about, which is why it needs a tripwire: anyone touching that block
+    # and losing CRITICAL propagation fails this job immediately.
     Write-Host ""
     Write-Host "== Exit-code accounting =="
-    if ($runExit -ne 0 -and $runExit -ne $null) { Write-Host ("  [ OK       ] audit did not report a clean exit with planted findings (code {0})" -f $runExit) }
+    if ($runExit -eq 8) { Write-Host "  [ OK       ] planted CRITICAL drove the exit code to 8" }
+    elseif ($runExit -ne 0 -and $runExit -ne $null) { Write-Host ("  [ REGRESS  ] audit exited {0}, not 8 -- CRITICAL severity was lost on the way to the exit code" -f $runExit); $requiredFail++ }
     else { Write-Host "  [ REGRESS  ] audit exited clean (0) despite planted findings"; $requiredFail++ }
-    if ($runExit -eq 8) { Write-Host "  [ PROMOTE  ] exit code 8 (CRITICAL) surfaced -- make it a required guarantee" }
-    else { Write-Host ("  [ gap      ] planted CRITICAL did not raise exit code to 8 (got {0}) -- see W1-W3" -f $runExit) }
 
     Write-Host ""
     if ($requiredFail -gt 0) {
