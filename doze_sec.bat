@@ -574,6 +574,16 @@ if not exist "%CTI_SKILL_PATH%" (
     echo  Cannot generate TTP update. Skipping.
     goto :skip_ttp_update
 )
+rem Reject a directory: a trailing-backslash test is true only for a folder.
+rem Without this, "type <dir>" below fails and the TTP update silently breaks.
+if exist "%CTI_SKILL_PATH%\" (
+    echo  [WARN] CTI skill path is a directory, not a file: %CTI_SKILL_PATH%
+    echo         ^(source: %CTI_SKILL_SOURCE%^)
+    echo         Point it at the prompt FILE, e.g.
+    echo         ...\threat-intel\standalone\cyber-threat-intel-prompt.md
+    echo  Cannot generate TTP update. Skipping.
+    goto :skip_ttp_update
+)
 
 echo  [OK] CTI skill: %CTI_SKILL_PATH%  ^(source: %CTI_SKILL_SOURCE%^)
 
@@ -2922,6 +2932,12 @@ del "%TEMP%\dz_evt.tmp" 2>nul
 
 echo.>> "%REPORT%"
 echo --- [MIDNIGHT BLIZZARD] OAuth Identity Registrations --->> "%REPORT%"
+echo  [INFO] Identity registrations are NORMAL for any signed-in Office/M365>> "%REPORT%"
+echo  user -- their PRESENCE is not a finding. Midnight Blizzard's technique>> "%REPORT%"
+echo  is REPLAY of stolen OAuth refresh tokens ^(T1528 / T1550.001^), which>> "%REPORT%"
+echo  this registry snapshot cannot confirm or deny. Review the identities>> "%REPORT%"
+echo  below for accounts or tenants you do not recognize, and correlate with>> "%REPORT%"
+echo  Entra ID ^(Azure AD^) sign-in logs for impossible-travel/anomalous token use.>> "%REPORT%"
 echo  Command: reg query "HKCU\Software\Microsoft\Office\16.0\Common\Identity\Identities" /s>> "%REPORT%"
 reg query "HKCU\Software\Microsoft\Office\16.0\Common\Identity\Identities" /s>> "%REPORT%" 2>nul
 if %errorlevel% neq 0 echo [OK] No Office/AAD OAuth identity registrations found (Midnight Blizzard check clear).>> "%REPORT%"
@@ -3120,6 +3136,12 @@ if not exist "%IOCDIR%\ioc_processes.txt" (
     goto :sec18_ctilive
 )
 echo  IOC directory: %IOCDIR%>> "%REPORT%"
+echo  PROVENANCE: the IOC lists below are a point-in-time snapshot from the>> "%REPORT%"
+echo  SENTINEL-X CTI skill / MITRE ATT^&CK, seeded from the release baseline>> "%REPORT%"
+echo  and refreshed with -updateTTP ^(online^) or -importTTP ^(offline^). They>> "%REPORT%"
+echo  go STALE between refreshes -- see ttp_manifest.txt for the generation>> "%REPORT%"
+echo  date. A match is an INDICATOR to investigate, not proof of compromise;>> "%REPORT%"
+echo  no match is not proof of cleanliness ^(only these known IOCs were checked^).>> "%REPORT%"
 :: (No copy needed -- runtime IS the source of truth from this point on.
 :: The early seed step at OUTDIR setup already pre-populated runtime from
 :: the repo baseline; INIT 10/14 refreshed it with upstream content.)

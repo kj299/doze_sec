@@ -2726,6 +2726,12 @@ set /a DEFERRED_COUNT+=1
 
 echo.>> "%REPORT%"
 echo --- [MIDNIGHT BLIZZARD] OAuth Identity Registrations --->> "%REPORT%"
+echo  [INFO] Identity registrations are NORMAL for any signed-in Office/M365>> "%REPORT%"
+echo  user -- their PRESENCE is not a finding. Midnight Blizzard's technique>> "%REPORT%"
+echo  is REPLAY of stolen OAuth refresh tokens ^(T1528 / T1550.001^), which>> "%REPORT%"
+echo  this registry snapshot cannot confirm or deny. Review the identities>> "%REPORT%"
+echo  below for accounts or tenants you do not recognize, and correlate with>> "%REPORT%"
+echo  Entra ID ^(Azure AD^) sign-in logs for impossible-travel/anomalous token use.>> "%REPORT%"
 echo  Command: reg query "HKCU\Software\Microsoft\Office\16.0\Common\Identity\Identities" /s>> "%REPORT%"
 reg query "HKCU\Software\Microsoft\Office\16.0\Common\Identity\Identities" /s>> "%REPORT%" 2>nul
 if %errorlevel% neq 0 echo [OK] No Office/AAD OAuth identity registrations found (Midnight Blizzard check clear).>> "%REPORT%"
@@ -2939,6 +2945,12 @@ if not exist "%IOCDIR%\ioc_processes.txt" (
     goto :sec18_verdict
 )
 echo  IOC directory: %IOCDIR%>> "%REPORT%"
+echo  PROVENANCE: the IOC lists below are a point-in-time snapshot from the>> "%REPORT%"
+echo  SENTINEL-X CTI skill / MITRE ATT^&CK, seeded from the release baseline>> "%REPORT%"
+echo  and refreshed with -updateTTP ^(online^) or -importTTP ^(offline^). They>> "%REPORT%"
+echo  go STALE between refreshes -- see ttp_manifest.txt for the generation>> "%REPORT%"
+echo  date. A match is an INDICATOR to investigate, not proof of compromise;>> "%REPORT%"
+echo  no match is not proof of cleanliness ^(only these known IOCs were checked^).>> "%REPORT%"
 :: (No copy needed -- runtime IS the source of truth; the early seed step
 :: at OUTDIR setup pre-populated it from the repo baseline.)
 
