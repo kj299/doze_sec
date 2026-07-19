@@ -11,14 +11,16 @@
 #               is a regression and FAILS the job (exit 1). Cases with
 #               Invert=$true are FALSE-POSITIVE guards: they plant a benign
 #               state and fail the job if the audit flags it anyway.
-#   pending  -- gaps the code review found, tracked in issue #138 (Run-key
-#               backdoor has no detection logic, Section 2 never evaluates the
-#               Guest account, IFEO on a non-accessibility binary is printed
-#               but never escalated). A pending case NEVER fails the job. When
+#   pending  -- gaps not yet closed. A pending case NEVER fails the job. When
 #               a fix lands and the case starts passing, the harness says
 #               "PROMOTE" -- move it to the required tier so it can never
-#               regress again. (Exit code 8 on planted CRITICAL and the
-#               report-filename timestamp were promoted to required 2026-07-18.)
+#               regress again.
+#
+# History: the issue #138 gaps (Run-key backdoor eval, Guest-account verdict,
+# IFEO escalation on non-accessibility binaries) were promoted to required on
+# 2026-07-19 once persistence_eval.ps1 and the Section 2 SID -501 check
+# landed. Exit code 8 on planted CRITICAL and the report-filename timestamp
+# were promoted 2026-07-18. There are currently no pending cases.
 #
 # This is the safety net for the exit-code/finding-model rework: it lets that
 # change proceed knowing the detections that work today keep working, and it
@@ -70,7 +72,7 @@ $cases = @(
     },
     @{
         Name   = 'Run-key backdoor (encoded PowerShell) -> flagged as suspicious'
-        Tier   = 'pending'   # Section 5 raw-dumps Run keys with no evaluation logic
+        Tier   = 'required'  # persistence_eval.ps1 evaluates Run keys (issue #138)
         Expect = ('(?im)(\[(WARNING|CRITICAL)\][^\r\n]*{0}|{0}[^\r\n]*(suspicious|encoded|backdoor))' -f $MARK)
         Plant  = { New-Item -Path $runKey -Force | Out-Null
                    Set-ItemProperty -Path $runKey -Name $MARK -Value 'powershell -w hidden -enc ZQBjAGgAbwA=' -Force }
@@ -78,7 +80,7 @@ $cases = @(
     },
     @{
         Name   = 'IFEO Debugger on a NON-accessibility binary (notepad) -> escalated'
-        Tier   = 'pending'   # Section 5 prints [IFEO HIT] but only accessibility bins escalate
+        Tier   = 'required'  # persistence_eval.ps1 escalates ANY IFEO Debugger (issue #138)
         Expect = '(?im)IFEO Debugger hijack[^\r\n]*notepad'
         Plant  = { New-Item -Path $ifeoKey -Force | Out-Null
                    Set-ItemProperty -Path $ifeoKey -Name Debugger -Value 'cmd.exe' -Force }
@@ -86,7 +88,7 @@ $cases = @(
     },
     @{
         Name   = 'Guest account enabled -> WARNING'
-        Tier   = 'pending'   # Section 2 raw-dumps `net user guest` with no verdict
+        Tier   = 'required'  # Section 2 now emits a SID -501 verdict (issue #138)
         Expect = '(?im)\[(WARNING|CRITICAL)\][^\r\n]*guest'
         Plant  = { & net user guest /active:yes | Out-Null }
         Cleanup= { & net user guest /active:no  | Out-Null }

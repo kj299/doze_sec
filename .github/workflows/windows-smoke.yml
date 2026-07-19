@@ -164,6 +164,23 @@ jobs:
           Write-Host "service_signature_check OK"
           exit 0
 
+      - name: persistence_eval.ps1 (Run-key + IFEO evaluation; clean host stays clean)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # On a clean runner (no planted autoruns/IFEO) it must print the OK
+          # line and must NOT false-positive on any pre-existing autorun.
+          $out = .\tools\persistence_eval.ps1 -MarkerFile "$env:TEMP\dz_ci_persist.txt"
+          $out | Write-Host
+          if (Test-Path "$env:TEMP\dz_ci_persist.txt") {
+            throw "persistence_eval flagged a finding on a clean runner (false positive): $($out -join '; ')"
+          }
+          if (-not ($out -match 'No suspicious Run-key autoruns or IFEO')) {
+            throw "persistence_eval did not emit the clean-state OK line"
+          }
+          Write-Host "persistence_eval OK"
+          exit 0
+
       - name: INIT-path extractions (self_update_check / disk_info / smart_health)
         shell: powershell
         run: |
