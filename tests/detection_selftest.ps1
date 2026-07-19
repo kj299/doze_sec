@@ -91,6 +91,35 @@ $cases = @(
         Plant  = { & net user guest /active:yes | Out-Null }
         Cleanup= { & net user guest /active:no  | Out-Null }
     },
+    @{
+        Name   = 'netsh portproxy rule active -> WARNING (Volt Typhoon C2 tunnel IOC)'
+        Tier   = 'required'
+        Expect = '(?im)\[WARNING\] netsh portproxy rules ACTIVE'
+        Plant  = { $r = & netsh interface portproxy add v4tov4 listenport=53219 listenaddress=127.0.0.1 connectport=80 connectaddress=127.0.0.1
+                   if ($LASTEXITCODE -ne 0) { throw ("netsh portproxy add failed: {0}" -f ($r -join ' ')) } }
+        Cleanup= { & netsh interface portproxy delete v4tov4 listenport=53219 listenaddress=127.0.0.1 | Out-Null }
+    },
+    # ---- Section-verdict unmasking (exit-code rework, review W1) ----
+    # Verdicts were derived from EXIT_CODE deltas; because the code saturates
+    # at 2, every section after the first finding printed "CLEAN" even when it
+    # found something. Verdicts now count findings per section, so BOTH the
+    # HOSTS section (3) and the portproxy section (17) must report ISSUES
+    # FOUND in the same run. No plant of their own -- they piggyback on the
+    # HOSTS and portproxy artifacts planted above.
+    @{
+        Name   = 'Section 3 verdict reflects the HOSTS finding (verdict unmasking)'
+        Tier   = 'required'
+        Expect = '\[SECTION 3/18 RESULT: ISSUES FOUND'
+        Plant  = { }
+        Cleanup= { }
+    },
+    @{
+        Name   = 'Section 17 verdict reflects the portproxy finding (verdict unmasking)'
+        Tier   = 'required'
+        Expect = '\[SECTION 17/18 RESULT: ISSUES FOUND'
+        Plant  = { }
+        Cleanup= { }
+    },
     # ---- False-positive guards: plant a BENIGN state, assert NOT flagged ----
     @{
         Name   = 'ScriptBlockLogging ON -> audit must NOT flag its own AMSI scan'
@@ -167,6 +196,11 @@ try {
     # provably works, so NODATE here would also be a regression.)
     $badName = $report.Name -notmatch '^SecurityReport_\d{8}_\d{6}\.txt$'
 
+    # REQUIRED: the exit handler must report a non-zero findings count when
+    # findings were planted -- this is the accumulator the section verdicts
+    # and exit code now read from.
+    $badFind = $text -notmatch '(?m)^\s*FINDINGS COUNTED: [1-9]'
+
     Write-Host ""
     Write-Host "== Detection scoreboard =="
     $requiredFail = 0
@@ -194,6 +228,8 @@ try {
     Write-Host "== Report integrity =="
     if ($badName) { Write-Host ("  [ REGRESS  ] report filename lacks a valid timestamp: '{0}' -- timestamp derivation broke (see the wmic-less fallback fix)" -f $report.Name); $requiredFail++ }
     else          { Write-Host ("  [ OK       ] report filename timestamp is well-formed ({0})" -f $report.Name) }
+    if ($badFind) { Write-Host "  [ REGRESS  ] FINDINGS COUNTED missing or zero despite planted findings -- findings accumulator broke"; $requiredFail++ }
+    else          { Write-Host "  [ OK       ] exit handler reports a non-zero findings count" }
 
     # False-positive guard with a dynamic expectation: the summary's firewall
     # verdict must agree with what Get-NetFirewallProfile actually reports.
