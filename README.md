@@ -19,6 +19,16 @@ Standalone batch script that audits a Windows workstation for nation-state TTPs,
 
 ## Quick Start
 
+> **Run it from the extracted release folder.** `doze_sec.bat` resolves its
+> helpers and data by path *relative to itself* — it needs the `tools\`
+> folder and (for Section 18) the `ThreatLists\` folder sitting next to it,
+> exactly as they ship in the release archive. Extract the whole archive and
+> run the `.bat` in place (`cd /d C:\path\to\doze_sec` first, or launch it
+> from its own folder). Copying **only** the `.bat` somewhere else — or into
+> `C:\Windows\System32` — breaks helper discovery and the audit aborts with
+> exit code 1. You do not need to install anything or set any paths; the
+> layout in the archive is the only requirement.
+
 ```
 :: Full audit (right-click > Run as administrator)
 doze_sec.bat
@@ -178,7 +188,7 @@ Full tactic-by-tactic and threat-class coverage matrices — including explicit 
 | Code | Meaning | Script |
 |:----:|---------|--------|
 | 0 | Success - all checks passed | Both |
-| 1 | Fatal error | Both |
+| 1 | Fatal pre-flight error - audit did not run | Both |
 | 2 | Warning - issues found (review report) | Both |
 | 3 | Unsupported OS (use `-dev` to override) | Both |
 | 4 | Reboot pending | Both |
@@ -188,6 +198,8 @@ Full tactic-by-tactic and threat-class coverage matrices — including explicit 
 | 8 | Audit complete - CRITICAL findings present (2 = warnings only) | Both |
 
 Code 8 fires when the live-summary verdict is ACTION REQUIRED (at least one CRITICAL check). It outranks 2, 4, and 6 — critical findings are the most actionable signal — but never the fatal/abort codes 1, 3, 5, 7. Automation can treat 0 as clean, 2/6 as review, 8 as incident-response trigger.
+
+**Code 1** is a *pre-flight abort* — the audit never started, so there is no report to read (it prints `Exit code: 1 -- audit did not run` to the console). It fires when the environment can't support a run: the `tools\` helper folder is missing (you copied only the `.bat`, or the download is incomplete), Windows PowerShell cannot be located, or the admin script (`doze_sec.bat`) was launched without elevation. Fix the named cause and re-run from the release folder — code 1 is never a security finding, only "could not run here." (Contrast code 5, which specifically means the script was launched from a TEMP directory.)
 
 Checks that cannot run (missing IOC list, failed process/pipe/service/DNS enumeration) now report `[SKIPPED]` in the report instead of looking clean, and the TOP FINDINGS block carries a COVERAGE NOTE with the skipped count.
 
@@ -248,6 +260,8 @@ When `-updateTTP` runs, the script resolves the CTI skill file in this order (hi
    - `.\threat-intel\standalone\cyber-threat-intel-prompt.md` (vendored)
    - the same four roots with the legacy `cyber_threat_skill.yaml` (pre-1.2.0 clones)
 4. Interactive prompt — if all of the above miss, the script asks for a path on stdin; press ENTER to skip the update.
+
+Whichever knob you use, point it at the prompt **file**, not the folder that contains it. A path that resolves to a directory is rejected with a clear message and the TTP update is skipped (rather than silently failing when the script tries to read the "file"). Example of the right value: `...\threat-intel\standalone\cyber-threat-intel-prompt.md`, not `...\threat-intel\standalone\`.
 
 **Per-run override (won't touch anything else):**
 

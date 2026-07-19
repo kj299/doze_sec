@@ -20,6 +20,13 @@ Two versions are included:
 
 QUICK START
 --------------------------------------------------------------------------------
+  IMPORTANT - run it from the extracted release folder. The script finds its
+  helpers (tools\) and IOC data (ThreatLists\) by path relative to itself, so
+  those folders must sit next to the .bat exactly as they ship in the archive.
+  Extract the whole archive and run the .bat in place. Copying ONLY the .bat
+  elsewhere - or into C:\Windows\System32 - breaks helper discovery and the
+  audit aborts with exit code 1. No install or path setup is needed.
+
   Full audit (admin):
     Right-click doze_sec.bat > Run as administrator
 
@@ -88,7 +95,11 @@ COMMAND-LINE SWITCHES
 EXIT CODES
 --------------------------------------------------------------------------------
   0   Success - all checks passed, no issues found
-  1   Fatal error - check console output for details
+  1   Fatal pre-flight error - audit did NOT run (no report produced). Causes:
+      the tools\ helper folder is missing (only the .bat was copied, or the
+      download is incomplete), Windows PowerShell was not found, or the admin
+      script was launched without elevation. Fix the named cause and re-run
+      from the release folder. Never a security finding - only "could not run."
   2   Warning - audit complete but issues found (review report)
   3   Unsupported OS - use -dev to override
   4   Reboot pending - reboot the system, then re-run
