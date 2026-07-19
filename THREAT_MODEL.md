@@ -188,3 +188,15 @@ Found during the v7.1 coverage review; tracked for future work:
   17 RMM running/installed checks (`Get-Process`/Uninstall-key empties
   mean "not present"). Probes elsewhere may still degrade silently, but
   the high-value verdict checks across Sections 4-18 now fail visibly.
+- ~~Section 5 raw-dumped the Run/RunOnce keys and printed a bare
+  `[IFEO HIT]` with no verdict, and Section 2 raw-dumped `net user guest`
+  with no verdict — an encoded-PowerShell autorun, an IFEO Debugger on a
+  non-accessibility binary, and an enabled Guest account all scrolled past
+  as clean (issue #138, confirmed by the detection harness).~~
+  **Closed:** Section 5 runs `tools/persistence_eval.ps1`, which flags
+  autorun commands with encoded-PowerShell / hidden-window / LOLBin-download
+  content (or execution from `\Temp\`, `\Downloads\`, `\Public\`) and
+  escalates *any* IFEO Debugger value (not only the accessibility binaries
+  Section 13 already escalates to CRITICAL). Section 2 evaluates the Guest
+  account by well-known SID (`-501`, locale-independent) and warns when it
+  is enabled. All three are `required` cases in the detection harness.

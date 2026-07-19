@@ -1235,6 +1235,14 @@ echo.>> "%REPORT%"
 echo --- Guest Account (must be Disabled) --->> "%REPORT%"
 echo  Command: net user guest>> "%REPORT%"
 net user guest>> "%REPORT%" 2>&1
+del "%TEMP%\dz_guest_hit.txt" 2>nul
+echo $g=Get-CimInstance Win32_UserAccount -Filter "LocalAccount=True" -EA SilentlyContinue ^| Where-Object {$_.SID -like '*-501'};if($g -and -not $g.Disabled){'[WARNING] Guest account (SID -501) is ENABLED -- disable it: net user guest /active:no';Set-Content -LiteralPath "$env:TEMP\dz_guest_hit.txt" -Value hit}else{'[OK] Guest account is disabled or absent.'} > "%PSRUN%"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+if exist "%TEMP%\dz_guest_hit.txt" (
+    set /a FINDINGS+=1
+    if !EXIT_CODE! LSS 2 set "EXIT_CODE=2"
+    del "%TEMP%\dz_guest_hit.txt" 2>nul
+)
 
 echo.>> "%REPORT%"
 echo --- Local Password Policy --->> "%REPORT%"
@@ -1518,6 +1526,23 @@ reg query "HKLM\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Run">> "%R
 reg query "HKLM\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\RunOnce">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
+echo --- Run/RunOnce + IFEO Persistence Evaluation --->> "%REPORT%"
+echo  Command: powershell -File tools\persistence_eval.ps1>> "%REPORT%"
+echo  Evaluates the raw autorun dumps above: flags encoded/hidden-window/>> "%REPORT%"
+echo  LOLBin-download autoruns and any IFEO Debugger hijack.>> "%REPORT%"
+del "%TEMP%\dz_persist_hit.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\persistence_eval.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\persistence_eval.ps1" -MarkerFile "%TEMP%\dz_persist_hit.txt">> "%REPORT%" 2>&1
+) else (
+    echo  [INFO] tools\persistence_eval.ps1 not found -- autorun/IFEO evaluation skipped.>> "%REPORT%"
+)
+if exist "%TEMP%\dz_persist_hit.txt" (
+    set /a FINDINGS+=1
+    if !EXIT_CODE! LSS 2 set "EXIT_CODE=2"
+    del "%TEMP%\dz_persist_hit.txt" 2>nul
+)
+
+echo.>> "%REPORT%"
 echo --- Other Users' Run Keys (HKU\^<SID^> enumeration) --->> "%REPORT%"
 echo  Command: powershell -Command "Get-ChildItem 'Registry::HKEY_USERS' -EA SilentlyContinue">> "%REPORT%"
 echo  noAdmin: only the current user's hive is loaded under HKEY_USERS;>> "%REPORT%"
@@ -1558,9 +1583,10 @@ reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows" /v AppInit
 reg query "HKLM\SOFTWARE\Wow6432Node\Microsoft\Windows NT\CurrentVersion\Windows" /v AppInit_DLLs>> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
-echo --- IFEO Debugger Hijacking --->> "%REPORT%"
-echo  Command: powershell -Command "Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options'">> "%REPORT%"
-echo $ok=$true; try{$hits=Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options' -EA Stop ^| ForEach-Object {$d=Get-ItemProperty $_.PSPath -Name Debugger -EA SilentlyContinue; if($d){'[IFEO HIT] '+$_.PSChildName+' =^> '+$d.Debugger}}}catch{$ok=$false}; if(-not $ok){'[SKIPPED] IFEO key enumeration failed -- debugger-hijack check NOT performed.'}elseif($hits){$hits}else{'[OK] No IFEO Debugger hijacks.'} > "%PSRUN%"
+echo --- IFEO Debugger Hijacking (evaluated above in Persistence Evaluation) --->> "%REPORT%"
+echo  Raw Debugger-value listing for reference; verdict is emitted by>> "%REPORT%"
+echo  persistence_eval.ps1 in the Run/RunOnce + IFEO Persistence Evaluation.>> "%REPORT%"
+echo $ok=$true; try{$hits=Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options' -EA Stop ^| ForEach-Object {$d=Get-ItemProperty $_.PSPath -Name Debugger -EA SilentlyContinue; if($d){'  '+$_.PSChildName+' =^> '+$d.Debugger}}}catch{$ok=$false}; if(-not $ok){'[SKIPPED] IFEO key enumeration failed.'}elseif($hits){$hits}else{'[OK] No IFEO Debugger values present.'} > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
