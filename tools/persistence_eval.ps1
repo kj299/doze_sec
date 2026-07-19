@@ -53,7 +53,8 @@ $suspContent = @(
     'regsvr32.*/i:http', 'regsvr32.*scrobj', 'rundll32.*javascript'
 )
 # Unusual autorun LOCATIONS (path-only signal; kept narrow to avoid FPs).
-$suspPath = @('\\Temp\\', '\\Downloads\\', '\\Public\\', '\\Users\\Public\\')
+# (\Users\Public\ is intentionally omitted -- it is already subsumed by \Public\.)
+$suspPath = @('\\Temp\\', '\\Downloads\\', '\\Public\\')
 
 $runKeys = @(
     'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run',
