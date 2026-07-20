@@ -50,6 +50,8 @@ $ifeoKey    = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Exe
 $sblKey     = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging'
 $fpSvcName  = 'dz_selftest_fp_svc'
 $fpSvcDir   = 'C:\Program Files\dz selftest fp'
+$flagSvcName = 'dz_selftest_flag_svc'
+$flagSvcBin  = 'C:\Users\Public\dz_selftest_flag_svc.exe'
 
 # Each case: Name, Tier, Plant/Cleanup script blocks, and Expect -- a regex that
 # must appear in the final report text for the detection to count as firing.
@@ -150,6 +152,20 @@ $cases = @(
                    if ($LASTEXITCODE -ne 0) { throw ("sc create failed: {0}" -f ($r -join ' ')) } }
         Cleanup= { & sc.exe delete $fpSvcName | Out-Null
                    Remove-Item -LiteralPath $fpSvcDir -Recurse -Force -EA SilentlyContinue }
+    },
+    @{
+        Name   = 'Flagged service (bad path) drives Section 7 verdict to ISSUES FOUND (wiring)'
+        Tier   = 'required'
+        # A service binary under \Users\Public\ is flagged by
+        # service_signature_check.ps1 (bad-path). Before the fix, the helper's
+        # [WARNING] never incremented FINDINGS, so Section 7's verdict read
+        # CLEAN and the exit code was unaffected. Assert the verdict now flips.
+        Expect = '\[SECTION 7/18 RESULT: ISSUES FOUND'
+        Plant  = { Copy-Item (Join-Path $env:SystemRoot 'System32\cmd.exe') $flagSvcBin -Force
+                   $r = & sc.exe create $flagSvcName 'binPath=' $flagSvcBin 'start=' 'demand'
+                   if ($LASTEXITCODE -ne 0) { throw ("sc create failed: {0}" -f ($r -join ' ')) } }
+        Cleanup= { & sc.exe delete $flagSvcName | Out-Null
+                   Remove-Item -LiteralPath $flagSvcBin -Force -EA SilentlyContinue }
     }
 )
 
@@ -203,6 +219,13 @@ try {
     # and exit code now read from.
     $badFind = $text -notmatch '(?m)^\s*FINDINGS COUNTED: [1-9]'
 
+    # REQUIRED: the end-of-run exit-8 escalation note must NOT be emitted as a
+    # [CRITICAL] line. The planted WDigest CRITICAL drives exit 8, so the note
+    # is emitted this run; if it carries a [CRITICAL] token, top_findings.ps1
+    # (which collects ^\s*\[(CRITICAL|WARNING)\]) re-lists it as a phantom
+    # finding. It must read [INFO].
+    $badCrit = [bool]([regex]::IsMatch($text, '(?im)\[CRITICAL\][^\r\n]*section-level CRITICAL finding'))
+
     Write-Host ""
     Write-Host "== Detection scoreboard =="
     $requiredFail = 0
@@ -232,6 +255,8 @@ try {
     else          { Write-Host ("  [ OK       ] report filename timestamp is well-formed ({0})" -f $report.Name) }
     if ($badFind) { Write-Host "  [ REGRESS  ] FINDINGS COUNTED missing or zero despite planted findings -- findings accumulator broke"; $requiredFail++ }
     else          { Write-Host "  [ OK       ] exit handler reports a non-zero findings count" }
+    if ($badCrit) { Write-Host "  [ REGRESS  ] exit-8 escalation note emitted as [CRITICAL] -- top_findings.ps1 will re-list it as a phantom finding (should be [INFO])"; $requiredFail++ }
+    else          { Write-Host "  [ OK       ] exit-8 escalation note is not a [CRITICAL] line (no phantom finding)" }
 
     # False-positive guard with a dynamic expectation: the summary's firewall
     # verdict must agree with what Get-NetFirewallProfile actually reports.

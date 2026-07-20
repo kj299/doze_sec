@@ -1583,13 +1583,6 @@ reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows" /v AppInit
 reg query "HKLM\SOFTWARE\Wow6432Node\Microsoft\Windows NT\CurrentVersion\Windows" /v AppInit_DLLs>> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
-echo --- IFEO Debugger Hijacking (evaluated above in Persistence Evaluation) --->> "%REPORT%"
-echo  Raw Debugger-value listing for reference; verdict is emitted by>> "%REPORT%"
-echo  persistence_eval.ps1 in the Run/RunOnce + IFEO Persistence Evaluation.>> "%REPORT%"
-echo $ok=$true; try{$hits=Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options' -EA Stop ^| ForEach-Object {$d=Get-ItemProperty $_.PSPath -Name Debugger -EA SilentlyContinue; if($d){'  '+$_.PSChildName+' =^> '+$d.Debugger}}}catch{$ok=$false}; if(-not $ok){'[SKIPPED] IFEO key enumeration failed.'}elseif($hits){$hits}else{'[OK] No IFEO Debugger values present.'} > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
-
-echo.>> "%REPORT%"
 echo --- BootExecute (SAFE: autocheck autochk * only) --->> "%REPORT%"
 echo  Command: reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager" /v BootExecute>> "%REPORT%"
 reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager" /v BootExecute>> "%REPORT%" 2>&1
@@ -1691,12 +1684,18 @@ echo  vendor allowlist (\b-anchored), cert must pass revocation+expiry, and>> "%
 echo  binary path must not be under Temp/AppData/Downloads/Public. Replaces>> "%REPORT%"
 echo  the prior path-substring allowlist that was bypassed by installing>> "%REPORT%"
 echo  to "C:\Program Files\anything\".>> "%REPORT%"
+del "%TEMP%\dz_svcgate_hit.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\service_signature_check.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\service_signature_check.ps1" >> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\service_signature_check.ps1" -MarkerFile "%TEMP%\dz_svcgate_hit.txt">> "%REPORT%" 2>&1
 ) else (
     echo  [INFO] tools\service_signature_check.ps1 not found -- service signature gating skipped.>> "%REPORT%"
     echo Get-CimInstance Win32_Service ^| Where-Object {$_.PathName -and $_.PathName -notmatch 'system32^|SysWOW64^|Program Files^|MpKsl^|Windows Defender^|SecurityHealth^|MsMpEng'} ^| Select-Object Name,State,StartMode,PathName ^| Format-Table -AutoSize -Wrap > "%PSRUN%"
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+)
+if exist "%TEMP%\dz_svcgate_hit.txt" (
+    set /a FINDINGS+=1
+    if !EXIT_CODE! LSS 2 set "EXIT_CODE=2"
+    del "%TEMP%\dz_svcgate_hit.txt" 2>nul
 )
 
 echo.>> "%REPORT%"
@@ -3542,11 +3541,13 @@ echo.
 :: not count. Runs BEFORE the summary is appended, so summary lines (which
 :: escalate separately via the CRIT token) are not double-counted.
 set "CRIT_COUNT=0"
-for /f "usebackq" %%c in (`powershell -NoProfile -Command "@(Select-String -LiteralPath '%REPORT%' -Pattern '\A\[CRITICAL\]').Count" 2^>nul`) do set "CRIT_COUNT=%%c"
+for /f "usebackq" %%c in (`"%PWSH%" -NoProfile -Command "@(Select-String -LiteralPath '%REPORT%' -Pattern '\A\[CRITICAL\]').Count" 2^>nul`) do set "CRIT_COUNT=%%c"
 if !CRIT_COUNT! GTR 0 (
     set /a FINDINGS+=1
     if !EXIT_CODE! LSS 8 set "EXIT_CODE=8"
-    echo  [CRITICAL] !CRIT_COUNT! section-level CRITICAL finding^(s^) in this report -- exit code raised to 8.>> "%REPORT%"
+    rem Emit as INFO not CRITICAL so top_findings.ps1 does not re-list this
+    rem bookkeeping note as a phantom finding in the TOP FINDINGS block.
+    echo  [INFO] Exit code raised to 8: !CRIT_COUNT! section-level CRITICAL finding^(s^) in this report.>> "%REPORT%"
 )
 
 set "SUMFILE=%TEMP%\AuditSummary_%TIMESTAMP%.txt"

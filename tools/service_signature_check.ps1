@@ -20,7 +20,14 @@
 # subjects (e.g. "Mandell Inc"). Same regex as Section 17 COM hijack.
 #
 # Usage:
-#   pwsh -NoProfile -ExecutionPolicy Bypass -File service_signature_check.ps1
+#   pwsh -NoProfile -ExecutionPolicy Bypass -File service_signature_check.ps1 [-MarkerFile <path>]
+#
+# -MarkerFile: if any service is flagged, write this file so the caller can
+# raise the exit code / findings count (the report [WARNING] alone was never
+# wired into Section 7's verdict, so a flagged service used to read CLEAN).
+
+[CmdletBinding()]
+param([string]$MarkerFile)
 
 $ErrorActionPreference = 'Continue'
 
@@ -130,6 +137,7 @@ if ($flagged.Count -gt 0) {
     "[INFO] 'unsigned' = binary has no Authenticode signature."
     "[INFO] 'cert-invalid' = chain build / revocation check failed for the signing cert."
     "[INFO] 'cert-expired' = cert past NotAfter and no countersigning timestamp."
+    if ($MarkerFile) { Set-Content -LiteralPath $MarkerFile -Value 'hit' -EA SilentlyContinue }
 } else {
     "[OK] All $totalChecked services with binary paths pass Authenticode gating + path check."
 }

@@ -161,7 +161,17 @@ jobs:
           # spaces). These services exist on every runner image.
           $bad = $out | Where-Object { $_ -match '\b(WinDefend|EventLog|Schedule|BITS|Dhcp|Dnscache)\b' -and $_ -match 'no-file' }
           if ($bad) { $bad | Write-Host; throw "service_signature_check misresolved a well-known service path (no-file)" }
-          Write-Host "service_signature_check OK"
+          # -MarkerFile contract: the marker is written IFF at least one service
+          # was flagged. Section 7 keys its FINDINGS raise on this file, so a
+          # broken marker means a flagged malicious service reads CLEAN.
+          $mk = Join-Path $env:TEMP 'dz_ci_svcgate.txt'
+          Remove-Item $mk -Force -EA SilentlyContinue
+          $out2 = .\tools\service_signature_check.ps1 -MarkerFile $mk
+          $flagged = [bool](($out2 -join "`n") -match '\[WARNING\] \d+ service\(s\) failed')
+          $marked  = Test-Path $mk
+          Remove-Item $mk -Force -EA SilentlyContinue
+          if ($flagged -ne $marked) { throw "service_signature_check -MarkerFile contract broken (flagged=$flagged marker=$marked)" }
+          Write-Host "service_signature_check OK (marker contract: flagged=$flagged marker=$marked)"
           exit 0
 
       - name: persistence_eval.ps1 (Run-key + IFEO evaluation; clean host stays clean)
@@ -310,7 +320,18 @@ jobs:
             try { [void]('probe' -match [regex]::Escape($_.Trim())); $false } catch { $true }
           })
           if ($bad) { Write-Host "FAILED: unusable IOC pattern(s): $($bad -join ', ')"; exit 1 }
-          Write-Host 'argv/regex fix guards OK (both bats, all task IOCs escape-safe)'
+          # The end-of-run CRITICAL escalation must use the resolved %PWSH%, not
+          # bare 'powershell' -- on a host where powershell is not on PATH (the
+          # exact case %PWSH% resolution exists for) a bare call no-ops and exit
+          # code 8 is never raised. Assert the scrape line uses "%PWSH%".
+          foreach ($f in 'doze_sec.bat','doze_sec_noAdmin.bat') {
+            $scrape = Select-String -Path $f -SimpleMatch "Select-String -LiteralPath '%REPORT%' -Pattern '\A\[CRITICAL\]'"
+            if (-not $scrape) { Write-Host "FAILED: $f lost the CRITICAL-escalation scrape line"; exit 1 }
+            if ($scrape.Line -notmatch '"%PWSH%"') {
+              Write-Host "FAILED: $f CRITICAL-escalation scrape uses bare powershell, not %PWSH% -- $($scrape.Line.Trim())"; exit 1
+            }
+          }
+          Write-Host 'argv/regex fix guards OK (both bats, all task IOCs escape-safe, CRIT scrape uses %PWSH%)'
           exit 0
 
       # vt_self_check.ps1 is called from the bats as -Binaries "a","b","c".
