@@ -10,14 +10,19 @@
 #
 #   Run/RunOnce  -- flags autorun commands whose CONTENT is a strong backdoor
 #                   indicator: encoded PowerShell (-enc / -EncodedCommand /
-#                   FromBase64String), hidden-window launchers, LOLBin
-#                   download-and-exec (iex/DownloadString/mshta/certutil
-#                   -urlcache/bitsadmin /transfer/regsvr32 /i:http/rundll32
-#                   javascript), or execution from an unusual autorun location
-#                   (\Temp\, \Downloads\, \Public\). Common legit autorun
-#                   paths (\AppData\, \ProgramData\) are deliberately NOT
-#                   flagged on path alone -- Slack/Discord/Teams/Spotify live
-#                   there -- so this does not reintroduce false alarms.
+#                   FromBase64String / -e <base64>), or LOLBin download-and-exec
+#                   (DownloadString/DownloadFile, iwr|curl|wget to http, piped
+#                   or invoked iex, mshta http/javascript, certutil
+#                   -urlcache/-decode, bitsadmin /transfer, regsvr32 /i:http or
+#                   scrobj, rundll32 javascript); or execution from an unusual
+#                   autorun location (\Temp\, \Downloads\, \Public\).
+#                   A hidden-window launcher (-w hidden) is common in
+#                   legitimate updaters, so it is flagged ONLY when it
+#                   co-occurs with a download/encode indicator -- never on its
+#                   own. Common legit autorun paths (\AppData\, \ProgramData\)
+#                   are deliberately NOT flagged on path alone --
+#                   Slack/Discord/Teams/Spotify live there -- so this does not
+#                   reintroduce false alarms.
 #
 #   IFEO         -- ANY Debugger value under Image File Execution Options is a
 #                   hijack technique (the debugger runs instead of the target
@@ -40,18 +45,24 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
-# Command-content backdoor indicators (case-insensitive -match patterns).
-$suspContent = @(
+# STRONG command-content indicators -- fire on their own (unambiguous):
+# encoded PowerShell, base64 decode, and LOLBin download-and-exec.
+$strongContent = @(
     '-enc(odedcommand)?\b',
-    '-e[ncw]*\s+[A-Za-z0-9+/=]{16,}',
+    '-e\s+[A-Za-z0-9+/=]{24,}',
     'frombase64string',
-    '-w(indowstyle)?\s+hidden',
-    'hidden\b.*\benc',
-    '\biex\b', 'invoke-expression', 'downloadstring', 'downloadfile', 'invoke-webrequest',
+    'downloadstring', 'downloadfile',
+    '(invoke-webrequest|\biwr\b|\bcurl\b|\bwget\b)[^\r\n]*https?:',
+    '(iex|invoke-expression)\s*[\(\$]', '\|\s*(iex|invoke-expression)\b',
     'mshta\s+https?:', 'mshta\s+javascript', 'mshtml,runhtmlapplication',
-    'certutil.*-urlcache', 'certutil.*-decode', 'bitsadmin.*/transfer',
-    'regsvr32.*/i:http', 'regsvr32.*scrobj', 'rundll32.*javascript'
+    'certutil[^\r\n]*-urlcache', 'certutil[^\r\n]*-decode', 'bitsadmin[^\r\n]*/transfer',
+    'regsvr32[^\r\n]*/i:http', 'regsvr32[^\r\n]*scrobj', 'rundll32[^\r\n]*javascript'
 )
+# A hidden-window launcher (-w hidden) ALONE is common in legitimate updaters,
+# so flag it only when it co-occurs with a download/encode indicator.
+$hiddenLauncher = '-w(indowstyle)?\s+hidden'
+$hiddenCombine  = @('-enc', 'frombase64', 'downloadstring', 'downloadfile',
+                    'https?:', '(iex|invoke-expression)\b', '-e\s+[A-Za-z0-9+/=]{24,}')
 # Unusual autorun LOCATIONS (path-only signal; kept narrow to avoid FPs).
 # (\Users\Public\ is intentionally omitted -- it is already subsumed by \Public\.)
 $suspPath = @('\\Temp\\', '\\Downloads\\', '\\Public\\')
@@ -77,7 +88,10 @@ foreach ($k in $runKeys) {
         if (-not $val) { continue }
 
         $why = $null
-        foreach ($s in $suspContent) { if ($val -match $s) { $why = "command content ($s)"; break } }
+        foreach ($s in $strongContent) { if ($val -match $s) { $why = "command content ($s)"; break } }
+        if (-not $why -and $val -match $hiddenLauncher) {
+            foreach ($s in $hiddenCombine) { if ($val -match $s) { $why = "hidden-window launcher + $s"; break } }
+        }
         if (-not $why) { foreach ($s in $suspPath) { if ($val -match $s) { $why = "unusual autorun path ($s)"; break } } }
 
         if ($why) {

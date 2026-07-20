@@ -3622,7 +3622,7 @@ echo. >> "%PSRUN%"
 :: ===== ATTACK SURFACE ================================================
 echo sec 'ATTACK SURFACE  (Sections 8, 10, 11)' >> "%PSRUN%"
 echo if($isAdmin -eq '1'){ >> "%PSRUN%"
-echo $fwp=@(Get-NetFirewallProfile -EA SilentlyContinue);$fwOff=@($fwp^|Where-Object{-not $_.Enabled});if($fwp.Count -eq 0){ck 'INFO' 'Firewall state unavailable via Get-NetFirewallProfile -- see Section 8'}elseif($fwOff.Count -eq 0){ck 'PASS' 'All firewall profiles enabled - Domain, Private, Public'}else{ck 'CRIT' "Firewall DISABLED on $($fwOff.Count) profile(s): $($fwOff.Name -join ', ')" 'Fix: Set-NetFirewallProfile -All -Enabled True'} >> "%PSRUN%"
+echo $fwp=@(Get-NetFirewallProfile -EA SilentlyContinue);$fwOff=@($fwp^|Where-Object{"$($_.Enabled)" -ne 'True'});if($fwp.Count -eq 0){ck 'INFO' 'Firewall state unavailable via Get-NetFirewallProfile -- see Section 8'}elseif($fwOff.Count -eq 0){ck 'PASS' 'All firewall profiles enabled - Domain, Private, Public'}else{ck 'CRIT' "Firewall DISABLED on $($fwOff.Count) profile(s): $($fwOff.Name -join ', ')" 'Fix: Set-NetFirewallProfile -All -Enabled True'} >> "%PSRUN%"
 echo $s1=(Get-SmbServerConfiguration -EA SilentlyContinue).EnableSMB1Protocol;if($s1 -eq $false){ck 'PASS' 'SMBv1 disabled (EternalBlue not exploitable)'}elseif($s1 -eq $true){ck 'CRIT' 'SMBv1 ENABLED (EternalBlue CVE-2017-0144)' 'Run: Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart'}else{ck 'INFO' 'SMBv1 state unavailable -- see Section 10'} >> "%PSRUN%"
 echo }else{ >> "%PSRUN%"
 echo ck 'INFO' 'Firewall status check deferred (requires admin)' >> "%PSRUN%"
