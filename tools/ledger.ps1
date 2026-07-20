@@ -73,12 +73,9 @@ switch ($Mode) {
     'Section' {
         if (-not $Section) { throw 'Section requires -Section' }
         $want = [string]$Section
-        $all = Read-LedgerLines $Path
-        Write-Warning ("SECTION-DBG path=[$Path] want=[$want] count=[$($all.Count)]")
         $n = 0
-        foreach ($ln in $all) {
+        foreach ($ln in (Read-LedgerLines $Path)) {
             $f = $ln.Split('|')
-            Write-Warning ("  ln=[$ln] len=[$($f.Length)] f1=[$($f[1])] eq=[$($f[1] -eq $want)]")
             if ($f.Length -ge 2 -and $f[1] -eq $want) { $n++ }
         }
         $n
