@@ -158,6 +158,9 @@ jobs:
           .\tools\ledger.ps1 -Mode Append -Path $L -Severity WARNING  -Section 9  -Code T1562.001 -Message 'ASR rules not in Block mode'
           .\tools\ledger.ps1 -Mode Append -Path $L -Severity CRITICAL -Section 13 -Message 'IFEO hijack on sethc.exe'
           .\tools\ledger.ps1 -Mode Append -Path $L -Severity WARNING  -Section 9  -Message 'second Section 9 finding'
+          Write-Host "--- ledger raw dump ---"
+          Get-Content -LiteralPath $L | ForEach-Object { Write-Host ("[{0}]" -f $_) }
+          Write-Host "--- end dump ---"
           $sum = .\tools\ledger.ps1 -Mode Summarize -Path $L
           $h = @{}; foreach ($l in $sum) { if ($l -match '^(\w+)=(.+)$') { $h[$Matches[1]] = $Matches[2] } }
           if ($h.TOTAL    -ne '3')        { throw "TOTAL expected 3, got $($h.TOTAL)" }
