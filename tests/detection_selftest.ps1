@@ -78,7 +78,7 @@ $cases = @(
         Name   = 'Run-key backdoor (encoded PowerShell) -> flagged as suspicious'
         Tier   = 'required'  # persistence_eval.ps1 evaluates Run keys (issue #138)
         Expect = ('(?im)(\[(WARNING|CRITICAL)\][^\r\n]*{0}|{0}[^\r\n]*(suspicious|encoded|backdoor))' -f $MARK)
-        Plant  = { New-Item -Path $runKey -Force | Out-Null
+        Plant  = { if (-not (Test-Path $runKey)) { New-Item -Path $runKey -Force | Out-Null }
                    Set-ItemProperty -Path $runKey -Name $MARK -Value 'powershell -w hidden -enc ZQBjAGgAbwA=' -Force }
         Cleanup= { Remove-ItemProperty -Path $runKey -Name $MARK -EA SilentlyContinue }
     },
@@ -177,7 +177,7 @@ $cases = @(
         # no download/encode token must NOT trip persistence_eval. Before the fix,
         # bare "-w hidden" (and bare "iex") flagged such autoruns.
         Expect = ('(?im)Suspicious Run-key autorun[^\r\n]*{0}_benign' -f $MARK)
-        Plant  = { New-Item -Path $runKey -Force | Out-Null
+        Plant  = { if (-not (Test-Path $runKey)) { New-Item -Path $runKey -Force | Out-Null }
                    Set-ItemProperty -Path $runKey -Name ("{0}_benign" -f $MARK) -Value 'powershell -WindowStyle Hidden -File "C:\Program Files\Vendor\update.ps1"' -Force }
         Cleanup= { Remove-ItemProperty -Path $runKey -Name ("{0}_benign" -f $MARK) -EA SilentlyContinue }
     },
