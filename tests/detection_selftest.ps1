@@ -54,6 +54,7 @@ $flagSvcName = 'dz_selftest_flag_svc'
 $flagSvcBin  = 'C:\Users\Public\dz_selftest_flag_svc.exe'
 $fwProfile   = 'Private'   # profile toggled by the disabled-firewall case
 $script:fwPrevEnabled = $null
+$defExclPath = 'C:\dz_selftest_excl_dir'   # Defender exclusion planted for Section 9
 
 # Each case: Name, Tier, Plant/Cleanup script blocks, and Expect -- a regex that
 # must appear in the final report text for the detection to count as firing.
@@ -192,6 +193,18 @@ $cases = @(
                    Set-NetFirewallProfile -Profile $fwProfile -Enabled False }
         Cleanup= { if ($null -ne $script:fwPrevEnabled) { Set-NetFirewallProfile -Profile $fwProfile -Enabled $script:fwPrevEnabled }
                    else { Set-NetFirewallProfile -Profile $fwProfile -Enabled True } }
+    },
+    @{
+        Name   = 'Defender path exclusion -> Section 9 verdict ISSUES FOUND (Div-1 wiring)'
+        Tier   = 'required'
+        # A Defender path exclusion (T1562.001, AV-blinding) emits [WARNING] in
+        # Section 9 but never incremented FINDINGS, so the section verdict read
+        # CLEAN. Assert it now flips. (If Defender is unavailable on the runner,
+        # Add-MpPreference throws and the harness SKIPs the case -- not a
+        # regression -- because Get-MpPreference would then also be unavailable.)
+        Expect = '\[SECTION 9/18 RESULT: ISSUES FOUND'
+        Plant  = { Add-MpPreference -ExclusionPath $defExclPath -EA Stop }
+        Cleanup= { Remove-MpPreference -ExclusionPath $defExclPath -EA SilentlyContinue }
     }
 )
 
@@ -252,6 +265,20 @@ try {
     # finding. It must read [INFO].
     $badCrit = [bool]([regex]::IsMatch($text, '(?im)\[CRITICAL\][^\r\n]*section-level CRITICAL finding'))
 
+    # REQUIRED (Div-2): FINDINGS COUNTED must not under-report the dashboard's
+    # own tally. Dashboard ck checks (firewall/SMBv1/RDP/...) can raise the exit
+    # code without a section bumping FINDINGS; the reconciliation floor keeps the
+    # two consistent (no "FINDINGS COUNTED: 0" next to a code-8 exit). Compare
+    # FINDINGS COUNTED against the dashboard's "N CRITICAL / M WARNING" line.
+    $badFloor = $false
+    $dash = [regex]::Match($text, '(\d+)\s+CRITICAL\s*/\s*(\d+)\s+WARNING')
+    if ($dash.Success) {
+        $dashCount = [int]$dash.Groups[1].Value + [int]$dash.Groups[2].Value
+        $fcM = [regex]::Match($text, '(?m)^\s*FINDINGS COUNTED:\s*(\d+)')
+        $fc  = if ($fcM.Success) { [int]$fcM.Groups[1].Value } else { -1 }
+        $badFloor = ($fc -lt $dashCount)
+    }
+
     Write-Host ""
     Write-Host "== Detection scoreboard =="
     $requiredFail = 0
@@ -283,6 +310,8 @@ try {
     else          { Write-Host "  [ OK       ] exit handler reports a non-zero findings count" }
     if ($badCrit) { Write-Host "  [ REGRESS  ] exit-8 escalation note emitted as [CRITICAL] -- top_findings.ps1 will re-list it as a phantom finding (should be [INFO])"; $requiredFail++ }
     else          { Write-Host "  [ OK       ] exit-8 escalation note is not a [CRITICAL] line (no phantom finding)" }
+    if ($badFloor) { Write-Host ("  [ REGRESS  ] FINDINGS COUNTED ({0}) is below the dashboard tally ({1}) -- Div-2 reconciliation floor broke" -f $fc, $dashCount); $requiredFail++ }
+    else           { Write-Host "  [ OK       ] FINDINGS COUNTED is not below the dashboard's CRITICAL/WARNING tally (Div-2 floor)" }
 
     # False-positive guard with a dynamic expectation: the summary's firewall
     # verdict must agree with what Get-NetFirewallProfile actually reports.
