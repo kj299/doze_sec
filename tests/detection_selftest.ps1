@@ -245,6 +245,17 @@ try {
     $text = Get-Content -LiteralPath $report.FullName -Raw
     Write-Host ("  report: {0}" -f $report.FullName)
 
+    # REQUIRED (Option B PR 2): converted sites must append to the ledger. The
+    # HOSTS finding (Section 3) is planted every run, so the ledger must exist
+    # and carry a WARNING|3| entry -- proving the :dz_finding plumbing works.
+    $ledger = Get-ChildItem -LiteralPath $OutDir -Filter 'SecurityReport_*.ledger' -EA SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    $badLedger = $true
+    if ($ledger) {
+        $lg = @(Get-Content -LiteralPath $ledger.FullName -EA SilentlyContinue)
+        $badLedger = -not [bool](@($lg | Where-Object { $_ -like 'WARNING|3|*' }).Count)
+    }
+
     # REQUIRED: the report filename must carry a real timestamp. On wmic-less
     # systems (Win11 24H2+/Server 2025) the old fallback produced garbage like
     # "SecurityReport_ =_.txt"; the wildcard match above would happily accept
@@ -312,6 +323,8 @@ try {
     else          { Write-Host "  [ OK       ] exit-8 escalation note is not a [CRITICAL] line (no phantom finding)" }
     if ($badFloor) { Write-Host ("  [ REGRESS  ] FINDINGS COUNTED ({0}) is below the dashboard tally ({1}) -- Div-2 reconciliation floor broke" -f $fc, $dashCount); $requiredFail++ }
     else           { Write-Host "  [ OK       ] FINDINGS COUNTED is not below the dashboard's CRITICAL/WARNING tally (Div-2 floor)" }
+    if ($badLedger) { Write-Host "  [ REGRESS  ] findings ledger missing or has no WARNING|3| (HOSTS) entry -- :dz_finding plumbing broke (Option B PR 2)"; $requiredFail++ }
+    else            { Write-Host "  [ OK       ] findings ledger populated by converted sites (HOSTS WARNING|3| present)" }
 
     # False-positive guard with a dynamic expectation: the summary's firewall
     # verdict must agree with what Get-NetFirewallProfile actually reports.
