@@ -2141,23 +2141,32 @@ echo  Command: powershell -Command "Get-MpPreference">> "%REPORT%"
 echo Get-MpPreference ^| Select-Object DisableRealtimeMonitoring,DisableBehaviorMonitoring,DisableIOAVProtection,DisableScriptScanning,DisableBlockAtFirstSeen,MAPSReporting ^| Format-List > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
+del "%TEMP%\dz_defexcl_hit.txt" 2>nul
 echo.>> "%REPORT%"
 echo --- CRITICAL: Exclusion Paths --->> "%REPORT%"
 echo  Command: powershell -Command "Get-MpPreference^).ExclusionPath">> "%REPORT%"
-echo $ok=$true; try{$e=(Get-MpPreference -EA Stop).ExclusionPath}catch{$ok=$false}; if(-not $ok){'[SKIPPED] Get-MpPreference failed -- path-exclusion check NOT performed (Defender disabled or third-party AV?).'}elseif($e){'[WARNING] Exclusion paths found:'; $e}else{'[OK] No path exclusions.'} > "%PSRUN%"
+echo $ok=$true; try{$e=(Get-MpPreference -EA Stop).ExclusionPath}catch{$ok=$false}; if(-not $ok){'[SKIPPED] Get-MpPreference failed -- path-exclusion check NOT performed (Defender disabled or third-party AV?).'}elseif($e){'[WARNING] Exclusion paths found:'; $e; Set-Content -LiteralPath "$env:TEMP\dz_defexcl_hit.txt" -Value hit}else{'[OK] No path exclusions.'} > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- CRITICAL: Exclusion Processes --->> "%REPORT%"
 echo  Command: powershell -Command "Get-MpPreference^).ExclusionProcess">> "%REPORT%"
-echo $ok=$true; try{$e=(Get-MpPreference -EA Stop).ExclusionProcess}catch{$ok=$false}; if(-not $ok){'[SKIPPED] Get-MpPreference failed -- process-exclusion check NOT performed (Defender disabled or third-party AV?).'}elseif($e){'[WARNING] Exclusion processes found:'; $e}else{'[OK] No process exclusions.'} > "%PSRUN%"
+echo $ok=$true; try{$e=(Get-MpPreference -EA Stop).ExclusionProcess}catch{$ok=$false}; if(-not $ok){'[SKIPPED] Get-MpPreference failed -- process-exclusion check NOT performed (Defender disabled or third-party AV?).'}elseif($e){'[WARNING] Exclusion processes found:'; $e; Set-Content -LiteralPath "$env:TEMP\dz_defexcl_hit.txt" -Value hit}else{'[OK] No process exclusions.'} > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- CRITICAL: Exclusion Extensions --->> "%REPORT%"
 echo  Command: powershell -Command "Get-MpPreference^).ExclusionExtension">> "%REPORT%"
-echo $ok=$true; try{$e=(Get-MpPreference -EA Stop).ExclusionExtension}catch{$ok=$false}; if(-not $ok){'[SKIPPED] Get-MpPreference failed -- extension-exclusion check NOT performed (Defender disabled or third-party AV?).'}elseif($e){'[WARNING] Exclusion extensions found:'; $e}else{'[OK] No extension exclusions.'} > "%PSRUN%"
+echo $ok=$true; try{$e=(Get-MpPreference -EA Stop).ExclusionExtension}catch{$ok=$false}; if(-not $ok){'[SKIPPED] Get-MpPreference failed -- extension-exclusion check NOT performed (Defender disabled or third-party AV?).'}elseif($e){'[WARNING] Exclusion extensions found:'; $e; Set-Content -LiteralPath "$env:TEMP\dz_defexcl_hit.txt" -Value hit}else{'[OK] No extension exclusions.'} > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+
+rem Defender exclusions are an attacker's way to blind AV (T1562.001); a
+rem [WARNING] here must count toward Section 9's verdict and the exit code.
+if exist "%TEMP%\dz_defexcl_hit.txt" (
+    set /a FINDINGS+=1
+    if !EXIT_CODE! LSS 2 set "EXIT_CODE=2"
+    del "%TEMP%\dz_defexcl_hit.txt" 2>nul
+)
 
 echo.>> "%REPORT%"
 echo --- Attack Surface Reduction Rules Audit (T1566.001 / T1003.001 / T1068) --->> "%REPORT%"
@@ -3720,6 +3729,7 @@ if !CRIT_COUNT! GTR 0 (
 
 set "SUMFILE=%TEMP%\AuditSummary_%TIMESTAMP%.txt"
 set "SUMCODE=%TEMP%\AuditCode_%TIMESTAMP%.txt"
+set "SUMCOUNT=%TEMP%\AuditCount_%TIMESTAMP%.txt"
 set "REMEDIATION=%OUTDIR%\Remediation_!TIMESTAMP!.ps1"
 
 :: ---- Seed remediation script with a safety header -------------------
@@ -3747,6 +3757,7 @@ echo. >> "%REMEDIATION%"
 echo $sw='%SMART_WARN%' > "%PSRUN%"
 echo $isAdmin='1' >> "%PSRUN%"
 echo $scf='%SUMCODE%' >> "%PSRUN%"
+echo $scnt='%SUMCOUNT%' >> "%PSRUN%"
 echo $rem='%REMEDIATION%' >> "%PSRUN%"
 echo $r=@();$cr=0;$wa=0;$pa=0;$inf=0 >> "%PSRUN%"
 echo function ck($s,$m,$d=''){$icon=if($s-eq 'CRIT'){'[^^!^^! CRITICAL ^^!^^!]'}elseif($s-eq 'WARN'){'[  WARNING   ]'}elseif($s-eq 'PASS'){'[    OK      ]'}else{'[    INFO    ]'};$script:r+='  '+$icon+'  '+$m;if($d){$script:r+='                     Fix: '+$d};switch($s){'CRIT'{$script:cr++}'WARN'{$script:wa++}'PASS'{$script:pa++}'INFO'{$script:inf++}}} >> "%PSRUN%"
@@ -3864,6 +3875,7 @@ echo } >> "%PSRUN%"
 echo $bar >> "%PSRUN%"
 echo '' >> "%PSRUN%"
 echo if ($cr -gt 0) { 'CRIT' ^| Out-File $scf -Encoding ASCII } elseif ($wa -gt 0) { 'WARN' ^| Out-File $scf -Encoding ASCII } else { 'OK' ^| Out-File $scf -Encoding ASCII } >> "%PSRUN%"
+echo ($cr + $wa) ^| Out-File $scnt -Encoding ASCII >> "%PSRUN%"
 
 :: ---- Emit runnable fix commands for known findings -----------------
 :: Scans $r (the rendered findings) and appends PS commands to $rem
@@ -3953,6 +3965,19 @@ if /i not "%SUM_RESULT%"=="CRIT" goto :skip_crit8
 if %EXIT_CODE% EQU 2 set "EXIT_CODE=8"
 if %EXIT_CODE% EQU 4 set "EXIT_CODE=8"
 :skip_crit8
+rem Reconcile FINDINGS with the dashboard's own tally. Dashboard ck checks
+rem (firewall, SMBv1, RDP, ...) can raise the exit code without a section
+rem incrementing FINDINGS, which printed "FINDINGS COUNTED: 0" next to a
+rem non-clean exit. Floor FINDINGS to the dashboard count so the two agree.
+rem A max (not a sum) avoids double-counting checks sections already tallied.
+set "SUM_COUNT=0"
+if exist "%SUMCOUNT%" (
+    for /f "usebackq tokens=* delims=" %%a in ("%SUMCOUNT%") do set "SUM_COUNT=%%a"
+    del "%SUMCOUNT%" >nul 2>&1
+)
+set "SUM_COUNT=%SUM_COUNT: =%"
+set /a SUM_COUNT+=0 2>nul
+if !SUM_COUNT! GTR !FINDINGS! set "FINDINGS=!SUM_COUNT!"
 if exist "%SUMFILE%" del "%SUMFILE%" >nul 2>&1
 
 echo.
