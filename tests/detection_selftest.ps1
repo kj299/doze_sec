@@ -52,6 +52,8 @@ $fpSvcName  = 'dz_selftest_fp_svc'
 $fpSvcDir   = 'C:\Program Files\dz selftest fp'
 $flagSvcName = 'dz_selftest_flag_svc'
 $flagSvcBin  = 'C:\Users\Public\dz_selftest_flag_svc.exe'
+$fwProfile   = 'Private'   # profile toggled by the disabled-firewall case
+$script:fwPrevEnabled = $null
 
 # Each case: Name, Tier, Plant/Cleanup script blocks, and Expect -- a regex that
 # must appear in the final report text for the detection to count as firing.
@@ -76,7 +78,7 @@ $cases = @(
         Name   = 'Run-key backdoor (encoded PowerShell) -> flagged as suspicious'
         Tier   = 'required'  # persistence_eval.ps1 evaluates Run keys (issue #138)
         Expect = ('(?im)(\[(WARNING|CRITICAL)\][^\r\n]*{0}|{0}[^\r\n]*(suspicious|encoded|backdoor))' -f $MARK)
-        Plant  = { New-Item -Path $runKey -Force | Out-Null
+        Plant  = { if (-not (Test-Path $runKey)) { New-Item -Path $runKey -Force | Out-Null }
                    Set-ItemProperty -Path $runKey -Name $MARK -Value 'powershell -w hidden -enc ZQBjAGgAbwA=' -Force }
         Cleanup= { Remove-ItemProperty -Path $runKey -Name $MARK -EA SilentlyContinue }
     },
@@ -166,6 +168,30 @@ $cases = @(
                    if ($LASTEXITCODE -ne 0) { throw ("sc create failed: {0}" -f ($r -join ' ')) } }
         Cleanup= { & sc.exe delete $flagSvcName | Out-Null
                    Remove-Item -LiteralPath $flagSvcBin -Force -EA SilentlyContinue }
+    },
+    @{
+        Name   = 'Benign hidden-window autorun -> must NOT be flagged (FP guard)'
+        Tier   = 'required'
+        Invert = $true
+        # A legitimate updater that runs "-WindowStyle Hidden -File <path>" with
+        # no download/encode token must NOT trip persistence_eval. Before the fix,
+        # bare "-w hidden" (and bare "iex") flagged such autoruns.
+        Expect = ('(?im)Suspicious Run-key autorun[^\r\n]*{0}_benign' -f $MARK)
+        Plant  = { if (-not (Test-Path $runKey)) { New-Item -Path $runKey -Force | Out-Null }
+                   Set-ItemProperty -Path $runKey -Name ("{0}_benign" -f $MARK) -Value 'powershell -WindowStyle Hidden -File "C:\Program Files\Vendor\update.ps1"' -Force }
+        Cleanup= { Remove-ItemProperty -Path $runKey -Name ("{0}_benign" -f $MARK) -EA SilentlyContinue }
+    },
+    @{
+        Name   = 'Disabled firewall profile -> summary reports DISABLED (enum-robust)'
+        Tier   = 'required'
+        # Get-NetFirewallProfile.Enabled is a GpoBoolean enum; the summary must
+        # classify a disabled profile as off. The harness previously only ever
+        # planted the all-enabled state, so the disabled path went untested.
+        Expect = 'Firewall DISABLED on'
+        Plant  = { $script:fwPrevEnabled = (Get-NetFirewallProfile -Profile $fwProfile).Enabled
+                   Set-NetFirewallProfile -Profile $fwProfile -Enabled False }
+        Cleanup= { if ($null -ne $script:fwPrevEnabled) { Set-NetFirewallProfile -Profile $fwProfile -Enabled $script:fwPrevEnabled }
+                   else { Set-NetFirewallProfile -Profile $fwProfile -Enabled True } }
     }
 )
 
@@ -267,7 +293,10 @@ try {
     Write-Host "== False-positive guards (ground truth) =="
     $fwp = @(Get-NetFirewallProfile -EA SilentlyContinue)
     if ($fwp.Count -gt 0) {
-        $fwAllOn = (@($fwp | Where-Object { -not $_.Enabled }).Count -eq 0)
+        # Enum-robust (GpoBoolean): "True" means enabled; anything else is off.
+        # Must NOT use `-not $_.Enabled` -- that is the idiom under test, so the
+        # ground truth has to be computed independently of it.
+        $fwAllOn = (@($fwp | Where-Object { "$($_.Enabled)" -ne 'True' }).Count -eq 0)
         $saysOn  = [bool]([regex]::IsMatch($text, 'All firewall profiles enabled'))
         $saysOff = [bool]([regex]::IsMatch($text, 'Firewall DISABLED on'))
         if (($fwAllOn -and $saysOn -and -not $saysOff) -or (-not $fwAllOn -and $saysOff -and -not $saysOn)) {
