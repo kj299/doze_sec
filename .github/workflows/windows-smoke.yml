@@ -149,6 +149,33 @@ jobs:
           Write-Host "ioc_hash_check OK"
           exit 0
 
+      - name: ledger.ps1 (finding-record append / summarize / section contract)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $L = Join-Path $env:TEMP ("dz_ledger_ci_{0}.txt" -f $PID)
+          Remove-Item $L -Force -EA SilentlyContinue
+          .\tools\ledger.ps1 -Mode Append -Path $L -Severity WARNING  -Section 9  -Code T1562.001 -Message 'ASR rules not in Block mode'
+          .\tools\ledger.ps1 -Mode Append -Path $L -Severity CRITICAL -Section 13 -Message 'IFEO hijack on sethc.exe'
+          .\tools\ledger.ps1 -Mode Append -Path $L -Severity WARNING  -Section 9  -Message 'second Section 9 finding'
+          $sum = .\tools\ledger.ps1 -Mode Summarize -Path $L
+          $h = @{}; foreach ($l in $sum) { if ($l -match '^(\w+)=(.+)$') { $h[$Matches[1]] = $Matches[2] } }
+          if ($h.TOTAL    -ne '3')        { throw "TOTAL expected 3, got $($h.TOTAL)" }
+          if ($h.CRITICAL -ne '1')        { throw "CRITICAL expected 1, got $($h.CRITICAL)" }
+          if ($h.WARNING  -ne '2')        { throw "WARNING expected 2, got $($h.WARNING)" }
+          if ($h.MAXSEV   -ne 'CRITICAL') { throw "MAXSEV expected CRITICAL, got $($h.MAXSEV)" }
+          $s9 = "$(.\tools\ledger.ps1 -Mode Section -Path $L -Section 9)".Trim()
+          if ($s9 -ne '2') { throw "Section 9 count expected 2, got $s9" }
+          $s99 = "$(.\tools\ledger.ps1 -Mode Section -Path $L -Section 99)".Trim()
+          if ($s99 -ne '0') { throw "Section 99 count expected 0, got $s99" }
+          # Separator/newline injection in a message must not corrupt the record.
+          .\tools\ledger.ps1 -Mode Append -Path $L -Severity WARNING -Section 8 -Message 'pipe|inside|the message'
+          $s8 = "$(.\tools\ledger.ps1 -Mode Section -Path $L -Section 8)".Trim()
+          if ($s8 -ne '1') { throw "Section 8 count expected 1 after pipe-injection, got $s8" }
+          Remove-Item $L -Force -EA SilentlyContinue
+          Write-Host "ledger.ps1 OK"
+          exit 0
+
       - name: service_signature_check.ps1 (real services + Authenticode; svchost must resolve)
         shell: powershell
         run: |
