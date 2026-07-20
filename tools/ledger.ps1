@@ -72,7 +72,14 @@ switch ($Mode) {
     }
     'Section' {
         if (-not $Section) { throw 'Section requires -Section' }
-        $lines = Read-LedgerLines $Path
-        @($lines | Where-Object { ($_ -split '\|')[1] -eq $Section }).Count
+        # Explicit iteration with String.Split (not the -split operator inside a
+        # Where-Object block, which mis-scoped $Section and always counted 0).
+        $want = [string]$Section
+        $n = 0
+        foreach ($ln in (Read-LedgerLines $Path)) {
+            $f = $ln.Split('|')
+            if ($f.Length -ge 2 -and $f[1] -eq $want) { $n++ }
+        }
+        $n
     }
 }
