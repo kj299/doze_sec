@@ -3167,8 +3167,7 @@ findstr /i /g:"%IOCDIR%\ioc_processes.txt" "%TEMP%\dz_proc18a.tmp" | findstr /v 
 if %errorlevel% equ 0 (
     echo [WARNING] Process IOC matches found above. Investigate immediately.>> "%REPORT%"
     set /a IOC_HITS+=1
-    set /a FINDINGS+=1
-    if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+    call :dz_finding WARNING 18 T1057 "Process IOC match"
 ) else (
     echo [OK] No process IOC matches.>> "%REPORT%"
 )
@@ -3190,8 +3189,7 @@ del "%TEMP%\dz_iochit_18b.txt" 2>nul
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_iochit_18b.txt" (
     set /a IOC_HITS+=1
-    set /a FINDINGS+=1
-    if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+    call :dz_finding WARNING 18 T1071 "Named pipe IOC match"
     del "%TEMP%\dz_iochit_18b.txt" 2>nul
 )
 
@@ -3209,8 +3207,7 @@ del "%TEMP%\dz_iochit_18c.txt" 2>nul
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_iochit_18c.txt" (
     set /a IOC_HITS+=1
-    set /a FINDINGS+=1
-    if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+    call :dz_finding WARNING 18 T1543 "Service IOC match"
     del "%TEMP%\dz_iochit_18c.txt" 2>nul
 )
 
@@ -3230,8 +3227,7 @@ del "%TEMP%\dz_iochit_18d.txt" 2>nul
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_iochit_18d.txt" (
     set /a IOC_HITS+=1
-    set /a FINDINGS+=1
-    if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+    call :dz_finding CRITICAL 18 T1074 "Known malware staging files found"
     del "%TEMP%\dz_iochit_18d.txt" 2>nul
 )
 
@@ -3247,8 +3243,7 @@ del "%TEMP%\dz_iochit_18e.txt" 2>nul
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_iochit_18e.txt" (
     set /a IOC_HITS+=1
-    set /a FINDINGS+=1
-    if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+    call :dz_finding WARNING 18 T1053 "Scheduled task IOC match"
     del "%TEMP%\dz_iochit_18e.txt" 2>nul
 )
 
@@ -3270,8 +3265,7 @@ findstr /i /g:"%IOCDIR%\ioc_domains.txt" "%TEMP%\dz_dns18f.tmp" | findstr /v /c:
 if %errorlevel% equ 0 (
     echo [WARNING] C2 domain IOC matches found in DNS cache above.>> "%REPORT%"
     set /a IOC_HITS+=1
-    set /a FINDINGS+=1
-    if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+    call :dz_finding WARNING 18 T1071.004 "C2 domain IOC match in DNS cache"
 ) else (
     echo [OK] No C2 domain IOC matches in DNS cache.>> "%REPORT%"
 )
@@ -3303,8 +3297,7 @@ del "%TEMP%\dz_evt.tmp" 2>nul
 if "!_SELECT_EXIT!"=="0" (
     echo [CRITICAL] LOLBin abuse patterns detected in running processes.>> "%REPORT%"
     set /a IOC_HITS+=1
-    set /a FINDINGS+=1
-    if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+    call :dz_finding CRITICAL 18 T1059 "LOLBin abuse patterns detected in running processes"
 ) else (
     echo [OK] No LOLBin abuse patterns in running processes.>> "%REPORT%"
 )
@@ -3331,8 +3324,7 @@ del "%TEMP%\dz_iochit_18h.txt" 2>nul
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_iochit_18h.txt" (
     set /a IOC_HITS+=1
-    set /a FINDINGS+=1
-    if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+    call :dz_finding WARNING 18 T1112 "Registry IOC match"
     del "%TEMP%\dz_iochit_18h.txt" 2>nul
 )
 
@@ -3357,8 +3349,7 @@ if "%VT_CHECK%"=="1" (
         "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\vt_check.ps1">> "%REPORT%" 2>&1
         if exist "%TEMP%\dz_iochit_18j.txt" (
             set /a IOC_HITS+=1
-            set /a FINDINGS+=1
-            if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+            call :dz_finding WARNING 18 T1105 "VirusTotal-flagged file"
             del "%TEMP%\dz_iochit_18j.txt" 2>nul
         )
     ) else (
@@ -3377,8 +3368,7 @@ if "%VT_CHECK%"=="1" (
         "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\vt_ip_check.ps1">> "%REPORT%" 2>&1
         if exist "%TEMP%\dz_iochit_18l.txt" (
             set /a IOC_HITS+=1
-            set /a FINDINGS+=1
-            if !EXIT_CODE! LSS 2 set "EXIT_CODE=2"
+            call :dz_finding WARNING 18 T1071 "VirusTotal-flagged remote IP"
             del "%TEMP%\dz_iochit_18l.txt" 2>nul
         )
     ) else (
@@ -3400,8 +3390,7 @@ if exist "%SCRIPT_DIR%tools\ioc_hash_check.ps1" (
         "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\ioc_hash_check.ps1" -IocFile "%IOCDIR%\ioc_hashes.txt" >> "%REPORT%" 2>&1
         if exist "%TEMP%\dz_iochit_18k.txt" (
             set /a IOC_HITS+=1
-            set /a FINDINGS+=1
-            if !EXIT_CODE! LSS 2 set "EXIT_CODE=2"
+            call :dz_finding WARNING 18 T1105 "File hash IOC match"
             del "%TEMP%\dz_iochit_18k.txt" 2>nul
         )
     ) else (
