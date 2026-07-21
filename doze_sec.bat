@@ -1724,8 +1724,7 @@ if "%DNS_PROBE%"=="1" (
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\dns_probe.ps1">> "%REPORT%" 2>&1
     if exist "%TEMP%\dz_dnsprobe_warn.txt" (
         set "DNSPROBE_STATE=warn"
-        set /a FINDINGS+=1
-        if !EXIT_CODE! LSS 2 set "EXIT_CODE=2"
+        call :dz_finding WARNING 3 T1071.004 "DNS or HOSTS blackhole of update/security domains"
         del "%TEMP%\dz_dnsprobe_warn.txt" 2>nul
     ) else (
         set "DNSPROBE_STATE=clean"
@@ -1909,8 +1908,7 @@ if exist "%SCRIPT_DIR%tools\persistence_eval.ps1" (
     echo  [INFO] tools\persistence_eval.ps1 not found -- autorun/IFEO evaluation skipped.>> "%REPORT%"
 )
 if exist "%TEMP%\dz_persist_hit.txt" (
-    set /a FINDINGS+=1
-    if !EXIT_CODE! LSS 2 set "EXIT_CODE=2"
+    call :dz_finding WARNING 5 T1547 "Suspicious Run-key autorun or IFEO Debugger hijack"
     del "%TEMP%\dz_persist_hit.txt" 2>nul
 )
 
@@ -2055,8 +2053,7 @@ if exist "%SCRIPT_DIR%tools\service_signature_check.ps1" (
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 )
 if exist "%TEMP%\dz_svcgate_hit.txt" (
-    set /a FINDINGS+=1
-    if !EXIT_CODE! LSS 2 set "EXIT_CODE=2"
+    call :dz_finding WARNING 7 T1543.003 "Service failed Authenticode gating"
     del "%TEMP%\dz_svcgate_hit.txt" 2>nul
 )
 
@@ -2164,8 +2161,7 @@ echo $ok=$true; try{$e=(Get-MpPreference -EA Stop).ExclusionExtension}catch{$ok=
 rem Defender exclusions are an attacker's way to blind AV (T1562.001); a
 rem [WARNING] here must count toward Section 9's verdict and the exit code.
 if exist "%TEMP%\dz_defexcl_hit.txt" (
-    set /a FINDINGS+=1
-    if !EXIT_CODE! LSS 2 set "EXIT_CODE=2"
+    call :dz_finding WARNING 9 T1562.001 "Defender exclusions configured"
     del "%TEMP%\dz_defexcl_hit.txt" 2>nul
 )
 
@@ -2483,8 +2479,7 @@ bcdedit /enum | findstr /i /c:"testsigning" /c:"nointegritychecks">> "%REPORT%" 
 bcdedit /enum 2>nul | findstr /i /c:"testsigning Yes" >nul 2>&1
 if %errorlevel% equ 0 (
     echo [WARNING] testsigning enabled. Unsigned kernel drivers can load.>> "%REPORT%"
-    set /a FINDINGS+=1
-    if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+    call :dz_finding WARNING 13 T1553.006 "testsigning enabled - unsigned kernel drivers can load"
 ) else (
     echo [OK] Driver signature enforcement active.>> "%REPORT%"
 )
@@ -2764,8 +2759,7 @@ if exist "%SCRIPT_DIR%tools\browser_extensions.ps1" (
     echo  [INFO] tools\browser_extensions.ps1 not found -- browser extension inventory skipped.>> "%REPORT%"
 )
 if exist "%TEMP%\dz_browserext_hit.txt" (
-    set /a FINDINGS+=1
-    if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+    call :dz_finding WARNING 15 T1176 "Suspicious browser extension flagged"
     del "%TEMP%\dz_browserext_hit.txt" 2>nul
 )
 echo.>> "%REPORT%"
@@ -2919,8 +2913,7 @@ netsh interface portproxy show all>> "%REPORT%" 2>&1
 netsh interface portproxy show all 2>nul | findstr /c:"Listen" >nul 2>&1
 if %errorlevel% equ 0 (
     echo [WARNING] netsh portproxy rules ACTIVE. Volt Typhoon C2 tunnel IOC.>> "%REPORT%"
-    set /a FINDINGS+=1
-    if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+    call :dz_finding WARNING 17 T1090 "netsh portproxy rules ACTIVE - Volt Typhoon C2 tunnel IOC"
 ) else (
     echo [OK] No netsh portproxy rules.>> "%REPORT%"
 )
