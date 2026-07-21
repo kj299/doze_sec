@@ -459,6 +459,10 @@ echo.>> "!CHANGELOG!"
 
 set "REPORT=%OUTDIR%\SecurityReport_!TIMESTAMP!.txt"
 set "REPORT_HTML=%OUTDIR%\SecurityReport_!TIMESTAMP!.html"
+rem Findings ledger (finding #4 Option B): the single record every finding
+rem appends to via :dz_finding. Consumers migrate to it in later PRs.
+set "LEDGER=%OUTDIR%\SecurityReport_!TIMESTAMP!.ledger"
+del "%LEDGER%" 2>nul
 set "PSRUN=%TEMP%\AuditPS_!TIMESTAMP!.ps1"
 set "SCRIPT_CHANGED=0"
 
@@ -1239,8 +1243,7 @@ del "%TEMP%\dz_guest_hit.txt" 2>nul
 echo $g=Get-CimInstance Win32_UserAccount -Filter "LocalAccount=True" -EA SilentlyContinue ^| Where-Object {$_.SID -like '*-501'};if($g -and -not $g.Disabled){'[WARNING] Guest account (SID -501) is ENABLED -- disable it: net user guest /active:no';Set-Content -LiteralPath "$env:TEMP\dz_guest_hit.txt" -Value hit}else{'[OK] Guest account is disabled or absent.'} > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_guest_hit.txt" (
-    set /a FINDINGS+=1
-    if !EXIT_CODE! LSS 2 set "EXIT_CODE=2"
+    call :dz_finding WARNING 2 T1078.001 "Guest account SID -501 is ENABLED"
     del "%TEMP%\dz_guest_hit.txt" 2>nul
 )
 
@@ -1330,8 +1333,7 @@ type "%WINDIR%\System32\drivers\etc\hosts">> "%REPORT%" 2>&1
 type "%WINDIR%\System32\drivers\etc\hosts" 2>nul | findstr /v /r "^#" | findstr /v /r "^$" | findstr /v /c:"127.0.0.1" /c:"::1" | findstr /r "[0-9]" >nul 2>&1
 if !errorlevel! equ 0 (
     echo  [WARNING] Non-standard entries found in HOSTS file. Review for DNS hijacking.>> "%REPORT%"
-    set /a FINDINGS+=1
-    if !EXIT_CODE! LSS 2 set "EXIT_CODE=2"
+    call :dz_finding WARNING 3 T1071.004 "Non-standard entries found in HOSTS"
 ) else (
     echo  [OK] HOSTS file contains only standard entries.>> "%REPORT%"
 )
@@ -1446,8 +1448,7 @@ if errorlevel 2 (
     echo [OK] No processes from suspicious locations.>> "%REPORT%"
 ) else (
     echo [WARNING] Suspicious process paths found above. Investigate now.>> "%REPORT%"
-    set /a FINDINGS+=1
-    if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+    call :dz_finding WARNING 4 T1057 "Suspicious process paths found"
 )
 goto :sec4_susp_done
 :sec4_susp_skip
@@ -4002,4 +4003,22 @@ echo.
 echo  Exit code: %EXIT_CODE% -- audit did not run.
 if defined DOZE_EXIT_FILE echo %EXIT_CODE%>"%DOZE_EXIT_FILE%" 2>nul
 endlocal & exit /b %EXIT_CODE%
+
+:: ====================================================================
+:: :dz_finding -- append one finding to the ledger and apply the compat
+:: FINDINGS/EXIT_CODE raise (finding #4 Option B). Converting a legacy raise
+:: site to a single `call :dz_finding` is behavior-preserving; a later PR
+:: points the section verdicts / FINDINGS COUNTED / exit code at %LEDGER%.
+:: Args: %1=severity CRITICAL^|WARNING  %2=section  %3=code (may be "")  %4="msg"
+:: Placed after the final exit so it is only ever entered via `call`.
+:: ====================================================================
+:dz_finding
+if defined LEDGER >>"%LEDGER%" echo %~1^|%~2^|%~3^|%~4
+set /a FINDINGS+=1
+if /i "%~1"=="CRITICAL" (
+    if !EXIT_CODE! LSS 8 set "EXIT_CODE=8"
+) else (
+    if !EXIT_CODE! LSS 2 set "EXIT_CODE=2"
+)
+goto :eof
 
