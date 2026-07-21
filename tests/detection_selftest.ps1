@@ -253,7 +253,13 @@ try {
     $badLedger = $true
     if ($ledger) {
         $lg = @(Get-Content -LiteralPath $ledger.FullName -EA SilentlyContinue)
-        $badLedger = -not [bool](@($lg | Where-Object { $_ -like 'WARNING|3|*' }).Count)
+        # Converted sites that are reliably triggered by planted artifacts must
+        # each appear as a ledger entry: HOSTS (3, PR2), persistence (5, PR3),
+        # portproxy (17, PR3). Proves the :dz_finding conversions populate it.
+        $has3  = [bool](@($lg | Where-Object { $_ -like 'WARNING|3|*'  }).Count)
+        $has5  = [bool](@($lg | Where-Object { $_ -like 'WARNING|5|*'  }).Count)
+        $has17 = [bool](@($lg | Where-Object { $_ -like 'WARNING|17|*' }).Count)
+        $badLedger = -not ($has3 -and $has5 -and $has17)
     }
 
     # REQUIRED: the report filename must carry a real timestamp. On wmic-less
