@@ -2105,6 +2105,17 @@ echo.>> "%REPORT%"
 echo --- Outbound BLOCK Rules --->> "%REPORT%"
 echo  Command: netsh advfirewall firewall show rule name=all dir=out action=block ^| findstr /i /c:"Rule Name" /c:"RemoteIP" /c:"Enabled" /c:"Program">> "%REPORT%"
 netsh advfirewall firewall show rule name=all dir=out action=block | findstr /i /c:"Rule Name" /c:"RemoteIP" /c:"Enabled" /c:"Program">> "%REPORT%" 2>&1
+
+echo.>> "%REPORT%"
+echo --- Firewall Profile State (evaluated) --->> "%REPORT%"
+echo  Command: powershell -Command "Get-NetFirewallProfile">> "%REPORT%"
+del "%TEMP%\dz_fw_hit.txt" 2>nul
+echo $fwp=@(Get-NetFirewallProfile -EA SilentlyContinue);$off=@($fwp^|Where-Object{"$($_.Enabled)" -ne 'True'});if($fwp.Count -eq 0){'[SKIPPED] Get-NetFirewallProfile unavailable -- firewall state NOT evaluated.'}elseif($off.Count -eq 0){'[OK] All firewall profiles enabled - Domain, Private, Public.'}else{'[CRITICAL] Firewall DISABLED on '+$off.Count+' profile(s): '+($off.Name -join ', ')+' (T1562.004)';Set-Content -LiteralPath "$env:TEMP\dz_fw_hit.txt" -Value hit} > "%PSRUN%"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+if exist "%TEMP%\dz_fw_hit.txt" (
+    call :dz_finding CRITICAL 8 T1562.004 "Windows Firewall disabled on one or more profiles"
+    del "%TEMP%\dz_fw_hit.txt" 2>nul
+)
 echo.>> "%REPORT%"
 
 :: ====================================================================

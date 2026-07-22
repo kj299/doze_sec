@@ -356,6 +356,17 @@ try {
     } else {
         Write-Host "  [ SKIP     ] Get-NetFirewallProfile unavailable on this host -- consistency check skipped"
     }
+    # Option B (dashboard retrofit): Section 8 now owns the firewall verdict, so
+    # a disabled profile must flip Section 8's OWN verdict to ISSUES FOUND and
+    # land a CRITICAL|8| ledger entry -- not just appear in the dashboard rollup
+    # (the flagship "Section 8 CLEAN while firewall disabled" divergence, fixed).
+    if ($fwp.Count -gt 0 -and -not $fwAllOn) {
+        $s8issues = [bool]([regex]::IsMatch($text, '\[SECTION 8/18 RESULT: ISSUES FOUND'))
+        $lg8 = $false
+        if ($ledger) { $lg8 = [bool](@(Get-Content -LiteralPath $ledger.FullName -EA SilentlyContinue | Where-Object { $_ -like 'CRITICAL|8|*' }).Count) }
+        if ($s8issues -and $lg8) { Write-Host "  [ OK       ] Section 8 firewall verdict is ISSUES FOUND + ledger has CRITICAL|8| (dashboard retrofit)" }
+        else { Write-Host ("  [ REGRESS  ] disabled firewall did not flip Section 8's own verdict/ledger (verdict={0} ledger={1})" -f $s8issues, $lg8); $requiredFail++ }
+    }
 
     # Exit-code architecture (code-review W1-W3): a planted CRITICAL (WDigest=1)
     # must drive the process exit code to 8. PROMOTED to required 2026-07-18
