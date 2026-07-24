@@ -200,3 +200,20 @@ Found during the v7.1 coverage review; tracked for future work:
   Section 13 already escalates to CRITICAL). Section 2 evaluates the Guest
   account by well-known SID (`-501`, locale-independent) and warns when it
   is enabled. All three are `required` cases in the detection harness.
+- ~~The logon/unlock screen (`LogonUI`/`Winlogon`) path was under-covered:
+  Winlogon Notify packages, malicious Credential Providers, and rogue Network
+  Provider DLLs (NPPSPY) all run at logon/unlock and can harvest credentials,
+  but nothing evaluated them.~~ **Closed (Tier 1):** Section 5 runs
+  `tools/logon_persistence.ps1`, which flags (a) any `Winlogon\Notify` subkey
+  (T1547.004 — fires on logon/lock/unlock; deprecated on modern Windows),
+  (b) non-default Network Provider entries and their `ProviderPath` DLLs
+  (T1556.008 / NPPSPY cleartext credential capture; legit order is only
+  `RDPNP,LanmanWorkstation,webclient`), and (c) registered Credential
+  Providers/Filters whose CLSID `InprocServer32` DLL fails Authenticode gating
+  (T1547 — LogonUI at logon **and unlock**). Severity is tiered to avoid false
+  positives on legitimate third-party MFA/VPN providers: CRITICAL for
+  unsigned/invalid/staging-path/missing DLLs, WARNING for validly-but-non-
+  Microsoft-signed. Three `required` detection-harness cases plant each vector.
+  Tier 2 (LSA notification/authentication packages, screensaver hijack
+  `SCRNSAVE.EXE`/`ScreenSaverIsSecure`, `UserInitMprLogonScript`) is a
+  follow-up.

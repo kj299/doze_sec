@@ -1913,6 +1913,38 @@ if exist "%TEMP%\dz_persist_hit.txt" (
 )
 
 echo.>> "%REPORT%"
+echo --- Logon / Unlock Persistence Vectors --->> "%REPORT%"
+echo  Command: powershell -File tools\logon_persistence.ps1>> "%REPORT%"
+echo  Winlogon Notify, Network Provider (NPPSPY), and Credential Provider DLLs>> "%REPORT%"
+echo  -- registry vectors that run at the logon/unlock screen (LogonUI).>> "%REPORT%"
+del "%TEMP%\dz_logon_notify.txt" 2>nul
+del "%TEMP%\dz_logon_netprov.txt" 2>nul
+del "%TEMP%\dz_logon_credprov.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\logon_persistence.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\logon_persistence.ps1">> "%REPORT%" 2>&1
+) else (
+    echo  [INFO] tools\logon_persistence.ps1 not found -- logon/unlock checks skipped.>> "%REPORT%"
+)
+if exist "%TEMP%\dz_logon_notify.txt" (
+    set "_LSEV="
+    set /p _LSEV=<"%TEMP%\dz_logon_notify.txt"
+    call :dz_finding !_LSEV! 5 T1547.004 "Winlogon Notify package present (fires on logon/unlock)"
+    del "%TEMP%\dz_logon_notify.txt" 2>nul
+)
+if exist "%TEMP%\dz_logon_netprov.txt" (
+    set "_LSEV="
+    set /p _LSEV=<"%TEMP%\dz_logon_netprov.txt"
+    call :dz_finding !_LSEV! 5 T1556.008 "Non-default network provider DLL (cleartext credential capture)"
+    del "%TEMP%\dz_logon_netprov.txt" 2>nul
+)
+if exist "%TEMP%\dz_logon_credprov.txt" (
+    set "_LSEV="
+    set /p _LSEV=<"%TEMP%\dz_logon_credprov.txt"
+    call :dz_finding !_LSEV! 5 T1547 "Suspicious credential provider DLL (logon/unlock capture)"
+    del "%TEMP%\dz_logon_credprov.txt" 2>nul
+)
+
+echo.>> "%REPORT%"
 echo --- Other Users' Run Keys (HKU\^<SID^> enumeration) --->> "%REPORT%"
 echo  Command: powershell -Command "Get-ChildItem 'Registry::HKEY_USERS' -EA SilentlyContinue">> "%REPORT%"
 echo  Walks loaded user hives under HKEY_USERS for additional Run/RunOnce>> "%REPORT%"

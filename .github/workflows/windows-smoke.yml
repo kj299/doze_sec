@@ -220,6 +220,29 @@ jobs:
           Write-Host "persistence_eval OK"
           exit 0
 
+      - name: logon_persistence.ps1 (logon/unlock vectors; clean runner has no CRITICAL)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item "$env:TEMP\dz_logon_*.txt" -Force -EA SilentlyContinue
+          $out = .\tools\logon_persistence.ps1
+          $out | Write-Host
+          # Must run cleanly and emit all three section headers.
+          foreach ($h in 'Winlogon Notify', 'Network Provider', 'Credential Providers') {
+            if (-not ($out -match [regex]::Escape($h))) { throw "logon_persistence missing section: $h" }
+          }
+          # A clean runner must not yield a CRITICAL logon-persistence finding.
+          # (A WARNING for a legit non-Microsoft-signed provider is acceptable.)
+          $crit = Get-ChildItem "$env:TEMP\dz_logon_*.txt" -EA SilentlyContinue |
+            Where-Object { (Get-Content -LiteralPath $_.FullName -Raw) -match 'CRITICAL' }
+          if ($crit) {
+            Get-ChildItem "$env:TEMP\dz_logon_*.txt" | ForEach-Object { Write-Host ("{0}: {1}" -f $_.Name, (Get-Content -LiteralPath $_.FullName -Raw)) }
+            throw "logon_persistence flagged a CRITICAL on a clean runner (false positive)"
+          }
+          Remove-Item "$env:TEMP\dz_logon_*.txt" -Force -EA SilentlyContinue
+          Write-Host "logon_persistence OK"
+          exit 0
+
       - name: INIT-path extractions (self_update_check / disk_info / smart_health)
         shell: powershell
         run: |
