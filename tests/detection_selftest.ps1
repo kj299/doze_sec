@@ -55,6 +55,14 @@ $flagSvcBin  = 'C:\Users\Public\dz_selftest_flag_svc.exe'
 $fwProfile   = 'Private'   # profile toggled by the disabled-firewall case
 $script:fwPrevEnabled = $null
 $defExclPath = 'C:\dz_selftest_excl_dir'   # Defender exclusion planted for Section 9
+# Logon/unlock persistence plants (Section 5, tools/logon_persistence.ps1)
+$notifyKey   = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\Notify\dz_selftest_evil'
+$npOrderKey  = 'HKLM:\SYSTEM\CurrentControlSet\Control\NetworkProvider\Order'
+$npSvcKey    = 'HKLM:\SYSTEM\CurrentControlSet\Services\dz_selftest_np'
+$script:npPrevOrder = $null
+$cpGuid      = '{deadbeef-0000-0000-0000-00000000d123}'
+$cpKey       = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\$cpGuid"
+$cpClsidKey  = "HKLM:\SOFTWARE\Classes\CLSID\$cpGuid"
 
 # Each case: Name, Tier, Plant/Cleanup script blocks, and Expect -- a regex that
 # must appear in the final report text for the detection to count as firing.
@@ -205,6 +213,35 @@ $cases = @(
         Expect = '\[SECTION 9/18 RESULT: ISSUES FOUND'
         Plant  = { Add-MpPreference -ExclusionPath $defExclPath -EA Stop }
         Cleanup= { Remove-MpPreference -ExclusionPath $defExclPath -EA SilentlyContinue }
+    },
+    @{
+        Name   = 'Winlogon Notify package -> flagged (logon/unlock persistence)'
+        Tier   = 'required'
+        Expect = '(?im)Winlogon Notify subkey[^\r\n]*dz_selftest_evil'
+        Plant  = { New-Item -Path $notifyKey -Force | Out-Null
+                   Set-ItemProperty -Path $notifyKey -Name DllName -Value 'C:\Users\Public\dz_evil_notify.dll' -Force }
+        Cleanup= { Remove-Item -Path $notifyKey -Recurse -Force -EA SilentlyContinue }
+    },
+    @{
+        Name   = 'Rogue Network Provider (NPPSPY) -> flagged (cleartext cred capture)'
+        Tier   = 'required'
+        Expect = '(?im)network provider .?dz_selftest_np'
+        Plant  = { $script:npPrevOrder = (Get-ItemProperty -Path $npOrderKey -Name ProviderOrder -EA Stop).ProviderOrder
+                   Set-ItemProperty -Path $npOrderKey -Name ProviderOrder -Value ($script:npPrevOrder + ',dz_selftest_np') -Force
+                   New-Item -Path ("{0}\NetworkProvider" -f $npSvcKey) -Force | Out-Null
+                   Set-ItemProperty -Path ("{0}\NetworkProvider" -f $npSvcKey) -Name ProviderPath -Value 'C:\Users\Public\dz_evil_np.dll' -Force }
+        Cleanup= { if ($null -ne $script:npPrevOrder) { Set-ItemProperty -Path $npOrderKey -Name ProviderOrder -Value $script:npPrevOrder -Force }
+                   Remove-Item -Path $npSvcKey -Recurse -Force -EA SilentlyContinue }
+    },
+    @{
+        Name   = 'Rogue Credential Provider DLL -> flagged (logon/unlock capture)'
+        Tier   = 'required'
+        Expect = '(?im)Credential provider [^\r\n]*deadbeef'
+        Plant  = { New-Item -Path $cpKey -Force | Out-Null
+                   New-Item -Path ("{0}\InprocServer32" -f $cpClsidKey) -Force | Out-Null
+                   Set-ItemProperty -Path ("{0}\InprocServer32" -f $cpClsidKey) -Name '(default)' -Value 'C:\Users\Public\dz_evil_cp.dll' -Force }
+        Cleanup= { Remove-Item -Path $cpKey -Recurse -Force -EA SilentlyContinue
+                   Remove-Item -Path $cpClsidKey -Recurse -Force -EA SilentlyContinue }
     }
 )
 
