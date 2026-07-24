@@ -1991,6 +1991,27 @@ if defined _SSHD_HIT (
 )
 set "_SSHD_HIT="
 echo.>> "%REPORT%"
+echo --- Remote-Access Exposure (evaluated) --->> "%REPORT%"
+del "%TEMP%\dz_smb1_hit.txt" 2>nul
+del "%TEMP%\dz_rdpnla_hit.txt" 2>nul
+del "%TEMP%\dz_winrm_hit.txt" 2>nul
+echo $s1=(Get-SmbServerConfiguration -EA SilentlyContinue).EnableSMB1Protocol;if($s1 -eq $true){'[CRITICAL] SMBv1 ENABLED (EternalBlue CVE-2017-0144)';Set-Content -LiteralPath "$env:TEMP\dz_smb1_hit.txt" -Value hit}elseif($s1 -eq $false){'[OK] SMBv1 disabled.'}else{'[SKIPPED] SMBv1 state unavailable.'} > "%PSRUN%"
+echo $rdp=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -EA SilentlyContinue).fDenyTSConnections;if($rdp -eq 1){'[OK] RDP disabled.'}else{$nla=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -EA SilentlyContinue).UserAuthentication;if($nla -eq 1){'[OK] RDP enabled with NLA.'}else{'[WARNING] RDP enabled WITHOUT NLA';Set-Content -LiteralPath "$env:TEMP\dz_rdpnla_hit.txt" -Value hit}} >> "%PSRUN%"
+echo $wmr=Get-Service WinRM -EA SilentlyContinue;if($wmr -and $wmr.Status -eq 'Running'){'[WARNING] WinRM RUNNING (remote PowerShell enabled)';Set-Content -LiteralPath "$env:TEMP\dz_winrm_hit.txt" -Value hit}else{'[OK] WinRM not running.'} >> "%PSRUN%"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+if exist "%TEMP%\dz_smb1_hit.txt" (
+    call :dz_finding CRITICAL 10 T1210 "SMBv1 enabled - EternalBlue exposure"
+    del "%TEMP%\dz_smb1_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_rdpnla_hit.txt" (
+    call :dz_finding WARNING 10 T1021.001 "RDP enabled without NLA"
+    del "%TEMP%\dz_rdpnla_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_winrm_hit.txt" (
+    call :dz_finding WARNING 10 T1021.006 "WinRM running - remote PowerShell enabled"
+    del "%TEMP%\dz_winrm_hit.txt" 2>nul
+)
+echo.>> "%REPORT%"
 
 :: ====================================================================
 
@@ -2042,6 +2063,14 @@ goto :sec11_psv2_done
 echo  [DEFERRED - ADMIN REQUIRED] Get-WindowsOptionalFeature requires admin.>> "%REPORT%"
 set /a DEFERRED_COUNT+=1
 :sec11_psv2_done
+
+del "%TEMP%\dz_psv2_hit.txt" 2>nul
+echo $psv2=Get-CimInstance Win32_OptionalFeature -Filter 'Name=''MicrosoftWindowsPowerShellV2Root''' -EA SilentlyContinue;if($psv2 -and $psv2.InstallState -eq 1){'[WARNING] PowerShell v2 ENABLED (AMSI downgrade possible)';Set-Content -LiteralPath "$env:TEMP\dz_psv2_hit.txt" -Value hit}elseif($psv2){'[OK] PowerShell v2 disabled.'}else{'[SKIPPED] PSv2 state unavailable.'} > "%PSRUN%"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+if exist "%TEMP%\dz_psv2_hit.txt" (
+    call :dz_finding WARNING 11 T1059.001 "PowerShell v2 enabled - AMSI downgrade path"
+    del "%TEMP%\dz_psv2_hit.txt" 2>nul
+)
 
 echo.>> "%REPORT%"
 echo --- Logging Policy --->> "%REPORT%"

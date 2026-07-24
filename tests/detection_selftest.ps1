@@ -367,6 +367,18 @@ try {
         if ($s8issues -and $lg8) { Write-Host "  [ OK       ] Section 8 firewall verdict is ISSUES FOUND + ledger has CRITICAL|8| (dashboard retrofit)" }
         else { Write-Host ("  [ REGRESS  ] disabled firewall did not flip Section 8's own verdict/ledger (verdict={0} ledger={1})" -f $s8issues, $lg8); $requiredFail++ }
     }
+    # Option B retrofit (PR 6): Section 10 now evaluates WinRM in-section. Its
+    # report line must agree with the live service state (non-invasive ground
+    # truth) -- validates the retrofit eval logic without planting.
+    $winrm = Get-Service WinRM -EA SilentlyContinue
+    if ($winrm) {
+        $wrun = ($winrm.Status -eq 'Running')
+        $rptWinrm = [bool]([regex]::IsMatch($text, '\[WARNING\] WinRM RUNNING'))
+        if ($wrun -eq $rptWinrm) { Write-Host ("  [ OK       ] Section 10 WinRM verdict matches live service state (running: {0})" -f $wrun) }
+        else { Write-Host ("  [ REGRESS  ] Section 10 WinRM verdict disagrees with service state (running: {0}; report flags: {1})" -f $wrun, $rptWinrm); $requiredFail++ }
+    } else {
+        Write-Host "  [ SKIP     ] WinRM service not present -- Section 10 WinRM check skipped"
+    }
 
     # Exit-code architecture (code-review W1-W3): a planted CRITICAL (WDigest=1)
     # must drive the process exit code to 8. PROMOTED to required 2026-07-18
