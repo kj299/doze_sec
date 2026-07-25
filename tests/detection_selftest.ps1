@@ -55,6 +55,9 @@ $flagSvcBin  = 'C:\Users\Public\dz_selftest_flag_svc.exe'
 $fwProfile   = 'Private'   # profile toggled by the disabled-firewall case
 $script:fwPrevEnabled = $null
 $defExclPath = 'C:\dz_selftest_excl_dir'   # Defender exclusion planted for Section 9
+$startupDir  = [Environment]::GetFolderPath('Startup')   # localized-safe
+$startupVbs  = Join-Path $startupDir ("{0}.vbs" -f $MARK)
+$appcertKey  = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\AppCertDlls'
 # Logon/unlock persistence plants (Section 5, tools/logon_persistence.ps1)
 $notifyKey   = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\Notify\dz_selftest_evil'
 $npOrderKey  = 'HKLM:\SYSTEM\CurrentControlSet\Control\NetworkProvider\Order'
@@ -106,6 +109,21 @@ $cases = @(
         Cleanup= { Remove-Item -Path $ifeoKey -Recurse -Force -EA SilentlyContinue }
     },
     @{
+        Name   = 'Startup-folder script autorun -> flagged (T1547.001)'
+        Tier   = 'required'  # startup_eval.ps1; same dump-without-verdict class as #138
+        Expect = ('(?im)\[(WARNING|CRITICAL)\] Startup item [^\r\n]*{0}' -f $MARK)
+        Plant  = { Set-Content -LiteralPath $startupVbs -Value "WScript.Echo ""$MARK""" -Encoding ASCII }
+        Cleanup= { Remove-Item -LiteralPath $startupVbs -Force -EA SilentlyContinue }
+    },
+    @{
+        Name   = 'AppCert DLL registered -> flagged (T1546.009)'
+        Tier   = 'required'  # startup_eval.ps1; uncovered sibling of AppInit_DLLs
+        Expect = ('(?im)\[(WARNING|CRITICAL)\] AppCert DLL [^\r\n]*{0}' -f $MARK)
+        Plant  = { if (-not (Test-Path $appcertKey)) { New-Item -Path $appcertKey -Force | Out-Null }
+                   Set-ItemProperty -Path $appcertKey -Name $MARK -Value 'C:\Windows\Temp\dz_selftest_evil.dll' -Force }
+        Cleanup= { Remove-ItemProperty -Path $appcertKey -Name $MARK -EA SilentlyContinue }
+    },
+    @{
         Name   = 'Guest account enabled -> WARNING'
         Tier   = 'required'  # Section 2 now emits a SID -501 verdict (issue #138)
         Expect = '(?im)\[(WARNING|CRITICAL)\][^\r\n]*guest'
@@ -142,6 +160,21 @@ $cases = @(
         Cleanup= { }
     },
     # ---- False-positive guards: plant a BENIGN state, assert NOT flagged ----
+    @{
+        Name   = 'Benign signed shortcut in Startup -> must NOT be flagged (FP guard)'
+        Tier   = 'required'
+        Invert = $true       # legit installers drop shortcuts here constantly
+        # A .lnk to the Microsoft-signed notepad.exe is exactly what OneDrive /
+        # Teams / vendor updaters look like. Flagging it would make the new
+        # Startup check unusable on real machines.
+        Expect = ('(?im)\[(WARNING|CRITICAL)\] Startup item [^\r\n]*{0}_benign' -f $MARK)
+        Plant  = { $sh = New-Object -ComObject WScript.Shell
+                   $lnk = $sh.CreateShortcut((Join-Path $startupDir ("{0}_benign.lnk" -f $MARK)))
+                   $lnk.TargetPath = (Join-Path $env:SystemRoot 'System32\notepad.exe')
+                   $lnk.Save()
+                   [void][Runtime.InteropServices.Marshal]::ReleaseComObject($sh) }
+        Cleanup= { Remove-Item -LiteralPath (Join-Path $startupDir ("{0}_benign.lnk" -f $MARK)) -Force -EA SilentlyContinue }
+    },
     @{
         Name   = 'ScriptBlockLogging ON -> audit must NOT flag its own AMSI scan'
         Tier   = 'required'

@@ -200,6 +200,26 @@ Found during the v7.1 coverage review; tracked for future work:
   Section 13 already escalates to CRITICAL). Section 2 evaluates the Guest
   account by well-known SID (`-501`, locale-independent) and warns when it
   is enabled. All three are `required` cases in the detection harness.
+- ~~Section 5 raw-dumped the per-user and common Startup folders with `dir`
+  and never evaluated them (a dropped `.lnk`/`.vbs`/`.exe` scrolled past with
+  no verdict -- the same dump-without-verdict class as issue #138), and
+  `AppCertDlls` was not audited at all even though its sibling `AppInit_DLLs`
+  was.~~ **Closed:** Section 5 runs `tools/startup_eval.ps1`, which evaluates
+  Startup-folder contents (T1547.001) and AppCert DLLs (T1546.009).
+  Startup folders are resolved via `Environment.GetFolderPath` so localized
+  Windows installs work. Severity is tiered to keep false positives near zero
+  (legitimate installers drop items here): CRITICAL for items -- or `.lnk`
+  targets, resolved read-only via the Shell API -- under a staging path or
+  carrying encoded-PowerShell / LOLBin-download content; WARNING for
+  auto-running script types (`.vbs .js .hta .ps1 .bat .cmd .scr .pif` ...) or
+  an unsigned/invalid-signature binary; validly-signed executables and their
+  shortcuts stay `[OK]`. Any AppCert DLL is reported (it loads into every
+  process that calls `CreateProcess*`, and unlike AppInit it is not disabled
+  by Secure Boot), with the same Authenticode gate used for Credential
+  Provider DLLs so a signed enterprise agent degrades to WARNING instead of
+  CRITICAL. Two `required` harness cases plant each vector, plus a
+  false-positive guard asserting a benign signed Startup shortcut is not
+  flagged.
 - ~~The logon/unlock screen (`LogonUI`/`Winlogon`) path was under-covered:
   Winlogon Notify packages, malicious Credential Providers, and rogue Network
   Provider DLLs (NPPSPY) all run at logon/unlock and can harvest credentials,
