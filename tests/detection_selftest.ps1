@@ -458,6 +458,40 @@ try {
         Write-Host "  [ SKIP     ] Winlogon Userinit not readable -- Section 5 check skipped"
     }
 
+    # REQUIRED (Option B flip step 1 of 2): section verdicts and FINDINGS
+    # COUNTED now derive from the ledger. Cross-check all 18 sections: a
+    # section with >=1 ledger entry must report ISSUES FOUND, a section with
+    # none must not -- on whatever state this runner is in, planted or organic.
+    if ($ledger) {
+        $secBad = 0
+        for ($n = 1; $n -le 18; $n++) {
+            $inLedger = [bool](@($lg | Where-Object { $_ -match ('^(CRITICAL|WARNING)\|{0}\|' -f $n) }).Count)
+            $issues = [bool]([regex]::IsMatch($text, ('\[SECTION {0}/18 RESULT: ISSUES FOUND' -f $n)))
+            if ($inLedger -ne $issues) {
+                Write-Host ("  [ REGRESS  ] Section {0}: ledger has findings={1} but report verdict shows issues={2} -- ledger-derived verdict diverged" -f $n, $inLedger, $issues)
+                $secBad++
+            }
+        }
+        if ($secBad -eq 0) { Write-Host "  [ OK       ] all 18 section verdicts agree with the ledger (flip step 1)" }
+        else { $requiredFail++ }
+
+        # REQUIRED: FINDINGS COUNTED must equal the ledger line count, and the
+        # dashboard-divergence floor must NOT have fired -- the floor kicking
+        # in means a dashboard condition is missing its in-section raise.
+        $fcL = [regex]::Match($text, '(?m)^\s*FINDINGS COUNTED:\s*(\d+)')
+        if ($fcL.Success -and ([int]$fcL.Groups[1].Value) -eq @($lg).Count) {
+            Write-Host ("  [ OK       ] FINDINGS COUNTED ({0}) equals the ledger line count (flip step 1)" -f @($lg).Count)
+        } else {
+            Write-Host ("  [ REGRESS  ] FINDINGS COUNTED ({0}) != ledger line count ({1}) -- count is no longer ledger-derived" -f $fcL.Groups[1].Value, @($lg).Count)
+            $requiredFail++
+        }
+        if ($text -match 'an in-section raise is missing') {
+            Write-Host "  [ REGRESS  ] dashboard floor fired -- some dashboard condition has no in-section raise (retrofit gap)"; $requiredFail++
+        } else {
+            Write-Host "  [ OK       ] dashboard-vs-ledger divergence floor did not fire (retrofit coverage holds)"
+        }
+    }
+
     # Option B retrofit (PR 9): Section 16 now evaluates log-tampering /
     # account-change events in-section. Compare its 1102 (Security log cleared)
     # verdict against a live Get-WinEvent probe -- NEVER clear a log on the
