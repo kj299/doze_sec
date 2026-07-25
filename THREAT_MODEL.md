@@ -242,3 +242,29 @@ Found during the v7.1 coverage review; tracked for future work:
   `ScreenSaverIsSecure=0` flagged as an unlock-without-password bypass), and
   `UserInitMprLogonScript` (T1037.001). Three more `required` harness cases
   plant each.
+- ~~Six subsystem load points had no coverage at all: netsh helper DLLs,
+  print processors, print port monitors, BITS jobs, PowerShell profile
+  scripts, and W32Time time providers. Each is a documented ATT&CK
+  persistence technique in which a Windows subsystem loads an
+  attacker-chosen DLL or runs an attacker-chosen command; being less common
+  than a Run key is precisely what makes them attractive once the obvious
+  locations are audited.~~ **Closed:** Section 5 runs
+  `tools/persistence_extra.ps1`, covering netsh helpers (T1546.007, loaded
+  on every `netsh.exe` run), print processors (T1547.012) and port monitors
+  (T1547.010) (loaded by the SYSTEM spooler at boot), BITS jobs (T1197 --
+  notify command lines, plus jobs approaching the 90-day max lifetime),
+  PowerShell profiles (T1546.013) and time providers (T1547.003).
+  The four DLL-backed points are judged by Authenticode rather than by a
+  name allowlist: printer vendors and some VPN products legitimately add
+  entries (validly-signed non-Microsoft degrades to WARNING), and judging by
+  signature also closes the bypass where an attacker overwrites the DLL
+  behind a *default* entry name such as `winprint.dll` or `w32time.dll`.
+  PowerShell-profile *existence* is never a finding -- only cradle/encoded
+  content is -- and a BITS job existing is not either, since Windows Update
+  uses BITS. Two `required` harness cases plant the time-provider and
+  PowerShell-profile vectors end-to-end; the netsh/print-processor/port-monitor
+  plants live in the isolated `helpers-ps51` step instead, because a bogus
+  netsh helper makes `netsh.exe` emit load errors that would contaminate the
+  firewall and portproxy cases in the same full-audit run. BITS is covered by
+  the clean-runner false-positive gate only (planting a job with a notify
+  command line is not worth the runner-state risk).

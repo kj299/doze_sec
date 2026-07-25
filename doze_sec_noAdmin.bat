@@ -1563,6 +1563,60 @@ if exist "%TEMP%\dz_appcert.txt" (
 )
 
 echo.>> "%REPORT%"
+echo --- Long-tail Persistence Points ^(evaluated^) --->> "%REPORT%"
+echo  Command: powershell -File tools\persistence_extra.ps1>> "%REPORT%"
+echo  Netsh helpers ^(T1546.007^), print processors ^(T1547.012^), port monitors>> "%REPORT%"
+echo  ^(T1547.010^), BITS jobs ^(T1197^), PowerShell profiles ^(T1546.013^) and time>> "%REPORT%"
+echo  providers ^(T1547.003^) -- subsystem load points nothing audited before.>> "%REPORT%"
+del "%TEMP%\dz_netsh.txt" 2>nul
+del "%TEMP%\dz_printproc.txt" 2>nul
+del "%TEMP%\dz_portmon.txt" 2>nul
+del "%TEMP%\dz_bits.txt" 2>nul
+del "%TEMP%\dz_psprofile.txt" 2>nul
+del "%TEMP%\dz_timeprov.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\persistence_extra.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\persistence_extra.ps1">> "%REPORT%" 2>&1
+) else (
+    echo  [INFO] tools\persistence_extra.ps1 not found -- long-tail persistence evaluation skipped.>> "%REPORT%"
+)
+if exist "%TEMP%\dz_netsh.txt" (
+    set "_NSHSEV="
+    set /p _NSHSEV=<"%TEMP%\dz_netsh.txt"
+    call :dz_finding !_NSHSEV! 5 T1546.007 "Netsh helper DLL is not Microsoft-signed - loads whenever netsh.exe runs"
+    del "%TEMP%\dz_netsh.txt" 2>nul
+)
+if exist "%TEMP%\dz_printproc.txt" (
+    set "_PPRSEV="
+    set /p _PPRSEV=<"%TEMP%\dz_printproc.txt"
+    call :dz_finding !_PPRSEV! 5 T1547.012 "Print processor DLL is not Microsoft-signed - loaded by the SYSTEM spooler"
+    del "%TEMP%\dz_printproc.txt" 2>nul
+)
+if exist "%TEMP%\dz_portmon.txt" (
+    set "_PMNSEV="
+    set /p _PMNSEV=<"%TEMP%\dz_portmon.txt"
+    call :dz_finding !_PMNSEV! 5 T1547.010 "Port monitor DLL is not Microsoft-signed - loaded by the SYSTEM spooler"
+    del "%TEMP%\dz_portmon.txt" 2>nul
+)
+if exist "%TEMP%\dz_bits.txt" (
+    set "_BTSSEV="
+    set /p _BTSSEV=<"%TEMP%\dz_bits.txt"
+    call :dz_finding !_BTSSEV! 5 T1197 "BITS job with a notify command line or an unusually long lifetime"
+    del "%TEMP%\dz_bits.txt" 2>nul
+)
+if exist "%TEMP%\dz_psprofile.txt" (
+    set "_PRFSEV="
+    set /p _PRFSEV=<"%TEMP%\dz_psprofile.txt"
+    call :dz_finding !_PRFSEV! 5 T1546.013 "PowerShell profile script contains suspicious content"
+    del "%TEMP%\dz_psprofile.txt" 2>nul
+)
+if exist "%TEMP%\dz_timeprov.txt" (
+    set "_TMPSEV="
+    set /p _TMPSEV=<"%TEMP%\dz_timeprov.txt"
+    call :dz_finding !_TMPSEV! 5 T1547.003 "Time provider DLL is not Microsoft-signed - loaded by W32Time as SYSTEM"
+    del "%TEMP%\dz_timeprov.txt" 2>nul
+)
+
+echo.>> "%REPORT%"
 echo --- Logon / Unlock Persistence Vectors --->> "%REPORT%"
 echo  Command: powershell -File tools\logon_persistence.ps1>> "%REPORT%"
 echo  Winlogon Notify, Network Provider (NPPSPY), and Credential Provider DLLs>> "%REPORT%"
