@@ -467,3 +467,58 @@ jobs:
           name: detection-selftest-output
           path: C:\SecurityAudit\*
           if-no-files-found: ignore
+
+  # The same plant/assert harness against doze_sec_noAdmin.bat, elevated.
+  # Elevated, the adaptive bat sets IS_ADMIN=1 and runs its full path, so every
+  # detection, section verdict, and Option B consistency assertion must hold
+  # exactly as they do for doze_sec.bat -- this is the mirror-parity check the
+  # design memo (section 7) called out as missing.
+  detection-selftest-noadmin:
+    name: "detection regression harness (doze_sec_noAdmin.bat, elevated adaptive path)"
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Plant indicators, run the noAdmin bat elevated, assert detections
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\tests\detection_selftest.ps1 -BatPath .\doze_sec_noAdmin.bat
+          exit $LASTEXITCODE
+
+      - name: Upload the selftest audit artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: detection-selftest-noadmin-output
+          path: C:\SecurityAudit\*
+          if-no-files-found: ignore
+
+  # The path CI never executed before: doze_sec_noAdmin.bat as a REAL standard
+  # user (created on the runner, launched via Start-Process -Credential).
+  # Asserts the non-admin contract: report says Admin : 0, sections defer with
+  # PARTIAL verdicts, a planted HKLM CRITICAL is still detected without admin,
+  # exit codes 6/8 honor their semantics, and the Option B ledger consistency
+  # net holds under deferral. See tests/noadmin_smoke.ps1.
+  noadmin-true-run:
+    name: "doze_sec_noAdmin.bat as a real standard user (deferral contract)"
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create standard user, run the audit twice, assert the contract
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\tests\noadmin_smoke.ps1 -BatPath .\doze_sec_noAdmin.bat
+          exit $LASTEXITCODE
+
+      - name: Upload the non-admin audit artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: noadmin-smoke-output
+          path: noadmin-smoke-output\*
+          if-no-files-found: ignore
