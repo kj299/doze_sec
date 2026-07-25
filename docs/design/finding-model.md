@@ -151,3 +151,8 @@ Implemented across PRs #148–#160 and the exit-code flip PR:
   ledger-divergence alarms ([INFO] report lines the harness fails on).
 - The dashboard's `ck` display is intentionally retained as a presentation
   layer; its tally acts as the Div-2 floor/alarm, not a source of truth.
+- The §7 noAdmin-parity concern is addressed: CI now runs the plant/assert
+  harness against `doze_sec_noAdmin.bat` elevated (adaptive full path) and
+  runs it as a real standard user (`tests/noadmin_smoke.ps1`) asserting the
+  deferral contract -- Admin : 0, PARTIAL verdicts, HKLM-read detection
+  without admin, exit-code 6/8 semantics, and the ledger consistency net.
