@@ -1549,6 +1549,9 @@ echo  -- registry vectors that run at the logon/unlock screen (LogonUI).>> "%REP
 del "%TEMP%\dz_logon_notify.txt" 2>nul
 del "%TEMP%\dz_logon_netprov.txt" 2>nul
 del "%TEMP%\dz_logon_credprov.txt" 2>nul
+del "%TEMP%\dz_logon_lsa.txt" 2>nul
+del "%TEMP%\dz_logon_scr.txt" 2>nul
+del "%TEMP%\dz_logon_logonscript.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\logon_persistence.ps1" (
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\logon_persistence.ps1">> "%REPORT%" 2>&1
 ) else (
@@ -1571,6 +1574,24 @@ if exist "%TEMP%\dz_logon_credprov.txt" (
     set /p _LSEV=<"%TEMP%\dz_logon_credprov.txt"
     call :dz_finding !_LSEV! 5 T1547 "Suspicious credential provider DLL (logon/unlock capture)"
     del "%TEMP%\dz_logon_credprov.txt" 2>nul
+)
+if exist "%TEMP%\dz_logon_lsa.txt" (
+    set "_LSEV="
+    set /p _LSEV=<"%TEMP%\dz_logon_lsa.txt"
+    call :dz_finding !_LSEV! 5 T1556.002 "Suspicious LSA package DLL (credential capture in lsass)"
+    del "%TEMP%\dz_logon_lsa.txt" 2>nul
+)
+if exist "%TEMP%\dz_logon_scr.txt" (
+    set "_LSEV="
+    set /p _LSEV=<"%TEMP%\dz_logon_scr.txt"
+    call :dz_finding !_LSEV! 5 T1546.002 "Screensaver hijack or unlock without password"
+    del "%TEMP%\dz_logon_scr.txt" 2>nul
+)
+if exist "%TEMP%\dz_logon_logonscript.txt" (
+    set "_LSEV="
+    set /p _LSEV=<"%TEMP%\dz_logon_logonscript.txt"
+    call :dz_finding !_LSEV! 5 T1037.001 "UserInitMprLogonScript logon script set"
+    del "%TEMP%\dz_logon_logonscript.txt" 2>nul
 )
 
 echo.>> "%REPORT%"
