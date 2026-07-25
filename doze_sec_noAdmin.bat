@@ -625,8 +625,7 @@ if "%DEV_MODE%"=="1" (
     echo  [WARNING] -dev override active. Continuing on unsupported OS.>> "%REPORT%"
     echo  [WARNING] Some checks may fail or return incorrect results.>> "%REPORT%"
     echo %C_GREEN%[INIT 4/14]%C_RESET% WARN: !OS_BLOCK_REASON! -- -dev override active, continuing.
-    set /a FINDINGS+=1
-    if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+    call :dz_finding WARNING INIT OSCOMPAT "Unsupported OS - -dev override active; results may be unreliable"
     goto :os_check_passed
 )
 echo.
@@ -1109,8 +1108,7 @@ if "%SMART_WARN%"=="1" (
     echo.>> "%REPORT%"
     echo [WARNING] One or more drives report SMART/health failure. Back up data immediately.>> "%REPORT%"
     echo [WARNING] Do not run this script again until drives are replaced or verified.>> "%REPORT%"
-    set /a FINDINGS+=1
-    if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
+    call :dz_finding WARNING INIT SMART "Drive reports SMART/health failure - back up data immediately"
     echo %C_GREEN%[INIT 14/14]%C_RESET% SMART: WARNING - drive health issue detected
 ) else (
     echo.>> "%REPORT%"
@@ -1142,7 +1140,6 @@ echo %C_BOLD%%C_WHITE%==========================================================
 echo.
 
 :: ====================================================================
-set "SEC1_PREV_FIND=%FINDINGS%"
 set "SEC1_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[1/18]%C_RESET% Collecting system identity and patch level...
 :: ====================================================================
@@ -1176,7 +1173,7 @@ del "%TEMP%\dz_reboot_needed.txt" 2>nul
 if exist "%TEMP%\dz_reboot_needed.txt" (
     echo [EXIT 4] A reboot is pending. Reboot the system then re-run the audit.>> "%REPORT%"
     echo [EXIT 4] Results may be incomplete until the pending reboot is applied.>> "%REPORT%"
-    set /a FINDINGS+=1
+    call :dz_finding WARNING 1 REBOOT "Reboot pending - audit results may be incomplete"
     if !EXIT_CODE! LSS 4 set "EXIT_CODE=4"
     del "%TEMP%\dz_reboot_needed.txt" 2>nul
 )
@@ -1192,7 +1189,8 @@ echo.>> "%REPORT%"
 
 :: ---- Section 1/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
-if "%FINDINGS%"=="%SEC1_PREV_FIND%" (
+call :dz_section_clean 1
+if "!DZ_SEC_CLEAN!"=="1" (
     if !DEFERRED_COUNT! GTR !SEC1_PREV_DEF! (
         set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC1_PREV_DEF!
         echo  [SECTION 1/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
@@ -1203,7 +1201,6 @@ if "%FINDINGS%"=="%SEC1_PREV_FIND%" (
     echo  [SECTION 1/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
-set "SEC2_PREV_FIND=%FINDINGS%"
 set "SEC2_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[2/18]%C_RESET% Auditing user accounts and privileges...
 :: ====================================================================
@@ -1263,7 +1260,8 @@ echo.>> "%REPORT%"
 
 :: ---- Section 2/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
-if "%FINDINGS%"=="%SEC2_PREV_FIND%" (
+call :dz_section_clean 2
+if "!DZ_SEC_CLEAN!"=="1" (
     if !DEFERRED_COUNT! GTR !SEC2_PREV_DEF! (
         set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC2_PREV_DEF!
         echo  [SECTION 2/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
@@ -1274,7 +1272,6 @@ if "%FINDINGS%"=="%SEC2_PREV_FIND%" (
     echo  [SECTION 2/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
-set "SEC3_PREV_FIND=%FINDINGS%"
 set "SEC3_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[3/18]%C_RESET% Scanning network connections and configuration...
 :: ====================================================================
@@ -1375,7 +1372,8 @@ echo.>> "%REPORT%"
 
 :: ---- Section 3/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
-if "%FINDINGS%"=="%SEC3_PREV_FIND%" (
+call :dz_section_clean 3
+if "!DZ_SEC_CLEAN!"=="1" (
     if !DEFERRED_COUNT! GTR !SEC3_PREV_DEF! (
         set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC3_PREV_DEF!
         echo  [SECTION 3/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
@@ -1386,7 +1384,6 @@ if "%FINDINGS%"=="%SEC3_PREV_FIND%" (
     echo  [SECTION 3/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
-set "SEC4_PREV_FIND=%FINDINGS%"
 set "SEC4_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[4/18]%C_RESET% Enumerating running processes...
 :: ====================================================================
@@ -1487,7 +1484,8 @@ echo.>> "%REPORT%"
 
 :: ---- Section 4/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
-if "%FINDINGS%"=="%SEC4_PREV_FIND%" (
+call :dz_section_clean 4
+if "!DZ_SEC_CLEAN!"=="1" (
     if !DEFERRED_COUNT! GTR !SEC4_PREV_DEF! (
         set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC4_PREV_DEF!
         echo  [SECTION 4/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
@@ -1498,7 +1496,6 @@ if "%FINDINGS%"=="%SEC4_PREV_FIND%" (
     echo  [SECTION 4/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
-set "SEC5_PREV_FIND=%FINDINGS%"
 set "SEC5_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[5/18]%C_RESET% Checking startup and persistence locations...
 :: ====================================================================
@@ -1669,7 +1666,8 @@ echo.>> "%REPORT%"
 
 :: ---- Section 5/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
-if "%FINDINGS%"=="%SEC5_PREV_FIND%" (
+call :dz_section_clean 5
+if "!DZ_SEC_CLEAN!"=="1" (
     if !DEFERRED_COUNT! GTR !SEC5_PREV_DEF! (
         set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC5_PREV_DEF!
         echo  [SECTION 5/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
@@ -1680,7 +1678,6 @@ if "%FINDINGS%"=="%SEC5_PREV_FIND%" (
     echo  [SECTION 5/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
-set "SEC6_PREV_FIND=%FINDINGS%"
 set "SEC6_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[6/18]%C_RESET% Enumerating scheduled tasks...
 :: ====================================================================
@@ -1735,7 +1732,8 @@ echo.>> "%REPORT%"
 
 :: ---- Section 6/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
-if "%FINDINGS%"=="%SEC6_PREV_FIND%" (
+call :dz_section_clean 6
+if "!DZ_SEC_CLEAN!"=="1" (
     if !DEFERRED_COUNT! GTR !SEC6_PREV_DEF! (
         set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC6_PREV_DEF!
         echo  [SECTION 6/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
@@ -1746,7 +1744,6 @@ if "%FINDINGS%"=="%SEC6_PREV_FIND%" (
     echo  [SECTION 6/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
-set "SEC7_PREV_FIND=%FINDINGS%"
 set "SEC7_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[7/18]%C_RESET% Auditing Windows services...
 :: ====================================================================
@@ -1799,7 +1796,8 @@ echo.>> "%REPORT%"
 
 :: ---- Section 7/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
-if "%FINDINGS%"=="%SEC7_PREV_FIND%" (
+call :dz_section_clean 7
+if "!DZ_SEC_CLEAN!"=="1" (
     if !DEFERRED_COUNT! GTR !SEC7_PREV_DEF! (
         set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC7_PREV_DEF!
         echo  [SECTION 7/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
@@ -1810,7 +1808,6 @@ if "%FINDINGS%"=="%SEC7_PREV_FIND%" (
     echo  [SECTION 7/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
-set "SEC8_PREV_FIND=%FINDINGS%"
 set "SEC8_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[8/18]%C_RESET% Checking firewall configuration...
 :: ====================================================================
@@ -1864,7 +1861,8 @@ echo.>> "%REPORT%"
 
 :: ---- Section 8/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
-if "%FINDINGS%"=="%SEC8_PREV_FIND%" (
+call :dz_section_clean 8
+if "!DZ_SEC_CLEAN!"=="1" (
     if !DEFERRED_COUNT! GTR !SEC8_PREV_DEF! (
         set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC8_PREV_DEF!
         echo  [SECTION 8/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
@@ -1875,7 +1873,6 @@ if "%FINDINGS%"=="%SEC8_PREV_FIND%" (
     echo  [SECTION 8/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
-set "SEC9_PREV_FIND=%FINDINGS%"
 set "SEC9_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[9/18]%C_RESET% Checking Defender and AV configuration...
 :: ====================================================================
@@ -2002,7 +1999,8 @@ echo.>> "%REPORT%"
 
 :: ---- Section 9/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
-if "%FINDINGS%"=="%SEC9_PREV_FIND%" (
+call :dz_section_clean 9
+if "!DZ_SEC_CLEAN!"=="1" (
     if !DEFERRED_COUNT! GTR !SEC9_PREV_DEF! (
         set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC9_PREV_DEF!
         echo  [SECTION 9/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
@@ -2013,7 +2011,6 @@ if "%FINDINGS%"=="%SEC9_PREV_FIND%" (
     echo  [SECTION 9/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
-set "SEC10_PREV_FIND=%FINDINGS%"
 set "SEC10_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[10/18]%C_RESET% Checking SMB and remote access...
 :: ====================================================================
@@ -2098,7 +2095,8 @@ echo.>> "%REPORT%"
 
 :: ---- Section 10/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
-if "%FINDINGS%"=="%SEC10_PREV_FIND%" (
+call :dz_section_clean 10
+if "!DZ_SEC_CLEAN!"=="1" (
     if !DEFERRED_COUNT! GTR !SEC10_PREV_DEF! (
         set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC10_PREV_DEF!
         echo  [SECTION 10/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
@@ -2109,7 +2107,6 @@ if "%FINDINGS%"=="%SEC10_PREV_FIND%" (
     echo  [SECTION 10/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
-set "SEC11_PREV_FIND=%FINDINGS%"
 set "SEC11_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[11/18]%C_RESET% Checking PowerShell security...
 :: ====================================================================
@@ -2187,7 +2184,8 @@ echo.>> "%REPORT%"
 
 :: ---- Section 11/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
-if "%FINDINGS%"=="%SEC11_PREV_FIND%" (
+call :dz_section_clean 11
+if "!DZ_SEC_CLEAN!"=="1" (
     if !DEFERRED_COUNT! GTR !SEC11_PREV_DEF! (
         set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC11_PREV_DEF!
         echo  [SECTION 11/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
@@ -2198,7 +2196,6 @@ if "%FINDINGS%"=="%SEC11_PREV_FIND%" (
     echo  [SECTION 11/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
-set "SEC12_PREV_FIND=%FINDINGS%"
 set "SEC12_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[12/18]%C_RESET% Checking credential and LSASS protection...
 :: ====================================================================
@@ -2281,7 +2278,8 @@ echo.>> "%REPORT%"
 
 :: ---- Section 12/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
-if "%FINDINGS%"=="%SEC12_PREV_FIND%" (
+call :dz_section_clean 12
+if "!DZ_SEC_CLEAN!"=="1" (
     if !DEFERRED_COUNT! GTR !SEC12_PREV_DEF! (
         set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC12_PREV_DEF!
         echo  [SECTION 12/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
@@ -2292,7 +2290,6 @@ if "%FINDINGS%"=="%SEC12_PREV_FIND%" (
     echo  [SECTION 12/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
-set "SEC13_PREV_FIND=%FINDINGS%"
 set "SEC13_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[13/18]%C_RESET% Checking system hardening settings...
 :: ====================================================================
@@ -2542,7 +2539,8 @@ echo.>> "%REPORT%"
 
 :: ---- Section 13/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
-if "%FINDINGS%"=="%SEC13_PREV_FIND%" (
+call :dz_section_clean 13
+if "!DZ_SEC_CLEAN!"=="1" (
     if !DEFERRED_COUNT! GTR !SEC13_PREV_DEF! (
         set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC13_PREV_DEF!
         echo  [SECTION 13/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
@@ -2553,7 +2551,6 @@ if "%FINDINGS%"=="%SEC13_PREV_FIND%" (
     echo  [SECTION 13/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
-set "SEC14_PREV_FIND=%FINDINGS%"
 set "SEC14_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[14/18]%C_RESET% Scanning file system for suspicious files...
 :: ====================================================================
@@ -2620,7 +2617,8 @@ echo.>> "%REPORT%"
 
 :: ---- Section 14/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
-if "%FINDINGS%"=="%SEC14_PREV_FIND%" (
+call :dz_section_clean 14
+if "!DZ_SEC_CLEAN!"=="1" (
     if !DEFERRED_COUNT! GTR !SEC14_PREV_DEF! (
         set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC14_PREV_DEF!
         echo  [SECTION 14/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
@@ -2631,7 +2629,6 @@ if "%FINDINGS%"=="%SEC14_PREV_FIND%" (
     echo  [SECTION 14/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
-set "SEC15_PREV_FIND=%FINDINGS%"
 set "SEC15_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[15/18]%C_RESET% Auditing installed software and drivers...
 :: ====================================================================
@@ -2695,7 +2692,8 @@ echo.>> "%REPORT%"
 
 :: ---- Section 15/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
-if "%FINDINGS%"=="%SEC15_PREV_FIND%" (
+call :dz_section_clean 15
+if "!DZ_SEC_CLEAN!"=="1" (
     if !DEFERRED_COUNT! GTR !SEC15_PREV_DEF! (
         set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC15_PREV_DEF!
         echo  [SECTION 15/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
@@ -2706,7 +2704,6 @@ if "%FINDINGS%"=="%SEC15_PREV_FIND%" (
     echo  [SECTION 15/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
-set "SEC16_PREV_FIND=%FINDINGS%"
 set "SEC16_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[16/18]%C_RESET% Pulling Windows Event Log anomalies...
 :: ====================================================================
@@ -2857,7 +2854,8 @@ echo.>> "%REPORT%"
 
 :: ---- Section 16/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
-if "%FINDINGS%"=="%SEC16_PREV_FIND%" (
+call :dz_section_clean 16
+if "!DZ_SEC_CLEAN!"=="1" (
     if !DEFERRED_COUNT! GTR !SEC16_PREV_DEF! (
         set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC16_PREV_DEF!
         echo  [SECTION 16/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
@@ -2868,7 +2866,6 @@ if "%FINDINGS%"=="%SEC16_PREV_FIND%" (
     echo  [SECTION 16/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
-set "SEC17_PREV_FIND=%FINDINGS%"
 set "SEC17_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[17/18]%C_RESET% Nation-state threat indicators from MDDR 2023...
 :: ====================================================================
@@ -3108,7 +3105,8 @@ echo.>> "%REPORT%"
 
 :: ---- Section 17/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
-if "%FINDINGS%"=="%SEC17_PREV_FIND%" (
+call :dz_section_clean 17
+if "!DZ_SEC_CLEAN!"=="1" (
     if !DEFERRED_COUNT! GTR !SEC17_PREV_DEF! (
         set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC17_PREV_DEF!
         echo  [SECTION 17/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
@@ -3119,7 +3117,6 @@ if "%FINDINGS%"=="%SEC17_PREV_FIND%" (
     echo  [SECTION 17/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
-set "SEC18_PREV_FIND=%FINDINGS%"
 set "SEC18_PREV_DEF=%DEFERRED_COUNT%"
 echo %C_CYAN%[18/18]%C_RESET% CTI-driven threat indicator sweep...
 :: ====================================================================
@@ -3687,7 +3684,8 @@ if exist "%TTP_BLOCKS%" (
 :sec18_verdict
 :: ---- Section 18/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
-if "%FINDINGS%"=="%SEC18_PREV_FIND%" (
+call :dz_section_clean 18
+if "!DZ_SEC_CLEAN!"=="1" (
     if !DEFERRED_COUNT! GTR !SEC18_PREV_DEF! (
         set /a _DEF_DELTA=!DEFERRED_COUNT!-!SEC18_PREV_DEF!
         echo  [SECTION 18/18 RESULT: PARTIAL -- !_DEF_DELTA! check^(s^) deferred ^(non-admin^); re-run as admin for full coverage]>> "%REPORT%"
@@ -4022,6 +4020,21 @@ if /i not "%SUM_RESULT%"=="CRIT" goto :skip_crit8
 if %EXIT_CODE% EQU 2 set "EXIT_CODE=8"
 if %EXIT_CODE% EQU 4 set "EXIT_CODE=8"
 :skip_crit8
+rem Option B flip step 1 of 2: FINDINGS COUNTED now derives from the ledger
+rem (tools\ledger.ps1 Summarize) -- the one file every raise writes through
+rem :dz_finding. The cmd FINDINGS counter survives only as a fallback for the
+rem no-ledger edge; the dashboard floor below survives as a divergence alarm.
+rem Exit-code derivation is deliberately UNCHANGED in this step -- it flips to
+rem ledger MAXSEV in step 2 once this step is proven green.
+set "LEDGER_TOTAL="
+set "LEDGER_MAXSEV=NONE"
+if defined LEDGER if exist "%LEDGER%" (
+    for /f "usebackq tokens=1* delims==" %%a in (`"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\ledger.ps1" -Mode Summarize -Path "%LEDGER%" 2^>nul`) do (
+        if "%%a"=="TOTAL" set "LEDGER_TOTAL=%%b"
+        if "%%a"=="MAXSEV" set "LEDGER_MAXSEV=%%b"
+    )
+)
+if defined LEDGER_TOTAL set "FINDINGS=!LEDGER_TOTAL!"
 rem Reconcile FINDINGS with the dashboard's own tally. Dashboard ck checks
 rem (firewall, SMBv1, RDP, ...) can raise the exit code without a section
 rem incrementing FINDINGS, which printed "FINDINGS COUNTED: 0" next to a
@@ -4034,7 +4047,10 @@ if exist "%SUMCOUNT%" (
 )
 set "SUM_COUNT=%SUM_COUNT: =%"
 set /a SUM_COUNT+=0 2>nul
-if !SUM_COUNT! GTR !FINDINGS! set "FINDINGS=!SUM_COUNT!"
+if !SUM_COUNT! GTR !FINDINGS! (
+    if defined LEDGER_TOTAL (echo  [INFO] Dashboard tallied !SUM_COUNT! condition^(s^) but the ledger holds !FINDINGS! -- an in-section raise is missing; floored to the dashboard tally.)>> "%REPORT%"
+    set "FINDINGS=!SUM_COUNT!"
+)
 if exist "%SUMFILE%" del "%SUMFILE%" >nul 2>&1
 
 :: Set exit code 6 for non-admin partial audit (if no worse code already set).
@@ -4063,6 +4079,8 @@ echo.
 echo ====================================================================>> "%REPORT%"
 (echo  EXIT CODE: %EXIT_CODE%)>> "%REPORT%"
 (echo  FINDINGS COUNTED: %FINDINGS%)>> "%REPORT%"
+if not defined LEDGER_MAXSEV set "LEDGER_MAXSEV=NONE"
+(echo  LEDGER MAXSEV: %LEDGER_MAXSEV%)>> "%REPORT%"
 echo  0=Success  1=Error  2=Warning  3=UnsupportedOS  4=RebootPending  5=RanFromTEMP  6=PartialNoAdmin  7=VTIntegrityFail  8=CriticalFindings>> "%REPORT%"
 if "%EXIT_CODE%"=="0" echo  STATUS: Clean run - no fatal issues encountered.>> "%REPORT%"
 if "%EXIT_CODE%"=="1" echo  STATUS: Fatal error. Check console output above for details.>> "%REPORT%"
@@ -4187,10 +4205,26 @@ if defined DOZE_EXIT_FILE echo %EXIT_CODE%>"%DOZE_EXIT_FILE%" 2>nul
 endlocal & exit /b %EXIT_CODE%
 
 :: ====================================================================
+:: :dz_section_clean -- set DZ_SEC_CLEAN=1 when the ledger holds no finding
+:: for section %1, else 0 (finding #4 Option B, flip step 1 of 2). Section
+:: verdicts derive from the ledger here. A missing ledger file means no
+:: :dz_finding call fired, which IS the clean case -- the file is created
+:: on first append. findstr /b anchors the severity field at line start,
+:: so severity words inside MESSAGE text cannot false-match, and "|17|"
+:: cannot collide with "|1|". Placed after the final exit; call-only.
+:: ====================================================================
+:dz_section_clean
+set "DZ_SEC_CLEAN=1"
+if not defined LEDGER goto :eof
+findstr /b /c:"CRITICAL|%~1|" /c:"WARNING|%~1|" "%LEDGER%" >nul 2>&1 && set "DZ_SEC_CLEAN=0"
+goto :eof
+
+:: ====================================================================
 :: :dz_finding -- append one finding to the ledger and apply the compat
 :: FINDINGS/EXIT_CODE raise (finding #4 Option B). Converting a legacy raise
-:: site to a single `call :dz_finding` is behavior-preserving; a later PR
-:: points the section verdicts / FINDINGS COUNTED / exit code at %LEDGER%.
+:: site to a single `call :dz_finding` is behavior-preserving. The section
+:: verdicts (:dz_section_clean) and FINDINGS COUNTED (Summarize rollup) now
+:: derive from %LEDGER%; the exit-code flip to MAXSEV is the remaining step.
 :: Args: %1=severity CRITICAL^|WARNING  %2=section  %3=code (may be "")  %4="msg"
 :: Placed after the final exit so it is only ever entered via `call`.
 :: ====================================================================
