@@ -227,8 +227,8 @@ jobs:
           Remove-Item "$env:TEMP\dz_logon_*.txt" -Force -EA SilentlyContinue
           $out = .\tools\logon_persistence.ps1
           $out | Write-Host
-          # Must run cleanly and emit all three section headers.
-          foreach ($h in 'Winlogon Notify', 'Network Provider', 'Credential Providers') {
+          # Must run cleanly and emit all section headers (Tier 1 + Tier 2).
+          foreach ($h in 'Winlogon Notify', 'Network Provider', 'Credential Providers', 'LSA Notification', 'Screensaver', 'Logon script') {
             if (-not ($out -match [regex]::Escape($h))) { throw "logon_persistence missing section: $h" }
           }
           # A clean runner must not yield a CRITICAL logon-persistence finding.

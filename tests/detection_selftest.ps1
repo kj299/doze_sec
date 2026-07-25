@@ -63,6 +63,12 @@ $script:npPrevOrder = $null
 $cpGuid      = '{deadbeef-0000-0000-0000-00000000d123}'
 $cpKey       = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\$cpGuid"
 $cpClsidKey  = "HKLM:\SOFTWARE\Classes\CLSID\$cpGuid"
+# Tier 2 logon/unlock plants
+$lsaKey      = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+$script:lsaPrevNotify = $null
+$scrDeskKey  = 'HKCU:\Control Panel\Desktop'
+$script:scrPrev = $null
+$envKey      = 'HKCU:\Environment'
 
 # Each case: Name, Tier, Plant/Cleanup script blocks, and Expect -- a regex that
 # must appear in the final report text for the detection to count as firing.
@@ -242,6 +248,32 @@ $cases = @(
                    Set-ItemProperty -Path ("{0}\InprocServer32" -f $cpClsidKey) -Name '(default)' -Value 'C:\Users\Public\dz_evil_cp.dll' -Force }
         Cleanup= { Remove-Item -Path $cpKey -Recurse -Force -EA SilentlyContinue
                    Remove-Item -Path $cpClsidKey -Recurse -Force -EA SilentlyContinue }
+    },
+    @{
+        Name   = 'Rogue LSA Notification package -> flagged (lsass credential capture)'
+        Tier   = 'required'
+        Expect = "(?im)LSA Notification Packages package 'dz_selftest_lsa'"
+        # Inert until reboot (lsass only re-reads at boot); restored in cleanup.
+        Plant  = { $cur = @((Get-ItemProperty -Path $lsaKey -Name 'Notification Packages' -EA Stop).'Notification Packages')
+                   $script:lsaPrevNotify = $cur
+                   Set-ItemProperty -Path $lsaKey -Name 'Notification Packages' -Value ($cur + 'dz_selftest_lsa') -Type MultiString -Force }
+        Cleanup= { if ($null -ne $script:lsaPrevNotify) { Set-ItemProperty -Path $lsaKey -Name 'Notification Packages' -Value $script:lsaPrevNotify -Type MultiString -Force } }
+    },
+    @{
+        Name   = 'Malicious screensaver (SCRNSAVE.EXE staging path) -> flagged'
+        Tier   = 'required'
+        Expect = '(?im)Screensaver SCRNSAVE\.EXE -> C:\\Users\\Public\\dz_evil\.scr'
+        Plant  = { $script:scrPrev = (Get-ItemProperty -Path $scrDeskKey -Name 'SCRNSAVE.EXE' -EA SilentlyContinue).'SCRNSAVE.EXE'
+                   Set-ItemProperty -Path $scrDeskKey -Name 'SCRNSAVE.EXE' -Value 'C:\Users\Public\dz_evil.scr' -Force }
+        Cleanup= { if ($script:scrPrev) { Set-ItemProperty -Path $scrDeskKey -Name 'SCRNSAVE.EXE' -Value $script:scrPrev -Force }
+                   else { Remove-ItemProperty -Path $scrDeskKey -Name 'SCRNSAVE.EXE' -EA SilentlyContinue } }
+    },
+    @{
+        Name   = 'UserInitMprLogonScript logon script -> flagged'
+        Tier   = 'required'
+        Expect = '(?im)UserInitMprLogonScript is set'
+        Plant  = { Set-ItemProperty -Path $envKey -Name UserInitMprLogonScript -Value 'C:\Users\Public\dz_evil.bat' -Force }
+        Cleanup= { Remove-ItemProperty -Path $envKey -Name UserInitMprLogonScript -EA SilentlyContinue }
     }
 )
 

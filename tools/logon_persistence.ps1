@@ -134,3 +134,56 @@ try {
 if (-not $ok) { '[SKIPPED] Credential Provider enumeration failed -- check NOT performed.' }
 elseif (-not $flagged) { '[OK] All registered credential providers are Microsoft-signed system DLLs.' }
 else { Write-Marker 'credprov' $sev }
+
+# ---- 4. LSA Notification / Authentication packages (Tier 2) --------------
+# Loaded by lsass at boot/logon; a rogue package (e.g. a password-filter DLL)
+# captures cleartext credentials at logon/password change. The signature IS the
+# allowlist -- legit MS packages (scecli/msv1_0/rassfm) are Microsoft-signed
+# System32 DLLs and pass; a planted non-MS/unsigned/missing one is flagged.
+''
+'--- [T1556.002/T1547.002] LSA Notification & Authentication packages (lsass, SYSTEM) ---'
+$sys = [Environment]::GetFolderPath('System')
+$lsaOk = $true; $lsaFlagged = $false; $lsaSev = 'OK'
+try {
+    $lp = Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -EA Stop
+    foreach ($setName in 'Notification Packages', 'Authentication Packages') {
+        foreach ($pkg in @($lp.$setName | Where-Object { $_ })) {
+            $dllp = Join-Path $sys ($pkg + '.dll')
+            $v = Get-DllVerdict -Path $dllp
+            if ($v.Sev -eq 'OK') { continue }
+            $lsaFlagged = $true; $lsaSev = Get-MaxSev $lsaSev $v.Sev
+            ("[{0}] LSA {1} package '{2}' -> {3} ({4})" -f $v.Sev, $setName, $pkg, $dllp, $v.Why)
+        }
+    }
+} catch { $lsaOk = $false }
+if (-not $lsaOk) { '[SKIPPED] LSA package enumeration failed -- check NOT performed.' }
+elseif (-not $lsaFlagged) { '[OK] LSA Notification/Authentication packages are Microsoft-signed system DLLs.' }
+else { Write-Marker 'lsa' $lsaSev }
+
+# ---- 5. Screensaver hijack (Tier 2) -- runs on idle -> lock --------------
+''
+'--- [T1546.002] Screensaver (executes on user inactivity / lock) ---'
+$desk = 'HKCU:\Control Panel\Desktop'
+$scr = (Get-ItemProperty -Path $desk -Name 'SCRNSAVE.EXE' -EA SilentlyContinue).'SCRNSAVE.EXE'
+$scrSecure = (Get-ItemProperty -Path $desk -Name 'ScreenSaverIsSecure' -EA SilentlyContinue).ScreenSaverIsSecure
+$scrFlagged = $false; $scrSev = 'OK'
+if ($scr) {
+    $v = Get-DllVerdict -Path $scr
+    if ($v.Sev -ne 'OK') { $scrFlagged = $true; $scrSev = Get-MaxSev $scrSev $v.Sev; ("[{0}] Screensaver SCRNSAVE.EXE -> {1} ({2})" -f $v.Sev, $scr, $v.Why) }
+    else { "[OK] Screensaver is a Microsoft-signed system binary: $scr" }
+    if ("$scrSecure" -eq '0') { $scrFlagged = $true; $scrSev = Get-MaxSev $scrSev 'WARNING'; '[WARNING] ScreenSaverIsSecure=0 -- screensaver does NOT require a password to resume (unlock bypass).' }
+} else {
+    '[OK] No custom screensaver configured.'
+}
+if ($scrFlagged) { Write-Marker 'scr' $scrSev }
+
+# ---- 6. UserInitMprLogonScript (Tier 2) ----------------------------------
+''
+'--- [T1037.001] Logon script (UserInitMprLogonScript) ---'
+$lsn = (Get-ItemProperty -Path 'HKCU:\Environment' -Name UserInitMprLogonScript -EA SilentlyContinue).UserInitMprLogonScript
+if ($lsn) {
+    ("[WARNING] UserInitMprLogonScript is set -- runs a script at every logon: {0}" -f $lsn)
+    Write-Marker 'logonscript' 'WARNING'
+} else {
+    '[OK] No UserInitMprLogonScript logon script.'
+}

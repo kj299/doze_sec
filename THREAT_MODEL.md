@@ -214,6 +214,11 @@ Found during the v7.1 coverage review; tracked for future work:
   positives on legitimate third-party MFA/VPN providers: CRITICAL for
   unsigned/invalid/staging-path/missing DLLs, WARNING for validly-but-non-
   Microsoft-signed. Three `required` detection-harness cases plant each vector.
-  Tier 2 (LSA notification/authentication packages, screensaver hijack
-  `SCRNSAVE.EXE`/`ScreenSaverIsSecure`, `UserInitMprLogonScript`) is a
-  follow-up.
+  **Tier 2 (also closed):** the same helper now also evaluates LSA
+  Notification/Authentication packages (T1556.002 password-filter DLLs /
+  T1547.002 auth packages loaded by lsass as SYSTEM -- the signature gate is
+  the allowlist, so a planted non-Microsoft/missing package DLL is flagged),
+  the screensaver (T1546.002 -- `SCRNSAVE.EXE` gated the same way, plus
+  `ScreenSaverIsSecure=0` flagged as an unlock-without-password bypass), and
+  `UserInitMprLogonScript` (T1037.001). Three more `required` harness cases
+  plant each.
