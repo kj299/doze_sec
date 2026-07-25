@@ -2705,6 +2705,34 @@ echo  Command: wevtutil qe Security /q:"*[System[^(EventID=4732^)]]" /c:10 /rd:t
 wevtutil qe Security /q:"*[System[(EventID=4732)]]" /c:10 /rd:true /f:text>> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
+echo --- Log Tampering and Account Changes (evaluated) --->> "%REPORT%"
+del "%TEMP%\dz_ev1102_hit.txt" 2>nul
+del "%TEMP%\dz_ev104_hit.txt" 2>nul
+del "%TEMP%\dz_ev4720_hit.txt" 2>nul
+del "%TEMP%\dz_ev4732_hit.txt" 2>nul
+echo $e=Get-WinEvent -FilterHashtable @{LogName='Security';Id=1102} -MaxEvents 1 -EA SilentlyContinue;if($e){'[CRITICAL] Security event log was CLEARED at '+$e.TimeCreated+' -- attacker erased evidence (T1070.001). Treat as active compromise.';Set-Content -LiteralPath "$env:TEMP\dz_ev1102_hit.txt" -Value hit}else{'[OK] Security event log has not been cleared.'} > "%PSRUN%"
+echo $e=Get-WinEvent -FilterHashtable @{LogName='System';Id=104} -MaxEvents 1 -EA SilentlyContinue;if($e){'[WARNING] System event log was cleared at '+$e.TimeCreated+' -- often benign (updates/driver installs/disk cleanup); the Security 1102 check above is the attacker cover-up signal.';Set-Content -LiteralPath "$env:TEMP\dz_ev104_hit.txt" -Value hit}else{'[OK] System event log has not been cleared.'} >> "%PSRUN%"
+echo $e=@(Get-WinEvent -FilterHashtable @{LogName='Security';Id=4720} -MaxEvents 5 -EA SilentlyContinue);if($e.Count -gt 0){'[WARNING] New local account(s) created: '+$e.Count+' event(s) (T1136.001) -- review the names listed above.';Set-Content -LiteralPath "$env:TEMP\dz_ev4720_hit.txt" -Value hit}else{'[OK] No new local account creation events (4720).'} >> "%PSRUN%"
+echo $e=@(Get-WinEvent -FilterHashtable @{LogName='Security';Id=4732} -MaxEvents 5 -EA SilentlyContinue);if($e.Count -gt 0){'[WARNING] Account(s) added to a privileged group: '+$e.Count+' event(s) (T1098) -- review the names listed above.';Set-Content -LiteralPath "$env:TEMP\dz_ev4732_hit.txt" -Value hit}else{'[OK] No unexpected additions to Administrators (4732).'} >> "%PSRUN%"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+if exist "%TEMP%\dz_ev1102_hit.txt" (
+    call :dz_finding CRITICAL 16 T1070.001 "Security event log was cleared - evidence destruction"
+    del "%TEMP%\dz_ev1102_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_ev104_hit.txt" (
+    call :dz_finding WARNING 16 T1070.001 "System event log was cleared"
+    del "%TEMP%\dz_ev104_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_ev4720_hit.txt" (
+    call :dz_finding WARNING 16 T1136.001 "New local account(s) created"
+    del "%TEMP%\dz_ev4720_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_ev4732_hit.txt" (
+    call :dz_finding WARNING 16 T1098 "Account(s) added to a privileged group"
+    del "%TEMP%\dz_ev4732_hit.txt" 2>nul
+)
+
+echo.>> "%REPORT%"
 echo --- Special Privilege Logon - Event 4672 --->> "%REPORT%"
 echo  Command: wevtutil qe Security /q:"*[System[^(EventID=4672^)]]" /c:20 /rd:true /f:text ^| findstr /c:"TimeCreated" /c:"Account Name" /c:"Privileges">> "%REPORT%"
 wevtutil qe Security /q:"*[System[(EventID=4672)]]" /c:20 /rd:true /f:text | findstr /c:"TimeCreated" /c:"Account Name" /c:"Privileges">> "%REPORT%" 2>&1

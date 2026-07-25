@@ -445,6 +445,17 @@ try {
     if ($s12issues -and $lg12) { Write-Host "  [ OK       ] Section 12 WDigest verdict is ISSUES FOUND + ledger has CRITICAL|12| (dashboard retrofit)" }
     else { Write-Host ("  [ REGRESS  ] planted WDigest did not flip Section 12's own verdict/ledger (verdict={0} ledger={1})" -f $s12issues, $lg12); $requiredFail++ }
 
+    # Option B retrofit (PR 9): Section 16 now evaluates log-tampering /
+    # account-change events in-section. Compare its 1102 (Security log cleared)
+    # verdict against a live Get-WinEvent probe -- NEVER clear a log on the
+    # runner, so this is read-only ground truth.
+    $ev1102 = $null
+    try { $ev1102 = Get-WinEvent -FilterHashtable @{LogName='Security';Id=1102} -MaxEvents 1 -EA Stop } catch {}
+    $cleared = [bool]$ev1102
+    $rptCleared = [bool]([regex]::IsMatch($text, '\[CRITICAL\] Security event log was CLEARED'))
+    if ($cleared -eq $rptCleared) { Write-Host ("  [ OK       ] Section 16 log-cleared verdict matches live Security 1102 state (cleared: {0})" -f $cleared) }
+    else { Write-Host ("  [ REGRESS  ] Section 16 log-cleared verdict disagrees with live 1102 state (cleared: {0}; report flags: {1})" -f $cleared, $rptCleared); $requiredFail++ }
+
     # Option B retrofit (PR 8): Section 13 now evaluates UAC in-section. Compare
     # its verdict against the live EnableLUA value (non-invasive ground truth --
     # we never disable UAC on the runner).
