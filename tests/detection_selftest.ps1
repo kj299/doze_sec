@@ -445,6 +445,19 @@ try {
     if ($s12issues -and $lg12) { Write-Host "  [ OK       ] Section 12 WDigest verdict is ISSUES FOUND + ledger has CRITICAL|12| (dashboard retrofit)" }
     else { Write-Host ("  [ REGRESS  ] planted WDigest did not flip Section 12's own verdict/ledger (verdict={0} ledger={1})" -f $s12issues, $lg12); $requiredFail++ }
 
+    # Option B retrofit (PR 10): Section 5 now evaluates Winlogon Userinit in
+    # -section. Compare against the live value (read-only ground truth -- we
+    # never repoint Userinit on the runner; that could break logon).
+    $wlUi = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name Userinit -EA SilentlyContinue).Userinit
+    if ($wlUi) {
+        $uiModified = ($wlUi.Trim().TrimEnd(',') -ine (Join-Path $env:SystemRoot 'system32\userinit.exe'))
+        $rptUi = [bool]([regex]::IsMatch($text, '\[CRITICAL\] Winlogon Userinit MODIFIED'))
+        if ($uiModified -eq $rptUi) { Write-Host ("  [ OK       ] Section 5 Winlogon Userinit verdict matches live value (modified: {0})" -f $uiModified) }
+        else { Write-Host ("  [ REGRESS  ] Section 5 Userinit verdict disagrees with live value (modified: {0}; report flags: {1})" -f $uiModified, $rptUi); $requiredFail++ }
+    } else {
+        Write-Host "  [ SKIP     ] Winlogon Userinit not readable -- Section 5 check skipped"
+    }
+
     # Option B retrofit (PR 9): Section 16 now evaluates log-tampering /
     # account-change events in-section. Compare its 1102 (Security log cleared)
     # verdict against a live Get-WinEvent probe -- NEVER clear a log on the
