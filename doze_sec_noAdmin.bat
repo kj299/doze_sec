@@ -4011,11 +4011,19 @@ rem :dz_finding. The cmd FINDINGS counter survives only as a fallback for the
 rem no-ledger edge; the dashboard floor below survives as a divergence alarm.
 set "LEDGER_TOTAL="
 set "LEDGER_MAXSEV=NONE"
-if defined LEDGER if exist "%LEDGER%" (
-    for /f "usebackq tokens=1* delims==" %%a in (`"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\ledger.ps1" -Mode Summarize -Path "%LEDGER%" 2^>nul`) do (
+rem Summarize via a temp file + file-mode for /f, NOT an in-block backtick
+rem command: a backquoted for /f inside a parenthesized block mis-parses
+rem (every proven backtick for /f in this script is top-level) and silently
+rem yields nothing -- caught by the flip-step-2 harness assertions.
+set "LEDGERSUM=%TEMP%\AuditLedgerSum_%TIMESTAMP%.txt"
+del "%LEDGERSUM%" 2>nul
+if defined LEDGER if exist "%LEDGER%" "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\ledger.ps1" -Mode Summarize -Path "%LEDGER%" >"%LEDGERSUM%" 2>nul
+if exist "%LEDGERSUM%" (
+    for /f "usebackq tokens=1* delims==" %%a in ("%LEDGERSUM%") do (
         if "%%a"=="TOTAL" set "LEDGER_TOTAL=%%b"
         if "%%a"=="MAXSEV" set "LEDGER_MAXSEV=%%b"
     )
+    del "%LEDGERSUM%" 2>nul
 )
 if defined LEDGER_TOTAL set "FINDINGS=!LEDGER_TOTAL!"
 rem Flip step 2 of 2: the exit code derives from ledger MAXSEV. The per-call
