@@ -2588,6 +2588,29 @@ echo try{Get-BitLockerVolume ^| Select-Object MountPoint,EncryptionMethod,Volume
 manage-bde -status>> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
+echo --- UAC and Disk Encryption State (evaluated) --->> "%REPORT%"
+del "%TEMP%\dz_uac_hit.txt" 2>nul
+del "%TEMP%\dz_uacprompt_hit.txt" 2>nul
+del "%TEMP%\dz_bitlocker_hit.txt" 2>nul
+echo $pol='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' > "%PSRUN%"
+echo $lua=(Get-ItemProperty $pol -Name EnableLUA -EA SilentlyContinue).EnableLUA;$cpb=(Get-ItemProperty $pol -Name ConsentPromptBehaviorAdmin -EA SilentlyContinue).ConsentPromptBehaviorAdmin >> "%PSRUN%"
+echo if($lua -eq 0){'[CRITICAL] UAC DISABLED (EnableLUA=0) -- all processes auto-elevate silently (T1548.002)';Set-Content -LiteralPath "$env:TEMP\dz_uac_hit.txt" -Value hit}elseif($cpb -eq 0){'[WARNING] UAC auto-elevates without prompting (ConsentPromptBehaviorAdmin=0)';Set-Content -LiteralPath "$env:TEMP\dz_uacprompt_hit.txt" -Value hit}else{'[OK] UAC enabled with elevation prompt.'} >> "%PSRUN%"
+echo try{$bl=Get-BitLockerVolume -MountPoint $env:SystemDrive -EA Stop;if($bl.ProtectionStatus -eq 'On'){'[OK] BitLocker ON for '+$env:SystemDrive+' ('+$bl.EncryptionMethod+').'}else{'[WARNING] BitLocker OFF for '+$env:SystemDrive+' -- data readable if the drive is removed';Set-Content -LiteralPath "$env:TEMP\dz_bitlocker_hit.txt" -Value hit}}catch{'[SKIPPED] BitLocker status unavailable (edition or cmdlet missing).'} >> "%PSRUN%"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+if exist "%TEMP%\dz_uac_hit.txt" (
+    call :dz_finding CRITICAL 13 T1548.002 "UAC disabled - processes auto-elevate silently"
+    del "%TEMP%\dz_uac_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_uacprompt_hit.txt" (
+    call :dz_finding WARNING 13 T1548.002 "UAC elevates without prompting"
+    del "%TEMP%\dz_uacprompt_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_bitlocker_hit.txt" (
+    call :dz_finding WARNING 13 T1486 "System drive not encrypted with BitLocker"
+    del "%TEMP%\dz_bitlocker_hit.txt" 2>nul
+)
+
+echo.>> "%REPORT%"
 echo --- Driver Signature Enforcement --->> "%REPORT%"
 echo  Command: bcdedit /enum ^| findstr /i /c:"testsigning" /c:"nointegritychecks">> "%REPORT%"
 bcdedit /enum | findstr /i /c:"testsigning" /c:"nointegritychecks">> "%REPORT%" 2>&1

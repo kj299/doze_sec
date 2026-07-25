@@ -445,6 +445,19 @@ try {
     if ($s12issues -and $lg12) { Write-Host "  [ OK       ] Section 12 WDigest verdict is ISSUES FOUND + ledger has CRITICAL|12| (dashboard retrofit)" }
     else { Write-Host ("  [ REGRESS  ] planted WDigest did not flip Section 12's own verdict/ledger (verdict={0} ledger={1})" -f $s12issues, $lg12); $requiredFail++ }
 
+    # Option B retrofit (PR 8): Section 13 now evaluates UAC in-section. Compare
+    # its verdict against the live EnableLUA value (non-invasive ground truth --
+    # we never disable UAC on the runner).
+    $lua = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name EnableLUA -EA SilentlyContinue).EnableLUA
+    if ($null -ne $lua) {
+        $uacOff = ($lua -eq 0)
+        $rptUacOff = [bool]([regex]::IsMatch($text, '\[CRITICAL\] UAC DISABLED'))
+        if ($uacOff -eq $rptUacOff) { Write-Host ("  [ OK       ] Section 13 UAC verdict matches live EnableLUA (disabled: {0})" -f $uacOff) }
+        else { Write-Host ("  [ REGRESS  ] Section 13 UAC verdict disagrees with EnableLUA (disabled: {0}; report flags: {1})" -f $uacOff, $rptUacOff); $requiredFail++ }
+    } else {
+        Write-Host "  [ SKIP     ] EnableLUA not readable -- Section 13 UAC check skipped"
+    }
+
     # Option B retrofit (PR 6): Section 10 now evaluates WinRM in-section. Its
     # report line must agree with the live service state (non-invasive ground
     # truth) -- validates the retrofit eval logic without planting.
