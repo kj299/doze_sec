@@ -43,6 +43,9 @@ function Invoke-NonAdminAudit {
         -ArgumentList '/c', ('"{0}" -noAdmin -dev -sdu -nosrp -noConsoleLog' -f $bat) `
         -Credential $Cred -LoadUserProfile -WorkingDirectory $repo `
         -RedirectStandardOutput $out -RedirectStandardError $err -PassThru
+    # Cache the handle NOW: a -PassThru Process object acquires it lazily, and
+    # once the process has exited it cannot -- ExitCode then reads as $null.
+    $null = $p.Handle
     if (-not $p.WaitForExit($TimeoutSec * 1000)) {
         & taskkill /T /F /PID $p.Id 2>$null | Out-Null
         throw ("audit run '{0}' hung past {1}s -- killed" -f $Label, $TimeoutSec)
@@ -147,10 +150,12 @@ try {
     Write-Host "== Run 2: standard user, WDigest planted as admin (HKLM-read detection) =="
     if (-not (Test-Path -LiteralPath $wdKey)) { New-Item -Path $wdKey -Force | Out-Null }
     Set-ItemProperty -LiteralPath $wdKey -Name UseLogonCredential -Value 1 -Type DWord
-    Get-ChildItem -LiteralPath $outDir -EA SilentlyContinue | Remove-Item -Force -EA SilentlyContinue
+    # Run 1's report stays in place (timestamped filenames never collide);
+    # newest-file selection plus the inequality check below pick out run 2's.
     $code2 = Invoke-NonAdminAudit -Cred $cred -Label 'run2'
     $report2 = Get-NewestFile -Dir $outDir -Filter 'SecurityReport_*.txt'
     if (-not $report2) { throw "run 2 produced no report under $outDir (exit $code2)" }
+    if ($report2.FullName -eq $report1.FullName) { throw "run 2 produced no NEW report (newest is still run 1's, exit $code2)" }
     $text2 = Get-Content -LiteralPath $report2.FullName -Raw
     $ledger2File = Get-NewestFile -Dir $outDir -Filter 'SecurityReport_*.ledger'
     $ledger2 = if ($ledger2File) { @(Get-Content -LiteralPath $ledger2File.FullName -EA SilentlyContinue) } else { @() }
