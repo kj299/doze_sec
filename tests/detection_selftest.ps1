@@ -436,6 +436,15 @@ try {
         if ($s8issues -and $lg8) { Write-Host "  [ OK       ] Section 8 firewall verdict is ISSUES FOUND + ledger has CRITICAL|8| (dashboard retrofit)" }
         else { Write-Host ("  [ REGRESS  ] disabled firewall did not flip Section 8's own verdict/ledger (verdict={0} ledger={1})" -f $s8issues, $lg8); $requiredFail++ }
     }
+    # Option B retrofit (PR 7): Section 12 now evaluates WDigest in-section, so
+    # the planted UseLogonCredential=1 must flip Section 12's OWN verdict and
+    # land a CRITICAL|12| ledger entry (previously only the dashboard saw it).
+    $s12issues = [bool]([regex]::IsMatch($text, '\[SECTION 12/18 RESULT: ISSUES FOUND'))
+    $lg12 = $false
+    if ($ledger) { $lg12 = [bool](@(Get-Content -LiteralPath $ledger.FullName -EA SilentlyContinue | Where-Object { $_ -like 'CRITICAL|12|*' }).Count) }
+    if ($s12issues -and $lg12) { Write-Host "  [ OK       ] Section 12 WDigest verdict is ISSUES FOUND + ledger has CRITICAL|12| (dashboard retrofit)" }
+    else { Write-Host ("  [ REGRESS  ] planted WDigest did not flip Section 12's own verdict/ledger (verdict={0} ledger={1})" -f $s12issues, $lg12); $requiredFail++ }
+
     # Option B retrofit (PR 6): Section 10 now evaluates WinRM in-section. Its
     # report line must agree with the live service state (non-invasive ground
     # truth) -- validates the retrofit eval logic without planting.
