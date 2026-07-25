@@ -149,6 +149,43 @@ jobs:
           Write-Host "ioc_hash_check OK"
           exit 0
 
+      - name: startup_eval.ps1 (Startup folder + AppCert DLL evaluation)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $md = Join-Path $env:TEMP ("dz_se_ci_{0}" -f $PID)
+          New-Item -ItemType Directory -Path $md -Force | Out-Null
+          # Clean runner: must produce no CRITICAL and write no marker.
+          # NB: -match/-notmatch on an ARRAY are FILTERS, not booleans. Join to
+          # a single string before testing, or `-notmatch` returns every
+          # non-matching line (truthy) and the check always fires.
+          $out = (.\tools\startup_eval.ps1 -MarkerDir $md) -join "`n"
+          Write-Host $out
+          if ($out -match '\[CRITICAL\]') { throw "startup_eval flagged CRITICAL on a clean runner (false positive)" }
+          if (Test-Path (Join-Path $md 'dz_startup_folder.txt')) {
+            throw ("startup marker written on a clean runner: {0}" -f (Get-Content (Join-Path $md 'dz_startup_folder.txt')))
+          }
+          if (Test-Path (Join-Path $md 'dz_appcert.txt')) {
+            throw ("appcert marker written on a clean runner: {0}" -f (Get-Content (Join-Path $md 'dz_appcert.txt')))
+          }
+          # Plant an AppCert DLL pointing at a missing staging-path file: must
+          # be CRITICAL and must write the marker.
+          $ac = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\AppCertDlls'
+          if (-not (Test-Path $ac)) { New-Item -Path $ac -Force | Out-Null }
+          Set-ItemProperty -Path $ac -Name 'dz_ci_probe' -Value 'C:\Windows\Temp\dz_ci_probe.dll' -Force
+          try {
+            $out2 = (.\tools\startup_eval.ps1 -MarkerDir $md) -join "`n"
+            if ($out2 -notmatch 'dz_ci_probe') { throw "planted AppCert DLL not reported" }
+            $m = Join-Path $md 'dz_appcert.txt'
+            if (-not (Test-Path $m)) { throw "planted AppCert DLL wrote no marker" }
+            if ((Get-Content $m).Trim() -ne 'CRITICAL') { throw ("expected CRITICAL marker, got {0}" -f (Get-Content $m)) }
+          } finally {
+            Remove-ItemProperty -Path $ac -Name 'dz_ci_probe' -EA SilentlyContinue
+            Remove-Item $md -Recurse -Force -EA SilentlyContinue
+          }
+          Write-Host "startup_eval.ps1 OK"
+          exit 0
+
       - name: ledger.ps1 (finding-record append / summarize / section contract)
         shell: powershell
         run: |

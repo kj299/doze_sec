@@ -1537,6 +1537,30 @@ if exist "%TEMP%\dz_persist_hit.txt" (
     call :dz_finding WARNING 5 T1547 "Suspicious Run-key autorun or IFEO Debugger hijack"
     del "%TEMP%\dz_persist_hit.txt" 2>nul
 )
+echo.>> "%REPORT%"
+echo --- Startup Folder / AppCert DLL Evaluation --->> "%REPORT%"
+echo  Command: powershell -File tools\startup_eval.ps1>> "%REPORT%"
+echo  Evaluates the Startup folder dumps above ^(T1547.001^) and AppCert DLLs>> "%REPORT%"
+echo  ^(T1546.009^) -- the uncovered sibling of AppInit_DLLs.>> "%REPORT%"
+del "%TEMP%\dz_startup_folder.txt" 2>nul
+del "%TEMP%\dz_appcert.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\startup_eval.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\startup_eval.ps1">> "%REPORT%" 2>&1
+) else (
+    echo  [INFO] tools\startup_eval.ps1 not found -- Startup/AppCert evaluation skipped.>> "%REPORT%"
+)
+if exist "%TEMP%\dz_startup_folder.txt" (
+    set "_SSEV="
+    set /p _SSEV=<"%TEMP%\dz_startup_folder.txt"
+    call :dz_finding !_SSEV! 5 T1547.001 "Suspicious item in a Startup folder"
+    del "%TEMP%\dz_startup_folder.txt" 2>nul
+)
+if exist "%TEMP%\dz_appcert.txt" (
+    set "_ASEV="
+    set /p _ASEV=<"%TEMP%\dz_appcert.txt"
+    call :dz_finding !_ASEV! 5 T1546.009 "AppCert DLL registered - loads into every CreateProcess caller"
+    del "%TEMP%\dz_appcert.txt" 2>nul
+)
 
 echo.>> "%REPORT%"
 echo --- Logon / Unlock Persistence Vectors --->> "%REPORT%"
