@@ -132,3 +132,22 @@ Each step ships green; the detection harness is the safety net.
 - **noAdmin parity:** every change lands in both bats, but the harness only runs
   the admin bat (noAdmin is covered by lint/parse + the sync CI guard). Option
   B's larger surface strengthens the case for a noAdmin harness run.
+
+## 8. Status — migration complete (2026-07-25)
+
+Implemented across PRs #148–#160 and the exit-code flip PR:
+
+- `tools/ledger.ps1` + `:dz_finding` landed; every raise site (sections, INIT,
+  dashboard retrofits) writes through them.
+- Section verdicts derive from the ledger (`:dz_section_clean`, findstr-based,
+  in both bats). Verdict timing resolved by evaluating in-section, so the
+  streaming `[SECTION n RESULT]` lines kept their position.
+- `FINDINGS COUNTED` = ledger line count (distinct findings — the Option B
+  natural semantics from §7).
+- Exit code = `maxSeverity(ledger)`, made explicit at end-of-run with the
+  `:dz_finding` per-call raise kept as the incremental/abort-path form.
+- The `[CRITICAL]` report scrape and the dashboard `SUM_RESULT` token no
+  longer touch the exit code or the count; both survive only as
+  ledger-divergence alarms ([INFO] report lines the harness fails on).
+- The dashboard's `ck` display is intentionally retained as a presentation
+  layer; its tally acts as the Div-2 floor/alarm, not a source of truth.
