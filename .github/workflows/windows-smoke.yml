@@ -215,6 +215,60 @@ jobs:
           Write-Host "ledger.ps1 OK"
           exit 0
 
+      - name: persistence_extra.ps1 (netsh / print / BITS / profile / time-provider)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $md = Join-Path $env:TEMP ("dz_pe_ci_{0}" -f $PID)
+          New-Item -ItemType Directory -Path $md -Force | Out-Null
+          $markers = @('dz_netsh.txt','dz_printproc.txt','dz_portmon.txt','dz_bits.txt','dz_psprofile.txt','dz_timeprov.txt')
+          # Clean runner: a stock Windows image registers netsh helpers, print
+          # processors, port monitors and time providers, and they are all
+          # Microsoft-signed -- so any CRITICAL here is a false positive in the
+          # signature gate, which is exactly the risk this check exists to catch.
+          # NB: -match on an ARRAY is a FILTER, not a boolean -- join first.
+          $out = (.\tools\persistence_extra.ps1 -MarkerDir $md) -join "`n"
+          Write-Host $out
+          if ($out -match '\[CRITICAL\]') { throw "persistence_extra flagged CRITICAL on a clean runner (false positive)" }
+          foreach ($m in $markers) {
+            if (Test-Path (Join-Path $md $m)) { throw ("{0} written on a clean runner: {1}" -f $m, (Get-Content (Join-Path $md $m))) }
+          }
+          # The detection harness plants the time-provider and PowerShell-profile
+          # vectors end-to-end (proving the bat marker wiring). The three print/
+          # netsh vectors are planted HERE instead: a bogus netsh helper makes
+          # netsh.exe emit load errors, which would contaminate the firewall and
+          # portproxy cases in the full-audit harness. Isolated per-vector plants
+          # keep that blast radius inside this step.
+          $netsh = 'HKLM:\SOFTWARE\Microsoft\Netsh'
+          $mon   = 'HKLM:\SYSTEM\CurrentControlSet\Control\Print\Monitors\dz_ci_probe'
+          $pproc = 'HKLM:\SYSTEM\CurrentControlSet\Control\Print\Environments\Windows x64\Print Processors\dz_ci_probe'
+          try {
+            Set-ItemProperty -Path $netsh -Name 'dz_ci_probe' -Value 'dz_ci_probe_missing.dll' -Force
+            New-Item -Path $mon -Force | Out-Null
+            Set-ItemProperty -Path $mon -Name 'Driver' -Value 'dz_ci_probe_missing.dll' -Force
+            New-Item -Path $pproc -Force | Out-Null
+            Set-ItemProperty -Path $pproc -Name 'Driver' -Value 'dz_ci_probe_missing.dll' -Force
+            $out2 = (.\tools\persistence_extra.ps1 -MarkerDir $md) -join "`n"
+            Write-Host $out2
+            foreach ($pair in @(
+              @{ Rx = "Netsh helper 'dz_ci_probe'";    Marker = 'dz_netsh.txt' },
+              @{ Rx = "Port monitor 'dz_ci_probe'";    Marker = 'dz_portmon.txt' },
+              @{ Rx = "Print processor 'dz_ci_probe'"; Marker = 'dz_printproc.txt' }
+            )) {
+              if ($out2 -notmatch [regex]::Escape($pair.Rx)) { throw ("planted vector not reported: {0}" -f $pair.Rx) }
+              $mp = Join-Path $md $pair.Marker
+              if (-not (Test-Path $mp)) { throw ("planted vector wrote no marker: {0}" -f $pair.Marker) }
+              if ((Get-Content $mp).Trim() -ne 'CRITICAL') { throw ("{0}: expected CRITICAL, got {1}" -f $pair.Marker, (Get-Content $mp)) }
+            }
+          } finally {
+            Remove-ItemProperty -Path $netsh -Name 'dz_ci_probe' -EA SilentlyContinue
+            Remove-Item -LiteralPath $mon   -Recurse -Force -EA SilentlyContinue
+            Remove-Item -LiteralPath $pproc -Recurse -Force -EA SilentlyContinue
+            Remove-Item $md -Recurse -Force -EA SilentlyContinue
+          }
+          Write-Host "persistence_extra.ps1 OK"
+          exit 0
+
       - name: service_signature_check.ps1 (real services + Authenticode; svchost must resolve)
         shell: powershell
         run: |
