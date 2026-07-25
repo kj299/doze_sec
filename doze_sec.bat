@@ -3888,7 +3888,7 @@ echo  Computing live security summary...
 echo ====================================================================%C_RESET%
 echo.
 
-:: ---- Detection-time CRITICAL escalation ----------------------------------
+:: ---- Report [CRITICAL]-line census (ledger-divergence alarm input) -------
 :: Sections print [CRITICAL] findings into the report but could historically
 :: only raise the exit code to 2; code 8 depended entirely on the end-of-run
 :: summary block re-deriving them. Count section-level [CRITICAL] lines from
@@ -3898,13 +3898,9 @@ echo.
 :: escalate separately via the CRIT token) are not double-counted.
 set "CRIT_COUNT=0"
 for /f "usebackq" %%c in (`"%PWSH%" -NoProfile -Command "@(Select-String -LiteralPath '%REPORT%' -Pattern '\A\[CRITICAL\]').Count" 2^>nul`) do set "CRIT_COUNT=%%c"
-if !CRIT_COUNT! GTR 0 (
-    set /a FINDINGS+=1
-    if !EXIT_CODE! LSS 8 set "EXIT_CODE=8"
-    rem Emit as INFO not CRITICAL so top_findings.ps1 does not re-list this
-    rem bookkeeping note as a phantom finding in the TOP FINDINGS block.
-    echo  [INFO] Exit code raised to 8: !CRIT_COUNT! section-level CRITICAL finding^(s^) in this report.>> "%REPORT%"
-)
+rem Flip step 2: the count above no longer raises the exit code or the
+rem findings tally -- it feeds the ledger-divergence alarm in the exit
+rem block below. The ledger (via :dz_finding) is the only findings source.
 
 set "SUMFILE=%TEMP%\AuditSummary_%TIMESTAMP%.txt"
 set "SUMCODE=%TEMP%\AuditCode_%TIMESTAMP%.txt"
@@ -4133,32 +4129,44 @@ if exist "%SUMCODE%" (
     del "%SUMCODE%" >nul 2>&1
 )
 set "SUM_RESULT=%SUM_RESULT: =%"
-if /i "%SUM_RESULT%"=="CRIT" if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
-if /i "%SUM_RESULT%"=="WARN" if %EXIT_CODE% LSS 2 set "EXIT_CODE=2"
-:: CRIT token: separate critical findings from plain warnings so calling
-:: automation can triage on the exit code alone. 8 = audit complete,
-:: CRITICAL findings present (the dashboard's ACTION REQUIRED verdict).
-:: Outranks 2 and 4 -- the reboot-pending message stays in the report --
-:: but never the fatal/abort codes 1/3/5/7.
-if /i not "%SUM_RESULT%"=="CRIT" goto :skip_crit8
-if %EXIT_CODE% EQU 2 set "EXIT_CODE=8"
-if %EXIT_CODE% EQU 4 set "EXIT_CODE=8"
-:skip_crit8
-rem Option B flip step 1 of 2: FINDINGS COUNTED now derives from the ledger
+rem Flip step 2: SUM_RESULT no longer touches the exit code -- it feeds the
+rem ledger-divergence alarm below. Dashboard display is unchanged.
+rem Option B consumer flip: FINDINGS COUNTED derives from the ledger
 rem (tools\ledger.ps1 Summarize) -- the one file every raise writes through
 rem :dz_finding. The cmd FINDINGS counter survives only as a fallback for the
 rem no-ledger edge; the dashboard floor below survives as a divergence alarm.
-rem Exit-code derivation is deliberately UNCHANGED in this step -- it flips to
-rem ledger MAXSEV in step 2 once this step is proven green.
 set "LEDGER_TOTAL="
 set "LEDGER_MAXSEV=NONE"
-if defined LEDGER if exist "%LEDGER%" (
-    for /f "usebackq tokens=1* delims==" %%a in (`"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\ledger.ps1" -Mode Summarize -Path "%LEDGER%" 2^>nul`) do (
+rem Summarize via a temp file + file-mode for /f, NOT an in-block backtick
+rem command: a backquoted for /f inside a parenthesized block mis-parses
+rem (every proven backtick for /f in this script is top-level) and silently
+rem yields nothing -- caught by the flip-step-2 harness assertions.
+set "LEDGERSUM=%TEMP%\AuditLedgerSum_%TIMESTAMP%.txt"
+del "%LEDGERSUM%" 2>nul
+if defined LEDGER if exist "%LEDGER%" "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\ledger.ps1" -Mode Summarize -Path "%LEDGER%" >"%LEDGERSUM%" 2>nul
+if exist "%LEDGERSUM%" (
+    for /f "usebackq tokens=1* delims==" %%a in ("%LEDGERSUM%") do (
         if "%%a"=="TOTAL" set "LEDGER_TOTAL=%%b"
         if "%%a"=="MAXSEV" set "LEDGER_MAXSEV=%%b"
     )
+    del "%LEDGERSUM%" 2>nul
 )
 if defined LEDGER_TOTAL set "FINDINGS=!LEDGER_TOTAL!"
+rem Flip step 2 of 2: the exit code derives from ledger MAXSEV. The per-call
+rem raise in :dz_finding tracks the same value incrementally (and covers
+rem abort paths that never reach this block); these two lines make the
+rem derivation explicit and authoritative. Fatal/abort codes 1/3/5/7 outrank
+rem findings (LSS guards); CRITICAL outranks reboot-pending 4 as before.
+if "!LEDGER_MAXSEV!"=="CRITICAL" if !EXIT_CODE! LSS 8 set "EXIT_CODE=8"
+if "!LEDGER_MAXSEV!"=="WARNING" if !EXIT_CODE! LSS 2 set "EXIT_CODE=2"
+rem Retired exit-code channels, kept as divergence alarms: if the report
+rem census or the dashboard token says CRITICAL while the ledger does not,
+rem some check prints [CRITICAL] or trips the dashboard without a matching
+rem :dz_finding raise. The harness fails on these lines.
+if not "!LEDGER_MAXSEV!"=="CRITICAL" (
+    if !CRIT_COUNT! GTR 0 (echo  [INFO] Report has !CRIT_COUNT! [CRITICAL] line^(s^) but ledger max severity is !LEDGER_MAXSEV! -- a raise is missing; exit code unaffected.)>> "%REPORT%"
+    if /i "!SUM_RESULT!"=="CRIT" (echo  [INFO] Dashboard verdict is CRIT but ledger max severity is !LEDGER_MAXSEV! -- a raise is missing; exit code unaffected.)>> "%REPORT%"
+)
 rem Reconcile FINDINGS with the dashboard's own tally. Dashboard ck checks
 rem (firewall, SMBv1, RDP, ...) can raise the exit code without a section
 rem incrementing FINDINGS, which printed "FINDINGS COUNTED: 0" next to a
@@ -4343,8 +4351,9 @@ goto :eof
 :: :dz_finding -- append one finding to the ledger and apply the compat
 :: FINDINGS/EXIT_CODE raise (finding #4 Option B). Converting a legacy raise
 :: site to a single `call :dz_finding` is behavior-preserving. The section
-:: verdicts (:dz_section_clean) and FINDINGS COUNTED (Summarize rollup) now
-:: derive from %LEDGER%; the exit-code flip to MAXSEV is the remaining step.
+:: verdicts (:dz_section_clean), FINDINGS COUNTED (Summarize rollup), and
+:: the exit code (MAXSEV) all derive from %LEDGER%. The raise below is the
+:: incremental form of the same derivation and covers abort paths.
 :: Args: %1=severity CRITICAL^|WARNING  %2=section  %3=code (may be "")  %4="msg"
 :: Placed after the final exit so it is only ever entered via `call`.
 :: ====================================================================

@@ -490,6 +490,36 @@ try {
         } else {
             Write-Host "  [ OK       ] dashboard-vs-ledger divergence floor did not fire (retrofit coverage holds)"
         }
+
+        # REQUIRED (Option B flip step 2 of 2): the exit code derives from
+        # ledger MAXSEV. Recompute MAXSEV from the raw ledger lines, cross-check
+        # the footer's LEDGER MAXSEV, and -- since the planted WDigest CRITICAL
+        # guarantees MAXSEV=CRITICAL this run -- require EXIT CODE: 8.
+        $lgMax = 'NONE'
+        if (@($lg | Where-Object { $_ -like 'CRITICAL|*' }).Count) { $lgMax = 'CRITICAL' }
+        elseif (@($lg).Count) { $lgMax = 'WARNING' }
+        $ftMax = [regex]::Match($text, '(?m)^\s*LEDGER MAXSEV:\s*(\S+)')
+        if ($ftMax.Success -and $ftMax.Groups[1].Value -eq $lgMax) {
+            Write-Host ("  [ OK       ] footer LEDGER MAXSEV ({0}) matches the ledger contents (flip step 2)" -f $lgMax)
+        } else {
+            Write-Host ("  [ REGRESS  ] footer LEDGER MAXSEV '{0}' disagrees with ledger contents '{1}'" -f $ftMax.Groups[1].Value, $lgMax); $requiredFail++
+        }
+        $ecM = [regex]::Match($text, '(?m)^\s*EXIT CODE:\s*(\d+)')
+        if ($lgMax -eq 'CRITICAL') {
+            if ($ecM.Success -and [int]$ecM.Groups[1].Value -eq 8) {
+                Write-Host "  [ OK       ] exit code is 8 with ledger MAXSEV=CRITICAL (flip step 2)"
+            } else {
+                Write-Host ("  [ REGRESS  ] ledger MAXSEV is CRITICAL but exit code is '{0}' (expected 8) -- MAXSEV derivation broke" -f $ecM.Groups[1].Value); $requiredFail++
+            }
+        }
+        # The retired channels (report [CRITICAL] census, dashboard CRIT token)
+        # survive only as divergence alarms; either alarm firing means a check
+        # signals CRITICAL without a matching :dz_finding raise.
+        if ($text -match 'a raise is missing; exit code unaffected') {
+            Write-Host "  [ REGRESS  ] retired-channel divergence alarm fired -- a CRITICAL signal has no ledger raise"; $requiredFail++
+        } else {
+            Write-Host "  [ OK       ] retired exit-code channels agree with the ledger (no divergence alarm)"
+        }
     }
 
     # Option B retrofit (PR 9): Section 16 now evaluates log-tampering /
