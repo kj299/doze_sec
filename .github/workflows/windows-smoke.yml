@@ -269,6 +269,77 @@ jobs:
           Write-Host "persistence_extra.ps1 OK"
           exit 0
 
+      - name: audit_policy_check.ps1 (auditing visibility; locale-independent cmdline signal)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $md = Join-Path $env:TEMP ("dz_ap_ci_{0}" -f $PID)
+          New-Item -ItemType Directory -Path $md -Force | Out-Null
+          try {
+            $out = (.\tools\audit_policy_check.ps1 -MarkerDir $md) -join "`n"
+            Write-Host $out
+            # The runner's real cmdline-logging key state must match what the
+            # tool prints -- proves the definitive signal is read correctly.
+            $k = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Audit'
+            $on = ((Get-ItemProperty -Path $k -Name 'ProcessCreationIncludeCmdLine_Enabled' -EA SilentlyContinue).ProcessCreationIncludeCmdLine_Enabled -eq 1)
+            if ($on -and $out -notmatch 'command-line logging is ENABLED') { throw 'cmdline key ON but tool did not report ENABLED' }
+            if (-not $on -and $out -notmatch 'command-line logging is DISABLED') { throw 'cmdline key OFF but tool did not report DISABLED' }
+          } finally { Remove-Item $md -Recurse -Force -EA SilentlyContinue }
+          Write-Host "audit_policy_check.ps1 OK"
+          exit 0
+
+      - name: driver_audit.ps1 (BYOVD by hash + unsigned catch-all; renamed cannot evade)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $md = Join-Path $env:TEMP ("dz_drv_ci_{0}" -f $PID)
+          New-Item -ItemType Directory -Path $md -Force | Out-Null
+          # Clean runner: every loaded/inbox driver is Microsoft- or vendor-signed,
+          # so no marker should be written. A CRITICAL here is a signature-gate bug.
+          $out = (.\tools\driver_audit.ps1 -MarkerDir $md) -join "`n"
+          Write-Host ($out -split "`n" | Select-Object -First 40)
+          if (Test-Path (Join-Path $md 'dz_driver.txt')) {
+            throw ("driver marker written on a clean runner: {0}" -f (Get-Content (Join-Path $md 'dz_driver.txt')))
+          }
+          # Plant an unsigned "driver" in a drop location: the signature catch-all
+          # (not a name/hash match) must flag it -- this is what defeats renaming.
+          $plant = 'C:\Users\Public\dz_ci_probe_driver.sys'
+          Set-Content -LiteralPath $plant -Value 'MZ not a real driver' -Encoding ASCII
+          try {
+            $out2 = (.\tools\driver_audit.ps1 -MarkerDir $md) -join "`n"
+            Write-Host ($out2 -split "`n" | Where-Object { $_ -match 'dz_ci_probe_driver' })
+            if ($out2 -notmatch 'dz_ci_probe_driver\.sys') { throw 'planted unsigned driver not reported' }
+            $m = Join-Path $md 'dz_driver.txt'
+            if (-not (Test-Path $m)) { throw 'planted unsigned driver wrote no marker' }
+          } finally {
+            Remove-Item $plant -Force -EA SilentlyContinue
+            Remove-Item $md -Recurse -Force -EA SilentlyContinue
+          }
+          Write-Host "driver_audit.ps1 OK"
+          exit 0
+
+      - name: report_safety.ps1 (Tier 0 preamble + coverage framing)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pre = (.\tools\report_safety.ps1 -Mode Preamble) -join "`n"
+          foreach ($needle in @('READ THIS FIRST','CLEAN" result does NOT prove','accessnow.org/help','stopstalkerware.org','PRESERVE EVIDENCE')) {
+            if ($pre -notmatch [regex]::Escape($needle)) { throw ("preamble missing: {0}" -f $needle) }
+          }
+          # Coverage mode over a synthetic report with a SKIPPED line and an
+          # auditing-off line must surface both in its confidence summary.
+          $rp = Join-Path $env:TEMP ("dz_rs_ci_{0}.txt" -f $PID)
+          Set-Content -LiteralPath $rp -Value @('[CRITICAL] x','[SKIPPED] y','Process Creation (4688) auditing is OFF [(not set)]') -Encoding ASCII
+          try {
+            $cov = (.\tools\report_safety.ps1 -Mode Coverage -Report $rp) -join "`n"
+            Write-Host $cov
+            if ($cov -notmatch 'COVERAGE & CONFIDENCE') { throw 'coverage header missing' }
+            if ($cov -notmatch 'Checks SKIPPED    : 1') { throw 'skipped count not surfaced' }
+            if ($cov -notmatch 'Audit visibility  : REDUCED') { throw 'reduced audit visibility not surfaced' }
+          } finally { Remove-Item $rp -Force -EA SilentlyContinue }
+          Write-Host "report_safety.ps1 OK"
+          exit 0
+
       - name: service_signature_check.ps1 (real services + Authenticode; svchost must resolve)
         shell: powershell
         run: |

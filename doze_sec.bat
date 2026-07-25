@@ -924,6 +924,13 @@ echo   PS Engine : %PWSH%>> "%REPORT%"
 (echo   Switches  : Dev=%DEV_MODE%  Resume=%RESUME_MODE%  SkipSRP=%SKIP_SRP%  IsAdmin=1)>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 echo.>> "%REPORT%"
+rem Tier 0 truthful-reporting preamble: what a clean result does and does
+rem not mean, at-risk-user safety warnings, and where to get expert help.
+rem In a tools\*.ps1 (not echoed into PSRUN) because it is long static text.
+if exist "%SCRIPT_DIR%tools\report_safety.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\report_safety.ps1" -Mode Preamble>> "%REPORT%" 2>&1
+    echo.>> "%REPORT%"
+)
 echo  TABLE OF CONTENTS>> "%REPORT%"
 echo  ------------------------------------------------------------------>> "%REPORT%"
 echo   1. System Identity and Patch Level>> "%REPORT%"
@@ -3058,6 +3065,24 @@ echo $e=Get-WinEvent -FilterHashtable @{LogName='System';Id=104} -MaxEvents 1 -E
 echo $e=@(Get-WinEvent -FilterHashtable @{LogName='Security';Id=4720} -MaxEvents 5 -EA SilentlyContinue);if($e.Count -gt 0){'[WARNING] New local account(s) created: '+$e.Count+' event(s) (T1136.001) -- review the names listed above.';Set-Content -LiteralPath "$env:TEMP\dz_ev4720_hit.txt" -Value hit}else{'[OK] No new local account creation events (4720).'} >> "%PSRUN%"
 echo $e=@(Get-WinEvent -FilterHashtable @{LogName='Security';Id=4732} -MaxEvents 5 -EA SilentlyContinue);if($e.Count -gt 0){'[WARNING] Account(s) added to a privileged group: '+$e.Count+' event(s) (T1098) -- review the names listed above.';Set-Content -LiteralPath "$env:TEMP\dz_ev4732_hit.txt" -Value hit}else{'[OK] No unexpected additions to Administrators (4732).'} >> "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+echo.>> "%REPORT%"
+echo --- Audit-Policy Visibility ^(can these checks even see anything?^) --->> "%REPORT%"
+echo  Command: powershell -File tools\audit_policy_check.ps1>> "%REPORT%"
+echo  Verifies process-creation / logon / account auditing and command-line>> "%REPORT%"
+echo  logging are ON. When they are OFF, a CLEAN event result above may only>> "%REPORT%"
+echo  mean the events were never recorded -- not that nothing happened.>> "%REPORT%"
+del "%TEMP%\dz_auditpol.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\audit_policy_check.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\audit_policy_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo  [INFO] tools\audit_policy_check.ps1 not found -- audit-policy visibility not verified.>> "%REPORT%"
+)
+if exist "%TEMP%\dz_auditpol.txt" (
+    set "_APSEV="
+    set /p _APSEV=<"%TEMP%\dz_auditpol.txt"
+    call :dz_finding !_APSEV! 16 T1562.002 "Security auditing gaps - event-based checks may be blind"
+    del "%TEMP%\dz_auditpol.txt" 2>nul
+)
 if exist "%TEMP%\dz_ev1102_hit.txt" (
     call :dz_finding CRITICAL 16 T1070.001 "Security event log was cleared - evidence destruction"
     del "%TEMP%\dz_ev1102_hit.txt" 2>nul
@@ -3808,17 +3833,23 @@ echo if ($hits.Count -gt 0) { '[CRITICAL][T1486] Files with ransomware-associate
 
 :: --- [CTI] EDR/AV Tampering via Driver Load (T1562.001) ---
 echo.>> "%REPORT%"
-echo --- [CTI][T1562.001] Kernel Driver Tampering (BYOVD - Bring Your Own Vulnerable Driver) --->> "%REPORT%"
-echo  Command: powershell -Command "Test-Path $f^) { $hits += $f }">> "%REPORT%"
-echo $byovd = @('RTCore64.sys','DBUtil_2_3.sys','gdrv.sys','cpuz141.sys','AsIO64.sys','HW64.sys','WinIO64.sys','IQVW64E.sys','kprocesshacker.sys','ProcExp152.sys','zemana.sys','viragt64.sys') > "%PSRUN%"
-echo $drvDir = "$env:SystemRoot\System32\drivers" >> "%PSRUN%"
-echo $hits = @() >> "%PSRUN%"
-echo foreach ($drv in $byovd) { >> "%PSRUN%"
-echo   $f = Join-Path $drvDir $drv >> "%PSRUN%"
-echo   if (Test-Path $f) { $hits += $f } >> "%PSRUN%"
-echo } >> "%PSRUN%"
-echo if ($hits.Count -gt 0) { '[CRITICAL][T1562.001] Known BYOVD (vulnerable driver) files present:'; $hits ^| ForEach-Object { '  '+$_ }; '[WARNING] Attackers use these to disable EDR/AV from kernel. Remove immediately.' } else { '[OK] No known BYOVD exploit drivers found in drivers directory.' } >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+echo --- [CTI][T1562.001] Kernel Driver Audit (BYOVD by hash + unsigned by signature) --->> "%REPORT%"
+echo  Command: powershell -File tools\driver_audit.ps1>> "%REPORT%"
+echo  Enumerates loaded + on-disk drivers and judges each by SHA256 ^(known-bad^),>> "%REPORT%"
+echo  filename, and Authenticode -- so a renamed or relocated vulnerable driver>> "%REPORT%"
+echo  cannot evade by name alone ^(the old 12-name Test-Path scan could^).>> "%REPORT%"
+del "%TEMP%\dz_driver.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\driver_audit.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\driver_audit.ps1">> "%REPORT%" 2>&1
+) else (
+    echo  [INFO] tools\driver_audit.ps1 not found -- driver audit skipped.>> "%REPORT%"
+)
+if exist "%TEMP%\dz_driver.txt" (
+    set "_DRVSEV="
+    set /p _DRVSEV=<"%TEMP%\dz_driver.txt"
+    call :dz_finding !_DRVSEV! 18 T1562.001 "Known-bad or unsigned kernel driver present (BYOVD / EDR-kill risk)"
+    del "%TEMP%\dz_driver.txt" 2>nul
+)
 
 :: --- [CTI] Suspicious Service Creation - Event 7045 Anomalies ---
 echo.>> "%REPORT%"
@@ -4265,7 +4296,7 @@ if exist "%SUMFILE%" del "%SUMFILE%" >nul 2>&1
 
 echo.
 echo ====================================================================
-if "%EXIT_CODE%"=="0" echo  %C_BOLD%%C_GREEN%RESULT: All checks passed.%C_RESET%
+if "%EXIT_CODE%"=="0" echo  %C_BOLD%%C_GREEN%RESULT: No issues found in the checks that ran.%C_RESET% See COVERAGE ^& CONFIDENCE and READ THIS FIRST in the report -- a clean result is not a safety guarantee.
 if "%EXIT_CODE%"=="2" echo  %C_BOLD%%C_YELLOW%RESULT: Issues found. See SUMMARY at end of report.%C_RESET%
 if "%EXIT_CODE%"=="8" echo  %C_BOLD%%C_RED%RESULT: CRITICAL findings. Treat as incident response. See SUMMARY.%C_RESET%
 echo  Report : %REPORT%
@@ -4278,13 +4309,19 @@ echo.
 :: ====================================================================
 :end_script
 
+rem Tier 0 COVERAGE & CONFIDENCE block -- reads the finished report and
+rem states how much was actually covered, so a clean pass is never read as
+rem a safety guarantee. Top-level call, no nesting.
+if exist "%SCRIPT_DIR%tools\report_safety.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\report_safety.ps1" -Mode Coverage -Report "%REPORT%">> "%REPORT%" 2>&1
+)
 echo ====================================================================>> "%REPORT%"
 (echo  EXIT CODE: %EXIT_CODE%)>> "%REPORT%"
 (echo  FINDINGS COUNTED: %FINDINGS%)>> "%REPORT%"
 if not defined LEDGER_MAXSEV set "LEDGER_MAXSEV=NONE"
 (echo  LEDGER MAXSEV: %LEDGER_MAXSEV%)>> "%REPORT%"
 echo  0=Success  1=Error  2=Warning  3=UnsupportedOS  4=RebootPending  5=RanFromTEMP  6=PartialNoAdmin  7=VTIntegrityFail  8=CriticalFindings>> "%REPORT%"
-if "%EXIT_CODE%"=="0" echo  STATUS: Clean run - no fatal issues encountered.>> "%REPORT%"
+if "%EXIT_CODE%"=="0" echo  STATUS: No issues in the checks that ran. NOT a proof of safety -- see COVERAGE ^& CONFIDENCE below and READ THIS FIRST at the top.>> "%REPORT%"
 if "%EXIT_CODE%"=="1" echo  STATUS: Fatal error. Check console output above for details.>> "%REPORT%"
 if "%EXIT_CODE%"=="2" echo  STATUS: Audit complete with warnings. Review [WARNING] items in report.>> "%REPORT%"
 if "%EXIT_CODE%"=="3" echo  STATUS: Unsupported OS. Use -dev switch to override.>> "%REPORT%"
