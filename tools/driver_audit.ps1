@@ -121,15 +121,19 @@ foreach ($dir in $shallowDirs) {
     if (-not (Test-Path -LiteralPath $dir)) { continue }
     try {
         foreach ($f in (Get-ChildItem -LiteralPath $dir -Filter '*.sys' -File -EA SilentlyContinue)) {
-            [void]$paths.Add($f.FullName)
+            if ($f.Extension -ieq '.sys') { [void]$paths.Add($f.FullName) }
         }
     } catch {}
 }
 foreach ($dir in $dropDirs) {
     if (-not (Test-Path -LiteralPath $dir)) { continue }
     try {
-        foreach ($f in (Get-ChildItem -LiteralPath $dir -Recurse -Include '*.sys' -File -EA SilentlyContinue)) {
-            [void]$paths.Add($f.FullName)
+        # -Filter, NOT -Include: with -LiteralPath -Recurse, -Include is silently
+        # ignored and EVERY file is returned (then Authenticode-checked as a bogus
+        # "driver"). -Filter is applied by the provider and actually restricts to
+        # .sys. Belt-and-braces: re-check the extension in PS too.
+        foreach ($f in (Get-ChildItem -LiteralPath $dir -Recurse -Filter '*.sys' -File -EA SilentlyContinue)) {
+            if ($f.Extension -ieq '.sys') { [void]$paths.Add($f.FullName) }
         }
     } catch {}
 }
