@@ -2219,6 +2219,29 @@ echo.>> "%REPORT%"
 echo --- Full LSA Key --->> "%REPORT%"
 echo  Command: reg query "HKLM\SYSTEM\CurrentControlSet\Control\Lsa">> "%REPORT%"
 reg query "HKLM\SYSTEM\CurrentControlSet\Control\Lsa">> "%REPORT%" 2>&1
+
+echo.>> "%REPORT%"
+echo --- Credential Protection State (evaluated) --->> "%REPORT%"
+del "%TEMP%\dz_wdigest_hit.txt" 2>nul
+del "%TEMP%\dz_ppl_hit.txt" 2>nul
+del "%TEMP%\dz_ntlm_hit.txt" 2>nul
+echo $lsa='HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' > "%PSRUN%"
+echo $wd=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' -Name UseLogonCredential -EA SilentlyContinue).UseLogonCredential;if($wd -eq 1){'[CRITICAL] WDigest ENABLED -- plaintext passwords cached in RAM (T1003.001)';Set-Content -LiteralPath "$env:TEMP\dz_wdigest_hit.txt" -Value hit}else{'[OK] WDigest not caching plaintext credentials.'} >> "%PSRUN%"
+echo $ppl=(Get-ItemProperty $lsa -Name RunAsPPL -EA SilentlyContinue).RunAsPPL;if($ppl -eq 1 -or $ppl -eq 2){'[OK] LSASS runs as a protected process (RunAsPPL='+$ppl+').'}else{'[WARNING] LSASS PPL not enabled -- LSASS memory can be dumped (T1003.001)';Set-Content -LiteralPath "$env:TEMP\dz_ppl_hit.txt" -Value hit} >> "%PSRUN%"
+echo $nl=(Get-ItemProperty $lsa -Name LmCompatibilityLevel -EA SilentlyContinue).LmCompatibilityLevel;if($nl -eq $null){'[OK] LmCompatibilityLevel not set (modern Windows defaults to NTLMv2-only behaviour).'}elseif($nl -ge 3){'[OK] NTLM level '+$nl+' (NTLMv2).'}else{'[WARNING] NTLMv1/LM permitted (LmCompatibilityLevel='+$nl+') -- downgrade/relay exposure';Set-Content -LiteralPath "$env:TEMP\dz_ntlm_hit.txt" -Value hit} >> "%PSRUN%"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+if exist "%TEMP%\dz_wdigest_hit.txt" (
+    call :dz_finding CRITICAL 12 T1003.001 "WDigest enabled - plaintext credentials cached in RAM"
+    del "%TEMP%\dz_wdigest_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_ppl_hit.txt" (
+    call :dz_finding WARNING 12 T1003.001 "LSASS PPL not enabled - LSASS memory dumpable"
+    del "%TEMP%\dz_ppl_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_ntlm_hit.txt" (
+    call :dz_finding WARNING 12 T1550.002 "NTLMv1/LM permitted - downgrade and relay exposure"
+    del "%TEMP%\dz_ntlm_hit.txt" 2>nul
+)
 echo.>> "%REPORT%"
 
 :: ====================================================================
