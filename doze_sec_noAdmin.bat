@@ -1635,6 +1635,26 @@ reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows" /v AppInit
 reg query "HKLM\SOFTWARE\Wow6432Node\Microsoft\Windows NT\CurrentVersion\Windows" /v AppInit_DLLs>> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
+echo --- Winlogon / AppInit Integrity (evaluated) --->> "%REPORT%"
+del "%TEMP%\dz_winlogon_hit.txt" 2>nul
+del "%TEMP%\dz_appinit_hit.txt" 2>nul
+echo $wl='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' > "%PSRUN%"
+echo $ui=(Get-ItemProperty $wl -Name Userinit -EA SilentlyContinue).Userinit;$sh=(Get-ItemProperty $wl -Name Shell -EA SilentlyContinue).Shell >> "%PSRUN%"
+echo if($ui -and ($ui.Trim().TrimEnd(',') -ine (Join-Path $env:SystemRoot 'system32\userinit.exe'))){'[CRITICAL] Winlogon Userinit MODIFIED (T1547.004): '+$ui;Set-Content -LiteralPath "$env:TEMP\dz_winlogon_hit.txt" -Value hit}elseif($ui){'[OK] Winlogon Userinit is the default userinit.exe.'}else{'[SKIPPED] Winlogon Userinit not readable.'} >> "%PSRUN%"
+echo if($sh -and ($sh.Trim() -ine 'explorer.exe')){'[CRITICAL] Winlogon Shell MODIFIED (T1547.004): '+$sh;Set-Content -LiteralPath "$env:TEMP\dz_winlogon_hit.txt" -Value hit}elseif($sh){'[OK] Winlogon Shell is the default explorer.exe.'}else{'[SKIPPED] Winlogon Shell not readable.'} >> "%PSRUN%"
+echo $ai=@();foreach($k in 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows','HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows NT\CurrentVersion\Windows'){$v=(Get-ItemProperty $k -Name AppInit_DLLs -EA SilentlyContinue).AppInit_DLLs;if($v -and $v.Trim()){$ai+=$v.Trim()}} >> "%PSRUN%"
+echo if($ai.Count -gt 0){'[CRITICAL] AppInit_DLLs is set (T1546.010) -- DLL loaded into every GUI process: '+($ai -join '; ');Set-Content -LiteralPath "$env:TEMP\dz_appinit_hit.txt" -Value hit}else{'[OK] AppInit_DLLs empty.'} >> "%PSRUN%"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+if exist "%TEMP%\dz_winlogon_hit.txt" (
+    call :dz_finding CRITICAL 5 T1547.004 "Winlogon Userinit or Shell modified"
+    del "%TEMP%\dz_winlogon_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_appinit_hit.txt" (
+    call :dz_finding CRITICAL 5 T1546.010 "AppInit_DLLs set - DLL injected into every GUI process"
+    del "%TEMP%\dz_appinit_hit.txt" 2>nul
+)
+
+echo.>> "%REPORT%"
 echo --- BootExecute (SAFE: autocheck autochk * only) --->> "%REPORT%"
 echo  Command: reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager" /v BootExecute>> "%REPORT%"
 reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager" /v BootExecute>> "%REPORT%" 2>&1
@@ -1691,6 +1711,14 @@ if exist "%SCRIPT_DIR%tools\scheduled_tasks_full.ps1" (
 ) else (
     echo  [INFO] Helper missing; falling back to truncated schtasks CSV scan.>> "%REPORT%"
     schtasks /query /fo CSV /v 2>nul | findstr /i /c:"\Temp" /c:"\AppData" /c:"\Downloads" /c:"\Users\Public" /c:"\ProgramData\update">> "%REPORT%" 2>&1
+)
+
+rem scheduled_tasks_full.ps1 writes this marker itself. It was only ever read
+rem by the end-of-run dashboard, so Section 6 own verdict stayed CLEAN even with
+rem a suspicious task present -- wire it here (dashboard still reads it, so it
+rem is NOT deleted).
+if exist "%TEMP%\dz_susptask_crit.txt" (
+    call :dz_finding CRITICAL 6 T1053.005 "Scheduled task in a suspicious location, unsigned or hard-coded path"
 )
 
 echo.>> "%REPORT%"
@@ -2128,14 +2156,19 @@ if exist "%TEMP%\dz_psv2_hit.txt" (
 echo.>> "%REPORT%"
 echo --- Logging Policy --->> "%REPORT%"
 echo  Command: powershell -Command "Get-ItemProperty "$base\ScriptBlockLogging" -Name EnableScriptBlockLogging -EA SilentlyContinue^).EnableScriptBlockLogging">> "%REPORT%"
+del "%TEMP%\dz_sbl_hit.txt" 2>nul
 echo $base='HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell' > "%PSRUN%"
 echo $sbl=(Get-ItemProperty "$base\ScriptBlockLogging" -Name EnableScriptBlockLogging -EA SilentlyContinue).EnableScriptBlockLogging >> "%PSRUN%"
 echo $ml=(Get-ItemProperty "$base\ModuleLogging" -Name EnableModuleLogging -EA SilentlyContinue).EnableModuleLogging >> "%PSRUN%"
 echo $tr=(Get-ItemProperty "$base\Transcription" -Name EnableTranscripting -EA SilentlyContinue).EnableTranscripting >> "%PSRUN%"
-echo if($sbl -eq 1){'ScriptBlockLogging  : [OK] ENABLED (GPO)'}else{'ScriptBlockLogging  : [WARN] Not enabled - PS commands not logged to Event 4104'} >> "%PSRUN%"
+echo if($sbl -eq 1){'ScriptBlockLogging  : [OK] ENABLED (GPO)'}else{'[WARNING] PS Script Block Logging NOT enabled -- PowerShell commands are not recorded to Event 4104 (T1562.002)';Set-Content -LiteralPath "$env:TEMP\dz_sbl_hit.txt" -Value hit} >> "%PSRUN%"
 echo if($ml  -eq 1){'ModuleLogging       : [OK] ENABLED (GPO)'}else{'ModuleLogging       : [OK] Not configured (optional)'} >> "%PSRUN%"
 echo if($tr  -eq 1){'Transcription       : [OK] ENABLED (GPO)'}else{'Transcription       : [OK] Not configured (optional)'} >> "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+if exist "%TEMP%\dz_sbl_hit.txt" (
+    call :dz_finding WARNING 11 T1562.002 "PowerShell Script Block Logging not enabled"
+    del "%TEMP%\dz_sbl_hit.txt" 2>nul
+)
 
 echo.>> "%REPORT%"
 echo --- Recent PS Command History --->> "%REPORT%"
