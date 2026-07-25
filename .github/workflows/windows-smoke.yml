@@ -156,8 +156,11 @@ jobs:
           $md = Join-Path $env:TEMP ("dz_se_ci_{0}" -f $PID)
           New-Item -ItemType Directory -Path $md -Force | Out-Null
           # Clean runner: must produce no CRITICAL and write no marker.
-          $out = .\tools\startup_eval.ps1 -MarkerDir $md
-          $out | Write-Host
+          # NB: -match/-notmatch on an ARRAY are FILTERS, not booleans. Join to
+          # a single string before testing, or `-notmatch` returns every
+          # non-matching line (truthy) and the check always fires.
+          $out = (.\tools\startup_eval.ps1 -MarkerDir $md) -join "`n"
+          Write-Host $out
           if ($out -match '\[CRITICAL\]') { throw "startup_eval flagged CRITICAL on a clean runner (false positive)" }
           if (Test-Path (Join-Path $md 'dz_startup_folder.txt')) {
             throw ("startup marker written on a clean runner: {0}" -f (Get-Content (Join-Path $md 'dz_startup_folder.txt')))
@@ -171,7 +174,7 @@ jobs:
           if (-not (Test-Path $ac)) { New-Item -Path $ac -Force | Out-Null }
           Set-ItemProperty -Path $ac -Name 'dz_ci_probe' -Value 'C:\Windows\Temp\dz_ci_probe.dll' -Force
           try {
-            $out2 = .\tools\startup_eval.ps1 -MarkerDir $md
+            $out2 = (.\tools\startup_eval.ps1 -MarkerDir $md) -join "`n"
             if ($out2 -notmatch 'dz_ci_probe') { throw "planted AppCert DLL not reported" }
             $m = Join-Path $md 'dz_appcert.txt'
             if (-not (Test-Path $m)) { throw "planted AppCert DLL wrote no marker" }
