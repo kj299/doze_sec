@@ -106,7 +106,24 @@ and 13 verify exactly that.
 - **Trust anchor**: the audit runs on the host it inspects. INIT 9/14's
   VirusTotal self-integrity pre-flight hash-checks the binaries the audit
   depends on, but a sufficiently privileged implant can lie to any
-  user-mode tool.
+  user-mode tool. Because of this, a clean result is never presented as a
+  safety guarantee: every report opens with a **READ THIS FIRST** block
+  stating plainly that on-host user-mode auditing cannot be authoritative
+  against a kernel-level implant, and closes with a **COVERAGE & CONFIDENCE**
+  block reporting how many checks were skipped and whether Windows auditing
+  was even enabled. At-risk users (journalists, activists, abuse survivors)
+  are warned that running or remediating may alert an operator with remote
+  access, told to preserve evidence before changing anything, and pointed to
+  free expert help (Access Now Digital Security Helpline, Coalition Against
+  Stalkerware, Citizen Lab). Protecting people means never letting the tool
+  imply more assurance than it can deliver.
+- **Detections depend on auditing being ON**: many Section 16 event checks
+  read Security events (4688/4624/4720/1102) that stock Windows does not
+  generate by default. Section 16 now runs `tools/audit_policy_check.ps1`,
+  which reports (by locale-independent subcategory GUID, plus the
+  command-line-inclusion registry key) when process-creation, logon, or
+  account auditing is off -- so a clean event-log result is understood as
+  "clean AND recorded", not "clean because nothing was watching".
 
 ## Getting full protection value
 

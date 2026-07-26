@@ -78,6 +78,8 @@ $script:lsaPrevNotify = $null
 $scrDeskKey  = 'HKCU:\Control Panel\Desktop'
 $script:scrPrev = $null
 $envKey      = 'HKCU:\Environment'
+# Tier 0 / advanced-actor round: fake unsigned kernel driver in a drop location
+$drvPlant    = "C:\Users\Public\{0}.sys" -f $MARK
 
 # Each case: Name, Tier, Plant/Cleanup script blocks, and Expect -- a regex that
 # must appear in the final report text for the detection to count as firing.
@@ -128,6 +130,13 @@ $cases = @(
         Plant  = { if (-not (Test-Path $appcertKey)) { New-Item -Path $appcertKey -Force | Out-Null }
                    Set-ItemProperty -Path $appcertKey -Name $MARK -Value 'C:\Windows\Temp\dz_selftest_evil.dll' -Force }
         Cleanup= { Remove-ItemProperty -Path $appcertKey -Name $MARK -EA SilentlyContinue }
+    },
+    @{
+        Name   = 'Unsigned kernel driver in a drop location -> flagged (BYOVD/T1562.001)'
+        Tier   = 'required'  # driver_audit.ps1; signature catch-all -- renaming cannot evade
+        Expect = ('(?im)\[(WARNING|CRITICAL)\] Driver [^\r\n]*{0}\.sys' -f $MARK)
+        Plant  = { Set-Content -LiteralPath $drvPlant -Value 'MZ not-a-real-driver' -Encoding ASCII }
+        Cleanup= { Remove-Item -LiteralPath $drvPlant -Force -EA SilentlyContinue }
     },
     @{
         Name   = 'Time provider DLL registered -> flagged (T1547.003)'
@@ -620,6 +629,27 @@ try {
     } else {
         Write-Host "  [ SKIP     ] WinRM service not present -- Section 10 WinRM check skipped"
     }
+
+    # Advanced-actor round: Section 16 audit-policy visibility must agree with
+    # the live command-line-logging registry key (locale-independent ground
+    # truth). We never toggle audit policy on the runner -- disabling auditing
+    # is exactly what this check warns about -- so this is read-only.
+    $cmdKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Audit'
+    $cmdOn  = ((Get-ItemProperty -Path $cmdKey -Name 'ProcessCreationIncludeCmdLine_Enabled' -EA SilentlyContinue).ProcessCreationIncludeCmdLine_Enabled -eq 1)
+    $rptCmdOn  = [bool]([regex]::IsMatch($text, 'command-line logging is ENABLED'))
+    $rptCmdOff = [bool]([regex]::IsMatch($text, 'command-line logging is DISABLED'))
+    if ($cmdOn -eq $rptCmdOn -and $cmdOn -ne $rptCmdOff) { Write-Host ("  [ OK       ] Section 16 audit-policy verdict matches live cmdline-logging key (enabled: {0})" -f $cmdOn) }
+    else { Write-Host ("  [ REGRESS  ] Section 16 audit-policy verdict disagrees with cmdline key (live enabled: {0}; report ENABLED={1} DISABLED={2})" -f $cmdOn, $rptCmdOn, $rptCmdOff); $requiredFail++ }
+
+    # Tier 0 truthful reporting: the preamble and the coverage block must be in
+    # every report, and the at-risk-user referral must survive. A clean run that
+    # silently drops these is a safety regression, so they are required.
+    if ([regex]::IsMatch($text, 'READ THIS FIRST')) { Write-Host "  [ OK       ] Tier 0 preamble present (READ THIS FIRST)" }
+    else { Write-Host "  [ REGRESS  ] Tier 0 preamble missing -- clean results could read as a safety guarantee"; $requiredFail++ }
+    if ([regex]::IsMatch($text, 'COVERAGE & CONFIDENCE')) { Write-Host "  [ OK       ] Tier 0 COVERAGE & CONFIDENCE block present" }
+    else { Write-Host "  [ REGRESS  ] Tier 0 COVERAGE & CONFIDENCE block missing"; $requiredFail++ }
+    if ([regex]::IsMatch($text, 'accessnow\.org/help')) { Write-Host "  [ OK       ] at-risk-user expert-help referral present" }
+    else { Write-Host "  [ REGRESS  ] expert-help referral missing from the report"; $requiredFail++ }
 
     # Exit-code architecture (code-review W1-W3): a planted CRITICAL (WDigest=1)
     # must drive the process exit code to 8. PROMOTED to required 2026-07-18
