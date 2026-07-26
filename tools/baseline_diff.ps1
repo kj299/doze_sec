@@ -301,7 +301,14 @@ foreach ($k in $new.Keys) {
 }
 foreach ($k in $old.Keys) { if (-not $new.ContainsKey($k)) { $removed += $k } }
 
-$addShown = 0
+# Evaluate every added item FIRST, then print raised findings before benign
+# ones. Printing in raw sorted order with a single shared cap is a real
+# detection-quality bug: category names sort ADMIN < CERT < DRV < PORT < RUN,
+# so on a stale or foreign baseline a few dozen benign new certificates and
+# drivers would exhaust the budget and silently push an actual malicious new
+# autorun off the end of the report. Severity decides who gets printed, never
+# alphabetical luck.
+$addEval = @()
 foreach ($k in ($added | Sort-Object)) {
     $cat = $k.Split('|')[0]
     $id  = $k.Substring($cat.Length + 1)
@@ -316,17 +323,23 @@ foreach ($k in ($added | Sort-Object)) {
     }
     $itemSev = 'WARNING'
     if ($msSigned) { $itemSev = 'INFO' }
-    $addShown++
-    if ($addShown -le $MaxReport) {
-        if ($itemSev -eq 'INFO') {
-            "[INFO] NEW $lbl since baseline (Microsoft-signed, likely a Windows update): $id"
-        } else {
-            "[WARNING] NEW $lbl since baseline: $id  =>  $detail"
-        }
-    }
     if ($itemSev -eq 'WARNING') { $sev = Get-MaxSev $sev 'WARNING' }
+    $addEval += New-Object PSObject -Property @{ Lbl = $lbl; Id = $id; Detail = $detail; Sev = $itemSev }
 }
-if ($addShown -gt $MaxReport) { "[INFO] ...and $($addShown - $MaxReport) more new item(s) not listed (report cap $MaxReport)." }
+$warnAdds = @($addEval | Where-Object { $_.Sev -eq 'WARNING' })
+$infoAdds = @($addEval | Where-Object { $_.Sev -ne 'WARNING' })
+$n = 0
+foreach ($a in $warnAdds) {
+    $n++
+    if ($n -le $MaxReport) { "[WARNING] NEW $($a.Lbl) since baseline: $($a.Id)  =>  $($a.Detail)" }
+}
+if ($warnAdds.Count -gt $MaxReport) { "[INFO] ...and $($warnAdds.Count - $MaxReport) more new item(s) needing review, not listed (report cap $MaxReport)." }
+$n = 0
+foreach ($a in $infoAdds) {
+    $n++
+    if ($n -le $MaxReport) { "[INFO] NEW $($a.Lbl) since baseline (Microsoft-signed, likely a Windows update): $($a.Id)" }
+}
+if ($infoAdds.Count -gt $MaxReport) { "[INFO] ...and $($infoAdds.Count - $MaxReport) more Microsoft-signed new item(s) not listed (report cap $MaxReport)." }
 
 $chShown = 0
 foreach ($k in ($changed | Sort-Object)) {

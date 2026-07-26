@@ -362,6 +362,21 @@ function Get-LatestReport {
 $planted = @()
 $runExit = $null
 try {
+    # Capture a REAL baseline BEFORE planting, so the audit's automatic diff
+    # sees exactly the planted artifacts as NEW. Calling the tool directly
+    # (rather than running the whole audit with -baseline) keeps the harness to
+    # one audit run while still exercising the real snapshot format.
+    Write-Host "== Seeding baseline (pre-plant state) =="
+    try {
+        if (-not (Test-Path -LiteralPath $OutDir)) { New-Item -ItemType Directory -Path $OutDir -Force | Out-Null }
+        $bl = Join-Path (Split-Path -Parent $PSCommandPath) '..\tools\baseline_diff.ps1'
+        & $bl -Mode Save -Path $baselineFile -MarkerDir $env:TEMP | Out-Null
+        $blRecs = @(Get-Content -LiteralPath $baselineFile -EA SilentlyContinue | Where-Object { $_ -notmatch '^#' }).Count
+        Write-Host ("  baseline captured: {0} record(s)" -f $blRecs)
+    } catch {
+        Write-Host ("  WARNING: baseline seed failed: {0}" -f $_.Exception.Message)
+    }
+
     # Plant per-case with a catch so one bad plant cannot abort the whole run
     # (and only cases that actually planted get asserted / cleaned up).
     Write-Host "== Planting known-bad artifacts =="
@@ -381,17 +396,6 @@ try {
     # PowerShell launches the .bat directly and captures its exit code in
     # $LASTEXITCODE (no cmd /c quoting hazard). -noConsoleLog skips the
     # self-tee re-exec so the exit code is the audit's own, not Tee-Object's.
-    # Seed a baseline that predates the plants. Written directly (not via a
-    # -baseline run) so it is guaranteed to lack the planted artifacts: a
-    # save-run here would capture them and the diff would then be empty.
-    try {
-        if (-not (Test-Path -LiteralPath $OutDir)) { New-Item -ItemType Directory -Path $OutDir -Force | Out-Null }
-        Set-Content -LiteralPath $baselineFile -Encoding ASCII -Value @(
-            '# doze_sec baseline snapshot -- seeded by detection_selftest',
-            'ADMIN|dz_selftest_baseline_placeholder|seed'
-        )
-    } catch {}
-
     & $BatPath -dev -sdu -nosrp -resetTTP -noConsoleLog | Out-Null
     $runExit = $LASTEXITCODE
     Write-Host ("  audit exit code: {0}" -f $runExit)
