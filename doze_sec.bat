@@ -144,6 +144,8 @@ set "VT_CHECK=0"
 set "DNS_PROBE=0"
 set "DNSPROBE_STATE="
 set "VT_SELF_SKIP=0"
+set "BASELINE_SAVE=0"
+set "BASELINE_SKIP=0"
 set "NO_CONSOLE_LOG=0"
 set "IOC_HITS=0"
 set "NETWORK_AVAIL=0"
@@ -179,6 +181,8 @@ if /i "%~1"=="-ctiSkill"   goto :parse_ctiskill
 if /i "%~1"=="-vt"         set "VT_CHECK=1"
 if /i "%~1"=="-dnsprobe"   set "DNS_PROBE=1"
 if /i "%~1"=="-noVtSelf"   set "VT_SELF_SKIP=1"
+if /i "%~1"=="-baseline"   set "BASELINE_SAVE=1"
+if /i "%~1"=="-noBaseline" set "BASELINE_SKIP=1"
 if /i "%~1"=="-noConsoleLog" set "NO_CONSOLE_LOG=1"
 shift
 goto :parse_args
@@ -232,6 +236,15 @@ echo.
 echo    %C_GREEN%-nosrp%C_RESET%       Skip System Restore Point creation. Saves 30-60 seconds
 echo                 if you already have a recent restore point.
 echo.
+echo    %C_GREEN%-baseline%C_RESET%    Capture/refresh a BASELINE snapshot of security-relevant
+echo                 state ^(drivers, services, tasks, autoruns, listening ports,
+echo                 local admins, root CAs^). Once a baseline exists, every later
+echo                 run automatically reports what is NEW, CHANGED or REMOVED --
+echo                 the strongest signal against a targeted implant that matches
+echo                 no known signature. Capture it as early as possible: a
+echo                 baseline taken on an already-compromised PC records the
+echo                 implant as normal.
+echo    %C_GREEN%-noBaseline%C_RESET%  Skip baseline capture and differential analysis.
 echo    %C_GREEN%-updateTTP%C_RESET%   Refresh the ThreatLists/ IOC files before the audit.
 echo                 Requires network. Downloads latest indicators from the
 echo                 configured threat intelligence source.
@@ -3399,6 +3412,35 @@ echo } >> "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 echo.>> "%REPORT%"
 
+
+rem ---- Baseline / differential analysis (T1543/T1053/T1136 -- novel-actor) ----
+rem Every other check asks "does this match known-bad?". This one asks "is
+rem anything different from how this machine used to be?" -- the only question
+rem that catches bespoke tooling written for one target. Diff runs
+rem AUTOMATICALLY whenever a baseline exists, so users get change detection
+rem without remembering a flag; -baseline captures/refreshes one.
+echo.>> "%REPORT%"
+set "BASELINE_FILE=%OUTDIR%\baseline.snapshot"
+del "%TEMP%\dz_baseline.txt" 2>nul
+if "%BASELINE_SKIP%"=="1" (
+    echo  [INFO] Baseline analysis skipped ^(-noBaseline^).>> "%REPORT%"
+) else (
+    if not exist "%SCRIPT_DIR%tools\baseline_diff.ps1" (
+        echo  [INFO] tools\baseline_diff.ps1 not found -- baseline analysis skipped.>> "%REPORT%"
+    ) else (
+        if "%BASELINE_SAVE%"=="1" (
+            "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\baseline_diff.ps1" -Mode Save -Path "!BASELINE_FILE!">> "%REPORT%" 2>&1
+        ) else (
+            "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\baseline_diff.ps1" -Mode Diff -Path "!BASELINE_FILE!">> "%REPORT%" 2>&1
+        )
+    )
+)
+if exist "%TEMP%\dz_baseline.txt" (
+    set "_BLSEV="
+    set /p _BLSEV=<"%TEMP%\dz_baseline.txt"
+    call :dz_finding !_BLSEV! 17 BASELINE "State changed since the saved baseline - review new/changed items"
+    del "%TEMP%\dz_baseline.txt" 2>nul
+)
 
 :: ---- Section 17/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"

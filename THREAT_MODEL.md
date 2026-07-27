@@ -76,7 +76,23 @@ and 13 verify exactly that.
 ## Inherent limitations
 
 - **Point-in-time**: a clean audit means clean *now*; re-run on a schedule
-  and after any suspicious event.
+  and after any suspicious event. Differential analysis narrows this
+  considerably: `-baseline` captures a snapshot of security-relevant state
+  (kernel drivers with hashes, services, scheduled tasks, autorun/persistence
+  values, listening ports, local administrators, root CA certificates), and
+  every later run automatically reports what is **NEW**, **CHANGED** or
+  **REMOVED**. This is the tool's strongest answer to a targeted or
+  state-level actor: static rules can only match tooling somebody has already
+  catalogued, whereas a new driver, service, admin, listening port or
+  persistence value that was not present last week is suspicious regardless
+  of whether a signature exists for it. False positives are controlled by
+  signature-gating new binaries (a validly Microsoft-signed addition is
+  reported as an expected update, not raised) and by reporting removals as
+  informational. **Limitation, stated in the report itself:** a baseline
+  captured on an already-compromised machine records the implant as normal,
+  so it detects change from the moment of capture forward and is not a
+  clean-room reference -- capture it as early in the device's life as
+  possible.
 - **IOC freshness**: indicator lists age. INIT 10/14 warns when upstream
   lists are stale (>60 days); refresh with `-updateTTP` (or `-importTTP`
   offline). A stale list silently narrows detection.

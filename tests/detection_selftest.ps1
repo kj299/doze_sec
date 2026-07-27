@@ -80,6 +80,11 @@ $script:scrPrev = $null
 $envKey      = 'HKCU:\Environment'
 # Tier 0 / advanced-actor round: fake unsigned kernel driver in a drop location
 $drvPlant    = "C:\Users\Public\{0}.sys" -f $MARK
+# Baseline/diff: the audit auto-diffs when a snapshot exists at OUTDIR. The
+# harness seeds one BEFORE the audit runs, with the planted Run-key backdoor
+# deliberately absent from it, so the audit's diff must report that autorun as
+# NEW -- proving end-to-end wiring the isolated helpers test cannot cover.
+$baselineFile = Join-Path $OutDir 'baseline.snapshot'
 
 # Each case: Name, Tier, Plant/Cleanup script blocks, and Expect -- a regex that
 # must appear in the final report text for the detection to count as firing.
@@ -357,6 +362,21 @@ function Get-LatestReport {
 $planted = @()
 $runExit = $null
 try {
+    # Capture a REAL baseline BEFORE planting, so the audit's automatic diff
+    # sees exactly the planted artifacts as NEW. Calling the tool directly
+    # (rather than running the whole audit with -baseline) keeps the harness to
+    # one audit run while still exercising the real snapshot format.
+    Write-Host "== Seeding baseline (pre-plant state) =="
+    try {
+        if (-not (Test-Path -LiteralPath $OutDir)) { New-Item -ItemType Directory -Path $OutDir -Force | Out-Null }
+        $bl = Join-Path (Split-Path -Parent $PSCommandPath) '..\tools\baseline_diff.ps1'
+        & $bl -Mode Save -Path $baselineFile -MarkerDir $env:TEMP | Out-Null
+        $blRecs = @(Get-Content -LiteralPath $baselineFile -EA SilentlyContinue | Where-Object { $_ -notmatch '^#' }).Count
+        Write-Host ("  baseline captured: {0} record(s)" -f $blRecs)
+    } catch {
+        Write-Host ("  WARNING: baseline seed failed: {0}" -f $_.Exception.Message)
+    }
+
     # Plant per-case with a catch so one bad plant cannot abort the whole run
     # (and only cases that actually planted get asserted / cleaned up).
     Write-Host "== Planting known-bad artifacts =="
@@ -651,6 +671,21 @@ try {
     if ([regex]::IsMatch($text, 'accessnow\.org/help')) { Write-Host "  [ OK       ] at-risk-user expert-help referral present" }
     else { Write-Host "  [ REGRESS  ] expert-help referral missing from the report"; $requiredFail++ }
 
+    # Baseline/diff (novel-actor detection): the seeded baseline lacks the
+    # planted Run-key backdoor, so the audit's automatic diff must report it as
+    # a NEW autorun. This proves the -baseline wiring end-to-end: snapshot read,
+    # diff computed, finding raised into the ledger under section 17.
+    if ([regex]::IsMatch($text, '(?im)NEW autorun/persistence value since baseline')) {
+        Write-Host "  [ OK       ] baseline diff reported the planted autorun as NEW"
+    } else {
+        Write-Host "  [ REGRESS  ] baseline diff did not report a NEW autorun despite a seeded pre-plant baseline"; $requiredFail++
+    }
+    if ($ledger -and @($lg | Where-Object { $_ -like '*|17|BASELINE|*' }).Count) {
+        Write-Host "  [ OK       ] baseline finding reached the ledger (section 17, BASELINE)"
+    } else {
+        Write-Host "  [ REGRESS  ] no BASELINE ledger entry -- baseline finding did not reach the finding model"; $requiredFail++
+    }
+
     # Exit-code architecture (code-review W1-W3): a planted CRITICAL (WDigest=1)
     # must drive the process exit code to 8. PROMOTED to required 2026-07-18
     # after it fired on CI -- the path is exactly the fragile summary block W3
@@ -680,5 +715,11 @@ finally {
     foreach ($c in $planted) {
         try { & $c.Cleanup; Write-Host ("  removed: {0}" -f $c.Name) }
         catch { Write-Host ("  WARNING: cleanup failed for {0}: {1}" -f $c.Name, $_.Exception.Message) }
+    }
+    # The seeded baseline is harness state, not a planted case -- remove it so
+    # the runner is left exactly as found.
+    if (Test-Path -LiteralPath $baselineFile) {
+        Remove-Item -LiteralPath $baselineFile -Force -EA SilentlyContinue
+        Write-Host "  removed: seeded baseline snapshot"
     }
 }
