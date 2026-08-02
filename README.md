@@ -98,7 +98,7 @@ Temp path check, admin detection, OS version, OS compatibility, Safe Mode, log d
 | 1 | System identity and patch level | No | Unpatched OS, CVE exposure |
 | 2 | User accounts and privilege audit | No | Rogue accounts, SID anomalies |
 | 3 | Network configuration and connections | No | C2 callbacks, DNS anomalies, open shares |
-| 4 | Running processes | No | LOLBins, RMM tools, suspicious paths |
+| 4 | Running processes | No | LOLBins, RMM tools, suspicious paths, loaded-module inspection (DLLs inside running processes: staging-path, unsigned, non-Microsoft in core security processes — T1055/T1574) |
 | 5 | Startup and persistence | No | Run keys, Startup folders, Winlogon, IFEO debuggers, AppInit/AppCert DLLs, logon/unlock vectors (Notify, Credential Providers, Network Provider DLLs), netsh helpers, print processors and port monitors, BITS jobs, PowerShell profiles, time providers |
 | 6 | Scheduled tasks | No | Malicious tasks, action-path detection (PS CSV, Task-To-Run column only) |
 | 7 | Windows services | Partial | Authenticode signature gating per service binary (vendor allowlist + revocation + expiry + bad-path); unusual accounts |
@@ -111,7 +111,7 @@ Temp path check, admin detection, OS version, OS compatibility, Safe Mode, log d
 | 14 | Suspicious files | No | ADS streams, double extensions, recent EXE/DLL/PS/VBS in user `%TEMP%` and `C:\Windows\Temp` (admin) |
 | 15 | Installed software and drivers | No | Unsigned drivers, vulnerable software; browser-extension inventory (T1176) — flags sideloaded/dev-mode, malware-favored permissions, policy force-installs across Chrome/Edge/Brave/Vivaldi/Firefox |
 | 16 | Event log anomalies | Partial | Log clearing (1102), brute force (4625), lateral (4624); audit-policy visibility check (flags when process-creation/logon/account auditing or command-line logging is OFF, so clean event results are not misread as safe) |
-| 17 | Nation-state threat indicators | No | MDDR 2023-2025 TTPs, portproxy, WMI persistence (CommandLine + ActiveScript consumers; SCM defaults allowlisted by Name+Query); baseline differential analysis (NEW/CHANGED/REMOVED drivers, services, tasks, autoruns, ports, admins, root CAs vs a saved snapshot) |
+| 17 | Nation-state threat indicators | No | MDDR 2023-2025 TTPs, portproxy, WMI persistence (CommandLine + ActiveScript consumers; SCM defaults allowlisted by Name+Query); baseline differential analysis (NEW/CHANGED/REMOVED drivers, services, tasks, autoruns, ports, admins, root CAs vs a saved snapshot); cross-API consistency check (processes/services/tasks read via independent APIs — rootkit indicator T1014 — plus Tarrask hidden-task detection) |
 | 18 | CTI-driven IOC sweep | No | SENTINEL-X file-based + inline CTI checks; kernel-driver audit (BYOVD by SHA256 + expanded name set + Authenticode catch-all over loaded and dropped drivers, so a renamed/relocated vulnerable driver cannot evade) |
 
 ## Section 18: CTI IOC Sweep

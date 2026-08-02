@@ -1502,6 +1502,25 @@ echo.>> "%REPORT%"
 
 :: ====================================================================
 
+echo.>> "%REPORT%"
+echo --- Loaded-Module Inspection ^(what is running INSIDE processes^) --->> "%REPORT%"
+echo  Command: powershell -File tools\module_inspect.ps1>> "%REPORT%"
+echo  Every persistence check reads a registry key or a file on disk. An implant
+echo  injected into a signed host process touches neither -- this inspects the
+echo  DLLs actually loaded in running processes ^(T1055 / T1574^).>> "%REPORT%"
+del "%TEMP%\dz_module.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\module_inspect.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\module_inspect.ps1">> "%REPORT%" 2>&1
+) else (
+    echo  [INFO] tools\module_inspect.ps1 not found -- loaded-module inspection skipped.>> "%REPORT%"
+)
+if exist "%TEMP%\dz_module.txt" (
+    set "_MODSEV="
+    set /p _MODSEV=<"%TEMP%\dz_module.txt"
+    call :dz_finding !_MODSEV! 4 T1055 "Suspicious DLL loaded inside a running process"
+    del "%TEMP%\dz_module.txt" 2>nul
+)
+
 :: ---- Section 4/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 call :dz_section_clean 4
@@ -3218,6 +3237,25 @@ echo } >> "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 echo.>> "%REPORT%"
 
+
+echo.>> "%REPORT%"
+echo --- Cross-API Consistency ^(is the OS telling us the truth?^) --->> "%REPORT%"
+echo  Command: powershell -File tools\cross_api_check.ps1>> "%REPORT%"
+echo  Reads processes, services and scheduled tasks through independent APIs and
+echo  flags disagreement -- the one positive rootkit signal a user-mode tool can
+echo  get. Also detects Tarrask-style hidden tasks ^(missing SD^).>> "%REPORT%"
+del "%TEMP%\dz_crossapi.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\cross_api_check.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\cross_api_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo  [INFO] tools\cross_api_check.ps1 not found -- cross-API consistency check skipped.>> "%REPORT%"
+)
+if exist "%TEMP%\dz_crossapi.txt" (
+    set "_CASEV="
+    set /p _CASEV=<"%TEMP%\dz_crossapi.txt"
+    call :dz_finding !_CASEV! 17 T1014 "Cross-API disagreement or hidden task - rootkit indicator"
+    del "%TEMP%\dz_crossapi.txt" 2>nul
+)
 
 rem ---- Baseline / differential analysis (T1543/T1053/T1136 -- novel-actor) ----
 rem Every other check asks "does this match known-bad?". This one asks "is

@@ -379,6 +379,100 @@ jobs:
           Write-Host "baseline_diff.ps1 OK"
           exit 0
 
+      - name: cross_api_check.ps1 (rootkit discrepancy; race-tolerance + Tarrask logic)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $md = Join-Path $env:TEMP ("dz_ca_ci_{0}" -f $PID)
+          New-Item -ItemType Directory -Path $md -Force | Out-Null
+          $tc = "HKCU:\Software\dz_ci_taskcache_$PID"
+          try {
+            # Clean runner: processes/services churn constantly, so this is the
+            # real false-positive gate -- if race re-verification is broken, a
+            # healthy machine reports a phantom hidden process every run.
+            $out = (.\tools\cross_api_check.ps1 -MarkerDir $md) -join "`n"
+            Write-Host $out
+            if ($out -match '\[CRITICAL\]') { throw "cross_api_check reported CRITICAL on a clean runner (race handling or enumeration bug)" }
+            # A WARNING marker is allowed here: reading TaskCache SD values can
+            # require SYSTEM, and reporting that blindness as [SKIPPED]+WARNING is
+            # the honest outcome. A CRITICAL marker is not -- that is a false
+            # accusation, which is what this gate exists to prevent.
+            $cm = Join-Path $md 'dz_crossapi.txt'
+            if (Test-Path $cm) {
+              $cv = (Get-Content $cm).Trim()
+              if ($cv -eq 'CRITICAL') { throw "crossapi wrote a CRITICAL marker on a clean runner" }
+              Write-Host ("  note: clean-runner marker is {0} (acceptable -- a skipped check, not an accusation)" -f $cv)
+            }
+            if ($out -notmatch 'Process lists agree') { throw 'process cross-check did not run' }
+            if ($out -notmatch 'Service views agree') { throw 'service cross-check did not run' }
+            # Tarrask logic against a SYNTHETIC hive -- never touches the real
+            # TaskCache, so the live Task Scheduler is unaffected.
+            $guid = '{dead0000-0000-0000-0000-00000000cafe}'
+            New-Item -Path "$tc\Tree\dz_ci_hidden" -Force | Out-Null
+            Set-ItemProperty -Path "$tc\Tree\dz_ci_hidden" -Name 'Id' -Value $guid -Force
+            New-Item -Path "$tc\Tasks\$guid" -Force | Out-Null
+            # (a) Tasks entry WITHOUT an SD value AND absent from the real Task
+            # Scheduler (it only exists in this synthetic hive) = both signals
+            # Tarrask requires, so it must be reported.
+            $md2 = Join-Path $md 'tarrask'
+            New-Item -ItemType Directory -Path $md2 -Force | Out-Null
+            $t1 = (.\tools\cross_api_check.ps1 -MarkerDir $md2 -TreeRoot "$tc\Tree" -TasksRoot "$tc\Tasks") -join "`n"
+            Write-Host ($t1 -split "`n" | Where-Object { $_ -match 'Tarrask|security descriptor|dz_ci_hidden' })
+            if ($t1 -notmatch 'NO security descriptor') { throw 'missing-SD task was not reported as Tarrask-style hidden' }
+            if ((Get-Content (Join-Path $md2 'dz_crossapi.txt')).Trim() -ne 'CRITICAL') { throw 'Tarrask finding did not write a CRITICAL marker' }
+            # (b) Same task WITH an SD value must be clean -- proves the check
+            # keys on the missing descriptor, not merely on the task existing.
+            Set-ItemProperty -Path "$tc\Tasks\$guid" -Name 'SD' -Value ([byte[]](1,2,3,4)) -Type Binary -Force
+            $md3 = Join-Path $md 'withsd'
+            New-Item -ItemType Directory -Path $md3 -Force | Out-Null
+            $t2 = (.\tools\cross_api_check.ps1 -MarkerDir $md3 -TreeRoot "$tc\Tree" -TasksRoot "$tc\Tasks") -join "`n"
+            if ($t2 -match 'NO security descriptor') { throw 'task WITH an SD was still reported as hidden (false positive)' }
+          } finally {
+            Remove-Item $tc -Recurse -Force -EA SilentlyContinue
+            Remove-Item $md -Recurse -Force -EA SilentlyContinue
+          }
+          Write-Host "cross_api_check.ps1 OK"
+          exit 0
+
+      - name: module_inspect.ps1 (injection detection; staged DLL must be caught)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $md = Join-Path $env:TEMP ("dz_mi_ci_{0}" -f $PID)
+          New-Item -ItemType Directory -Path $md -Force | Out-Null
+          $staged = "C:\Users\Public\dz_ci_probe_mod.dll"
+          $sig = '[DllImport("kernel32", CharSet=CharSet.Unicode)] public static extern IntPtr LoadLibraryW(string p); [DllImport("kernel32")] public static extern bool FreeLibrary(IntPtr h);'
+          Add-Type -Name DzK -Namespace DzCi -MemberDefinition $sig | Out-Null
+          $h = [IntPtr]::Zero
+          try {
+            # Clean runner first: a healthy box loads everything from signed
+            # system locations, so any CRITICAL here is a false positive.
+            $out = (.\tools\module_inspect.ps1 -MarkerDir $md) -join "`n"
+            Write-Host ($out -split "`n" | Select-Object -First 15)
+            if ($out -match '\[CRITICAL\]') { throw "module_inspect reported CRITICAL on a clean runner (false positive)" }
+            # Load a REAL signed Microsoft DLL from a staging path into THIS
+            # process, then inspect. Severity must come from the staging path,
+            # not the signature -- that is the injection shape being modelled.
+            Copy-Item "$env:SystemRoot\System32\version.dll" $staged -Force
+            $h = [DzCi.DzK]::LoadLibraryW($staged)
+            if ($h -eq [IntPtr]::Zero) { throw 'could not load the staged probe DLL' }
+            $md2 = Join-Path $md 'staged'
+            New-Item -ItemType Directory -Path $md2 -Force | Out-Null
+            $out2 = (.\tools\module_inspect.ps1 -MarkerDir $md2) -join "`n"
+            Write-Host ($out2 -split "`n" | Where-Object { $_ -match 'dz_ci_probe_mod' })
+            if ($out2 -notmatch 'dz_ci_probe_mod\.dll') { throw 'staged module not reported' }
+            if ($out2 -notmatch 'staging path') { throw 'staged module not attributed to the staging path' }
+            $m = Join-Path $md2 'dz_module.txt'
+            if (-not (Test-Path $m)) { throw 'staged module wrote no marker' }
+            if ((Get-Content $m).Trim() -ne 'CRITICAL') { throw ("expected CRITICAL, got {0}" -f (Get-Content $m)) }
+          } finally {
+            if ($h -ne [IntPtr]::Zero) { [void][DzCi.DzK]::FreeLibrary($h) }
+            Remove-Item $staged -Force -EA SilentlyContinue
+            Remove-Item $md -Recurse -Force -EA SilentlyContinue
+          }
+          Write-Host "module_inspect.ps1 OK"
+          exit 0
+
       - name: service_signature_check.ps1 (real services + Authenticode; svchost must resolve)
         shell: powershell
         run: |

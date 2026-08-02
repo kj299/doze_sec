@@ -686,6 +686,38 @@ try {
         Write-Host "  [ REGRESS  ] no BASELINE ledger entry -- baseline finding did not reach the finding model"; $requiredFail++
     }
 
+    # Cross-API rootkit check + loaded-module inspection: both must RUN in the
+    # audit (proving the bat wiring), and neither may cry rootkit on a healthy
+    # runner. The false-positive half matters most here: process and service
+    # tables churn constantly, so a cross-API check without working race
+    # re-verification would fire on every clean machine and be worse than
+    # useless -- users would learn to ignore it.
+    if ([regex]::IsMatch($text, 'Process lists agree across .NET, WMI and tasklist')) {
+        Write-Host "  [ OK       ] cross-API process check ran and agreed on a healthy runner"
+    } elseif ([regex]::IsMatch($text, 'Process enumeration cross-check')) {
+        Write-Host "  [ REGRESS  ] cross-API process check ran but did NOT agree -- phantom hidden process (race re-verification broken)"; $requiredFail++
+    } else {
+        Write-Host "  [ REGRESS  ] cross-API process check did not run -- Section 17 wiring broken"; $requiredFail++
+    }
+    if ([regex]::IsMatch($text, 'Service views agree across SCM, WMI and registry')) {
+        Write-Host "  [ OK       ] cross-API service check ran and agreed on a healthy runner"
+    } else {
+        Write-Host "  [ REGRESS  ] cross-API service check missing or disagreeing on a healthy runner"; $requiredFail++
+    }
+    if ([regex]::IsMatch($text, 'Loaded-module inspection|unique module\(s\) across')) {
+        Write-Host "  [ OK       ] loaded-module inspection ran (Section 4 wiring)"
+    } else {
+        Write-Host "  [ REGRESS  ] loaded-module inspection did not run -- Section 4 wiring broken"; $requiredFail++
+    }
+    # Tarrask: no task on a clean runner should be missing its security
+    # descriptor. If this fires here it is either a real hidden task or a bug --
+    # both need eyes, so it is required.
+    if ([regex]::IsMatch($text, 'NO security descriptor')) {
+        Write-Host "  [ REGRESS  ] a scheduled task on the runner has no SD (Tarrask indicator or false positive) -- investigate"; $requiredFail++
+    } else {
+        Write-Host "  [ OK       ] no Tarrask-style hidden task (all tasks carry a security descriptor)"
+    }
+
     # Exit-code architecture (code-review W1-W3): a planted CRITICAL (WDigest=1)
     # must drive the process exit code to 8. PROMOTED to required 2026-07-18
     # after it fired on CI -- the path is exactly the fragile summary block W3
