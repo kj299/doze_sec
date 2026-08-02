@@ -18,10 +18,24 @@
 #             process (lsass, winlogon, services, csrss, smss, wininit). A
 #             non-Microsoft DLL in lsass is the classic credential-theft shape
 #             (password filter, injected stealer).
-#   WARNING   An unsigned or invalid-signature module in any other process, or a
-#             validly-signed NON-Microsoft module inside a core security
+#   WARNING   A validly-signed NON-Microsoft module inside a core security
 #             process (legitimate for some EDR/smartcard/MFA vendors, so it is
 #             reported for review rather than raised to critical).
+#   COUNTED   Unsigned modules elsewhere. NOT itemised: plenty of legitimate
+#             software ships unsigned DLLs, and CI alone produced a screenful
+#             from the build agent's own binaries. A report listing hundreds of
+#             them is one nobody can triage, and it buries the findings that
+#             matter -- so they are summarised as a count the user can act on if
+#             they have other reason for concern.
+#
+# NOT FLAGGED -- deliberately:
+#   * A process's OWN executable (Modules[0]). A process running from a
+#     suspicious path is a real finding, but it is a DIFFERENT finding that
+#     Section 4 already makes; calling it an injected module double-reports it
+#     and is a category error.
+#   * .NET NGEN native images (\Windows\assembly\NativeImages_*), which are
+#     compiled locally from already-validated assemblies and are unsigned by
+#     design.
 #
 # LSASS AND PPL: when LSA Protection (RunAsPPL) is enabled, lsass module
 # enumeration is denied to everything -- including this tool. That is the
@@ -70,6 +84,7 @@ $coreProcs = @('lsass', 'winlogon', 'services', 'csrss', 'smss', 'wininit')
 $sev = 'OK'
 $sigCache = @{}
 $modOwners = @{}     # module path -> list of process names that loaded it
+$mainImages = @{}    # each process's own executable -- not an injected module
 $denied = 0
 $procCount = 0
 $lsassDenied = $false
@@ -84,10 +99,17 @@ foreach ($p in (Get-Process -EA SilentlyContinue)) {
         continue
     }
     if (-not $mods) { continue }
+    $first = $true
     foreach ($m in $mods) {
         $fn = $null
         try { $fn = [string]$m.FileName } catch {}
         if (-not $fn) { continue }
+        # Modules[0] is the process's OWN executable. Flagging that as an
+        # injected module is a category error -- a process running from a
+        # suspicious path is a different finding, and Section 4 already reports
+        # it. Record it so it can be excluded, or every process launched from
+        # Temp gets double-reported here as an injection.
+        if ($first) { $mainImages[$fn] = $true; $first = $false; continue }
         if (-not $modOwners.ContainsKey($fn)) { $modOwners[$fn] = New-Object System.Collections.Generic.List[string] }
         if (-not $modOwners[$fn].Contains($pname)) { $modOwners[$fn].Add($pname) }
     }
@@ -138,6 +160,7 @@ function Get-SigVerdict {
 
 $findings = @()
 $checked = 0
+$unsignedOther = 0
 $capped = $false
 foreach ($path in ($modOwners.Keys | Sort-Object)) {
     $owners = $modOwners[$path]
@@ -145,6 +168,10 @@ foreach ($path in ($modOwners.Keys | Sort-Object)) {
     foreach ($o in $owners) { if ($coreProcs -contains $o.ToLower()) { $inCore = $true; break } }
     $staged = ($path -match $badPathRx)
 
+    # .NET NGEN native images are compiled ON THIS MACHINE from assemblies that
+    # were already validated, and are unsigned by design -- they are not a
+    # signal, on a runner or on a user's PC.
+    if ($path -match '\\Windows\\assembly\\NativeImages_') { continue }
     if ($checked -ge $MaxModules) { $capped = $true; break }
     $checked++
     $v = Get-SigVerdict $path
@@ -155,8 +182,17 @@ foreach ($path in ($modOwners.Keys | Sort-Object)) {
         $itemSev = 'CRITICAL'
         $reason = 'loaded from a staging path'
     } elseif (-not $v.Valid) {
-        if ($inCore) { $itemSev = 'CRITICAL'; $reason = $v.Why + ' inside a core security process' }
-        else         { $itemSev = 'WARNING';  $reason = $v.Why }
+        if ($inCore) {
+            $itemSev = 'CRITICAL'; $reason = $v.Why + ' inside a core security process'
+        } else {
+            # Unsigned DLLs outside the core security processes are ordinary on
+            # real machines -- plenty of legitimate software ships unsigned
+            # binaries, and CI alone showed .NET NGEN native images plus every
+            # app DLL of the build agent. Itemising them produces a report of
+            # hundreds of entries that nobody can triage, which buries the
+            # findings that matter. Counted and summarised instead of raised.
+            $unsignedOther++
+        }
     } elseif ($inCore -and -not $v.MsSigned) {
         $itemSev = 'WARNING'
         $reason = $v.Why + ' (non-Microsoft) inside a core security process'
@@ -188,7 +224,10 @@ foreach ($f in $warn) {
 if ($warn.Count -gt $MaxReport) { "[INFO] ...and $($warn.Count - $MaxReport) more module finding(s) not listed (report cap $MaxReport)." }
 
 if ($findings.Count -eq 0) {
-    "[OK] $checked unique module(s) across $procCount process(es) -- all validly signed, none loaded from a staging path."
+    "[OK] $checked unique loaded module(s) across $procCount process(es) -- none from a staging path, none unsigned inside a core security process."
+}
+if ($unsignedOther -gt 0) {
+    "[INFO] $unsignedOther unique unsigned module(s) loaded outside the core security processes -- common for legitimate third-party software, so counted rather than flagged. Reviewed individually only if you have other reason for concern."
 }
 if ($capped) {
     "[INFO] Module inspection stopped at the $MaxModules-file cap; $($modOwners.Count - $checked) unique module(s) were NOT checked."
