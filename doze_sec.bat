@@ -2512,6 +2512,26 @@ echo.>> "%REPORT%"
 
 :: ====================================================================
 
+echo.>> "%REPORT%"
+echo --- Covert Monitoring ^(is someone watching this person?^) --->> "%REPORT%"
+echo  Command: powershell -File tools\stalkerware_check.ps1>> "%REPORT%"
+echo  Models an attacker who wants the PERSON rather than the machine: hidden
+echo  accounts, silent RDP shadowing, camera/mic/location grants, and consumer
+echo  monitoring products. Often signed, legitimate software used abusively --
+echo  which is exactly why the rest of the audit walks past it.>> "%REPORT%"
+del "%TEMP%\dz_stalkerware.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\stalkerware_check.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\stalkerware_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo  [INFO] tools\stalkerware_check.ps1 not found -- covert-monitoring check skipped.>> "%REPORT%"
+)
+if exist "%TEMP%\dz_stalkerware.txt" (
+    set "_SWSEV="
+    set /p _SWSEV=<"%TEMP%\dz_stalkerware.txt"
+    call :dz_finding !_SWSEV! 10 T1564.002 "Possible covert monitoring - hidden account, silent shadowing, or monitoring software"
+    del "%TEMP%\dz_stalkerware.txt" 2>nul
+)
+
 :: ---- Section 10/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
 call :dz_section_clean 10

@@ -60,6 +60,7 @@ endpoint footprint to audit; they are out of scope by nature.
 | Network MitM / rogue infra | Limited | hosts file, ARP table, portproxy, DNS cache; no traffic capture, no router/SOHO visibility |
 | Rootkits / firmware | Limited | Secure Boot state, driver signing, known BYOVD names/hashes; no UEFI/firmware scanning — a kernel rootkit can defeat user-mode auditing |
 | Zero-days / novel malware | Inherent limit | Detection is IOC- and configuration-based plus some behavioral signals (events, staging paths); unknown tooling with no known indicators can evade it |
+| Stalkerware / intimate-partner surveillance | Good | Section 10 `tools/stalkerware_check.ps1`: accounts hidden from the sign-in screen (T1564.002), silent RDP shadowing (T1113), a camera/microphone/location consent inventory with last-used times (T1125/T1123), and known consumer monitoring/spouseware products by process, service, install entry and task. Models an attacker who wants the *person*, not the machine — usually signed, commercial software working as designed, which the rest of the audit walks past. Findings are worded as "present, do you know about this?" rather than as accusations, because these products are also sold legitimately for parental and workplace monitoring |
 | Insider threat / DLP | Out of scope | No content inspection or user-behavior analytics |
 | DoS / availability attacks | Out of scope | Nothing to audit at endpoint level |
 | Mobile, IoT, macOS, Linux, Server | Out of scope | Windows 10/11 client editions only (Server is explicitly blocked, INIT 4) |
