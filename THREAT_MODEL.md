@@ -122,8 +122,27 @@ and 13 verify exactly that.
 - **Trust anchor**: the audit runs on the host it inspects. INIT 9/14's
   VirusTotal self-integrity pre-flight hash-checks the binaries the audit
   depends on, but a sufficiently privileged implant can lie to any
-  user-mode tool. Because of this, a clean result is never presented as a
-  safety guarantee: every report opens with a **READ THIS FIRST** block
+  user-mode tool. The audit now at least TRIES to catch the lie:
+  `tools/cross_api_check.ps1` (Section 17) reads processes, services and
+  scheduled tasks through independent paths -- .NET/`NtQuerySystemInformation`
+  vs WMI vs `tasklist.exe`; SCM vs WMI vs the raw `Services` registry;
+  Task Scheduler vs the raw `TaskCache` hive -- and reports any persistent
+  disagreement as a rootkit indicator (T1014). Hooking is applied per code
+  path, so an implant that hides a process from one enumeration rarely hides
+  it from all three. Every candidate is re-verified after a settle so ordinary
+  process churn does not produce false positives. The same check detects
+  Tarrask-style hidden scheduled tasks (HAFNIUM, T1053.005): a task whose
+  `TaskCache\Tasks\{GUID}` entry has no `SD` value is invisible to
+  `schtasks.exe` and the Task Scheduler UI while still running.
+  `tools/module_inspect.ps1` (Section 4) closes the complementary blind spot
+  -- an implant injected into a signed host process touches no registry key
+  and no autorun, so the DLLs actually loaded inside running processes are
+  inspected for staging-path origins, unsigned/invalid signatures, and
+  non-Microsoft modules inside core security processes (lsass, winlogon,
+  services, csrss, smss, wininit). Neither check can defeat a competent
+  kernel implant that hooks every path consistently, but both raise the cost
+  and catch the common cases. Because of the residual limit, a clean result
+  is never presented as a safety guarantee: every report opens with a **READ THIS FIRST** block
   stating plainly that on-host user-mode auditing cannot be authoritative
   against a kernel-level implant, and closes with a **COVERAGE & CONFIDENCE**
   block reporting how many checks were skipped and whether Windows auditing
