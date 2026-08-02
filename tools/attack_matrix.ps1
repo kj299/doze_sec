@@ -85,7 +85,7 @@ if (Test-Path -LiteralPath $Manifest) {
     }
 } else {
     "[SKIPPED] ttp_manifest.txt not found at $Manifest -- coverage matrix not generated."
-    return
+    exit 0
 }
 
 # 2. Techniques the audit code REFERENCES (live scan of the sources).
@@ -168,3 +168,7 @@ if ($unmapped.Count -gt 0) {
 } else {
     '[OK] Every technique the audit references is mapped in the manifest -- coverage matrix is complete.'
 }
+
+# Deterministic exit so a caller can trust $LASTEXITCODE (see note above). Only
+# an unmapped technique under -Strict is a failure; everything else is success.
+exit 0
