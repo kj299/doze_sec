@@ -20,11 +20,20 @@
 #              HKLM\SYSTEM\CurrentControlSet\Services registry keys. A service
 #              present in the registry but hidden from both SCM and WMI is the
 #              classic "hidden service" shape.
-#   Tasks      Get-ScheduledTask (Task Scheduler COM) vs the raw TaskCache\Tree
-#              registry. This also catches TARRASK (HAFNIUM, T1053.005): deleting
-#              a task's SD value under TaskCache\Tasks makes it invisible to
-#              schtasks.exe and the Task Scheduler UI while it still runs. A task
-#              in Tree whose Tasks\{GUID} entry has no SD is that exact IOC.
+#   Tasks      TARRASK (HAFNIUM, T1053.005): deleting a task's SD value under
+#              TaskCache\Tasks makes it invisible to schtasks.exe and the Task
+#              Scheduler UI while it still runs. A task registered in Tree whose
+#              Tasks\{GUID} entry EXISTS but carries no SD is that exact IOC.
+#
+#              NOT compared: "present in Tree but not returned by
+#              Get-ScheduledTask". That sounds like the same idea but is
+#              unusable in practice -- a stock Windows install legitimately
+#              keeps stale and non-enumerable Tree entries (CI measured 26 of
+#              them on a clean image: Store licensing, WindowsUpdate\sihboot,
+#              maintenance tasks). Reporting those as hidden tasks would bury a
+#              real Tarrask hit in noise, so the precise documented IOC (the
+#              missing security descriptor) is the detection and the fuzzy
+#              comparison is dropped.
 #
 # RACE CONDITIONS ARE THE FALSE-POSITIVE RISK, and the reason a naive version of
 # this check is useless: processes start and exit constantly, so any two
@@ -55,8 +64,11 @@ param(
     # always uses the defaults.
     [string]$TreeRoot  = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tree',
     [string]$TasksRoot = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tasks',
-    # When testing against a synthetic hive there is no live Task Scheduler to
-    # compare against, so the "in registry but not enumerated" half is skipped.
+    # Retained for compatibility with existing invocations. The comparison it
+    # used to gate (Tree entries vs live Get-ScheduledTask output) was removed
+    # after CI proved it false-positives on stock Windows, so this is now a
+    # no-op; the SD check below works identically against a real or synthetic
+    # hive and needs no scheduler probe.
     [switch]$SkipLiveTaskCompare
 )
 
@@ -194,15 +206,6 @@ if (-not $sOk -or $svcReg.Count -eq 0) {
 $treeRoot  = $TreeRoot
 $tasksRoot = $TasksRoot
 $tOk = $true
-$live = @{}
-if (-not $SkipLiveTaskCompare) {
-    try {
-        foreach ($t in (Get-ScheduledTask -EA Stop)) {
-            $full = ([string]$t.TaskPath).TrimEnd('\') + '\' + [string]$t.TaskName
-            $live[$full.ToLower()] = $true
-        }
-    } catch { $tOk = $false }
-}
 
 $treeTasks = @()
 try {
@@ -214,8 +217,13 @@ try {
             $id = $null
             try { $id = (Get-ItemProperty -LiteralPath $node.PSPath -Name 'Id' -EA SilentlyContinue).Id } catch {}
             if ($id) {
+                # REG_SZ values here carry a trailing NUL; leaving it in makes the
+                # Tasks\{GUID} lookup malformed, the SD read fail, and EVERY task
+                # look like a Tarrask hit. Strip NULs and whitespace.
+                $idClean = ([string]$id) -replace "`0", '' 
+                $idClean = $idClean.Trim()
                 $full = $node.PSPath -replace ('^.*' + [regex]::Escape((Split-Path -Leaf $treeRoot))), ''
-                $treeTasks += New-Object PSObject -Property @{ Path = $full; Id = [string]$id }
+                $treeTasks += New-Object PSObject -Property @{ Path = $full; Id = $idClean }
             }
             try { foreach ($c in (Get-ChildItem -LiteralPath $node.PSPath -EA SilentlyContinue)) { $stack.Push($c) } } catch {}
         }
@@ -226,7 +234,7 @@ if (-not $tOk -or $treeTasks.Count -eq 0) {
     '[SKIPPED] TaskCache registry or Task Scheduler unavailable (needs admin) -- task cross-check NOT performed.'
     $sev = Get-MaxSev $sev 'WARNING'
 } else {
-    $noSd = @(); $notLive = @()
+    $noSd = @()
     foreach ($tt in $treeTasks) {
         # Tarrask: the SD (security descriptor) value under Tasks\{GUID} is
         # deleted, which hides the task from schtasks.exe and the Task Scheduler
@@ -237,7 +245,6 @@ if (-not $tOk -or $treeTasks.Count -eq 0) {
             try { $sd = (Get-ItemProperty -LiteralPath $tk -Name 'SD' -EA SilentlyContinue).SD } catch {}
             if ($null -eq $sd) { $noSd += ("{0}  (Id {1})" -f $tt.Path, $tt.Id) }
         }
-        if (-not $SkipLiveTaskCompare -and -not $live.ContainsKey(($tt.Path).ToLower())) { $notLive += $tt.Path }
     }
     if ($noSd.Count -gt 0) {
         '[CRITICAL] Scheduled task registered in TaskCache with NO security descriptor (SD) -- Tarrask-style hidden task (T1053.005):'
@@ -245,14 +252,8 @@ if (-not $tOk -or $treeTasks.Count -eq 0) {
         '[CRITICAL] Deleting the SD value hides a task from schtasks and the Task Scheduler UI while it still runs. Used by HAFNIUM.'
         $sev = Get-MaxSev $sev 'CRITICAL'
     }
-    if ($notLive.Count -gt 0) {
-        '[CRITICAL] Scheduled task present in the TaskCache registry but not returned by Task Scheduler (T1014/T1053.005):'
-        foreach ($h in ($notLive | Select-Object -First 20)) { "  $h" }
-        if ($notLive.Count -gt 20) { "  ...and $($notLive.Count - 20) more." }
-        $sev = Get-MaxSev $sev 'CRITICAL'
-    }
-    if ($noSd.Count -eq 0 -and $notLive.Count -eq 0) {
-        "[OK] Scheduled-task views agree ($($treeTasks.Count) registered tasks; all have a security descriptor)."
+    if ($noSd.Count -eq 0) {
+        "[OK] No hidden scheduled tasks ($($treeTasks.Count) registered tasks; all carry a security descriptor)."
     }
 }
 
