@@ -4291,6 +4291,13 @@ echo.
 :: ====================================================================
 :end_script
 
+rem ATT&CK coverage matrix -- auto-derived from the audits own technique
+rem references and annotated with what fired this run. Informational; raises
+rem no finding. Placed just before COVERAGE & CONFIDENCE.
+if exist "%SCRIPT_DIR%tools\attack_matrix.ps1" (
+    echo.>> "%REPORT%"
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\attack_matrix.ps1" -SourceDir "%SCRIPT_DIR%." -Report "%REPORT%">> "%REPORT%" 2>&1
+)
 rem Tier 0 COVERAGE & CONFIDENCE block -- reads the finished report and
 rem states how much was actually covered, so a clean pass is never read as
 rem a safety guarantee. Top-level call, no nesting.

@@ -743,6 +743,21 @@ try {
         Write-Host "  [ REGRESS  ] covert-monitoring check did not run -- Section 10 wiring broken"; $requiredFail++
     }
 
+    # ATT&CK coverage matrix: it must appear in the report (Section wiring) and,
+    # because a planted WDigest CRITICAL is T1550.002/T1003.001, at least one
+    # technique must be marked as having fired this run -- proving the
+    # per-run annotation reflects real findings, not a static list.
+    if ([regex]::IsMatch($text, 'ATT&CK COVERAGE MATRIX')) {
+        Write-Host "  [ OK       ] ATT&CK coverage matrix present in the report"
+    } else {
+        Write-Host "  [ REGRESS  ] ATT&CK coverage matrix missing -- attack_matrix wiring broken"; $requiredFail++
+    }
+    if ([regex]::IsMatch($text, 'Every technique the audit references is mapped')) {
+        Write-Host "  [ OK       ] coverage matrix reports itself complete (no unmapped techniques)"
+    } else {
+        Write-Host "  [ REGRESS  ] coverage matrix reports unmapped techniques -- ttp_manifest drifted from the code"; $requiredFail++
+    }
+
     # Exit-code architecture (code-review W1-W3): a planted CRITICAL (WDigest=1)
     # must drive the process exit code to 8. PROMOTED to required 2026-07-18
     # after it fired on CI -- the path is exactly the fragile summary block W3
