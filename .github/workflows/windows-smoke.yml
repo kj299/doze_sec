@@ -473,6 +473,48 @@ jobs:
           Write-Host "module_inspect.ps1 OK"
           exit 0
 
+      - name: stalkerware_check.ps1 (covert monitoring; consent inventory must not accuse)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $md = Join-Path $env:TEMP ("dz_sw_ci_{0}" -f $PID)
+          New-Item -ItemType Directory -Path $md -Force | Out-Null
+          $ul = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList'
+          $madeUl = $false
+          try {
+            # Clean runner: camera/mic permissions are ordinary, so the consent
+            # inventory must stay INFORMATIONAL. Any CRITICAL here means the
+            # module is accusing a healthy machine -- the failure mode that
+            # matters most for the people this check is written for.
+            $out = (.\tools\stalkerware_check.ps1 -MarkerDir $md) -join "`n"
+            Write-Host $out
+            if ($out -match '\[CRITICAL\]') { throw "stalkerware_check reported CRITICAL on a clean runner" }
+            if ($out -notmatch 'sign-in screen') { throw 'hidden-account check did not run' }
+            if ($out -notmatch 'shadowing') { throw 'RDP shadowing check did not run' }
+            if ($out -notmatch 'monitoring/spouseware|monitoring another person') { throw 'monitoring-product check did not run' }
+            # Plant a hidden account entry: must be reported, and must be worded
+            # as something to review rather than as an accusation.
+            if (-not (Test-Path $ul)) { New-Item -Path $ul -Force | Out-Null; $madeUl = $true }
+            Set-ItemProperty -Path $ul -Name 'dz_ci_probe_user' -Value 0 -Type DWord -Force
+            $md2 = Join-Path $md 'hidden'
+            New-Item -ItemType Directory -Path $md2 -Force | Out-Null
+            $out2 = (.\tools\stalkerware_check.ps1 -MarkerDir $md2) -join "`n"
+            Write-Host ($out2 -split "`n" | Where-Object { $_ -match 'dz_ci_probe_user|HIDDEN' })
+            if ($out2 -notmatch 'dz_ci_probe_user') { throw 'planted hidden account not reported' }
+            $m = Join-Path $md2 'dz_stalkerware.txt'
+            if (-not (Test-Path $m)) { throw 'planted hidden account wrote no marker' }
+            if ((Get-Content $m).Trim() -ne 'WARNING') { throw ("expected WARNING, got {0}" -f (Get-Content $m)) }
+            # A hidden account is suspicious, not proof -- legitimate software
+            # hides service accounts. The wording must not condemn.
+            if ($out2 -notmatch 'legitimate software') { throw 'hidden-account finding lacks the not-necessarily-malicious framing' }
+          } finally {
+            Remove-ItemProperty -Path $ul -Name 'dz_ci_probe_user' -EA SilentlyContinue
+            if ($madeUl) { Remove-Item $ul -Force -EA SilentlyContinue }
+            Remove-Item $md -Recurse -Force -EA SilentlyContinue
+          }
+          Write-Host "stalkerware_check.ps1 OK"
+          exit 0
+
       - name: service_signature_check.ps1 (real services + Authenticode; svchost must resolve)
         shell: powershell
         run: |

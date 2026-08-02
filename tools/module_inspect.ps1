@@ -84,7 +84,6 @@ $coreProcs = @('lsass', 'winlogon', 'services', 'csrss', 'smss', 'wininit')
 $sev = 'OK'
 $sigCache = @{}
 $modOwners = @{}     # module path -> list of process names that loaded it
-$mainImages = @{}    # each process's own executable -- not an injected module
 $denied = 0
 $procCount = 0
 $lsassDenied = $false
@@ -109,7 +108,7 @@ foreach ($p in (Get-Process -EA SilentlyContinue)) {
         # suspicious path is a different finding, and Section 4 already reports
         # it. Record it so it can be excluded, or every process launched from
         # Temp gets double-reported here as an injection.
-        if ($first) { $mainImages[$fn] = $true; $first = $false; continue }
+        if ($first) { $first = $false; continue }
         if (-not $modOwners.ContainsKey($fn)) { $modOwners[$fn] = New-Object System.Collections.Generic.List[string] }
         if (-not $modOwners[$fn].Contains($pname)) { $modOwners[$fn].Add($pname) }
     }

@@ -80,6 +80,8 @@ $script:scrPrev = $null
 $envKey      = 'HKCU:\Environment'
 # Tier 0 / advanced-actor round: fake unsigned kernel driver in a drop location
 $drvPlant    = "C:\Users\Public\{0}.sys" -f $MARK
+# Covert-monitoring: an account hidden from the sign-in screen (T1564.002).
+$userListKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList'
 # Baseline/diff: the audit auto-diffs when a snapshot exists at OUTDIR. The
 # harness seeds one BEFORE the audit runs, with the planted Run-key backdoor
 # deliberately absent from it, so the audit's diff must report that autorun as
@@ -142,6 +144,14 @@ $cases = @(
         Expect = ('(?im)\[(WARNING|CRITICAL)\] Driver [^\r\n]*{0}\.sys' -f $MARK)
         Plant  = { Set-Content -LiteralPath $drvPlant -Value 'MZ not-a-real-driver' -Encoding ASCII }
         Cleanup= { Remove-Item -LiteralPath $drvPlant -Force -EA SilentlyContinue }
+    },
+    @{
+        Name   = 'Account hidden from the sign-in screen -> flagged (T1564.002)'
+        Tier   = 'required'  # stalkerware_check.ps1; covert-monitoring path
+        Expect = ('(?im)\[(WARNING|CRITICAL)\][^\r\n]*HIDDEN[^\r\n]*{0}' -f $MARK)
+        Plant  = { if (-not (Test-Path $userListKey)) { New-Item -Path $userListKey -Force | Out-Null }
+                   Set-ItemProperty -Path $userListKey -Name $MARK -Value 0 -Type DWord -Force }
+        Cleanup= { Remove-ItemProperty -Path $userListKey -Name $MARK -EA SilentlyContinue }
     },
     @{
         Name   = 'Time provider DLL registered -> flagged (T1547.003)'
@@ -716,6 +726,21 @@ try {
         Write-Host "  [ REGRESS  ] a scheduled task on the runner has no SD (Tarrask indicator or false positive) -- investigate"; $requiredFail++
     } else {
         Write-Host "  [ OK       ] no Tarrask-style hidden task (all tasks carry a security descriptor)"
+    }
+
+    # Covert-monitoring module: the camera/mic/location inventory exists to
+    # INFORM someone who may be monitored, not to accuse. Holding a webcam
+    # permission is ordinary, so the audit must never turn that inventory into a
+    # verdict -- a false accusation here lands on someone already frightened.
+    if ([regex]::IsMatch($text, '(?im)^\s*\[(WARNING|CRITICAL)\][^\r\n]*application permission')) {
+        Write-Host "  [ REGRESS  ] camera/mic permission inventory was raised as a finding -- it must stay informational"; $requiredFail++
+    } else {
+        Write-Host "  [ OK       ] camera/mic/location inventory stayed informational (no accusation from ordinary permissions)"
+    }
+    if ([regex]::IsMatch($text, 'Covert Monitoring|covert-monitoring|sign-in screen')) {
+        Write-Host "  [ OK       ] covert-monitoring check ran (Section 10 wiring)"
+    } else {
+        Write-Host "  [ REGRESS  ] covert-monitoring check did not run -- Section 10 wiring broken"; $requiredFail++
     }
 
     # Exit-code architecture (code-review W1-W3): a planted CRITICAL (WDigest=1)
