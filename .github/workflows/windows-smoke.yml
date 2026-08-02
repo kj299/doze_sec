@@ -393,8 +393,15 @@ jobs:
             $out = (.\tools\cross_api_check.ps1 -MarkerDir $md) -join "`n"
             Write-Host $out
             if ($out -match '\[CRITICAL\]') { throw "cross_api_check reported CRITICAL on a clean runner (race handling or enumeration bug)" }
-            if (Test-Path (Join-Path $md 'dz_crossapi.txt')) {
-              throw ("crossapi marker written on a clean runner: {0}" -f (Get-Content (Join-Path $md 'dz_crossapi.txt')))
+            # A WARNING marker is allowed here: reading TaskCache SD values can
+            # require SYSTEM, and reporting that blindness as [SKIPPED]+WARNING is
+            # the honest outcome. A CRITICAL marker is not -- that is a false
+            # accusation, which is what this gate exists to prevent.
+            $cm = Join-Path $md 'dz_crossapi.txt'
+            if (Test-Path $cm) {
+              $cv = (Get-Content $cm).Trim()
+              if ($cv -eq 'CRITICAL') { throw "crossapi wrote a CRITICAL marker on a clean runner" }
+              Write-Host ("  note: clean-runner marker is {0} (acceptable -- a skipped check, not an accusation)" -f $cv)
             }
             if ($out -notmatch 'Process lists agree') { throw 'process cross-check did not run' }
             if ($out -notmatch 'Service views agree') { throw 'service cross-check did not run' }

@@ -235,16 +235,37 @@ if (-not $tOk -or $treeTasks.Count -eq 0) {
     $sev = Get-MaxSev $sev 'WARNING'
 } else {
     $noSd = @()
+    $unreadable = 0
     foreach ($tt in $treeTasks) {
         # Tarrask: the SD (security descriptor) value under Tasks\{GUID} is
         # deleted, which hides the task from schtasks.exe and the Task Scheduler
         # UI while the task keeps running.
         $tk = Join-Path $tasksRoot $tt.Id
         if (Test-Path -LiteralPath $tk) {
-            $sd = $null
-            try { $sd = (Get-ItemProperty -LiteralPath $tk -Name 'SD' -EA SilentlyContinue).SD } catch {}
-            if ($null -eq $sd) { $noSd += ("{0}  (Id {1})" -f $tt.Path, $tt.Id) }
+            # Ask which VALUES EXIST rather than reading SD's data. Reading the
+            # descriptor bytes generally requires SYSTEM (Administrators can open
+            # the key but not necessarily read that value), so a data read
+            # returning null cannot distinguish "deleted" from "not permitted"
+            # -- and treating those the same reports every task on the machine as
+            # a Tarrask hit. Enumerating value names answers the actual question.
+            $vals = $null
+            try { $vals = (Get-Item -LiteralPath $tk -EA Stop).GetValueNames() } catch {}
+            if ($null -eq $vals) { $unreadable++; continue }
+            if ($vals -notcontains 'SD') { $noSd += ("{0}  (Id {1})" -f $tt.Path, $tt.Id) }
         }
+    }
+    # Safety net independent of the cause: a real Tarrask implant hides ONE task
+    # (or a few). If EVERY registered task appears to lack a descriptor, that is
+    # a permissions or platform artifact, not a compromise -- report the blind
+    # spot honestly instead of burying the user in false criticals. Kept
+    # conservative (only when there is a real population to judge) so a genuine
+    # single-task hit on a small task list is never suppressed.
+    if ($treeTasks.Count -ge 10 -and $noSd.Count -eq $treeTasks.Count) {
+        "[SKIPPED] All $($treeTasks.Count) task security descriptors were unreadable -- hidden-task check NOT performed (reading TaskCache SD values generally requires SYSTEM, not just admin)."
+        $sev = Get-MaxSev $sev 'WARNING'
+        $noSd = @()
+    } elseif ($unreadable -gt 0) {
+        "[INFO] $unreadable task(s) could not be inspected for a security descriptor; the rest were checked."
     }
     if ($noSd.Count -gt 0) {
         '[CRITICAL] Scheduled task registered in TaskCache with NO security descriptor (SD) -- Tarrask-style hidden task (T1053.005):'
