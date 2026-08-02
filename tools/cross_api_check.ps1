@@ -25,15 +25,19 @@
 #              Scheduler UI while it still runs. A task registered in Tree whose
 #              Tasks\{GUID} entry EXISTS but carries no SD is that exact IOC.
 #
-#              NOT compared: "present in Tree but not returned by
-#              Get-ScheduledTask". That sounds like the same idea but is
-#              unusable in practice -- a stock Windows install legitimately
-#              keeps stale and non-enumerable Tree entries (CI measured 26 of
-#              them on a clean image: Store licensing, WindowsUpdate\sihboot,
-#              maintenance tasks). Reporting those as hidden tasks would bury a
-#              real Tarrask hit in noise, so the precise documented IOC (the
-#              missing security descriptor) is the detection and the fuzzy
-#              comparison is dropped.
+#              BOTH signals are required, because each alone false-positives on
+#              a healthy machine -- CI proved both empirically:
+#                * "Tree entry not returned by Get-ScheduledTask" alone flagged
+#                  26 legitimate Microsoft tasks (stale/non-enumerable entries
+#                  are normal: Store licensing, WindowsUpdate\sihboot, ...).
+#                * "missing SD" alone flagged EVERY task, because reading task
+#                  security descriptors really wants SYSTEM; at admin privilege
+#                  the value is simply not visible.
+#              Tarrask is the INTERSECTION of the two -- hidden from the
+#              scheduler AND stripped of its descriptor -- so requiring both
+#              collapses both false-positive sources while still catching the
+#              technique. A proportion guard additionally suppresses the whole
+#              check if an implausible share of tasks match.
 #
 # RACE CONDITIONS ARE THE FALSE-POSITIVE RISK, and the reason a naive version of
 # this check is useless: processes start and exit constantly, so any two
@@ -206,6 +210,17 @@ if (-not $sOk -or $svcReg.Count -eq 0) {
 $treeRoot  = $TreeRoot
 $tasksRoot = $TasksRoot
 $tOk = $true
+# Live task list, used ONLY to corroborate a missing-SD hit (see below). Failure
+# to enumerate is not fatal -- it just means corroboration is unavailable.
+$live = @{}
+$liveOk = $false
+try {
+    foreach ($t in (Get-ScheduledTask -EA Stop)) {
+        $full = ([string]$t.TaskPath).TrimEnd('\') + '\' + [string]$t.TaskName
+        $live[$full.ToLower()] = $true
+    }
+    $liveOk = ($live.Count -gt 0)
+} catch { $liveOk = $false }
 
 $treeTasks = @()
 try {
@@ -236,6 +251,8 @@ if (-not $tOk -or $treeTasks.Count -eq 0) {
 } else {
     $noSd = @()
     $unreadable = 0
+    $inspected = 0
+    $sdOnly = 0
     foreach ($tt in $treeTasks) {
         # Tarrask: the SD (security descriptor) value under Tasks\{GUID} is
         # deleted, which hides the task from schtasks.exe and the Task Scheduler
@@ -251,7 +268,22 @@ if (-not $tOk -or $treeTasks.Count -eq 0) {
             $vals = $null
             try { $vals = (Get-Item -LiteralPath $tk -EA Stop).GetValueNames() } catch {}
             if ($null -eq $vals) { $unreadable++; continue }
-            if ($vals -notcontains 'SD') { $noSd += ("{0}  (Id {1})" -f $tt.Path, $tt.Id) }
+            $inspected++
+            if ($vals -notcontains 'SD') {
+                # CORROBORATION IS REQUIRED. Each signal alone false-positives:
+                # a missing SD in this registry view happens for ordinary tasks
+                # (CI measured it for EVERY task at admin privilege -- reading
+                # descriptors here really wants SYSTEM), and a Tree entry the
+                # scheduler does not return is usually just stale. Tarrask is
+                # the INTERSECTION: the task is hidden from Task Scheduler AND
+                # its descriptor is gone. Demanding both collapses both
+                # false-positive sources while still catching the real technique.
+                if ($liveOk -and -not $live.ContainsKey(($tt.Path).ToLower())) {
+                    $noSd += ("{0}  (Id {1})" -f $tt.Path, $tt.Id)
+                } else {
+                    $sdOnly++
+                }
+            }
         }
     }
     # Safety net independent of the cause: a real Tarrask implant hides ONE task
@@ -260,12 +292,23 @@ if (-not $tOk -or $treeTasks.Count -eq 0) {
     # spot honestly instead of burying the user in false criticals. Kept
     # conservative (only when there is a real population to judge) so a genuine
     # single-task hit on a small task list is never suppressed.
-    if ($treeTasks.Count -ge 10 -and $noSd.Count -eq $treeTasks.Count) {
-        "[SKIPPED] All $($treeTasks.Count) task security descriptors were unreadable -- hidden-task check NOT performed (reading TaskCache SD values generally requires SYSTEM, not just admin)."
+    # Proportion guard, independent of cause: a real implant hides one task or a
+    # few. If a large share of everything inspected trips the rule, that is a
+    # platform or permissions artifact -- say so instead of emitting a wall of
+    # false criticals a frightened user cannot evaluate.
+    if ($inspected -ge 10 -and $noSd.Count -gt [int]($inspected * 0.25)) {
+        "[SKIPPED] $($noSd.Count) of $inspected tasks matched the hidden-task rule -- implausibly many, treated as a platform/permissions artifact rather than a compromise. Hidden-task check NOT performed."
         $sev = Get-MaxSev $sev 'WARNING'
         $noSd = @()
-    } elseif ($unreadable -gt 0) {
-        "[INFO] $unreadable task(s) could not be inspected for a security descriptor; the rest were checked."
+    }
+    if (-not $liveOk) {
+        '[INFO] Task Scheduler could not be enumerated, so missing-descriptor hits could not be corroborated -- hidden-task detection ran without its second signal.'
+    }
+    if ($sdOnly -gt 0) {
+        "[INFO] $sdOnly task(s) lack a readable security descriptor but ARE enumerable by Task Scheduler -- expected at admin privilege (descriptor reads want SYSTEM), not treated as hidden."
+    }
+    if ($unreadable -gt 0) {
+        "[INFO] $unreadable task(s) could not be inspected at all; the remaining $inspected were checked."
     }
     if ($noSd.Count -gt 0) {
         '[CRITICAL] Scheduled task registered in TaskCache with NO security descriptor (SD) -- Tarrask-style hidden task (T1053.005):'

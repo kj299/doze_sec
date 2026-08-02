@@ -411,10 +411,12 @@ jobs:
             New-Item -Path "$tc\Tree\dz_ci_hidden" -Force | Out-Null
             Set-ItemProperty -Path "$tc\Tree\dz_ci_hidden" -Name 'Id' -Value $guid -Force
             New-Item -Path "$tc\Tasks\$guid" -Force | Out-Null
-            # (a) Tasks entry WITHOUT an SD value = the Tarrask hidden-task IOC.
+            # (a) Tasks entry WITHOUT an SD value AND absent from the real Task
+            # Scheduler (it only exists in this synthetic hive) = both signals
+            # Tarrask requires, so it must be reported.
             $md2 = Join-Path $md 'tarrask'
             New-Item -ItemType Directory -Path $md2 -Force | Out-Null
-            $t1 = (.\tools\cross_api_check.ps1 -MarkerDir $md2 -TreeRoot "$tc\Tree" -TasksRoot "$tc\Tasks" -SkipLiveTaskCompare) -join "`n"
+            $t1 = (.\tools\cross_api_check.ps1 -MarkerDir $md2 -TreeRoot "$tc\Tree" -TasksRoot "$tc\Tasks") -join "`n"
             Write-Host ($t1 -split "`n" | Where-Object { $_ -match 'Tarrask|security descriptor|dz_ci_hidden' })
             if ($t1 -notmatch 'NO security descriptor') { throw 'missing-SD task was not reported as Tarrask-style hidden' }
             if ((Get-Content (Join-Path $md2 'dz_crossapi.txt')).Trim() -ne 'CRITICAL') { throw 'Tarrask finding did not write a CRITICAL marker' }
@@ -423,7 +425,7 @@ jobs:
             Set-ItemProperty -Path "$tc\Tasks\$guid" -Name 'SD' -Value ([byte[]](1,2,3,4)) -Type Binary -Force
             $md3 = Join-Path $md 'withsd'
             New-Item -ItemType Directory -Path $md3 -Force | Out-Null
-            $t2 = (.\tools\cross_api_check.ps1 -MarkerDir $md3 -TreeRoot "$tc\Tree" -TasksRoot "$tc\Tasks" -SkipLiveTaskCompare) -join "`n"
+            $t2 = (.\tools\cross_api_check.ps1 -MarkerDir $md3 -TreeRoot "$tc\Tree" -TasksRoot "$tc\Tasks") -join "`n"
             if ($t2 -match 'NO security descriptor') { throw 'task WITH an SD was still reported as hidden (false positive)' }
           } finally {
             Remove-Item $tc -Recurse -Force -EA SilentlyContinue
