@@ -1,0 +1,66 @@
+# emulation_corpus.txt -- adversary-emulation coverage declarations.
+# Read by tools/emulation_coverage.ps1. Format: CLASS|TECHNIQUE|reason
+#
+# CLASS:
+#   CORE       -- a high-value detection that MUST stay emulated by a harness
+#                 plant. emulation_coverage.ps1 -Strict fails if any CORE
+#                 technique loses its plant, so a core detection cannot be left
+#                 silently untested.
+#   CI         -- emulated by a plant in an isolated helpers-ps51 step rather
+#                 than the full-audit harness (planting it in a live audit run
+#                 is fragile or would contaminate other checks). Credited as
+#                 emulated; not required to have a full-harness plant.
+#   UNTESTABLE -- planting this on a shared machine would be destructive or
+#                 unsafe, OR the detection is informational (no raised finding
+#                 to assert). Excluded from the backlog with the reason stated.
+#
+# Everything the audit detects that is NOT listed here and NOT tagged on a
+# harness case is BACKLOG -- a real detection that could be tested but is not
+# yet. emulation_coverage.ps1 prints the backlog; it does not hide it.
+
+# ---- CORE: must stay emulated by a harness plant ----
+CORE|T1003.001|WDigest plaintext credential caching
+CORE|T1037.001|UserInitMprLogonScript logon script
+CORE|T1078.001|default (Guest) account enabled
+CORE|T1090|netsh portproxy tunnel
+CORE|T1546.002|malicious screensaver
+CORE|T1546.009|AppCert DLL
+CORE|T1546.010|AppInit_DLLs injection
+CORE|T1546.013|PowerShell profile cradle
+CORE|T1546.015|HKCU COM CLSID hijack
+CORE|T1547|credential provider persistence
+CORE|T1547.001|Run key / Startup folder autorun
+CORE|T1547.003|time provider
+CORE|T1547.004|Winlogon Notify
+CORE|T1556.002|LSA notification / password-filter DLL
+CORE|T1556.008|rogue network provider (NPPSPY)
+CORE|T1562.001|BYOVD / unsigned kernel driver
+CORE|T1564.002|account hidden from the sign-in screen
+
+# ---- CI: emulated in an isolated helpers-ps51 step ----
+CI|T1014|Tarrask hidden task, via a synthetic TaskCache hive (cross_api_check)
+CI|T1053.005|hidden scheduled task, synthetic hive (cross_api_check)
+CI|T1055|process injection, staged DLL loaded into the test process (module_inspect)
+CI|T1574|DLL hijack, staged DLL loaded from a drop path (module_inspect)
+CI|T1546.007|netsh helper DLL (persistence_extra isolated plant)
+CI|T1547.010|print port monitor (persistence_extra isolated plant)
+CI|T1547.012|print processor (persistence_extra isolated plant)
+
+# ---- UNTESTABLE by design ----
+UNTESTABLE|T1486|encrypting files on the runner is destructive
+UNTESTABLE|T1490|deleting volume shadow copies is destructive and unrecoverable
+UNTESTABLE|T1070.001|clearing the Security log destroys evidence; verified read-only against the live 1102 state instead
+UNTESTABLE|T1548|disabling UAC lowers the machine's protection; verified read-only against live EnableLUA instead
+UNTESTABLE|T1548.002|see T1548 -- UAC bypass/disable is not safe to plant
+UNTESTABLE|T1553.006|enabling testsigning changes the kernel driver-signing policy and needs a reboot
+UNTESTABLE|T1562.002|disabling Windows auditing would blind other checks; verified read-only against the live audit policy instead
+UNTESTABLE|T1112|generic Modify Registry has no single safe artifact to plant
+UNTESTABLE|T1113|enabling RDP session shadowing changes the machine's remote-access policy
+UNTESTABLE|T1123|audio-capture consent is informational only (ordinary apps hold it); no raised finding to assert
+UNTESTABLE|T1125|video-capture consent is informational only; no raised finding to assert
+UNTESTABLE|T1430|location consent is informational only; no raised finding to assert
+UNTESTABLE|T1190|exploiting a public-facing application has no benign on-host artifact to plant
+UNTESTABLE|T1195|supply-chain compromise has no benign on-host artifact to plant
+UNTESTABLE|T1204.002|requires a human to open a malicious file; not safely automatable
+UNTESTABLE|T1210|exploiting a remote service is not safe to emulate on a shared runner
+UNTESTABLE|T1566.001|spearphishing attachment has no safe on-host plant
