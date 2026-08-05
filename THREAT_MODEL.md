@@ -25,6 +25,16 @@ user a safe, reviewable path to fix it. The protection chain it supports:
 Every endpoint-relevant tactic has at least partial coverage. "Where" lists
 the primary audit sections.
 
+The table below is written by hand for readability, but it is no longer the
+source of truth. Every run emits an **auto-derived ATT&CK coverage matrix**
+(`tools/attack_matrix.ps1`): it scans the actual `.bat`/`.ps1` sources for every
+technique id they reference, maps each to its tactic via `ttp_manifest.txt`,
+groups the result by tactic, marks which techniques fired on this machine, and
+names the tactics with the least coverage as gaps. CI runs it in `-Strict` mode,
+which fails the build if any technique the code references is missing a manifest
+mapping -- so a new detection cannot quietly ship without appearing in the
+coverage picture, and the numbers here cannot drift from what the tool does.
+
 | Tactic | Coverage | Where |
 |---|---|---|
 | Initial Access | Partial — artifacts, not prevention | S1 (patch level), S13 (Office macro policy, MOTW, SmartScreen state), S14 (HTML smuggling, Downloads), S18 AiTM token cache |

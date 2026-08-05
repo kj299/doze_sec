@@ -515,6 +515,26 @@ jobs:
           Write-Host "stalkerware_check.ps1 OK"
           exit 0
 
+      - name: attack_matrix.ps1 (coverage matrix derived from code; completeness enforced)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # -Strict makes the tool exit non-zero if any technique referenced in
+          # the audit is missing a ttp_manifest mapping. This is the guarantee
+          # that the coverage matrix cannot silently drift from what the code
+          # actually detects: add a detection with a new technique id and forget
+          # to describe it, and THIS job fails until the mapping is added.
+          $out = (.\tools\attack_matrix.ps1 -SourceDir . -Strict) -join "`n"
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw "attack_matrix -Strict found technique ids referenced by the audit but not mapped in ttp_manifest.txt (see WARNING lines above)" }
+          if ($out -notmatch 'ATT&CK COVERAGE MATRIX') { throw 'matrix header missing' }
+          if ($out -notmatch 'coverage matrix is complete') { throw 'completeness line missing -- unexpected unmapped techniques' }
+          # Sanity: the audit's heaviest tactic must show real coverage, or the
+          # source scan silently found nothing (e.g. a path/regex regression).
+          if ($out -notmatch '(?m)^Persistence\s+\((\d+)\)') { throw 'Persistence tactic group missing from the matrix' }
+          Write-Host "attack_matrix.ps1 OK"
+          exit 0
+
       - name: service_signature_check.ps1 (real services + Authenticode; svchost must resolve)
         shell: powershell
         run: |

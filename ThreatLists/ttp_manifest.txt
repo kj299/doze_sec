@@ -75,3 +75,56 @@ T1048|Exfiltration|Exfil Over Alternative Protocol|APT29,Volt Typhoon|Sec 3 DNS 
 T1486|Impact|Data Encrypted for Impact|All ransomware|Sec 18 process IOCs
 T1490|Impact|Inhibit System Recovery|All ransomware|Sec 18 LOLBin vssadmin/bcdedit
 T1489|Impact|Service Stop|Ransomware|Sec 18 LOLBin patterns
+
+#
+# === COVERAGE ADDITIONS (techniques the audit detects; keeps the ATT&CK
+# === coverage matrix complete -- attack_matrix.ps1 + CI enforce that every
+# === technique referenced in the audit has a mapping line here) ===
+T1021|Lateral Movement|Remote Services|-|Sec 10 SMB/RDP/WinRM
+T1037.001|Persistence|Logon Script (Windows)|-|Sec 5 logon_persistence
+T1053|Persistence|Scheduled Task/Job|-|Sec 6 scheduled tasks
+T1055|Defense Evasion|Process Injection|-|Sec 4 module_inspect
+T1057|Discovery|Process Discovery|-|Sec 4 process enum
+T1059|Execution|Command and Scripting Interpreter|-|Sec 11 PowerShell
+T1071|C2|Application Layer Protocol|-|Sec 3 connections
+T1071.004|C2|DNS|-|Sec 3 DNS cache / dns_probe
+T1074|Collection|Data Staged|-|Sec 14 staging dirs
+T1078.001|Initial Access|Default Accounts|-|Sec 2 Guest account
+T1090|C2|Proxy|-|Sec 3/17 portproxy
+T1098|Persistence|Account Manipulation|-|Sec 16 4732 admin-group change
+T1112|Defense Evasion|Modify Registry|-|Sec 5/9 registry checks
+T1113|Collection|Screen Capture|-|Sec 10 stalkerware (RDP shadow)
+T1123|Collection|Audio Capture|-|Sec 10 stalkerware (mic consent)
+T1125|Collection|Video Capture|-|Sec 10 stalkerware (camera consent)
+T1136|Persistence|Create Account|-|Sec 16 4720 new account
+T1176|Persistence|Browser Extensions|-|Sec 15 browser_extensions
+T1195|Initial Access|Supply Chain Compromise|-|Sec 9/17 signature gating
+T1204.002|Execution|User Execution: Malicious File|-|Sec 14 suspicious files
+T1210|Lateral Movement|Exploitation of Remote Services|-|Sec 10 SMBv1
+T1430|Collection|Location Tracking|-|Sec 10 stalkerware (location consent)
+T1528|Credential Access|Steal Application Access Token|-|Sec 18 cloud cred stores
+T1543|Persistence|Create or Modify System Process|-|Sec 7 services / baseline
+T1546.002|Persistence|Event Triggered Execution: Screensaver|-|Sec 5 logon_persistence
+T1546.007|Persistence|Netsh Helper DLL|-|Sec 5 persistence_extra
+T1546.009|Persistence|AppCert DLLs|-|Sec 5 startup_eval
+T1546.010|Persistence|AppInit DLLs|-|Sec 5 Winlogon/AppInit
+T1546.013|Persistence|PowerShell Profile|-|Sec 5 persistence_extra
+T1547|Persistence|Boot or Logon Autostart Execution|-|Sec 5 startup/logon
+T1547.002|Persistence|Authentication Package|-|Sec 5 logon_persistence
+T1547.003|Persistence|Time Providers|-|Sec 5 persistence_extra
+T1547.004|Persistence|Winlogon Helper DLL|-|Sec 5 Winlogon Userinit/Shell
+T1547.010|Persistence|Port Monitors|-|Sec 5 persistence_extra
+T1547.012|Persistence|Print Processors|-|Sec 5 persistence_extra
+T1548|Priv Esc|Abuse Elevation Control Mechanism|-|Sec 13 UAC
+T1550.001|Lateral Movement|Application Access Token|-|Sec 12 token theft context
+T1550.002|Lateral Movement|Pass the Hash|-|Sec 12 NTLM/WDigest
+T1553.006|Defense Evasion|Code Signing Policy Modification|-|Sec 13 testsigning
+T1555.003|Credential Access|Credentials from Web Browsers|-|Sec 18 browser cred stores
+T1555.004|Credential Access|Windows Credential Manager|-|Sec 12/18 cred stores
+T1556.002|Credential Access|Password Filter DLL|-|Sec 5 logon_persistence (LSA)
+T1556.008|Credential Access|Network Provider DLL|-|Sec 5 logon_persistence (NPPSPY)
+T1562.002|Defense Evasion|Disable Windows Event Logging|-|Sec 16 audit_policy_check
+T1564|Defense Evasion|Hide Artifacts|-|Sec 10 stalkerware / Sec 17 cross_api
+T1564.002|Defense Evasion|Hidden Users|-|Sec 10 stalkerware (hidden account)
+T1574|Persistence|Hijack Execution Flow|-|Sec 4 module_inspect / Sec 7 services
+T1574.001|Persistence|DLL Search Order Hijacking|-|Sec 4 module_inspect
