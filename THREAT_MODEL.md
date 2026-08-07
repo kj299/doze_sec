@@ -35,6 +35,16 @@ which fails the build if any technique the code references is missing a manifest
 mapping -- so a new detection cannot quietly ship without appearing in the
 coverage picture, and the numbers here cannot drift from what the tool does.
 
+Coverage of *detections* is measured the same way. `tools/emulation_coverage.ps1`
+cross-references the techniques the audit detects against the techniques a test
+actually plants (the `Attack` tags on the detection harness, plus isolated CI
+plants), and reports the emulation-coverage percentage of the testable surface,
+the not-yet-emulated backlog, and the techniques declared untestable (with a
+reason -- destructive to plant, or informational-only). CI runs it `-Strict`:
+a core detection that loses its plant, or a test that references a technique the
+audit no longer detects, fails the build. So a detection can neither silently
+break untested nor drift out of sync with its test.
+
 | Tactic | Coverage | Where |
 |---|---|---|
 | Initial Access | Partial — artifacts, not prevention | S1 (patch level), S13 (Office macro policy, MOTW, SmartScreen state), S14 (HTML smuggling, Downloads), S18 AiTM token cache |

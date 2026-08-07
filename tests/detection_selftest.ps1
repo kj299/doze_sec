@@ -82,6 +82,14 @@ $envKey      = 'HKCU:\Environment'
 $drvPlant    = "C:\Users\Public\{0}.sys" -f $MARK
 # Covert-monitoring: an account hidden from the sign-in screen (T1564.002).
 $userListKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList'
+# AppInit_DLLs injection (T1546.010) and HKCU COM CLSID hijack (T1546.015).
+$appInitKey  = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows'
+$script:appInitPrev = $null
+$comKey      = 'HKCU:\Software\Classes\CLSID\{dead1111-0000-0000-0000-00000000c015}'
+# NOTE: the COM check ignores any InprocServer32 path containing Windows/
+# System32/Microsoft, so the planted DLL path must be neutral (Public), which is
+# also a staging path the check treats as suspicious.
+$comDll      = 'C:\Users\Public\dz_selftest_evil_com.dll'
 # Baseline/diff: the audit auto-diffs when a snapshot exists at OUTDIR. The
 # harness seeds one BEFORE the audit runs, with the planted Run-key backdoor
 # deliberately absent from it, so the audit's diff must report that autorun as
@@ -93,6 +101,7 @@ $baselineFile = Join-Path $OutDir 'baseline.snapshot'
 $cases = @(
     @{
         Name   = 'WDigest UseLogonCredential=1 -> CRITICAL (plaintext creds in RAM)'
+        Attack = @('T1003.001')
         Tier   = 'required'
         Expect = 'WDigest ENABLED'
         Plant  = { New-Item -Path $wdigestKey -Force | Out-Null
@@ -109,6 +118,7 @@ $cases = @(
     },
     @{
         Name   = 'Run-key backdoor (encoded PowerShell) -> flagged as suspicious'
+        Attack = @('T1547.001')
         Tier   = 'required'  # persistence_eval.ps1 evaluates Run keys (issue #138)
         Expect = ('(?im)(\[(WARNING|CRITICAL)\][^\r\n]*{0}|{0}[^\r\n]*(suspicious|encoded|backdoor))' -f $MARK)
         Plant  = { if (-not (Test-Path $runKey)) { New-Item -Path $runKey -Force | Out-Null }
@@ -125,6 +135,7 @@ $cases = @(
     },
     @{
         Name   = 'Startup-folder script autorun -> flagged (T1547.001)'
+        Attack = @('T1547.001')
         Tier   = 'required'  # startup_eval.ps1; same dump-without-verdict class as #138
         Expect = ('(?im)\[(WARNING|CRITICAL)\] Startup item [^\r\n]*{0}' -f $MARK)
         Plant  = { Set-Content -LiteralPath $startupVbs -Value "WScript.Echo ""$MARK""" -Encoding ASCII }
@@ -132,6 +143,7 @@ $cases = @(
     },
     @{
         Name   = 'AppCert DLL registered -> flagged (T1546.009)'
+        Attack = @('T1546.009')
         Tier   = 'required'  # startup_eval.ps1; uncovered sibling of AppInit_DLLs
         Expect = ('(?im)\[(WARNING|CRITICAL)\] AppCert DLL [^\r\n]*{0}' -f $MARK)
         Plant  = { if (-not (Test-Path $appcertKey)) { New-Item -Path $appcertKey -Force | Out-Null }
@@ -140,6 +152,7 @@ $cases = @(
     },
     @{
         Name   = 'Unsigned kernel driver in a drop location -> flagged (BYOVD/T1562.001)'
+        Attack = @('T1562.001')
         Tier   = 'required'  # driver_audit.ps1; signature catch-all -- renaming cannot evade
         Expect = ('(?im)\[(WARNING|CRITICAL)\] Driver [^\r\n]*{0}\.sys' -f $MARK)
         Plant  = { Set-Content -LiteralPath $drvPlant -Value 'MZ not-a-real-driver' -Encoding ASCII }
@@ -147,6 +160,7 @@ $cases = @(
     },
     @{
         Name   = 'Account hidden from the sign-in screen -> flagged (T1564.002)'
+        Attack = @('T1564.002')
         Tier   = 'required'  # stalkerware_check.ps1; covert-monitoring path
         Expect = ('(?im)\[(WARNING|CRITICAL)\][^\r\n]*HIDDEN[^\r\n]*{0}' -f $MARK)
         Plant  = { if (-not (Test-Path $userListKey)) { New-Item -Path $userListKey -Force | Out-Null }
@@ -154,7 +168,27 @@ $cases = @(
         Cleanup= { Remove-ItemProperty -Path $userListKey -Name $MARK -EA SilentlyContinue }
     },
     @{
+        Name   = 'AppInit_DLLs set -> flagged (T1546.010)'
+        Attack = @('T1546.010')
+        Tier   = 'required'  # emulation corpus; DLL injected into every GUI process
+        Expect = '(?im)\[CRITICAL\] AppInit_DLLs is set \(T1546\.010\)'
+        Plant  = { $script:appInitPrev = (Get-ItemProperty -Path $appInitKey -Name 'AppInit_DLLs' -EA SilentlyContinue).AppInit_DLLs
+                   Set-ItemProperty -Path $appInitKey -Name 'AppInit_DLLs' -Value $comDll -Force }
+        Cleanup= { if ($null -ne $script:appInitPrev) { Set-ItemProperty -Path $appInitKey -Name 'AppInit_DLLs' -Value $script:appInitPrev -Force }
+                   else { Set-ItemProperty -Path $appInitKey -Name 'AppInit_DLLs' -Value '' -Force } }
+    },
+    @{
+        Name   = 'HKCU COM CLSID InprocServer32 hijack -> flagged (T1546.015)'
+        Attack = @('T1546.015')
+        Tier   = 'required'  # emulation corpus; userland COM persistence
+        Expect = '(?im)\[T1546\.015\][\s\S]{0,800}dz_selftest_evil_com'
+        Plant  = { New-Item -Path "$comKey\InprocServer32" -Force | Out-Null
+                   Set-ItemProperty -Path "$comKey\InprocServer32" -Name '(default)' -Value $comDll -Force }
+        Cleanup= { Remove-Item -Path $comKey -Recurse -Force -EA SilentlyContinue }
+    },
+    @{
         Name   = 'Time provider DLL registered -> flagged (T1547.003)'
+        Attack = @('T1547.003')
         Tier   = 'required'  # persistence_extra.ps1; W32Time loads these as SYSTEM
         # Planting the subkey is inert: W32Time only loads providers when the
         # service starts, and the harness never restarts it.
@@ -165,6 +199,7 @@ $cases = @(
     },
     @{
         Name   = 'PowerShell profile with a download cradle -> flagged (T1546.013)'
+        Attack = @('T1546.013')
         Tier   = 'required'  # persistence_extra.ps1; content is judged, not existence
         Expect = '(?im)\[(WARNING|CRITICAL)\] PowerShell profile [^\r\n]*'
         Plant  = { if (-not (Test-Path $psProfDir)) { New-Item -ItemType Directory -Path $psProfDir -Force | Out-Null }
@@ -178,6 +213,7 @@ $cases = @(
     },
     @{
         Name   = 'Guest account enabled -> WARNING'
+        Attack = @('T1078.001')
         Tier   = 'required'  # Section 2 now emits a SID -501 verdict (issue #138)
         Expect = '(?im)\[(WARNING|CRITICAL)\][^\r\n]*guest'
         Plant  = { & net user guest /active:yes | Out-Null }
@@ -185,6 +221,7 @@ $cases = @(
     },
     @{
         Name   = 'netsh portproxy rule active -> WARNING (Volt Typhoon C2 tunnel IOC)'
+        Attack = @('T1090')
         Tier   = 'required'
         Expect = '(?im)\[WARNING\] netsh portproxy rules ACTIVE'
         Plant  = { $r = & netsh interface portproxy add v4tov4 listenport=53219 listenaddress=127.0.0.1 connectport=80 connectaddress=127.0.0.1
@@ -308,6 +345,7 @@ $cases = @(
     },
     @{
         Name   = 'Winlogon Notify package -> flagged (logon/unlock persistence)'
+        Attack = @('T1547.004')
         Tier   = 'required'
         Expect = '(?im)Winlogon Notify subkey[^\r\n]*dz_selftest_evil'
         Plant  = { New-Item -Path $notifyKey -Force | Out-Null
@@ -316,6 +354,7 @@ $cases = @(
     },
     @{
         Name   = 'Rogue Network Provider (NPPSPY) -> flagged (cleartext cred capture)'
+        Attack = @('T1556.008')
         Tier   = 'required'
         Expect = '(?im)network provider .?dz_selftest_np'
         Plant  = { $script:npPrevOrder = (Get-ItemProperty -Path $npOrderKey -Name ProviderOrder -EA Stop).ProviderOrder
@@ -327,6 +366,7 @@ $cases = @(
     },
     @{
         Name   = 'Rogue Credential Provider DLL -> flagged (logon/unlock capture)'
+        Attack = @('T1547')
         Tier   = 'required'
         Expect = '(?im)Credential provider [^\r\n]*deadbeef'
         Plant  = { New-Item -Path $cpKey -Force | Out-Null
@@ -337,6 +377,7 @@ $cases = @(
     },
     @{
         Name   = 'Rogue LSA Notification package -> flagged (lsass credential capture)'
+        Attack = @('T1556.002')
         Tier   = 'required'
         Expect = "(?im)LSA Notification Packages package 'dz_selftest_lsa'"
         # Inert until reboot (lsass only re-reads at boot); restored in cleanup.
@@ -347,6 +388,7 @@ $cases = @(
     },
     @{
         Name   = 'Malicious screensaver (SCRNSAVE.EXE staging path) -> flagged'
+        Attack = @('T1546.002')
         Tier   = 'required'
         Expect = '(?im)Screensaver SCRNSAVE\.EXE -> C:\\Users\\Public\\dz_evil\.scr'
         Plant  = { $script:scrPrev = (Get-ItemProperty -Path $scrDeskKey -Name 'SCRNSAVE.EXE' -EA SilentlyContinue).'SCRNSAVE.EXE'
@@ -356,6 +398,7 @@ $cases = @(
     },
     @{
         Name   = 'UserInitMprLogonScript logon script -> flagged'
+        Attack = @('T1037.001')
         Tier   = 'required'
         Expect = '(?im)UserInitMprLogonScript is set'
         Plant  = { Set-ItemProperty -Path $envKey -Name UserInitMprLogonScript -Value 'C:\Users\Public\dz_evil.bat' -Force }
@@ -756,6 +799,21 @@ try {
         Write-Host "  [ OK       ] coverage matrix reports itself complete (no unmapped techniques)"
     } else {
         Write-Host "  [ REGRESS  ] coverage matrix reports unmapped techniques -- ttp_manifest drifted from the code"; $requiredFail++
+    }
+
+    # Emulation corpus consistency, checked live against the very sources and
+    # harness this run used: every CORE detection must have a plant and no tag
+    # may reference a technique the audit no longer detects. This is the
+    # test-coverage analogue of the ATT&CK matrix's completeness gate.
+    $ecTool = Join-Path (Split-Path -Parent $PSCommandPath) '..\tools\emulation_coverage.ps1'
+    if (Test-Path -LiteralPath $ecTool) {
+        $ecRepo = (Resolve-Path (Join-Path (Split-Path -Parent $PSCommandPath) '..')).Path
+        $ecOut = (& $ecTool -SourceDir $ecRepo) -join "`n"
+        if ($ecOut -match 'Emulation corpus is consistent') {
+            Write-Host "  [ OK       ] emulation corpus is consistent (every core detection has a plant; no stale tags)"
+        } else {
+            Write-Host "  [ REGRESS  ] emulation corpus drifted -- a core detection lost its plant or a tag is stale"; $requiredFail++
+        }
     }
 
     # Exit-code architecture (code-review W1-W3): a planted CRITICAL (WDigest=1)

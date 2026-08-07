@@ -535,6 +535,24 @@ jobs:
           Write-Host "attack_matrix.ps1 OK"
           exit 0
 
+      - name: emulation_coverage.ps1 (adversary-emulation corpus; -Strict guards drift)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # -Strict fails if a CORE detection lost its plant, or if any Attack
+          # tag / corpus line names a technique the audit no longer detects.
+          # The backlog (detections not yet emulated) is allowed to be non-empty
+          # and is printed, not gated -- pretending every technique is testable
+          # would be dishonest; silent drift is what this prevents.
+          $out = (.\tools\emulation_coverage.ps1 -SourceDir . -Strict) -join "`n"
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw "emulation_coverage -Strict found corpus drift (a core detection lost its plant, or a stale tag) -- see WARNING lines above" }
+          if ($out -notmatch 'ADVERSARY-EMULATION COVERAGE') { throw 'coverage header missing' }
+          if ($out -notmatch 'Emulation corpus is consistent') { throw 'consistency line missing -- unexpected corpus drift' }
+          if ($out -notmatch '(?m)^Emulation coverage of the testable surface: \d+%') { throw 'coverage percentage missing -- source scan or harness parse regressed' }
+          Write-Host "emulation_coverage.ps1 OK"
+          exit 0
+
       - name: service_signature_check.ps1 (real services + Authenticode; svchost must resolve)
         shell: powershell
         run: |
