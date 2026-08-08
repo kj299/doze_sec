@@ -36,6 +36,10 @@ CORE|T1556.002|LSA notification / password-filter DLL
 CORE|T1556.008|rogue network provider (NPPSPY)
 CORE|T1562.001|BYOVD / unsigned kernel driver
 CORE|T1564.002|account hidden from the sign-in screen
+CORE|T1543.003|Windows service creation with a suspicious path
+CORE|T1546.008|accessibility-binary IFEO hijack (sethc.exe)
+CORE|T1547.002|LSA authentication package
+CORE|T1562.004|firewall profile disabled
 
 # ---- CI: emulated in an isolated helpers-ps51 step ----
 CI|T1014|Tarrask hidden task, via a synthetic TaskCache hive (cross_api_check)
