@@ -75,6 +75,8 @@ $cpClsidKey  = "HKLM:\SOFTWARE\Classes\CLSID\$cpGuid"
 # Tier 2 logon/unlock plants
 $lsaKey      = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
 $script:lsaPrevNotify = $null
+$script:lsaPrevAuth = $null
+$sethcIfeoKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\sethc.exe'
 $scrDeskKey  = 'HKCU:\Control Panel\Desktop'
 $script:scrPrev = $null
 $envKey      = 'HKCU:\Environment'
@@ -152,7 +154,7 @@ $cases = @(
     },
     @{
         Name   = 'Unsigned kernel driver in a drop location -> flagged (BYOVD/T1562.001)'
-        Attack = @('T1562.001')
+        Attack = @('T1562.001', 'T1068')
         Tier   = 'required'  # driver_audit.ps1; signature catch-all -- renaming cannot evade
         Expect = ('(?im)\[(WARNING|CRITICAL)\] Driver [^\r\n]*{0}\.sys' -f $MARK)
         Plant  = { Set-Content -LiteralPath $drvPlant -Value 'MZ not-a-real-driver' -Encoding ASCII }
@@ -160,7 +162,7 @@ $cases = @(
     },
     @{
         Name   = 'Account hidden from the sign-in screen -> flagged (T1564.002)'
-        Attack = @('T1564.002')
+        Attack = @('T1564.002', 'T1564')
         Tier   = 'required'  # stalkerware_check.ps1; covert-monitoring path
         Expect = ('(?im)\[(WARNING|CRITICAL)\][^\r\n]*HIDDEN[^\r\n]*{0}' -f $MARK)
         Plant  = { if (-not (Test-Path $userListKey)) { New-Item -Path $userListKey -Force | Out-Null }
@@ -185,6 +187,25 @@ $cases = @(
         Plant  = { New-Item -Path "$comKey\InprocServer32" -Force | Out-Null
                    Set-ItemProperty -Path "$comKey\InprocServer32" -Name '(default)' -Value $comDll -Force }
         Cleanup= { Remove-Item -Path $comKey -Recurse -Force -EA SilentlyContinue }
+    },
+    @{
+        Name   = 'Accessibility IFEO hijack on sethc.exe -> flagged (T1546.008)'
+        Attack = @('T1546.008')
+        Tier   = 'required'  # emulation corpus; nation-state login-screen backdoor
+        Expect = '(?im)\[CRITICAL\] IFEO Debugger hijack: sethc\.exe'
+        Plant  = { New-Item -Path $sethcIfeoKey -Force | Out-Null
+                   Set-ItemProperty -Path $sethcIfeoKey -Name 'Debugger' -Value 'cmd.exe' -Force }
+        Cleanup= { Remove-Item -Path $sethcIfeoKey -Recurse -Force -EA SilentlyContinue }
+    },
+    @{
+        Name   = 'Rogue LSA Authentication package -> flagged (T1547.002)'
+        Attack = @('T1547.002')
+        Tier   = 'required'  # emulation corpus; sibling of the LSA Notification plant
+        Expect = "(?im)LSA Authentication Packages package 'dz_selftest_authpkg'"
+        Plant  = { $cur = @((Get-ItemProperty -Path $lsaKey -Name 'Authentication Packages' -EA Stop).'Authentication Packages')
+                   $script:lsaPrevAuth = $cur
+                   Set-ItemProperty -Path $lsaKey -Name 'Authentication Packages' -Value ($cur + 'dz_selftest_authpkg') -Type MultiString -Force }
+        Cleanup= { if ($null -ne $script:lsaPrevAuth) { Set-ItemProperty -Path $lsaKey -Name 'Authentication Packages' -Value $script:lsaPrevAuth -Type MultiString -Force } }
     },
     @{
         Name   = 'Time provider DLL registered -> flagged (T1547.003)'
@@ -295,6 +316,7 @@ $cases = @(
     },
     @{
         Name   = 'Flagged service (bad path) drives Section 7 verdict to ISSUES FOUND (wiring)'
+        Attack = @('T1543.003', 'T1543')
         Tier   = 'required'
         # A service binary under \Users\Public\ is flagged by
         # service_signature_check.ps1 (bad-path). Before the fix, the helper's
@@ -321,6 +343,7 @@ $cases = @(
     },
     @{
         Name   = 'Disabled firewall profile -> summary reports DISABLED (enum-robust)'
+        Attack = @('T1562.004')
         Tier   = 'required'
         # Get-NetFirewallProfile.Enabled is a GpoBoolean enum; the summary must
         # classify a disabled profile as off. The harness previously only ever
