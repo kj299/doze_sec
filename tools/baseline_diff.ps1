@@ -238,7 +238,14 @@ if ($Mode -eq 'Save') {
     try {
         $dir = Split-Path -Parent $Path
         if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-        Set-Content -LiteralPath $Path -Value ($header + $snapshot) -Encoding ASCII -EA Stop
+        # UTF8, not ASCII. -Encoding ASCII replaces every non-ASCII character
+        # with '?', so any record containing one -- a service display name, a
+        # task path, or a certificate subject with an accented or non-Latin
+        # character -- was stored mangled. It could then never match the live
+        # value again, producing a permanent false WARNING on every subsequent
+        # run: the diff would report the same item as CHANGED forever, which is
+        # precisely the noise that makes a change-detection feature unusable.
+        Set-Content -LiteralPath $Path -Value ($header + $snapshot) -Encoding UTF8 -EA Stop
         '--- Baseline Snapshot (saved) ---'
         "[OK] Baseline saved: $Path"
         "[OK] $($snapshot.Count) state record(s) captured (drivers, services, tasks, autoruns, ports, admins, root CAs)."
@@ -265,7 +272,7 @@ if (-not (Test-Path -LiteralPath $Path)) {
 
 $old = @{}
 try {
-    foreach ($ln in (Get-Content -LiteralPath $Path -EA Stop)) {
+    foreach ($ln in (Get-Content -LiteralPath $Path -Encoding UTF8 -EA Stop)) {
         $t = $ln.Trim()
         if (-not $t -or $t.StartsWith('#')) { continue }
         $f = $t.Split('|')

@@ -127,6 +127,7 @@ if (-not $pOk -or $setNet.Count -eq 0 -or $setWmi.Count -eq 0 -or $setTl.Count -
     # Re-verify: a process that merely started or exited mid-scan resolves
     # consistently (present everywhere, or gone everywhere) on the second look.
     $realHits = @()
+    $raced = 0   # candidates whose disagreement was explained by the process exiting
     if ($cand.Count -gt 0) {
         Start-Sleep -Milliseconds $SettleMs
         foreach ($procId in $cand) {
@@ -140,7 +141,21 @@ if (-not $pOk -or $setNet.Count -eq 0 -or $setWmi.Count -eq 0 -or $setTl.Count -
             $present = @($n2, $w2, $t2) | Where-Object { $_ }
             # Gone everywhere = it exited. Present everywhere = it started. Both benign.
             if ($present.Count -gt 0 -and $present.Count -lt 3) {
-                $realHits += ("PID {0} ({1}) -- .NET:{2} WMI:{3} tasklist:{4}" -f $procId, $nm, $n2, $w2, $t2)
+                # CLOSING LIVENESS CHECK. The three reads above are sequential,
+                # so a process that exits partway through is present in the
+                # earlier reads and absent from the later ones -- an ordinary
+                # race that looked identical to a hiding rootkit and was raised
+                # as CRITICAL. Re-read once more at the end: if the PID is gone
+                # now, the disagreement is explained by it exiting, not by
+                # concealment. A genuinely hidden process is still running and
+                # still disagrees.
+                $stillAlive = $false
+                try { if ([System.Diagnostics.Process]::GetProcessById($procId)) { $stillAlive = $true } } catch {}
+                if ($stillAlive) {
+                    $realHits += ("PID {0} ({1}) -- .NET:{2} WMI:{3} tasklist:{4}" -f $procId, $nm, $n2, $w2, $t2)
+                } else {
+                    $raced++
+                }
             }
         }
     }
@@ -151,6 +166,9 @@ if (-not $pOk -or $setNet.Count -eq 0 -or $setWmi.Count -eq 0 -or $setTl.Count -
         $sev = Get-MaxSev $sev 'CRITICAL'
     } else {
         "[OK] Process lists agree across .NET, WMI and tasklist ($($setNet.Count) processes; transient start/exit differences resolved on re-check)."
+    }
+    if ($raced -gt 0) {
+        "[INFO] $raced process(es) disagreed across APIs but had exited by the final re-check -- ordinary start/exit races, not concealment."
     }
 }
 
@@ -240,7 +258,14 @@ try {
                 # look like a Tarrask hit. Strip NULs and whitespace.
                 $idClean = ([string]$id) -replace "`0", '' 
                 $idClean = $idClean.Trim()
-                $full = $node.PSPath -replace ('^.*' + [regex]::Escape((Split-Path -Leaf $treeRoot))), ''
+                # NON-greedy. `^.*Tree` matched as far as the LAST occurrence,
+                # so a task whose own name contains the root's leaf -- a vendor
+                # task called "TreeSize Update", say -- was truncated at the
+                # wrong place ("Size Update"), and that bogus path never matched
+                # the live Get-ScheduledTask list. The corroboration signal was
+                # lost silently, for precisely the task whose name triggered it.
+                # `^.*?` stops at the root's own segment, which comes first.
+                $full = $node.PSPath -replace ('^.*?' + [regex]::Escape((Split-Path -Leaf $treeRoot))), ''
                 $treeTasks += New-Object PSObject -Property @{ Path = $full; Id = $idClean }
             }
             try { foreach ($c in (Get-ChildItem -LiteralPath $node.PSPath -EA SilentlyContinue)) { $stack.Push($c) } } catch {}
@@ -299,7 +324,9 @@ if (-not $tOk -or $treeTasks.Count -eq 0) {
     # few. If a large share of everything inspected trips the rule, that is a
     # platform or permissions artifact -- say so instead of emitting a wall of
     # false criticals a frightened user cannot evaluate.
+    $sdSuppressed = $false
     if ($inspected -ge 10 -and $noSd.Count -gt [int]($inspected * 0.25)) {
+        $sdSuppressed = $true
         "[SKIPPED] $($noSd.Count) of $inspected tasks matched the hidden-task rule -- implausibly many, treated as a platform/permissions artifact rather than a compromise. Hidden-task check NOT performed."
         $sev = Get-MaxSev $sev 'WARNING'
         $noSd = @()
@@ -328,8 +355,13 @@ if (-not $tOk -or $treeTasks.Count -eq 0) {
         '[CRITICAL] Deleting the SD value hides a task from schtasks and the Task Scheduler UI while it still runs. Used by HAFNIUM.'
         $sev = Get-MaxSev $sev 'CRITICAL'
     }
-    # Only claim a clean result when the check could actually reach one.
-    if ($noSd.Count -eq 0 -and $liveOk) {
+    # Only claim a clean result when the check could actually reach one. Two
+    # ways it cannot: the scheduler was unavailable ($liveOk false), or the
+    # proportion guard just emptied $noSd and said "Hidden-task check NOT
+    # performed". Without $sdSuppressed the second path printed that SKIPPED
+    # line and then, one branch later, "all carry a security descriptor" --
+    # contradicting itself in adjacent lines.
+    if ($noSd.Count -eq 0 -and $liveOk -and -not $sdSuppressed) {
         "[OK] No hidden scheduled tasks ($($treeTasks.Count) registered tasks; all carry a security descriptor)."
     }
 }

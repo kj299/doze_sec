@@ -191,6 +191,16 @@ foreach ($path in $ordered) {
     } elseif (-not $v.Valid) {
         if ($inCore) {
             $itemSev = 'CRITICAL'; $reason = $v.Why + ' inside a core security process'
+        } elseif ($v.Why -match 'not found on disk') {
+            # A module mapped into a process whose FILE DOES NOT EXIST is not
+            # the same thing as an unsigned vendor DLL, and folding it into
+            # $unsignedOther meant the classic in-memory injection signal was
+            # counted and then explained away as "common for legitimate
+            # third-party software". Reflectively-loaded and unbacked modules
+            # are exactly what this check exists to surface, so they are raised
+            # on their own rather than absorbed into a benign tally.
+            $itemSev = 'WARNING'
+            $reason = 'module is mapped into the process but its file is NOT on disk -- reflective or unbacked load, the standard in-memory injection pattern (T1055)'
         } else {
             # Unsigned DLLs outside the core security processes are ordinary on
             # real machines -- plenty of legitimate software ships unsigned

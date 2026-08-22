@@ -131,6 +131,7 @@ T1556.008|Credential Access|Network Provider DLL|-|Sec 5 logon_persistence (NPPS
 T1562.002|Defense Evasion|Disable Windows Event Logging|-|Sec 16 audit_policy_check
 T1564|Defense Evasion|Hide Artifacts|-|Sec 10 stalkerware / Sec 17 cross_api
 T1564.002|Defense Evasion|Hidden Users|-|Sec 10 stalkerware (hidden account)
+T1564.004|Defense Evasion|NTFS File Attributes (Alternate Data Streams)|-|Sec 14 ADS scan in TEMP
 T1574|Persistence|Hijack Execution Flow|-|Sec 4 module_inspect / Sec 7 services
 T1574.001|Persistence|DLL Search Order Hijacking|-|Sec 4 module_inspect
 #
