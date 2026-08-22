@@ -68,11 +68,12 @@ param(
     # always uses the defaults.
     [string]$TreeRoot  = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tree',
     [string]$TasksRoot = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tasks',
-    # Retained for compatibility with existing invocations. The comparison it
-    # used to gate (Tree entries vs live Get-ScheduledTask output) was removed
-    # after CI proved it false-positives on stock Windows, so this is now a
-    # no-op; the SD check below works identically against a real or synthetic
-    # hive and needs no scheduler probe.
+    # Skips the live Get-ScheduledTask probe, forcing the same degraded path a
+    # host takes when the Schedule service is stopped or tampered with. It was
+    # dead (documented as a no-op, passed by nobody); it now does what its name
+    # says, which gives CI a seam to prove the degraded path reports itself
+    # honestly instead of claiming a clean result it cannot reach. Production
+    # never passes it.
     [switch]$SkipLiveTaskCompare
 )
 
@@ -214,13 +215,15 @@ $tOk = $true
 # to enumerate is not fatal -- it just means corroboration is unavailable.
 $live = @{}
 $liveOk = $false
-try {
-    foreach ($t in (Get-ScheduledTask -EA Stop)) {
-        $full = ([string]$t.TaskPath).TrimEnd('\') + '\' + [string]$t.TaskName
-        $live[$full.ToLower()] = $true
-    }
-    $liveOk = ($live.Count -gt 0)
-} catch { $liveOk = $false }
+if (-not $SkipLiveTaskCompare) {
+    try {
+        foreach ($t in (Get-ScheduledTask -EA Stop)) {
+            $full = ([string]$t.TaskPath).TrimEnd('\') + '\' + [string]$t.TaskName
+            $live[$full.ToLower()] = $true
+        }
+        $liveOk = ($live.Count -gt 0)
+    } catch { $liveOk = $false }
+}
 
 $treeTasks = @()
 try {
@@ -302,7 +305,16 @@ if (-not $tOk -or $treeTasks.Count -eq 0) {
         $noSd = @()
     }
     if (-not $liveOk) {
-        '[INFO] Task Scheduler could not be enumerated, so missing-descriptor hits could not be corroborated -- hidden-task detection ran without its second signal.'
+        # NOT "ran without its second signal" -- it did not run at all. The rule
+        # is `$liveOk -and -not $live.ContainsKey(...)`, so with $liveOk false
+        # EVERY task takes the else branch, $noSd stays empty, and no hit is
+        # reachable. The old wording claimed a degraded check while the [OK]
+        # line below asserted every task carried a descriptor -- two false
+        # statements on a host where the Schedule service is stopped or
+        # tampered with, which is exactly what an implant that just planted a
+        # hidden task would arrange. Report the blind spot and raise it.
+        '[SKIPPED] Task Scheduler could not be enumerated, so the hidden-task (Tarrask) check could NOT run -- it requires both signals: a missing security descriptor AND absence from the scheduler. A stopped or tampered Schedule service is itself worth investigating.'
+        $sev = Get-MaxSev $sev 'WARNING'
     }
     if ($sdOnly -gt 0) {
         "[INFO] $sdOnly task(s) lack a readable security descriptor but ARE enumerable by Task Scheduler -- expected at admin privilege (descriptor reads want SYSTEM), not treated as hidden."
@@ -316,7 +328,8 @@ if (-not $tOk -or $treeTasks.Count -eq 0) {
         '[CRITICAL] Deleting the SD value hides a task from schtasks and the Task Scheduler UI while it still runs. Used by HAFNIUM.'
         $sev = Get-MaxSev $sev 'CRITICAL'
     }
-    if ($noSd.Count -eq 0) {
+    # Only claim a clean result when the check could actually reach one.
+    if ($noSd.Count -eq 0 -and $liveOk) {
         "[OK] No hidden scheduled tasks ($($treeTasks.Count) registered tasks; all carry a security descriptor)."
     }
 }

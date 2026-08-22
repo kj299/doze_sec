@@ -317,6 +317,36 @@ foreach ($k in $old.Keys) { if (-not $new.ContainsKey($k)) { $removed += $k } }
 # drivers would exhaust the budget and silently push an actual malicious new
 # autorun off the end of the report. Severity decides who gets printed, never
 # alphabetical luck.
+# Argument-content test for signed LOLBin hosts. Patterns are deliberately the
+# same ones persistence_eval.ps1 uses to judge Run-key values, so a command line
+# that would be flagged as an autorun is flagged here too.
+$lolbinHosts   = 'rundll32|regsvr32|mshta|powershell|pwsh|wscript|cscript|cmd|msiexec|installutil|certutil|bitsadmin|curl|wget|conhost|forfiles|mftrace'
+$strongContent = @(
+    '-enc(odedcommand)?\b',
+    '-e\s+[A-Za-z0-9+/=]{24,}',
+    'frombase64string',
+    'downloadstring', 'downloadfile',
+    '(invoke-webrequest|\biwr\b|\bcurl\b|\bwget\b)[^\r\n]*https?:',
+    '(iex|invoke-expression)\s*[\(\$]', '\|\s*(iex|invoke-expression)\b',
+    'mshta\s+https?:', 'mshta\s+javascript', 'mshtml,runhtmlapplication',
+    'certutil[^\r\n]*-urlcache', 'certutil[^\r\n]*-decode', 'bitsadmin[^\r\n]*/transfer',
+    'regsvr32[^\r\n]*/i:http', 'regsvr32[^\r\n]*scrobj', 'rundll32[^\r\n]*javascript'
+)
+$hiddenLauncher = '-w(indowstyle)?\s+hidden'
+$suspPath       = @('\\Temp\\', '\\Downloads\\', '\\Public\\', '\\ProgramData\\', '\\AppData\\')
+function Test-SuspiciousArgs {
+    param([string]$Detail)
+    if (-not $Detail) { return $false }
+    foreach ($p in $strongContent) { if ($Detail -match $p) { return $true } }
+    if ($Detail -match $hiddenLauncher) { return $true }
+    # A signed LOLBin host pointed at a user-writable staging directory is the
+    # shape of the technique even when no single argument token is damning.
+    if ($Detail -match $lolbinHosts) {
+        foreach ($p in $suspPath) { if ($Detail -match $p) { return $true } }
+    }
+    return $false
+}
+
 $addEval = @()
 foreach ($k in ($added | Sort-Object)) {
     $cat = $k.Split('|')[0]
@@ -330,8 +360,18 @@ foreach ($k in ($added | Sort-Object)) {
         $bin = Get-BinPath ($detail -replace ' sha256=[0-9A-Fa-f]*$', '' -replace ' start=\w+$', '')
         $msSigned = Test-MsSigned $bin
     }
+    # A Microsoft signature on the HOST binary is not a clean bill of health.
+    # `rundll32.exe C:\ProgramData\upd\x.dll,Run` and
+    # `powershell.exe -enc <base64>` both resolve to a Microsoft-signed binary,
+    # so this gate used to downgrade them to INFO -- excluded from $warnAdds,
+    # $sev never raised, no marker, no ledger entry, Section 17 CLEAN -- and the
+    # INFO line omitted the command line, so nothing on the page even hinted at
+    # it. That is LOLBin persistence reported as a Windows update, in the check
+    # this file's own header calls the strongest signal it has against a
+    # targeted implant that matches no signature. Signed suppresses to INFO only
+    # when the arguments carry nothing suspicious.
     $itemSev = 'WARNING'
-    if ($msSigned) { $itemSev = 'INFO' }
+    if ($msSigned -and -not (Test-SuspiciousArgs $detail)) { $itemSev = 'INFO' }
     if ($itemSev -eq 'WARNING') { $sev = Get-MaxSev $sev 'WARNING' }
     $addEval += New-Object PSObject -Property @{ Lbl = $lbl; Id = $id; Detail = $detail; Sev = $itemSev }
 }
@@ -346,7 +386,10 @@ if ($warnAdds.Count -gt $MaxReport) { "[INFO] ...and $($warnAdds.Count - $MaxRep
 $n = 0
 foreach ($a in $infoAdds) {
     $n++
-    if ($n -le $MaxReport) { "[INFO] NEW $($a.Lbl) since baseline (Microsoft-signed, likely a Windows update): $($a.Id)" }
+    # Print the detail on INFO items too. Omitting it is how a signed LOLBin
+    # host with a malicious command line stayed invisible even to someone
+    # reading the report line by line.
+    if ($n -le $MaxReport) { "[INFO] NEW $($a.Lbl) since baseline (Microsoft-signed, likely a Windows update): $($a.Id)  =>  $($a.Detail)" }
 }
 if ($infoAdds.Count -gt $MaxReport) { "[INFO] ...and $($infoAdds.Count - $MaxReport) more Microsoft-signed new item(s) not listed (report cap $MaxReport)." }
 

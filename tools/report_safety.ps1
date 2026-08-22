@@ -82,9 +82,25 @@ if ($Report -and (Test-Path -LiteralPath $Report)) {
     try {
         $lines = Get-Content -LiteralPath $Report -EA Stop
         foreach ($l in $lines) {
-            if ($l -match '\[CRITICAL\]') { $crit++ }
-            elseif ($l -match '\[WARNING\]') { $warn++ }
-            elseif ($l -match '\[SKIPPED\]') { $skip++ }
+            $t = $l.TrimStart()
+            # Anchor to the line's OWN leading tag, the same rule block_sev.ps1
+            # applies. Unanchored matching counted every line that merely
+            # MENTIONED the token -- including the TOP FINDINGS block that
+            # top_findings.ps1 prepends, which quotes each finding, so every
+            # finding was counted twice in the block that is supposed to tell
+            # the reader how much to trust the run.
+            if ($t -match '^\[CRITICAL\]') { $crit++ }
+            elseif ($t -match '^\[WARNING\]') { $warn++ }
+            elseif ($t -match '^\[SKIPPED\]') { $skip++ }
+            # A helper that is missing is a check that DID NOT RUN. doze_sec.bat
+            # reports those as "[INFO] tools\X.ps1 not found -- ... skipped",
+            # which the [SKIPPED] test above never matched. So deleting a helper
+            # -- say stalkerware_check.ps1, the one check that models an abusive
+            # partner -- left this block asserting "every attempted check
+            # produced a result" while that check had silently vanished. An
+            # honesty block that certifies coverage it does not have is worse
+            # than no honesty block at all.
+            elseif ($t -match '^\[INFO\]' -and $t -match 'not found' -and $t -match 'skip') { $skip++ }
             if ($l -match 'auditing is OFF' -or $l -match 'command-line logging is DISABLED') { $auditBlind = $true }
         }
     } catch {}
@@ -96,8 +112,9 @@ if ($Report -and (Test-Path -LiteralPath $Report)) {
 "  Findings this run : $crit critical, $warn warning line(s)."
 if ($skip -gt 0) {
     "  Checks SKIPPED    : $skip -- these could NOT run (permissions, a"
-    '                      disabled service, or missing data). A clean'
-    '                      overall result does not cover what was skipped.'
+    '                      disabled service, missing data, or a helper script'
+    '                      that was not found). A clean overall result does'
+    '                      not cover what was skipped.'
 } else {
     '  Checks SKIPPED    : 0 -- every attempted check produced a result.'
 }
