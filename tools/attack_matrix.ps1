@@ -89,6 +89,7 @@ if (Test-Path -LiteralPath $Manifest) {
     }
 } else {
     "[SKIPPED] ttp_manifest.txt not found at $Manifest -- coverage matrix not generated."
+    if ($Strict) { '[WARNING] -Strict was requested but the manifest was not found, so NOTHING was verified.'; exit 2 }
     exit 0
 }
 
@@ -137,6 +138,17 @@ if ($Ledger -and (Test-Path -LiteralPath $Ledger)) {
 }
 
 # 4. Reconcile.
+#
+# Guard the guard first. The completeness check below is "every REFERENCED
+# technique is mapped" -- which an empty $referenced satisfies trivially. A bad
+# -SourceDir, a moved file or a regex regression would therefore make this tool
+# print "coverage matrix is complete" and exit 0 while having verified nothing.
+# The claim it exists to defend (the matrix cannot drift from the code) would be
+# silently unenforced, so an empty scan is a hard failure under -Strict.
+if ($referenced.Count -eq 0) {
+    "[WARNING] No technique references found in the audit sources under $SourceDir -- the source scan returned nothing, so completeness was NOT verified."
+    if ($Strict) { exit 2 }
+}
 $covered = @($referenced.Keys | Where-Object { $map.ContainsKey($_) })
 $unmapped = @($referenced.Keys | Where-Object { -not $map.ContainsKey($_) } | Sort-Object)
 $documentedOnly = @($map.Keys | Where-Object { -not $referenced.ContainsKey($_) } | Sort-Object)

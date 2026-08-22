@@ -1,0 +1,31 @@
+# unraised_allowlist.txt -- lines that print a [CRITICAL]/[WARNING] tag into the
+# report and deliberately do NOT raise a finding.
+#
+# Read by tools/lint_unraised_findings.ps1. Format: FILE|SUBSTRING|reason
+# FILE may be '*' to cover both batch scripts (they mirror each other).
+#
+# THE BAR FOR AN ENTRY. A finding is a statement about the AUDITED MACHINE's
+# security state; it belongs in the ledger, drives the section verdict, the
+# findings count and the exit code, and must never be allowlisted. The only
+# things that belong here are:
+#   * notices about the AUDIT ITSELF (a step could not run, a summary could not
+#     render) -- real information, but not a fact about the machine;
+#   * a per-item line whose aggregate raise sits elsewhere, where raising both
+#     would double-count the same problem.
+# Every entry states which of those it is. The lint prints the used entries on
+# every run and warns about entries that no longer match anything, so an
+# exemption cannot quietly outlive its reason.
+
+# ---- audit self-degradation: the audit could not do something, which is not a
+# ---- statement about the machine's security. These are already visible to the
+# ---- reader; turning them into findings would put "bcdedit is restricted" next
+# ---- to "your antivirus is off" and flatten the difference.
+*|Could not create RunOnce key|audit self-degradation: resume across reboot is unavailable; says nothing about the machine's security state
+*|Could not set displaybootmenu|audit self-degradation: a boot-menu convenience could not be set (bcdedit restricted)
+*|Could not set boot timeout|audit self-degradation: a boot-menu convenience could not be set (bcdedit restricted)
+*|Live summary could not run|audit self-degradation: the summary renderer produced no output; the ledger and section verdicts are unaffected
+*|Check PowerShell execution policy|audit self-degradation: continuation of the summary-renderer message above
+
+# ---- per-item lines whose aggregate raise is elsewhere ----------------------
+*|SMART failure status on PhysicalDrive|per-drive detail line; the aggregate raise is `call :dz_finding WARNING INIT SMART` after the loop, and raising per drive would count one failing disk many times
+*|IOC category matches found. Review|end-of-section tally of Section 18 categories that each already raised their own finding; raising again would double-count every IOC hit

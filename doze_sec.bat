@@ -1194,6 +1194,13 @@ if "%NETWORK_AVAIL%"=="1" if "%VT_SELF_SKIP%"=="0" if exist "%USERPROFILE%\.vt_t
         if !errorlevel! equ 1 (
             echo  [CRITICAL] Pre-flight VT integrity check FAILED -- script-critical binary flagged.>> "%REPORT%"
             echo  [CRITICAL] Aborting audit. See report for details.>> "%REPORT%"
+            rem The abort must be RECORDED, not just printed. Without this the
+            rem run ends with FINDINGS COUNTED = 0 and an empty ledger while a
+            rem script-critical binary is flagged as malicious -- the report
+            rem would read as though nothing was found. Raised BEFORE the
+            rem exit code is set, because :dz_finding would otherwise promote
+            rem it to 8 and lose the specific meaning of 7.
+            call :dz_finding CRITICAL INIT VTSELF "Pre-flight VirusTotal check flagged a script-critical binary - audit aborted"
             echo %C_RED%[CRITICAL]%C_RESET% Script-critical binary flagged by VirusTotal. Audit aborted.
             echo %C_RED%[CRITICAL]%C_RESET% See %REPORT% for the offending hash and engine count.
             set "EXIT_CODE=7"
@@ -2343,6 +2350,45 @@ echo --- Defender Disabled Flags --->> "%REPORT%"
 echo  Command: powershell -Command "Get-MpPreference">> "%REPORT%"
 echo Get-MpPreference ^| Select-Object DisableRealtimeMonitoring,DisableBehaviorMonitoring,DisableIOAVProtection,DisableScriptScanning,DisableBlockAtFirstSeen,MAPSReporting ^| Format-List > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+echo.>> "%REPORT%"
+echo --- Defender Core Status: EVALUATED --->> "%REPORT%"
+echo THREAT: the two field dumps above are EVIDENCE, not a verdict. Until this>> "%REPORT%"
+echo check existed, "RealTimeProtectionEnabled : False" and "IsTamperProtected :>> "%REPORT%"
+echo False" were printed into the report and reached no verdict at all -- the>> "%REPORT%"
+echo section could still say CLEAN on a machine whose antivirus had been switched>> "%REPORT%"
+echo off, which is the first thing an intruder does after gaining admin.>> "%REPORT%"
+echo  Command: powershell evaluates Get-MpComputerStatus + Get-MpPreference>> "%REPORT%"
+echo $ok=$true; try{$st=Get-MpComputerStatus -EA Stop}catch{$ok=$false} > "%PSRUN%"
+echo $pf=$true; try{$pr=Get-MpPreference -EA Stop}catch{$pf=$false} >> "%PSRUN%"
+echo $mode='' >> "%PSRUN%"
+echo if($ok){ try{$mode=[string]$st.AMRunningMode}catch{} } >> "%PSRUN%"
+echo $passive = ($mode -ne '' -and $mode -notmatch 'Normal') >> "%PSRUN%"
+echo if(-not $ok){ >> "%PSRUN%"
+echo   '[SKIPPED] Get-MpComputerStatus failed -- Defender core status NOT evaluated. Either a third-party AV owns protection or Defender itself is disabled; confirm manually which one it is.' >> "%PSRUN%"
+echo } else { >> "%PSRUN%"
+echo   if($passive){ '[INFO] Defender is running in ' + $mode + ' -- another antivirus product is in control, so Defender own real-time flags are EXPECTED to read as disabled. Verify that other product is running and current.' } >> "%PSRUN%"
+echo   if(-not $st.AMServiceEnabled){ '[WARNING] Defender antimalware service is not enabled (T1562.001).' } >> "%PSRUN%"
+echo   if(-not $passive){ >> "%PSRUN%"
+echo     if(-not $st.RealTimeProtectionEnabled){ '[CRITICAL] Defender real-time protection is OFF (T1562.001) -- files are not scanned as they are written or run. Fix: Set-MpPreference -DisableRealtimeMonitoring $false' } >> "%PSRUN%"
+echo     if(-not $st.AntivirusEnabled){ '[CRITICAL] Defender antivirus is OFF (T1562.001) and no other AV reported control of this machine.' } >> "%PSRUN%"
+echo     if(-not $st.AntispywareEnabled){ '[WARNING] Defender antispyware protection is off.' } >> "%PSRUN%"
+echo     if(-not $st.OnAccessProtectionEnabled){ '[WARNING] Defender on-access protection is off -- files are not scanned when opened.' } >> "%PSRUN%"
+echo   } >> "%PSRUN%"
+echo   if(-not $st.IsTamperProtected){ '[WARNING] Tamper Protection is OFF -- an attacker who gains admin can silently disable Defender and its logging. Fix: Windows Security ^> Virus ^& threat protection ^> Manage settings ^> Tamper Protection On' } >> "%PSRUN%"
+echo   $age = $null >> "%PSRUN%"
+echo   try{ $age = ((Get-Date) - $st.AntivirusSignatureLastUpdated).TotalDays }catch{} >> "%PSRUN%"
+echo   if($null -ne $age -and $age -gt 7){ '[WARNING] Defender signatures are ' + [int]$age + ' day(s) old -- updates are not arriving, which is itself a tampering indicator.' } >> "%PSRUN%"
+echo } >> "%PSRUN%"
+echo if($pf){ >> "%PSRUN%"
+echo   if($pr.DisableRealtimeMonitoring){ '[CRITICAL] DisableRealtimeMonitoring is SET (T1562.001) -- real-time monitoring was explicitly turned off.' } >> "%PSRUN%"
+echo   if($pr.DisableBehaviorMonitoring){ '[WARNING] DisableBehaviorMonitoring is set -- behavioural detection is off.' } >> "%PSRUN%"
+echo   if($pr.DisableScriptScanning){ '[WARNING] DisableScriptScanning is set -- malicious scripts are not scanned.' } >> "%PSRUN%"
+echo   if($pr.DisableIOAVProtection){ '[WARNING] DisableIOAVProtection is set -- downloaded files are not scanned.' } >> "%PSRUN%"
+echo   if($pr.DisableBlockAtFirstSeen){ '[WARNING] DisableBlockAtFirstSeen is set -- cloud first-sight blocking is off.' } >> "%PSRUN%"
+echo } else { >> "%PSRUN%"
+echo   '[SKIPPED] Get-MpPreference failed -- the Defender disable flags were NOT evaluated.' >> "%PSRUN%"
+echo } >> "%PSRUN%"
+call :dz_ps_scan 9 T1562.001 "Defender core protection disabled, passive without a replacement, or tampered with"
 
 del "%TEMP%\dz_defexcl_hit.txt" 2>nul
 echo.>> "%REPORT%"
@@ -2423,7 +2469,7 @@ echo foreach ($k in $keyRules.Keys) { >> "%PSRUN%"
 echo   $ix = [array]::IndexOf($lowIds, $k) >> "%PSRUN%"
 echo   if ($ix -lt 0 -or [int]$acts[$ix] -ne 1) { Write-Output ('[WARNING] Key ASR rule not in Block mode: ' + $keyRules[$k]) } >> "%PSRUN%"
 echo } >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+call :dz_ps_scan 9 T1562.001 "Defender ASR rules absent or not in Block mode"
 
 echo.>> "%REPORT%"
 echo --- Defender Threat Detection History --->> "%REPORT%"
@@ -2727,7 +2773,12 @@ if defined _LUA_HIT (
     reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v EnableLUA>> "%REPORT%" 2>nul
 ) else (
     echo [WARNING] EnableLUA registry value MISSING -- unusual on Win10/11; investigate for tampering.>> "%REPORT%"
+    set "_LUA_MISSING=1"
 )
+rem The absence itself is the finding, so it has to reach the ledger -- a
+rem [WARNING] that only lands in the report leaves the section verdict CLEAN.
+if defined _LUA_MISSING call :dz_finding WARNING 13 T1548.002 "EnableLUA value missing - UAC policy may have been tampered with"
+set "_LUA_MISSING="
 set "_LUA_HIT="
 set "_CPBA_HIT="
 reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v ConsentPromptBehaviorAdmin >nul 2>nul && set "_CPBA_HIT=1"
@@ -2735,7 +2786,10 @@ if defined _CPBA_HIT (
     reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v ConsentPromptBehaviorAdmin>> "%REPORT%" 2>nul
 ) else (
     echo [WARNING] ConsentPromptBehaviorAdmin registry value MISSING -- unusual on Win10/11; investigate for tampering.>> "%REPORT%"
+    set "_CPBA_MISSING=1"
 )
+if defined _CPBA_MISSING call :dz_finding WARNING 13 T1548.002 "ConsentPromptBehaviorAdmin value missing - UAC policy may have been tampered with"
+set "_CPBA_MISSING="
 set "_CPBA_HIT="
 reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v LocalAccountTokenFilterPolicy>> "%REPORT%" 2>nul
 if errorlevel 1 (echo [OK] LocalAccountTokenFilterPolicy not set -- default remote-admin token filtering applies.)>> "%REPORT%"
@@ -2744,7 +2798,7 @@ echo.>> "%REPORT%"
 echo --- Secure Boot --->> "%REPORT%"
 echo  Command: powershell -Command "try{$sb=Confirm-SecureBootUEFI; if^($sb^){'[OK] Secure Boot ENABLED.'}else{'[WARNING] Secure Boot DISABLED.'}}catch{'[INFO] Secure Boot query not supported ^(may be legacy BIOS^).'}">> "%REPORT%"
 echo try{$sb=Confirm-SecureBootUEFI; if($sb){'[OK] Secure Boot ENABLED.'}else{'[WARNING] Secure Boot DISABLED.'}}catch{'[INFO] Secure Boot query not supported (may be legacy BIOS).'} > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+call :dz_ps_scan 13 T1542.001 "Secure Boot is disabled"
 
 echo.>> "%REPORT%"
 echo --- BitLocker --->> "%REPORT%"
@@ -2846,7 +2900,7 @@ echo   $d = Get-ItemProperty $key -Name Debugger -EA SilentlyContinue >> "%PSRUN
 echo   if ($d) { $hits += '[CRITICAL] IFEO Debugger hijack: '+$b+' -^> '+$d.Debugger } >> "%PSRUN%"
 echo } >> "%PSRUN%"
 echo if ($hits) { $hits; Write-Output '[^^!^^!] Accessibility IFEO hijack = SYSTEM-level login-screen backdoor. Remove Debugger value immediately.' } else { '[OK] No IFEO Debugger hijacks on accessibility binaries.' } >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+call :dz_ps_scan 13 T1546.008 "IFEO Debugger hijack on an accessibility binary - SYSTEM login-screen backdoor"
 
 echo.>> "%REPORT%"
 echo --- [T1546.008] Accessibility Binary File Signature Check --->> "%REPORT%"
@@ -2867,7 +2921,7 @@ echo     } >> "%PSRUN%"
 echo   } else { Write-Output ('[WARN] '+$b+' - not found in System32') } >> "%PSRUN%"
 echo } >> "%PSRUN%"
 echo if ($bad.Count -gt 0) { Write-Output '[^^!^^!] Replace tampered binaries: sfc /scannow or restore from WinRE.' } >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+call :dz_ps_scan 13 T1546.008 "Accessibility binary is not validly Microsoft-signed - possible WinRE file swap"
 
 echo.>> "%REPORT%"
 echo --- [T1546.008] Sticky Keys Shortcut Status --->> "%REPORT%"
@@ -2918,7 +2972,7 @@ echo     } >> "%PSRUN%"
 echo   } >> "%PSRUN%"
 echo } >> "%PSRUN%"
 echo if (-not $found) { Write-Output '[INFO] No explicit per-app macro settings found - Office absent or platform defaults apply. Modern default blocks internet-sourced macros.' } >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+call :dz_ps_scan 13 T1204.002 "Office macro protection weakened"
 
 echo.>> "%REPORT%"
 echo --- Mark-of-the-Web Preservation: SAFE=SaveZoneInformation absent or 0x1 --->> "%REPORT%"
@@ -2935,6 +2989,7 @@ if defined _MOTW_OFF (
 ) else (
     echo [OK] Mark-of-the-Web zone data preserved on downloaded files -- default.>> "%REPORT%"
 )
+if defined _MOTW_OFF call :dz_finding WARNING 13 T1553.005 "Mark-of-the-Web not recorded on downloads - SmartScreen and Office macro blocking are blinded"
 set "_MOTW_OFF="
 
 echo.>> "%REPORT%"
@@ -2948,6 +3003,7 @@ set "_SS_OFF="
 reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" /v SmartScreenEnabled 2>nul | findstr /i /c:" Off" >nul && set "_SS_OFF=1"
 reg query "HKLM\SOFTWARE\Policies\Microsoft\Windows\System" /v EnableSmartScreen 2>nul | findstr /i /c:"0x0" >nul && set "_SS_OFF=1"
 if defined _SS_OFF (echo [WARNING] SmartScreen is OFF -- downloaded-file reputation checks are disabled.)>> "%REPORT%"
+if defined _SS_OFF call :dz_finding WARNING 13 T1562.001 "SmartScreen is off - downloaded-file reputation checks disabled"
 set "_SS_OFF="
 echo.>> "%REPORT%"
 
@@ -3318,13 +3374,13 @@ echo.>> "%REPORT%"
 echo --- [MIDNIGHT/AQUA BLIZZARD] Large HTML/HTA in Temp (HTML Smuggling) --->> "%REPORT%"
 echo  Command: powershell -Command "Get-ChildItem -Path $env:TEMP -Recurse -Include '*.html','*.htm','*.hta' -EA SilentlyContinue">> "%REPORT%"
 echo $r = @(Get-ChildItem -Path $env:TEMP -Recurse -Include '*.html','*.htm','*.hta' -EA SilentlyContinue ^| Where-Object {$_.Length -gt 200000}); if($r.Count -gt 0){ '[WARNING] Large HTML/HTA files in Temp:'; $r ^| Select-Object FullName,@{N='SizeKB';E={[math]::Round($_.Length/1024,1)}},LastWriteTime ^| Format-Table -AutoSize } else { '[OK] No oversized HTML/HTA files in user TEMP.' } > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+call :dz_ps_scan 17 T1027.006 "Oversized HTML/HTA in TEMP - HTML smuggling staging"
 
 echo.>> "%REPORT%"
 echo --- [FOREST BLIZZARD] CVE-2023-23397 Outlook .msg Artefacts --->> "%REPORT%"
 echo  Command: powershell -Command "Get-ChildItem -Path ^([System.Environment]::GetFolderPath^('LocalApplicationData'^)+'\Microsoft\Outlook'^) -Recurse -Include '*.msg','*.oft' -EA SilentlyContinue">> "%REPORT%"
 echo $r = @(Get-ChildItem -Path ([System.Environment]::GetFolderPath('LocalApplicationData')+'\Microsoft\Outlook') -Recurse -Include '*.msg','*.oft' -EA SilentlyContinue ^| Where-Object {$_.LastWriteTime -gt (Get-Date).AddDays(-90)}); if($r.Count -gt 0){ '[WARNING] Recent Outlook .msg/.oft artefacts (review for CVE-2023-23397 NTLM relay):'; $r ^| Select-Object FullName,LastWriteTime ^| Format-Table -AutoSize } else { '[OK] No recent Outlook .msg/.oft artefacts (Outlook profile may be absent).' } > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+call :dz_ps_scan 17 T1566.001 "Recent Outlook .msg/.oft artefacts - review for CVE-2023-23397 NTLM relay"
 
 echo.>> "%REPORT%"
 echo --- [PEACH SANDSTORM] ADFS Service (GoldenSAML attack surface) --->> "%REPORT%"
@@ -3335,7 +3391,10 @@ reg query "HKLM\SOFTWARE\Microsoft\ADFS" >nul 2>nul && set "_ADFS_HIT=1"
 if defined _ADFS_HIT (
     sc query adfssrv>> "%REPORT%" 2>nul
     reg query "HKLM\SOFTWARE\Microsoft\ADFS">> "%REPORT%" 2>nul
-    echo [WARNING] ADFS detected -- GoldenSAML attack surface present.>> "%REPORT%"
+    rem Presence of ADFS is attack SURFACE, not evidence of compromise, so it
+    rem is reported as context. Raising it would cry wolf on every machine that
+    rem legitimately runs ADFS and teach the reader to ignore the tool.
+    echo [INFO] ADFS detected -- GoldenSAML attack surface present. Not a compromise indicator by itself; keep it patched and monitored.>> "%REPORT%"
 ) else (
     echo [OK] ADFS not installed -- no GoldenSAML attack surface.>> "%REPORT%"
 )
@@ -3350,7 +3409,8 @@ reg query "HKLM\SOFTWARE\Microsoft\Azure AD Connect" >nul 2>nul && set "_AAD_HIT
 if defined _AAD_HIT (
     sc query "ADSync">> "%REPORT%" 2>nul
     reg query "HKLM\SOFTWARE\Microsoft\Azure AD Connect">> "%REPORT%" 2>nul
-    echo [WARNING] Azure AD Connect detected -- on-prem to cloud pivot surface present.>> "%REPORT%"
+    rem Attack surface, not compromise -- see the ADFS note above.
+    echo [INFO] Azure AD Connect detected -- on-prem to cloud pivot surface present. Not a compromise indicator by itself; keep it patched and monitored.>> "%REPORT%"
 ) else (
     echo [OK] Azure AD Connect not installed -- no on-prem to cloud pivot.>> "%REPORT%"
 )
@@ -3366,7 +3426,7 @@ echo   $accts=$xml ^| ForEach-Object {$_.Event.EventData.Data ^| Where-Object {$
 echo   Write-Output ('Unique target accounts in last 200 failed logins: '+$accts.Count) >> "%PSRUN%"
 echo   if($accts.Count -gt 10){'[WARNING] High unique account count - possible password spray attack'} >> "%PSRUN%"
 echo }else{'[INFO] No 4625 events or insufficient privileges.'} >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+call :dz_ps_scan 17 T1110.003 "High unique account count in logon failures - possible password spray"
 
 echo.>> "%REPORT%"
 echo --- [DPRK] RMM Tool Processes (Diamond/Jade Sleet IOC) --->> "%REPORT%"
@@ -3391,17 +3451,17 @@ echo.>> "%REPORT%"
 echo --- [ALL ACTORS] Cobalt Strike Named Pipes (MDDR: most abused C2 tool) --->> "%REPORT%"
 echo  Command: powershell -Command "Get-ChildItem \\.\pipe\ -EA SilentlyContinue">> "%REPORT%"
 echo try{$pipes=Get-ChildItem \\.\pipe\ -EA SilentlyContinue ^| Where-Object {$_.Name -match 'postex_^|msagent_^|MSSE-^|metsvc^|beacon^|cobaltstrike^|status_'}; if($pipes){$pipes ^| Select-Object Name; '[WARNING] Possible Cobalt Strike pipes detected.'}else{'[OK] No Cobalt Strike default named pipes.'}}catch{'[SKIPPED] Named pipe enumeration failed -- Cobalt Strike pipe check NOT performed.'} > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+call :dz_ps_scan 17 T1071 "Cobalt Strike default named pipe present"
 
 echo.>> "%REPORT%"
 echo --- [ALL ACTORS] WMI Permanent Subscriptions (stealthy persistence) --->> "%REPORT%"
 echo  Command: powershell -Command "Get-WMIObject -Namespace root\subscription -Class __EventFilter -EA SilentlyContinue">> "%REPORT%"
 echo $ok=$true; try{$subs=@(Get-WMIObject -Namespace root\subscription -Class __EventFilter -EA Stop ^| Where-Object { -not ( ($_.Name -eq 'SCM Event Log Filter' -and $_.Query -like '*MSFT_SCMEventLogEvent*') -or ($_.Name -in @('BVTConsumer','BVTFilter','RmAssistEventLog')) ) })}catch{$ok=$false}; if(-not $ok){'[SKIPPED] WMI subscription query failed -- EventFilter check NOT performed.'}elseif($subs.Count -gt 0){'[WARNING] Non-default WMI EventFilters found:'; $subs ^| Select-Object Name,Query ^| Format-Table -AutoSize}else{'[OK] No non-default WMI EventFilter subscriptions (default Microsoft filters allowlisted).'} > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+call :dz_ps_scan 17 T1546.003 "Non-default WMI EventFilter - stealthy persistence"
 echo $ok=$true; try{$cons=Get-WMIObject -Namespace root\subscription -Class CommandLineEventConsumer -EA Stop}catch{$ok=$false}; if(-not $ok){'[SKIPPED] WMI subscription query failed -- CommandLineEventConsumer check NOT performed.'}elseif($cons){'[WARNING] WMI CommandLine Consumers found:'; $cons ^| Select-Object Name,CommandLineTemplate ^| Format-Table -AutoSize}else{'[OK] No WMI CommandLineEventConsumer.'} > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+call :dz_ps_scan 17 T1546.003 "WMI CommandLineEventConsumer present - stealthy persistence"
 echo $ok=$true; try{$acons=Get-WMIObject -Namespace root\subscription -Class ActiveScriptEventConsumer -EA Stop}catch{$ok=$false}; if(-not $ok){'[SKIPPED] WMI subscription query failed -- ActiveScriptEventConsumer check NOT performed.'}elseif($acons){'[WARNING] WMI ActiveScript (VBScript/JScript) Consumers found:'; $acons ^| Select-Object Name,ScriptingEngine,@{n='ScriptText';e={if($_.ScriptText.Length -gt 200){$_.ScriptText.Substring(0,200)+'...[truncated]'}else{$_.ScriptText}}} ^| Format-List}else{'[OK] No WMI ActiveScriptEventConsumer.'} > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+call :dz_ps_scan 17 T1546.003 "WMI ActiveScriptEventConsumer present - stealthy persistence"
 
 echo.>> "%REPORT%"
 echo --- [CHINA/VOLT TYPHOON] Kerberos RC4 Encryption Types --->> "%REPORT%"
@@ -3413,7 +3473,7 @@ echo.>> "%REPORT%"
 echo --- [DPRK/RUBY SLEET] Recently Installed Root Certificates --->> "%REPORT%"
 echo  Command: powershell -Command "Get-ChildItem Cert:\LocalMachine\Root">> "%REPORT%"
 echo $r = @(Get-ChildItem Cert:\LocalMachine\Root ^| Where-Object {$_.NotBefore -gt (Get-Date).AddDays(-90)}); if($r.Count -gt 0){ '[WARNING] Root certificates installed in last 90 days (Ruby Sleet drops fake roots):'; $r ^| Select-Object Subject,Thumbprint,NotBefore,NotAfter ^| Format-Table -AutoSize } else { '[OK] No new root certificates installed in last 90 days.' } > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+call :dz_ps_scan 17 T1553.004 "Root certificate installed in the last 90 days"
 
 echo.>> "%REPORT%"
 echo --- [VOLT TYPHOON] VPN Client Processes --->> "%REPORT%"
@@ -3468,7 +3528,7 @@ echo     Write-Output ($b+' Signature: '+$sig.Status+' / '+$sig.SignerCertificat
 echo     if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'Microsoft') { Write-Output ('[CRITICAL] '+$b+' may have been replaced with a non-Microsoft binary^^!') } >> "%PSRUN%"
 echo   } >> "%PSRUN%"
 echo } >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+call :dz_ps_scan 17 T1546.008 "Accessibility binary hijack, tampering or prior Defender detection"
 echo.>> "%REPORT%"
 
 
@@ -3837,7 +3897,7 @@ echo.>> "%REPORT%"
 echo --- [CTI] Sliver / Havoc / Brute Ratel C2 Named Pipes --->> "%REPORT%"
 echo  Command: powershell -Command "Get-ChildItem \\.\pipe\ -EA SilentlyContinue">> "%REPORT%"
 echo try{$pipes=Get-ChildItem \\.\pipe\ -EA SilentlyContinue ^| Where-Object {$_.Name -match 'sliverpb^|havoc^|bruteratel^|badger_^|b4_^|_krbtgt^|dcetest^|systemd-^|svc_pivot'}; if($pipes){$pipes ^| Select-Object Name; '[WARNING] Possible next-gen C2 named pipes detected.'}else{'[OK] No Sliver/Havoc/BruteRatel default pipes.'}}catch{'[SKIPPED] Named pipe enumeration failed -- next-gen C2 pipe check NOT performed.'} > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+call :dz_ps_scan 18 T1071 "Sliver/Havoc/Brute Ratel named pipe IOC"
 
 :: --- [CTI] DLL Search Order Hijacking (T1574.001) ---
 echo.>> "%REPORT%"
@@ -3858,7 +3918,7 @@ echo     } >> "%PSRUN%"
 echo   } >> "%PSRUN%"
 echo } >> "%PSRUN%"
 echo if ($hits.Count -gt 0) { '[WARNING][T1574.001] Unsigned/suspicious DLLs in system paths:'; $hits ^| ForEach-Object { '  '+$_ } } else { '[OK] No suspicious unsigned DLLs found in system paths.' } >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+call :dz_ps_scan 18 T1574.001 "Unsigned or suspicious DLLs in system paths"
 
 :: --- [CTI] LOLBin Download/Execute Chains (T1105+T1059) ---
 echo.>> "%REPORT%"
@@ -3885,7 +3945,7 @@ echo     } >> "%PSRUN%"
 echo   } >> "%PSRUN%"
 echo } >> "%PSRUN%"
 echo if ($hits.Count -gt 0) { '[WARNING][T1562.001] AMSI bypass attempts detected in PS logs:'; $hits ^| Select-Object -First 10 ^| ForEach-Object { '  '+$_ } } else { '[OK] No AMSI bypass patterns in recent PowerShell Script Block logs (audit-self events filtered).' } >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+call :dz_ps_scan 18 T1562.001 "AMSI bypass patterns in PowerShell Script Block logs"
 
 :: --- [CTI] Credential Access via DPAPI (T1555.003 / T1555.004) ---
 echo.>> "%REPORT%"
@@ -3949,7 +4009,7 @@ echo     } >> "%PSRUN%"
 echo   } >> "%PSRUN%"
 echo } >> "%PSRUN%"
 echo if ($hits.Count -gt 0) { '[CRITICAL][T1486] Files with ransomware-associated extensions found:'; $hits ^| Select-Object -First 20 ^| ForEach-Object { '  '+$_ } } else { '[OK] No files with known ransomware extensions in user directories.' } >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+call :dz_ps_scan 18 T1486 "Files with ransomware-associated extensions present"
 
 :: --- [CTI] EDR/AV Tampering via Driver Load (T1562.001) ---
 echo.>> "%REPORT%"
@@ -3986,7 +4046,7 @@ echo     } >> "%PSRUN%"
 echo   } >> "%PSRUN%"
 echo } >> "%PSRUN%"
 echo if ($hits.Count -gt 0) { '[WARNING][T1543.003] Suspicious service installations found:'; $hits ^| Select-Object -First 10 ^| ForEach-Object { '  '+$_ } } else { '[OK] No suspicious service installations in recent Event 7045 logs.' } >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+call :dz_ps_scan 18 T1543.003 "Suspicious service installation in Event 7045"
 
 :: --- [CTI] COM Object Hijacking (T1546.015) ---
 echo.>> "%REPORT%"
@@ -4024,7 +4084,7 @@ echo } >> "%PSRUN%"
 echo if ($flagged.Count -gt 0) { '[WARNING][T1546.015] Suspicious COM CLSID overrides ('+$flagged.Count+'):'; $flagged ^| Select-Object -First 15 ^| ForEach-Object { '  '+$_ } } >> "%PSRUN%"
 echo if ($vendor.Count -gt 0) { '[INFO][T1546.015] Vendor-registered user CLSID overrides ('+$vendor.Count+', expected):'; $vendor ^| Select-Object -First 15 ^| ForEach-Object { '  '+$_ } } >> "%PSRUN%"
 echo if ($flagged.Count -eq 0 -and $vendor.Count -eq 0) { '[OK] No user-level COM CLSID overrides.' } >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+call :dz_ps_scan 18 T1546.015 "Suspicious COM CLSID override"
 
 :: --- [CTI] Living-off-the-Cloud: Azure/M365 CLI Token Files ---
 echo.>> "%REPORT%"
@@ -4071,7 +4131,7 @@ echo   '[OK] OpenSSH Server installed but not running.' >> "%PSRUN%"
 echo } else { >> "%PSRUN%"
 echo   '[OK] OpenSSH Server not installed.' >> "%PSRUN%"
 echo } >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+call :dz_ps_scan 18 T1021.004 "OpenSSH Server (sshd) is running"
 echo.>> "%REPORT%"
 
 :: --- [CTI-AUTO] Execute auto-generated TTP blocks from -updateTTP ---
@@ -4607,5 +4667,42 @@ if /i "%~1"=="CRITICAL" (
 ) else (
     if !EXIT_CODE! LSS 2 set "EXIT_CODE=2"
 )
+goto :eof
+
+:: ====================================================================
+:: :dz_ps_scan -- run the staged %PSRUN% block, append its output to the
+:: report, and raise ONE finding at the highest severity the block printed.
+::
+:: WHY: a staged block that prints [CRITICAL]/[WARNING] and is redirected
+:: straight into %REPORT% never reaches the ledger, so the section verdict,
+:: FINDINGS COUNTED and the exit code all understate what the block found.
+:: A retrospective found ~25 checks in that state at once -- Cobalt Strike
+:: named pipes, WMI subscription persistence, IFEO accessibility hijacks,
+:: ransomware-extension files and more could all be printed while the
+:: report's own verdict said the machine was clean. Blocks now run through
+:: here, and tools\lint_unraised_findings.ps1 fails CI on any that do not.
+::
+:: The severity is read back from the block's own output by
+:: tools\block_sev.ps1 (leading-tag parsing, so [OK]/[INFO]/[SKIPPED] lines
+:: can never inflate it). A block that reports nothing raises nothing.
+:: Args: %1=section  %2=code  %3="message"
+:: ====================================================================
+:dz_ps_scan
+set "DZ_BLK=%TEMP%\dz_blk_%DOZE_LOG_TS%.txt"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" > "%DZ_BLK%" 2>&1
+type "%DZ_BLK%">> "%REPORT%"
+set "DZ_BLKSEV=OK"
+if not exist "%SCRIPT_DIR%tools\block_sev.ps1" goto :dz_ps_scan_nohelper
+for /f "usebackq delims=" %%s in (`"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\block_sev.ps1" -Path "%DZ_BLK%" 2^>nul`) do set "DZ_BLKSEV=%%s"
+del "%DZ_BLK%" 2>nul
+if not "!DZ_BLKSEV!"=="OK" call :dz_finding !DZ_BLKSEV! %1 %2 %3
+goto :eof
+:dz_ps_scan_nohelper
+:: Degrade LOUDLY. Without the helper this block's output cannot be graded, so
+:: silence here would mean "no finding" -- indistinguishable from a clean
+:: result, which is the failure mode the whole mechanism exists to prevent.
+del "%DZ_BLK%" 2>nul
+echo [WARNING] tools\block_sev.ps1 is missing -- the block above was printed but NOT graded, so any finding in it is not counted. Reinstall the full doze_sec folder.>> "%REPORT%"
+call :dz_finding WARNING %1 AUDITGAP "Block severity could not be evaluated - tools\block_sev.ps1 missing; findings in this section may be uncounted"
 goto :eof
 

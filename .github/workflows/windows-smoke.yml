@@ -532,7 +532,65 @@ jobs:
           # Sanity: the audit's heaviest tactic must show real coverage, or the
           # source scan silently found nothing (e.g. a path/regex regression).
           if ($out -notmatch '(?m)^Persistence\s+\((\d+)\)') { throw 'Persistence tactic group missing from the matrix' }
-          Write-Host "attack_matrix.ps1 OK"
+          # Prove the gate is not vacuous. Point it at a directory with no audit
+          # sources: the completeness check ("every referenced technique is
+          # mapped") is trivially satisfied by an empty reference set, so a
+          # scan that finds nothing must FAIL under -Strict rather than report
+          # a complete matrix. A gate that passes when it checked nothing is
+          # not a gate.
+          $empty = Join-Path $env:TEMP ("dz_empty_src_{0}" -f $PID)
+          New-Item -ItemType Directory -Path $empty -Force | Out-Null
+          Copy-Item ThreatLists\ttp_manifest.txt (Join-Path $empty 'ttp_manifest.txt') -Force
+          $vac = (.\tools\attack_matrix.ps1 -SourceDir $empty -Manifest (Join-Path $empty 'ttp_manifest.txt') -Strict) -join "`n"
+          if ($LASTEXITCODE -eq 0) { Write-Host $vac; throw 'attack_matrix -Strict PASSED on a source tree with no techniques -- the gate can pass vacuously' }
+          Remove-Item $empty -Recurse -Force -EA SilentlyContinue
+          Write-Host "attack_matrix.ps1 OK (incl. empty-scan guard)"
+          exit 0
+
+      - name: block_sev.ps1 (severity read-back that :dz_ps_scan depends on)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # :dz_ps_scan decides whether a block raises a finding purely from
+          # what this script returns. If it under-reads, a detection goes
+          # silent again -- exactly the failure the mechanism exists to fix --
+          # so every parsing rule is asserted here on real 5.1.
+          $f = Join-Path $env:TEMP ("dz_blocksev_ci_{0}.txt" -f $PID)
+          function Sev($lines) { $lines | Set-Content -LiteralPath $f -Encoding UTF8; (.\tools\block_sev.ps1 -Path $f).Trim() }
+
+          if ((Sev @('[OK] nothing to see', '[INFO] context', '[SKIPPED] not run')) -ne 'OK') { throw 'clean block did not read OK' }
+          if ((Sev @('[OK] fine', '[WARNING] Non-default WMI EventFilters found:')) -ne 'WARNING') { throw 'WARNING not detected' }
+          if ((Sev @('[WARNING] a', '[CRITICAL] Known malware staging files found:')) -ne 'CRITICAL') { throw 'CRITICAL must win over WARNING' }
+          if ((Sev @('  [CRITICAL] indented finding')) -ne 'CRITICAL') { throw 'indented finding missed' }
+          if ((Sev @('[WARNING][T1574.001] Unsigned DLLs in system paths:')) -ne 'WARNING') { throw 'tag+technique form missed' }
+          if ((Sev @('Word 16.0: [WARNING] blockcontentexecutionfrominternet=0')) -ne 'WARNING') { throw 'mid-line form missed' }
+          # Prose must never inflate a block: these are the shapes that would
+          # turn a clean machine into a false positive.
+          if ((Sev @('[OK] No AMSI bypass patterns in recent PowerShell logs')) -ne 'OK') { throw '[OK] line inflated severity' }
+          if ((Sev @('[INFO] Review [WARNING] and [CRITICAL] entries above')) -ne 'OK') { throw '[INFO] prose inflated severity' }
+          if ((Sev @('[SKIPPED] WMI subscription query failed -- check NOT performed.')) -ne 'OK') { throw '[SKIPPED] inflated severity' }
+          # An unreadable input must not invent a finding.
+          if (((.\tools\block_sev.ps1 -Path (Join-Path $env:TEMP 'dz_no_such_file.txt')).Trim()) -ne 'OK') { throw 'missing file did not read OK' }
+          Remove-Item $f -Force -EA SilentlyContinue
+          Write-Host "block_sev.ps1 OK (10 parsing cases)"
+          exit 0
+
+      - name: lint_unraised_findings.ps1 (no check prints a severity it never raises)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Also run under Windows PowerShell 5.1, not just the Linux lint job:
+          # this is the gate that keeps printed-but-unraised findings out, and
+          # it must work on the same runtime the project targets.
+          $out = (.\tools\lint_unraised_findings.ps1 -Root .) -join "`n"
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw 'lint_unraised_findings found checks that print a severity without raising it' }
+          if ($out -notmatch 'routed through :dz_ps_scan') { throw 'lint did not report block routing -- staged-block scan regressed' }
+          # Guard the guard: if the block scanner ever stops finding blocks, the
+          # lint would pass vacuously and the whole class could return.
+          $m = [regex]::Match($out, 'Scanned (\d+) staged PowerShell block')
+          if (-not $m.Success -or [int]$m.Groups[1].Value -lt 100) { throw "lint scanned only $($m.Groups[1].Value) blocks -- the parser regressed, so a clean result means nothing" }
+          Write-Host "lint_unraised_findings.ps1 OK"
           exit 0
 
       - name: emulation_coverage.ps1 (adversary-emulation corpus; -Strict guards drift)
@@ -550,7 +608,16 @@ jobs:
           if ($out -notmatch 'ADVERSARY-EMULATION COVERAGE') { throw 'coverage header missing' }
           if ($out -notmatch 'Emulation corpus is consistent') { throw 'consistency line missing -- unexpected corpus drift' }
           if ($out -notmatch '(?m)^Emulation coverage of the testable surface: \d+%') { throw 'coverage percentage missing -- source scan or harness parse regressed' }
-          Write-Host "emulation_coverage.ps1 OK"
+          # Prove the CORE invariant is not vacuous. Every core check is a loop
+          # over the parsed CORE set, so a corpus that yields zero CORE entries
+          # makes the loop iterate nothing and the tool report "consistent".
+          # Feed it a corpus with no CORE lines: -Strict must fail.
+          $noCore = Join-Path $env:TEMP ("dz_nocore_{0}.txt" -f $PID)
+          (Get-Content tests\emulation_corpus.txt) | Where-Object { $_ -notmatch '^CORE\|' } | Set-Content -LiteralPath $noCore -Encoding UTF8
+          $vac = (.\tools\emulation_coverage.ps1 -SourceDir . -Corpus $noCore -Strict) -join "`n"
+          if ($LASTEXITCODE -eq 0) { Write-Host $vac; throw 'emulation_coverage -Strict PASSED on a corpus with no CORE entries -- the core-detection invariant can go unchecked' }
+          Remove-Item $noCore -Force -EA SilentlyContinue
+          Write-Host "emulation_coverage.ps1 OK (incl. empty-CORE guard)"
           exit 0
 
       - name: boot_chain_check.ps1 (boot-chain config audit; must not false-CRITICAL a clean VM)

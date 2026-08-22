@@ -13,3 +13,16 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run lint_batch_comments.ps1
         run: pwsh -NoProfile -File tools/lint_batch_comments.ps1
+
+  unraised-findings-lint:
+    name: "Findings lint: nothing printed that is not raised"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Guards the failure mode a retrospective found on ~25 checks at once: a
+      # check printing '[CRITICAL] ...' into the report while the ledger -- and
+      # therefore the section verdict, the findings count and the exit code --
+      # never heard about it. Structural, so a check written next year is
+      # covered the day it is added.
+      - name: Run lint_unraised_findings.ps1
+        run: pwsh -NoProfile -File tools/lint_unraised_findings.ps1

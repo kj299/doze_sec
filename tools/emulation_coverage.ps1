@@ -75,7 +75,15 @@ foreach ($f in $srcFiles) {
     try { foreach ($t in (Read-Techniques (Get-Content -LiteralPath $f -Raw -EA Stop))) { [void]$detected.Add($t) } } catch {}
 }
 if ($detected.Count -eq 0) {
+    # Under -Strict this is a FAILURE, not a skip. A gate that returns success
+    # because it found nothing to check is indistinguishable from a gate that
+    # checked everything and was satisfied -- and the caller cannot tell the
+    # difference from the exit code alone.
     '[SKIPPED] No audit sources found to scan -- emulation coverage not computed.'
+    if ($Strict) {
+        '[WARNING] -Strict was requested but no audit source was scanned, so NOTHING was verified. Check -SourceDir.'
+        exit 2
+    }
     exit 0
 }
 
@@ -88,6 +96,7 @@ if (Test-Path -LiteralPath $Harness) {
     }
 } else {
     "[SKIPPED] Harness not found at $Harness -- emulation coverage not computed."
+    if ($Strict) { '[WARNING] -Strict was requested but the harness was not found, so NOTHING was verified.'; exit 2 }
     exit 0
 }
 
@@ -112,6 +121,7 @@ if (Test-Path -LiteralPath $Corpus) {
     }
 } else {
     "[SKIPPED] Corpus not found at $Corpus -- emulation coverage not computed."
+    if ($Strict) { '[WARNING] -Strict was requested but the corpus was not found, so NOTHING was verified.'; exit 2 }
     exit 0
 }
 
@@ -146,6 +156,15 @@ if ($untestable.Count -gt 0) {
 
 # 5. Invariants. Only these fail -Strict; the backlog is allowed to exist.
 $violations = @()
+# Guard the guard. Every CORE invariant below is a `foreach ($c in $core)`, so a
+# corpus that parses to zero CORE entries -- a reformat, a renamed class word, a
+# parser regression -- makes the loop iterate nothing and the tool report
+# "consistent". The strongest promise this file makes (a core detection cannot
+# lose its emulation test) would stop being checked, and -Strict would still
+# exit 0. An empty CORE set is therefore a violation in its own right.
+if ($core.Count -eq 0) {
+    $violations += 'the corpus declared NO CORE techniques, so the core-detection invariant was not checked at all (corpus parse regression or every CORE line removed)'
+}
 foreach ($c in $core) {
     if (-not $harnessEmu.Contains($c)) { $violations += "CORE technique $c has no harness plant (a core detection lost its emulation test)" }
     if (-not $detected.Contains($c))   { $violations += "CORE technique $c is not detected by the audit (stale corpus entry)" }
