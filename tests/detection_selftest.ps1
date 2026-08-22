@@ -372,6 +372,7 @@ $cases = @(
         # Add-MpPreference throws and the harness SKIPs the case -- not a
         # regression -- because Get-MpPreference would then also be unavailable.)
         Expect = '\[SECTION 9/18 RESULT: ISSUES FOUND'
+        MaySkip = 'Defender is not available on this host (Server Core, or a third-party AV owns protection), so Add-MpPreference cannot plant an exclusion'
         Plant  = { Add-MpPreference -ExclusionPath $defExclPath -EA Stop }
         Cleanup= { Remove-MpPreference -ExclusionPath $defExclPath -EA SilentlyContinue }
     },
@@ -590,9 +591,22 @@ try {
     Write-Host "== Detection scoreboard =="
     $requiredFail = 0
     $promote = 0
+    $skippedRequired = @()
     foreach ($c in $cases) {
         if (-not $c.Planted) {
-            Write-Host ("  [ SKIP     ] {0}  -- could not be planted (harness issue, not a detection regression)" -f $c.Name)
+            # A plant that fails silently is a detection that stopped being
+            # tested -- and a green job then means "we checked nothing here",
+            # which is indistinguishable from "we checked and it was fine".
+            # Only a case that DECLARES it may legitimately skip (because the
+            # feature genuinely may be absent on a host) is allowed to; every
+            # other failed plant is a harness regression and fails the job.
+            if ($c.MaySkip) {
+                Write-Host ("  [ SKIP     ] {0}  -- {1}" -f $c.Name, $c.MaySkip)
+            } else {
+                Write-Host ("  [ REGRESS  ] {0}  -- could not be planted, so this detection was NOT tested this run (undeclared skip)" -f $c.Name)
+                $skippedRequired += $c.Name
+                $requiredFail++
+            }
             continue
         }
         $hit  = [bool]([regex]::IsMatch($text, $c.Expect))
@@ -607,6 +621,12 @@ try {
             if ($pass) { Write-Host ("  [ PROMOTE  ] {0}  -- now detected; move to the required tier" -f $c.Name); $promote++ }
             else       { Write-Host ("  [ gap      ] {0}  -- still a known gap (see code review)" -f $c.Name) }
         }
+    }
+
+    if ($skippedRequired.Count -gt 0) {
+        Write-Host ""
+        Write-Host ("  {0} required detection(s) went UNTESTED this run because their plant failed:" -f $skippedRequired.Count)
+        foreach ($n in $skippedRequired) { Write-Host ("    - {0}" -f $n) }
     }
 
     Write-Host ""
