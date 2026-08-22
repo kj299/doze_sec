@@ -299,13 +299,30 @@ jobs:
               '{0CCE9235-69AE-11D9-BED3-505054503030}' = 'User Account Management'
               '{0CCE922F-69AE-11D9-BED3-505054503030}' = 'Audit Policy Change'
             }
+            # NB: /list /subcategory: takes a CATEGORY name or *, never a GUID
+            # (passing one returns 0x57 ERROR_INVALID_PARAMETER). Enumerate all
+            # subcategories once with /v, which prints "<name>  <guid>", and
+            # build the mapping from that. The native command writes to stderr,
+            # so relax EAP around it or PowerShell turns that into a
+            # terminating NativeCommandError.
+            $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+            $list = & auditpol /list /subcategory:* /v 2>&1
+            $ErrorActionPreference = $eap
+            $map = @{}
+            foreach ($ln in $list) {
+              $m = [regex]::Match([string]$ln, '^\s*(\S.*?)\s+(\{[0-9A-Fa-f]{8}-[0-9A-Fa-f-]+\})\s*$')
+              if ($m.Success) { $map[$m.Groups[2].Value.ToUpper()] = $m.Groups[1].Value.Trim() }
+            }
+            # Guard the guard: an empty or tiny map would make every comparison
+            # below vacuously true.
+            if ($map.Count -lt 10) { throw "auditpol /list returned only $($map.Count) subcategory mappings -- the GUID check cannot verify anything" }
             $src = Get-Content .\tools\audit_policy_check.ps1 -Raw
             foreach ($g in $expect.Keys) {
               if ($src -notmatch [regex]::Escape($g)) { throw "audit_policy_check.ps1 no longer queries $g ($($expect[$g]))" }
-              $name = (& auditpol /list /subcategory:"$g" 2>$null | Where-Object { $_.Trim() -and $_ -notmatch '^(Category|System audit)' } | Select-Object -Last 1)
-              if (-not $name) { throw "auditpol could not resolve $g" }
-              if ($name.Trim() -ne $expect[$g]) { throw "GUID $g resolves to '$($name.Trim())' on this OS, but the tool labels it '$($expect[$g])'" }
-              Write-Host ("  {0} -> {1}  (confirmed by auditpol)" -f $g, $name.Trim())
+              $actual = $map[$g.ToUpper()]
+              if (-not $actual) { throw "auditpol does not report a subcategory with GUID $g" }
+              if ($actual -ne $expect[$g]) { throw "GUID $g is '$actual' on this OS, but audit_policy_check.ps1 labels it '$($expect[$g])'" }
+              Write-Host ("  {0} -> {1}  (confirmed by auditpol)" -f $g, $actual)
             }
           } finally { Remove-Item $md -Recurse -Force -EA SilentlyContinue }
           Write-Host "audit_policy_check.ps1 OK (incl. GUID-to-subcategory verification against the live OS)"
