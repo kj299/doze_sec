@@ -38,6 +38,10 @@ param(
     [string]$SourceDir = (Split-Path -Parent (Split-Path -Parent $PSCommandPath)),
     [string]$Manifest  = '',
     [string]$Report    = '',
+    # Authoritative source for "did this technique actually FIRE this run": the
+    # findings ledger, whose CODE field is written only by an actual
+    # :dz_finding raise. See the FIRED note below for why the report text is not.
+    [string]$Ledger    = '',
     [switch]$Strict
 )
 
@@ -107,15 +111,29 @@ foreach ($f in $srcFiles) {
     } catch {}
 }
 
-# 3. Which fired this run (optional).
+# 3. Which techniques actually FIRED this run (optional).
+#
+# This MUST come from the ledger, not from the report text. The report prints
+# technique ids in ~14 unconditional section headers (e.g. "--- [T1546.008] IFEO
+# Debugger Hijack ---"), so substring-searching the report marks EVERY referenced
+# technique as fired on every run -- including on a completely clean machine,
+# which is exactly the false-assurance this tool exists to avoid. The ledger's
+# CODE field is written only by a real :dz_finding raise, so it answers the
+# question honestly.
 $fired = @{}
-if ($Report -and (Test-Path -LiteralPath $Report)) {
+$firedSource = ''
+if ($Ledger -and (Test-Path -LiteralPath $Ledger)) {
     try {
-        $rt = Get-Content -LiteralPath $Report -Raw -EA Stop
-        foreach ($id in $referenced.Keys) {
-            if ($rt -match ([regex]::Escape($id))) { $fired[$id] = $true }
+        foreach ($ln in (Get-Content -LiteralPath $Ledger -EA Stop)) {
+            $t = $ln.Trim()
+            if (-not $t -or $t.StartsWith('#')) { continue }
+            $f = $t.Split('|')
+            if ($f.Count -lt 3) { continue }
+            $code = $f[2].Trim()
+            if ($code -match '^T1[0-9]{3}(\.[0-9]{3})?$') { $fired[$code] = $true }
         }
-    } catch {}
+        $firedSource = 'ledger'
+    } catch { $firedSource = '' }
 }
 
 # 4. Reconcile.
@@ -132,7 +150,7 @@ foreach ($id in $covered) {
 }
 
 "Techniques detected by the audit: $($covered.Count) across $((@($byTactic.Keys)).Count) ATT&CK tactic(s)."
-if ($Report) { "Of those, $((@($fired.Keys)).Count) had at least one finding in THIS report." }
+if ($firedSource) { "Of those, $((@($fired.Keys)).Count) raised at least one finding in THIS run." }
 ''
 
 $displayTactics = @($tacticOrder + (@($byTactic.Keys) | Where-Object { $tacticOrder -notcontains $_ } | Sort-Object))
@@ -147,7 +165,8 @@ foreach ($tac in $displayTactics) {
     }
     ''
 }
-if ($Report) { '  (* = at least one finding for this technique in this report)' }
+if ($firedSource) { '  (* = this technique raised at least one finding in this run)' }
+elseif ($Report) { '  (per-technique fired/not-fired needs the findings ledger; not annotated in this run)' }
 
 # 5. Honest gaps: enterprise tactics with no coverage at all.
 $gapTactics = @($tacticOrder | Where-Object { -not $byTactic.ContainsKey($_) })

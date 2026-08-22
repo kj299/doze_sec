@@ -8,7 +8,12 @@
 # RTCore64.sys (MSI Afterburner driver - abused by BlackByte, Scattered Spider)
 01aa278b07b58dc46c84bd0b1b5c8e9ee4e62ea0bf7a695862571c98b5a68e49|RTCore64_BYOVD|CISA
 # DBUtil_2_3.sys (Dell BIOS driver - CVE-2021-21551)
-0296e2ce999e67c76352613a718e11516fe1b0efc3ffdb8918fc999dd76a73a5b|DBUtil_BYOVD|Mandiant
+# !! MALFORMED - QUARANTINED. The value below is 65 hex chars; a SHA256 is 64,
+# !! so this entry silently never loaded and DBUtil_2_3.sys was never matched
+# !! by hash (the filename rule in driver_audit.ps1 still covers it). Which
+# !! character is spurious cannot be determined offline -- re-source this
+# !! hash from CISA/Mandiant and restore the line rather than guessing.
+# 0296e2ce999e67c76352613a718e11516fe1b0efc3ffdb8918fc999dd76a73a5b|DBUtil_BYOVD|Mandiant
 # WinRing0x64.sys (EVGA Precision X1 - abused by multiple ransomware)
 11bd2c9f9e2397c9a16e0990e4ed2cf0679498fe0fd418a3dfdac60b5c160ee5|WinRing0_BYOVD|Sophos
 #
