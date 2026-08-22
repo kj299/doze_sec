@@ -45,6 +45,11 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
+# PowerShell adds these note-properties to every Get-ItemProperty result; they
+# are not registry values. Matched by EXACT name -- a '^PS' prefix match would
+# also swallow real values whose names start with "PS".
+$psNoteProps = @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider')
+
 # STRONG command-content indicators -- fire on their own (unambiguous):
 # encoded PowerShell, base64 decode, and LOLBin download-and-exec.
 $strongContent = @(
@@ -83,7 +88,17 @@ foreach ($k in $runKeys) {
     $props = Get-ItemProperty -Path $k -EA SilentlyContinue
     if (-not $props) { continue }
     foreach ($p in $props.PSObject.Properties) {
-        if ($p.Name -match '^PS') { continue }
+        # Skip PowerShell's synthetic note-properties by EXACT name.
+        #
+        # This test used to be `-match '^PS'` -- a case-insensitive PREFIX
+        # match. It skipped PSPath/PSChildName/... as intended, but it also
+        # skipped every REAL registry value whose name merely began with "PS".
+        # Naming a Run-key autorun "PSUpdater" or "psnotify" therefore hid it
+        # from this evaluator completely: no verdict, no finding, no ledger
+        # entry. That is a one-word evasion of the tool's most important
+        # persistence check, and "PS" is a natural prefix for anything
+        # PowerShell-flavoured, so it could also happen by accident.
+        if ($psNoteProps -contains $p.Name) { continue }
         $val = [string]$p.Value
         if (-not $val) { continue }
 

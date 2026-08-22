@@ -128,6 +128,22 @@ $cases = @(
         Cleanup= { Remove-ItemProperty -Path $runKey -Name $MARK -EA SilentlyContinue }
     },
     @{
+        Name   = 'Run-key autorun whose VALUE NAME starts with "PS" -> still flagged (note-property filter evasion)'
+        Attack = @('T1547.001')
+        Tier   = 'required'
+        # Every registry evaluator skipped PowerShell's synthetic note-properties
+        # with `-match '^PS'`, a PREFIX match. That also skipped any real value
+        # whose name merely began with "PS", so naming an autorun "PSUpdater"
+        # hid it from the check entirely -- a one-word evasion of the tool's
+        # most important persistence detection. The plant below is the ordinary
+        # encoded-PowerShell backdoor under a "PS"-prefixed value name; it must
+        # be flagged exactly as the plain-named one is.
+        Expect = ('(?im)(\[(WARNING|CRITICAL)\][^\r\n]*PS{0}|PS{0}[^\r\n]*(suspicious|encoded|backdoor))' -f $MARK)
+        Plant  = { if (-not (Test-Path $runKey)) { New-Item -Path $runKey -Force | Out-Null }
+                   Set-ItemProperty -Path $runKey -Name ("PS{0}" -f $MARK) -Value 'powershell -w hidden -enc ZQBjAGgAbwA=' -Force }
+        Cleanup= { Remove-ItemProperty -Path $runKey -Name ("PS{0}" -f $MARK) -EA SilentlyContinue }
+    },
+    @{
         Name   = 'IFEO Debugger on a NON-accessibility binary (notepad) -> escalated'
         Tier   = 'required'  # persistence_eval.ps1 escalates ANY IFEO Debugger (issue #138)
         Expect = '(?im)IFEO Debugger hijack[^\r\n]*notepad'

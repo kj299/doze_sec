@@ -3638,6 +3638,13 @@ if "%VT_CHECK%"=="1" (
     echo  NOTE: only file hashes are submitted; file contents are never uploaded.>> "%REPORT%"
     echo  NOTE: noAdmin variant cannot read C:\Windows\System32\drivers; checks user-readable files only.>> "%REPORT%"
     if exist "%SCRIPT_DIR%tools\vt_check.ps1" (
+        rem Clear any marker left by an INTERRUPTED earlier -vt run. Without
+        rem this, a run killed between vt_check.ps1 writing the marker and the
+        rem del below leaves the file behind, and the next -vt run raises a
+        rem "VirusTotal-flagged file" finding with nothing in the report to
+        rem support it. Every other IOC marker already deletes before its
+        rem producer runs; these two were the exceptions.
+        del "%TEMP%\dz_iochit_18j.txt" 2>nul
         "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\vt_check.ps1">> "%REPORT%" 2>&1
         if exist "%TEMP%\dz_iochit_18j.txt" (
             set /a IOC_HITS+=1
@@ -3657,6 +3664,9 @@ if "%VT_CHECK%"=="1" (
     echo  Source: https://docs.virustotal.com/reference/ip-info ^| API key from %%USERPROFILE%%\.vt_token>> "%REPORT%"
     echo  NOTE: only IP literals are submitted; connection metadata is never sent.>> "%REPORT%"
     if exist "%SCRIPT_DIR%tools\vt_ip_check.ps1" (
+        rem Clear a marker left by an interrupted earlier -vt run -- see the
+        rem note on the 18j marker above.
+        del "%TEMP%\dz_iochit_18l.txt" 2>nul
         "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\vt_ip_check.ps1">> "%REPORT%" 2>&1
         if exist "%TEMP%\dz_iochit_18l.txt" (
             set /a IOC_HITS+=1

@@ -71,6 +71,11 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
+# PowerShell adds these note-properties to every Get-ItemProperty result; they
+# are not registry values. Matched by EXACT name -- a '^PS' prefix match would
+# also swallow real values whose names start with "PS".
+$psNoteProps = @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider')
+
 $trusted   = '\bMicrosoft\b|\bWindows\b'
 $badPathRx = '\\Temp\\|\\Downloads\\|\\Public\\|\\ProgramData\\update'
 # Strong command-content indicators, kept in sync with persistence_eval.ps1
@@ -157,7 +162,9 @@ if (-not $nsOk) {
 } else {
     $n = 0
     foreach ($p in $nsProps.PSObject.Properties) {
-        if ($p.Name -match '^PS') { continue }
+        # Exact-name skip, not a '^PS' prefix match (see persistence_eval.ps1):
+        # a netsh helper named "psmon" was previously never evaluated.
+        if ($psNoteProps -contains $p.Name) { continue }
         $raw = [string]$p.Value
         if (-not $raw) { continue }
         $n++
