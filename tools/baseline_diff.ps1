@@ -59,6 +59,11 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
+# PowerShell adds these note-properties to every Get-ItemProperty result; they
+# are not registry values. Matched by EXACT name -- a '^PS' prefix match would
+# also swallow real values whose names start with "PS".
+$psNoteProps = @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider')
+
 function Write-Marker {
     param([string]$Name, [string]$Sev)
     if ($Sev -eq 'OK') { return }
@@ -161,7 +166,11 @@ function Get-Snapshot {
             if (-not (Test-Path $k)) { continue }
             $props = Get-ItemProperty -Path $k -EA Stop
             foreach ($p in $props.PSObject.Properties) {
-                if ($p.Name -match '^PS') { continue }
+                # Exact-name skip, not a '^PS' prefix match (see
+                # persistence_eval.ps1). A "PS"-named autorun was excluded from
+                # the snapshot too, so the diff could not report it as NEW
+                # either -- both the direct check and change detection missed it.
+                if ($psNoteProps -contains $p.Name) { continue }
                 $recs.Add(('RUN|{0}\{1}|{2}' -f (CleanField $k), (CleanField $p.Name), (CleanField ([string]$p.Value))))
             }
         } catch {}

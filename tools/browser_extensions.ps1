@@ -38,6 +38,11 @@ param()
 
 $ErrorActionPreference = 'SilentlyContinue'
 
+# PowerShell adds these note-properties to every Get-ItemProperty result; they
+# are not registry values. Matched by EXACT name -- a '^PS' prefix match would
+# also swallow real values whose names start with "PS".
+$psNoteProps = @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider')
+
 $marker = Join-Path $env:TEMP 'dz_browserext_hit.txt'
 if (Test-Path -LiteralPath $marker) { Remove-Item -LiteralPath $marker -Force -EA SilentlyContinue }
 
@@ -247,7 +252,8 @@ foreach ($k in $forceKeys) {
     $vals = Get-ItemProperty -LiteralPath $k -EA SilentlyContinue
     if (-not $vals) { continue }
     foreach ($p in $vals.PSObject.Properties) {
-        if ($p.Name -match '^PS') { continue }
+        # Exact-name skip, not a '^PS' prefix match (see persistence_eval.ps1).
+        if ($psNoteProps -contains $p.Name) { continue }
         $script:warnCount++
         Write-Output ("[WARNING] Policy force-install ($k): " + [string]$p.Value)
     }

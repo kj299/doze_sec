@@ -62,6 +62,11 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
+# PowerShell adds these note-properties to every Get-ItemProperty result; they
+# are not registry values. Matched by EXACT name -- a '^PS' prefix match would
+# also swallow real values whose names start with "PS".
+$psNoteProps = @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider')
+
 function Write-Marker {
     param([string]$Name, [string]$Sev)
     if ($Sev -eq 'OK') { return }
@@ -107,7 +112,12 @@ $hlKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAcc
 try {
     if (Test-Path $hlKey) {
         foreach ($p in (Get-ItemProperty -Path $hlKey -EA Stop).PSObject.Properties) {
-            if ($p.Name -match '^PS') { continue }
+            # Exact-name skip, not a '^PS' prefix match (see
+            # persistence_eval.ps1). This one mattered most: a hidden account
+            # named "psadmin" was hidden from the sign-in screen AND from this
+            # check, which is precisely the account someone monitoring a
+            # partner or employee would create.
+            if ($psNoteProps -contains $p.Name) { continue }
             if ([int]$p.Value -eq 0) { $hidden += $p.Name }
         }
     }

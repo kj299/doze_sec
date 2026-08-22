@@ -284,8 +284,48 @@ jobs:
             $on = ((Get-ItemProperty -Path $k -Name 'ProcessCreationIncludeCmdLine_Enabled' -EA SilentlyContinue).ProcessCreationIncludeCmdLine_Enabled -eq 1)
             if ($on -and $out -notmatch 'command-line logging is ENABLED') { throw 'cmdline key ON but tool did not report ENABLED' }
             if (-not $on -and $out -notmatch 'command-line logging is DISABLED') { throw 'cmdline key OFF but tool did not report DISABLED' }
+
+            # Ask WINDOWS what each configured GUID actually is, rather than
+            # trusting the constant in the source. A retrospective found this
+            # row querying {0CCE9217} (Audit_Logon_AccountLockout) while
+            # reporting on "Audit Policy Change (4719)" -- so disabling 4719,
+            # the exact T1562.002 action the row exists to catch, still printed
+            # "auditing is ON". Three of the four GUIDs were right, which is
+            # precisely why nobody noticed. auditpol /list resolves GUID -> name
+            # on the real OS; the runner is English so the names are stable.
+            $expect = @{
+              '{0CCE922B-69AE-11D9-BED3-505054503030}' = 'Process Creation'
+              '{0CCE9215-69AE-11D9-BED3-505054503030}' = 'Logon'
+              '{0CCE9235-69AE-11D9-BED3-505054503030}' = 'User Account Management'
+              '{0CCE922F-69AE-11D9-BED3-505054503030}' = 'Audit Policy Change'
+            }
+            # NB: /list /subcategory: takes a CATEGORY name or *, never a GUID
+            # (passing one returns 0x57 ERROR_INVALID_PARAMETER). Enumerate all
+            # subcategories once with /v, which prints "<name>  <guid>", and
+            # build the mapping from that. The native command writes to stderr,
+            # so relax EAP around it or PowerShell turns that into a
+            # terminating NativeCommandError.
+            $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+            $list = & auditpol /list /subcategory:* /v 2>&1
+            $ErrorActionPreference = $eap
+            $map = @{}
+            foreach ($ln in $list) {
+              $m = [regex]::Match([string]$ln, '^\s*(\S.*?)\s+(\{[0-9A-Fa-f]{8}-[0-9A-Fa-f-]+\})\s*$')
+              if ($m.Success) { $map[$m.Groups[2].Value.ToUpper()] = $m.Groups[1].Value.Trim() }
+            }
+            # Guard the guard: an empty or tiny map would make every comparison
+            # below vacuously true.
+            if ($map.Count -lt 10) { throw "auditpol /list returned only $($map.Count) subcategory mappings -- the GUID check cannot verify anything" }
+            $src = Get-Content .\tools\audit_policy_check.ps1 -Raw
+            foreach ($g in $expect.Keys) {
+              if ($src -notmatch [regex]::Escape($g)) { throw "audit_policy_check.ps1 no longer queries $g ($($expect[$g]))" }
+              $actual = $map[$g.ToUpper()]
+              if (-not $actual) { throw "auditpol does not report a subcategory with GUID $g" }
+              if ($actual -ne $expect[$g]) { throw "GUID $g is '$actual' on this OS, but audit_policy_check.ps1 labels it '$($expect[$g])'" }
+              Write-Host ("  {0} -> {1}  (confirmed by auditpol)" -f $g, $actual)
+            }
           } finally { Remove-Item $md -Recurse -Force -EA SilentlyContinue }
-          Write-Host "audit_policy_check.ps1 OK"
+          Write-Host "audit_policy_check.ps1 OK (incl. GUID-to-subcategory verification against the live OS)"
           exit 0
 
       - name: driver_audit.ps1 (BYOVD by hash + unsigned catch-all; renamed cannot evade)

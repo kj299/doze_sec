@@ -55,7 +55,17 @@ $subs = @(
     @{ Guid = '{0CCE922B-69AE-11D9-BED3-505054503030}'; Name = 'Process Creation (4688)';         Feeds = 'suspicious-process, service-install and LOLBin event checks' },
     @{ Guid = '{0CCE9215-69AE-11D9-BED3-505054503030}'; Name = 'Logon (4624/4625)';                Feeds = 'logon / failed-logon and lateral-movement checks' },
     @{ Guid = '{0CCE9235-69AE-11D9-BED3-505054503030}'; Name = 'User Account Management (4720/4732)'; Feeds = 'new-account and admin-group-change checks' },
-    @{ Guid = '{0CCE9217-69AE-11D9-BED3-505054503030}'; Name = 'Audit Policy Change (4719)';        Feeds = 'detection of auditing being turned off by an attacker' }
+    # {0CCE922F} is Audit_PolicyChange_AuditPolicy (ntsecapi.h). This row used
+    # to query {0CCE9217}, which is Audit_Logon_AccountLockout -- a different
+    # subcategory in a different category that happens to ship default=Success
+    # on Windows client. So the exact T1562.002 action this row exists to catch,
+    # `auditpol /set /subcategory:{0CCE922F-...} /success:disable`, left the
+    # queried subcategory untouched and the tool reported "[OK] Audit Policy
+    # Change (4719) auditing is ON" while 4719 was in fact blinded. The one
+    # check that tells the reader whether tamper-detection is live was reporting
+    # the opposite of the truth. Verified against Microsoft's Auditing Constants
+    # and asserted on a real Windows runner by the helpers-ps51 CI job.
+    @{ Guid = '{0CCE922F-69AE-11D9-BED3-505054503030}'; Name = 'Audit Policy Change (4719)';        Feeds = 'detection of auditing being turned off by an attacker' }
 )
 
 $apOk = $true
@@ -65,9 +75,24 @@ try {
     $csv = & auditpol /get ("/subcategory:$guidList") /r 2>$null
     if ($LASTEXITCODE -ne 0 -or -not $csv) { $apOk = $false }
     else {
-        foreach ($line in ($csv | ConvertFrom-Csv)) {
-            $g = [string]$line.'Subcategory GUID'
-            if ($g) { $rows[$g.Trim().ToLower()] = [string]$line.'Inclusion Setting' }
+        # Locate each row by its GUID POSITIONALLY, not by English column name.
+        # auditpol localizes its /r header row (the Japanese header reads
+        # "カテゴリ/サブカテゴリ GUID"), so `$line.'Subcategory GUID'` returns $null on
+        # any non-English Windows -- $rows stayed empty and all four
+        # subcategories were then reported OFF, with '(not set)' giving the
+        # reader no hint that this was a parse failure rather than a real
+        # finding. A German or Japanese user got four fabricated WARNINGs and a
+        # downgraded audit-visibility verdict on a correctly configured machine.
+        # The GUID literal itself is locale-invariant, so find the field that
+        # looks like one and take the next field as its setting.
+        foreach ($line in $csv) {
+            $f = [string]$line -split ','
+            for ($i = 0; $i -lt $f.Count - 1; $i++) {
+                if ($f[$i].Trim() -match '^\{?0cce[0-9a-f]{4}-') {
+                    $rows[$f[$i].Trim().Trim('{','}').ToLower()] = $f[$i + 1].Trim()
+                    break
+                }
+            }
         }
     }
 } catch { $apOk = $false }
@@ -77,12 +102,21 @@ if (-not $apOk) {
     $sev = 'WARNING'
 } else {
     foreach ($s in $subs) {
-        $set = $rows[$s.Guid.ToLower()]
+        $set = $rows[$s.Guid.ToLower().Trim('{','}')]
         # "Success" present => the success events this feeds are being recorded.
-        # Empty or "No Auditing" => blind. (Localized text may read otherwise on
-        # non-English Windows; the cmdline registry signal below is definitive.)
+        # "No Auditing" or empty => blind.
+        #
+        # The setting TEXT is localized too, so a third case exists: the row was
+        # found but its value is in a language this script cannot classify.
+        # Reporting that as "auditing is OFF" would be a fabricated finding, so
+        # it is reported as unverified instead. Saying "I could not read this"
+        # is honest; saying "your auditing is off" when it is not teaches the
+        # reader to ignore the tool.
         if ($set -and $set -match 'Success') {
             "[OK] $($s.Name) auditing is ON -- feeds $($s.Feeds)."
+        } elseif ($set -and $set -notmatch '^(No Auditing|Failure)$') {
+            "[SKIPPED] $($s.Name) auditing state could not be read -- auditpol reported '$set', which this check cannot classify (localized Windows). Verify manually: auditpol /get /subcategory:$($s.Guid)"
+            $sev = 'WARNING'
         } else {
             $shown = if ($set) { $set } else { '(not set)' }
             "[WARNING] $($s.Name) auditing is OFF [$shown] -- a clean result for the $($s.Feeds) may only mean these events are not being recorded (T1562.002)."
