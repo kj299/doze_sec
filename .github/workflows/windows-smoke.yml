@@ -553,6 +553,36 @@ jobs:
           Write-Host "emulation_coverage.ps1 OK"
           exit 0
 
+      - name: boot_chain_check.ps1 (boot-chain config audit; must not false-CRITICAL a clean VM)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $md = Join-Path $env:TEMP ("dz_bc_ci_{0}" -f $PID)
+          New-Item -ItemType Directory -Path $md -Force | Out-Null
+          try {
+            # The runner is a VM: bcdedit works (nointegritychecks is No), while
+            # the Secure Boot UEFI vars typically do not exist -> those sub-checks
+            # must degrade to [SKIPPED], NOT crash or false-CRITICAL. A CRITICAL
+            # here would mean the runner really has kernel integrity disabled OR
+            # the bcdedit parse is wrong.
+            $out = (.\tools\boot_chain_check.ps1 -MarkerDir $md) -join "`n"
+            Write-Host $out
+            if ($out -notmatch 'Boot-chain configuration audit') { throw 'boot-chain header missing' }
+            if ($out -match '\[CRITICAL\]') { throw "boot_chain_check reported CRITICAL on a clean VM runner (bcdedit parse or gate bug)" }
+            if (Test-Path (Join-Path $md 'dz_bootchain.txt')) {
+              $mv = (Get-Content (Join-Path $md 'dz_bootchain.txt')).Trim()
+              if ($mv -eq 'CRITICAL') { throw "boot_chain_check wrote a CRITICAL marker on a clean VM runner" }
+              Write-Host ("  note: clean-runner marker is {0} (acceptable -- e.g. no-bcdedit-output SKIPPED)" -f $mv)
+            }
+            # The nointegritychecks OK line must appear when bcdedit produced output,
+            # proving the integrity-flag parse actually ran on this machine.
+            if ($out -match 'nointegritychecks not set') { Write-Host "  integrity-flag parse ran and reported enforced" }
+            elseif ($out -match 'bcdedit produced no output') { Write-Host "  bcdedit unavailable on this runner -- integrity parse skipped (honest)" }
+            else { throw 'neither the integrity-OK line nor the bcdedit-skip line appeared -- parse path unclear' }
+          } finally { Remove-Item $md -Recurse -Force -EA SilentlyContinue }
+          Write-Host "boot_chain_check.ps1 OK"
+          exit 0
+
       - name: service_signature_check.ps1 (real services + Authenticode; svchost must resolve)
         shell: powershell
         run: |

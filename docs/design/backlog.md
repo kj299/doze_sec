@@ -3,7 +3,10 @@
 Ideas evaluated and deferred, kept here so they are not lost. Nothing here is a
 commitment; each entry records enough context to pick it up later.
 
-## Firmware / boot-chain coverage
+## Firmware / boot-chain coverage  -- SHIPPED (Sec 13 `boot_chain_check.ps1`)
+
+**Status:** the config-audit slice below is implemented. What remains genuinely out of reach (firmware image scanning, SPI flash) stays out of scope by the stated ceiling.
+
 
 **Idea.** Extend the audit below the OS: DBX (UEFI revocation list) freshness,
 UEFI variable inspection, Secure Boot depth beyond the current on/off check, and

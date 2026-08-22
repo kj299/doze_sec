@@ -128,3 +128,8 @@ T1564|Defense Evasion|Hide Artifacts|-|Sec 10 stalkerware / Sec 17 cross_api
 T1564.002|Defense Evasion|Hidden Users|-|Sec 10 stalkerware (hidden account)
 T1574|Persistence|Hijack Execution Flow|-|Sec 4 module_inspect / Sec 7 services
 T1574.001|Persistence|DLL Search Order Hijacking|-|Sec 4 module_inspect
+#
+# === PRE-OS BOOT (boot-chain configuration audit) ===
+T1542|Defense Evasion|Pre-OS Boot|BlackLotus,CosmicStrand|Sec 13 boot_chain_check
+T1542.001|Defense Evasion|System Firmware (Secure Boot state/setup mode)|-|Sec 13 boot_chain_check
+T1542.003|Defense Evasion|Bootkit (boot-loader integrity flags)|BlackLotus|Sec 13 boot_chain_check

@@ -2789,6 +2789,26 @@ if %errorlevel% equ 0 (
 )
 
 echo.>> "%REPORT%"
+echo --- Boot-Chain Configuration ^(config + known-bad indicators; NOT a firmware scan^) --->> "%REPORT%"
+echo  Command: powershell -File tools\boot_chain_check.ps1>> "%REPORT%"
+echo  Audits boot-loader integrity flags, Secure Boot setup mode / revocation list,>> "%REPORT%"
+echo  and memory-integrity state ^(T1542^). A user-mode tool cannot scan firmware or>> "%REPORT%"
+echo  trust it -- this checks whether the boot chain is CONFIGURED to resist a>> "%REPORT%"
+echo  bootkit, not whether the firmware is clean.>> "%REPORT%"
+del "%TEMP%\dz_bootchain.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\boot_chain_check.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\boot_chain_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo  [INFO] tools\boot_chain_check.ps1 not found -- boot-chain audit skipped.>> "%REPORT%"
+)
+if exist "%TEMP%\dz_bootchain.txt" (
+    set "_BCSEV="
+    set /p _BCSEV=<"%TEMP%\dz_bootchain.txt"
+    call :dz_finding !_BCSEV! 13 T1542.003 "Boot-chain configuration weakness - bootkit/rootkit enabler"
+    del "%TEMP%\dz_bootchain.txt" 2>nul
+)
+
+echo.>> "%REPORT%"
 echo --- AutoRun/AutoPlay: SAFE=NoDriveTypeAutoRun=0xFF --->> "%REPORT%"
 echo  Command: reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v NoDriveTypeAutoRun ^&^& set "_AR_HIT=1">> "%REPORT%"
 set "_AR_HIT="
