@@ -161,7 +161,15 @@ $findings = @()
 $checked = 0
 $unsignedOther = 0
 $capped = $false
-foreach ($path in ($modOwners.Keys | Sort-Object)) {
+# INSPECT THE SUSPICIOUS PATHS FIRST. Plain `Sort-Object` is alphabetical, so
+# C:\Windows\Temp\... and C:\Users\<u>\AppData\... sort near the END -- and on a
+# busy workstation (Chrome + Teams + Office + an IDE easily exceed the 2500-file
+# cap) the cap dropped exactly the modules this check exists to find, while the
+# report still said no module came from a staging path. Ordering staged paths
+# ahead of everything else means the cap can only ever discard the least
+# interesting candidates.
+$ordered = @($modOwners.Keys | Sort-Object @{Expression = { if ($_ -match $badPathRx) { 0 } else { 1 } }}, @{Expression = { $_ }})
+foreach ($path in $ordered) {
     $owners = $modOwners[$path]
     $inCore = $false
     foreach ($o in $owners) { if ($coreProcs -contains $o.ToLower()) { $inCore = $true; break } }
@@ -223,7 +231,16 @@ foreach ($f in $warn) {
 if ($warn.Count -gt $MaxReport) { "[INFO] ...and $($warn.Count - $MaxReport) more module finding(s) not listed (report cap $MaxReport)." }
 
 if ($findings.Count -eq 0) {
-    "[OK] $checked unique loaded module(s) across $procCount process(es) -- none from a staging path, none unsigned inside a core security process."
+    # Qualify the all-clear when the cap truncated the walk: "none from a
+    # staging path" must not be read as covering modules that were never
+    # examined. (Staged paths are inspected first, so a cap hit now means the
+    # unchecked remainder is the least interesting part of the list -- but the
+    # sentence still has to say what it actually covers.)
+    if ($capped) {
+        "[OK] $checked unique loaded module(s) inspected across $procCount process(es) -- none of THOSE came from a staging path or were unsigned inside a core security process. The walk stopped at the $MaxModules-file cap; see the coverage note below."
+    } else {
+        "[OK] $checked unique loaded module(s) across $procCount process(es) -- none from a staging path, none unsigned inside a core security process."
+    }
 }
 if ($unsignedOther -gt 0) {
     "[INFO] $unsignedOther unique unsigned module(s) loaded outside the core security processes -- common for legitimate third-party software, so counted rather than flagged. Reviewed individually only if you have other reason for concern."

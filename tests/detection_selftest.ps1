@@ -115,8 +115,16 @@ $cases = @(
         Tier   = 'required'
         Expect = 'Non-standard entries found in HOSTS'
         Plant  = { Add-Content -LiteralPath $hostsPath -Value ("203.0.113.5 {0}.example" -f $MARK) }
-        Cleanup= { $keep = Get-Content -LiteralPath $hostsPath | Where-Object { $_ -notmatch $MARK }
-                   Set-Content -LiteralPath $hostsPath -Value $keep -Encoding ASCII }
+        # Read and write with the SAME explicit encoding. The old cleanup read
+        # with Get-Content's default (the process ANSI codepage) and rewrote
+        # with -Encoding ASCII, so on a machine whose hosts file is UTF-8 with
+        # non-ASCII content -- a curated blocklist with non-English comments,
+        # a hostname note in Cyrillic or CJK -- every multi-byte sequence
+        # became mojibake and then '?'. A test harness must leave the machine
+        # as it found it; silently corrupting a system file it only borrowed is
+        # not an acceptable side effect of asserting a detection.
+        Cleanup= { $keep = Get-Content -LiteralPath $hostsPath -Encoding UTF8 | Where-Object { $_ -notmatch $MARK }
+                   Set-Content -LiteralPath $hostsPath -Value $keep -Encoding UTF8 }
     },
     @{
         Name   = 'Run-key backdoor (encoded PowerShell) -> flagged as suspicious'
