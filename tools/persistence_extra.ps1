@@ -190,6 +190,7 @@ $ppSearch = @(
 )
 $envRoot = 'HKLM:\SYSTEM\CurrentControlSet\Control\Print\Environments'
 $ppCount = 0
+$ppUnread = 0   # entries whose value could not be read -- must not be covered by an all-clear
 $ppOk = $true
 try {
     if (Test-Path $envRoot) {
@@ -197,8 +198,15 @@ try {
             $procRoot = Join-Path $envKey.PSPath 'Print Processors'
             if (-not (Test-Path $procRoot)) { continue }
             foreach ($proc in (Get-ChildItem -LiteralPath $procRoot -EA SilentlyContinue)) {
-                $raw = [string](Get-ItemProperty -Path $proc.PSPath -Name 'Driver' -EA SilentlyContinue).Driver
-                if (-not $raw) { continue }
+                # -LiteralPath, NOT -Path: the subkey name is
+                # attacker-controlled and -Path treats it as a WILDCARD. A
+                # port monitor named "Std [TCP] Mon" with a malicious Driver
+                # value matched nothing, -EA SilentlyContinue hid the error,
+                # the `if (-not $raw) { continue }` below dropped it without
+                # counting it, and the section still reported every registered
+                # entry as validly Microsoft-signed.
+                $raw = [string](Get-ItemProperty -LiteralPath $proc.PSPath -Name 'Driver' -EA SilentlyContinue).Driver
+                if (-not $raw) { $ppUnread++; continue }
                 $ppCount++
                 $dll = Resolve-DllPath -Raw $raw -SearchDirs $ppSearch
                 $v = Get-DllVerdict -Path $dll
@@ -215,6 +223,8 @@ if (-not $ppOk) {
     $ppSev = Get-MaxSev $ppSev 'WARNING'
 } elseif ($ppSev -eq 'OK') {
     "[OK] All $ppCount registered print processor(s) are validly Microsoft-signed."
+    # An all-clear may not cover entries the scan could not read.
+    if ($ppUnread -gt 0) { "[WARNING] $ppUnread print processor(s) had an unreadable driver value and were NOT checked -- a registry key name crafted to defeat enumeration is itself suspicious. Inspect them by hand." ; $ppSev = Get-MaxSev $ppSev 'WARNING' }
 }
 Write-Marker -Name 'printproc' -Sev $ppSev
 
@@ -224,12 +234,20 @@ Write-Marker -Name 'printproc' -Sev $ppSev
 $pmSev = 'OK'
 $monRoot = 'HKLM:\SYSTEM\CurrentControlSet\Control\Print\Monitors'
 $pmCount = 0
+$pmUnread = 0   # entries whose value could not be read -- must not be covered by an all-clear
 $pmOk = $true
 try {
     if (Test-Path $monRoot) {
         foreach ($mon in (Get-ChildItem -LiteralPath $monRoot -EA Stop)) {
-            $raw = [string](Get-ItemProperty -Path $mon.PSPath -Name 'Driver' -EA SilentlyContinue).Driver
-            if (-not $raw) { continue }
+            # -LiteralPath, NOT -Path: the subkey name is
+            # attacker-controlled and -Path treats it as a WILDCARD. A
+            # port monitor named "Std [TCP] Mon" with a malicious Driver
+            # value matched nothing, -EA SilentlyContinue hid the error,
+            # the `if (-not $raw) { continue }` below dropped it without
+            # counting it, and the section still reported every registered
+            # entry as validly Microsoft-signed.
+            $raw = [string](Get-ItemProperty -LiteralPath $mon.PSPath -Name 'Driver' -EA SilentlyContinue).Driver
+            if (-not $raw) { $pmUnread++; continue }
             $pmCount++
             $dll = Resolve-DllPath -Raw $raw -SearchDirs @($sys32)
             $v = Get-DllVerdict -Path $dll
@@ -245,6 +263,8 @@ if (-not $pmOk) {
     $pmSev = Get-MaxSev $pmSev 'WARNING'
 } elseif ($pmSev -eq 'OK') {
     "[OK] All $pmCount registered port monitor(s) are validly Microsoft-signed."
+    # An all-clear may not cover entries the scan could not read.
+    if ($pmUnread -gt 0) { "[WARNING] $pmUnread port monitor(s) had an unreadable driver value and were NOT checked -- a registry key name crafted to defeat enumeration is itself suspicious. Inspect them by hand." ; $pmSev = Get-MaxSev $pmSev 'WARNING' }
 }
 Write-Marker -Name 'portmon' -Sev $pmSev
 
@@ -345,12 +365,20 @@ Write-Marker -Name 'psprofile' -Sev $profSev
 $tpSev = 'OK'
 $tpRoot = 'HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\TimeProviders'
 $tpCount = 0
+$tpUnread = 0   # entries whose value could not be read -- must not be covered by an all-clear
 $tpOk = $true
 try {
     if (Test-Path $tpRoot) {
         foreach ($tp in (Get-ChildItem -LiteralPath $tpRoot -EA Stop)) {
-            $raw = [string](Get-ItemProperty -Path $tp.PSPath -Name 'DllName' -EA SilentlyContinue).DllName
-            if (-not $raw) { continue }
+            # -LiteralPath, NOT -Path: the subkey name is
+            # attacker-controlled and -Path treats it as a WILDCARD. A
+            # port monitor named "Std [TCP] Mon" with a malicious Driver
+            # value matched nothing, -EA SilentlyContinue hid the error,
+            # the `if (-not $raw) { continue }` below dropped it without
+            # counting it, and the section still reported every registered
+            # entry as validly Microsoft-signed.
+            $raw = [string](Get-ItemProperty -LiteralPath $tp.PSPath -Name 'DllName' -EA SilentlyContinue).DllName
+            if (-not $raw) { $tpUnread++; continue }
             $tpCount++
             $dll = Resolve-DllPath -Raw $raw -SearchDirs @($sys32)
             $v = Get-DllVerdict -Path $dll
@@ -366,5 +394,7 @@ if (-not $tpOk) {
     $tpSev = Get-MaxSev $tpSev 'WARNING'
 } elseif ($tpSev -eq 'OK') {
     "[OK] All $tpCount registered time provider(s) are validly Microsoft-signed."
+    # An all-clear may not cover entries the scan could not read.
+    if ($tpUnread -gt 0) { "[WARNING] $tpUnread time provider(s) had an unreadable driver value and were NOT checked -- a registry key name crafted to defeat enumeration is itself suspicious. Inspect them by hand." ; $tpSev = Get-MaxSev $tpSev 'WARNING' }
 }
 Write-Marker -Name 'timeprov' -Sev $tpSev

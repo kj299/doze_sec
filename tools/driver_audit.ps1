@@ -150,13 +150,41 @@ foreach ($dir in $dropDirs) {
     } catch {}
 }
 
+# A driver is "staged" when it sits somewhere a legitimate kernel driver never
+# lives. Presence there turns an abusable-but-signed driver into the actual
+# BYOVD pattern.
+$stagedRx = '\\Temp\\|\\Tmp\\|\\Downloads\\|\\Users\\Public\\|\\ProgramData\\|\\AppData\\'
+$sys32drv = Join-Path (Join-Path $env:SystemRoot 'System32') 'drivers'
+
 $checked = 0
+$missing = 0
 foreach ($p in $paths) {
-    if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { continue }
+    if (-not (Test-Path -LiteralPath $p -PathType Leaf)) {
+        # A LOADED driver whose file is gone is not a non-event -- it is the
+        # load-then-delete BYOVD pattern: create the service, start the driver
+        # (the image stays mapped in the kernel), delete the .sys so there is
+        # nothing left to hash. Win32_SystemDriver still enumerates it, so it
+        # reaches this loop and used to be dropped by a bare `continue` -- no
+        # counter, no output -- after which the all-clear below was printed
+        # unqualified. The absence IS the finding.
+        $missing++
+        "[WARNING] Driver $p is registered/loaded but its file is NOT on disk -- the load-then-delete pattern used to stage a vulnerable driver and then remove the evidence (T1562.001). It cannot be hashed or signature-checked; investigate the owning service."
+        $sev = Get-MaxSev $sev 'WARNING'
+        continue
+    }
     $checked++
     $name = [System.IO.Path]::GetFileName($p).ToLower()
     $why = @()
     $itemSev = 'OK'
+
+    # -LiteralPath everywhere: -FilePath wildcard-expands, so a driver at
+    # C:\Users\Public\vgk[1].sys (the duplicate-download form browsers produce,
+    # and one an attacker can choose deliberately) matched no file and was
+    # misreported as unsigned.
+    $sig = $null
+    try { $sig = Get-AuthenticodeSignature -LiteralPath $p -EA Stop } catch {}
+    $sigValid = ($sig -and $sig.Status -eq 'Valid')
+    $staged = ($p -match $stagedRx) -or -not ($p -like (Join-Path $sys32drv '*'))
 
     $hash = $null
     try { $hash = (Get-FileHash -LiteralPath $p -Algorithm SHA256 -EA Stop).Hash.ToLower() } catch {}
@@ -165,17 +193,28 @@ foreach ($p in $paths) {
         $itemSev = 'CRITICAL'
     }
     if ($badNames -contains $name) {
-        $why += "filename is a known vulnerable/abused driver"
-        $itemSev = 'CRITICAL'
-    }
-    if ($itemSev -ne 'CRITICAL') {
-        $sig = $null
-        try { $sig = Get-AuthenticodeSignature -FilePath $p -EA Stop } catch {}
-        if (-not $sig -or $sig.Status -ne 'Valid') {
-            $st = if ($sig) { [string]$sig.Status } else { 'unreadable' }
-            $why += "unsigned or invalid Authenticode signature ($st) on a kernel driver"
+        # These names ARE genuinely BYOVD-abusable -- but several of them ship
+        # with software people deliberately install (vboxdrv.sys with
+        # VirtualBox, procexp152.sys with Process Explorer, cpuz141.sys,
+        # gdrv.sys, asio64.sys). The old rule set CRITICAL on the name alone
+        # and then SKIPPED the signature check entirely, so a validly
+        # vendor-signed driver in its normal location produced "CRITICAL
+        # findings present -- review NOW" and exit code 8 on a healthy
+        # developer machine. A tool that cries wolf there is not believed the
+        # day it is right. So: attack surface and evidence of compromise are
+        # reported differently, as they already are for ADFS / Azure AD Connect.
+        if ($sigValid -and -not $staged) {
+            $why += "known BYOVD-abusable driver, but validly signed and in the normal drivers directory -- most likely installed by legitimate software. A local attacker can still abuse it to load unsigned kernel code; remove it if you do not need the software that installed it"
             $itemSev = Get-MaxSev $itemSev 'WARNING'
+        } else {
+            $why += "filename is a known vulnerable/abused driver, and it is unsigned, invalidly signed, or staged outside the drivers directory -- the BYOVD staging pattern"
+            $itemSev = 'CRITICAL'
         }
+    }
+    if ($itemSev -ne 'CRITICAL' -and -not $sigValid) {
+        $st = if ($sig) { [string]$sig.Status } else { 'unreadable' }
+        $why += "unsigned or invalid Authenticode signature ($st) on a kernel driver"
+        $itemSev = Get-MaxSev $itemSev 'WARNING'
     }
 
     if ($itemSev -ne 'OK') {
@@ -187,5 +226,7 @@ foreach ($p in $paths) {
 
 if ($sev -eq 'OK') {
     "[OK] $checked kernel driver(s) audited -- none known-bad, all validly signed."
+} elseif ($missing -gt 0) {
+    "[INFO] $missing driver(s) could not be examined because their files are absent; $checked were fully audited."
 }
 Write-Marker -Name 'driver' -Sev $sev

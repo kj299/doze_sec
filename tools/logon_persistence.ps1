@@ -53,6 +53,19 @@ function Get-DllVerdict {
     if (-not $Path) { return @{ Sev = 'CRITICAL'; Why = 'no DLL path' } }
     $p = [Environment]::ExpandEnvironmentVariables($Path.Trim().Trim('"'))
     if ($p -match '^\\\?\?\\') { $p = $p.Substring(4) }
+    # A BARE module name is not a missing DLL. Winlogon Notify DllName is by
+    # design just a module name (sclgntfy.dll), which the loader resolves
+    # against System32. Test-Path on the raw value resolved it against the
+    # PowerShell working directory instead, failed, and returned
+    # CRITICAL "DLL not found" -- a critical finding and a non-zero exit on a
+    # healthy machine carrying a legitimate signed Notify handler. The LSA
+    # branch further down already resolves its bare package names with
+    # Join-Path $sys; do the same here so every caller benefits.
+    if ($p -notmatch '[\\/]') {
+        $sys32 = [Environment]::GetFolderPath('System')
+        $cand  = Join-Path $sys32 $p
+        if (Test-Path -LiteralPath $cand -PathType Leaf) { $p = $cand }
+    }
     if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { return @{ Sev = 'CRITICAL'; Why = "DLL not found: $p" } }
     if ($p -match $badPathRx) { return @{ Sev = 'CRITICAL'; Why = "DLL under staging path: $p" } }
     $sig = $null
@@ -171,7 +184,14 @@ if ($scr) {
     $v = Get-DllVerdict -Path $scr
     if ($v.Sev -ne 'OK') { $scrFlagged = $true; $scrSev = Get-MaxSev $scrSev $v.Sev; ("[{0}] Screensaver SCRNSAVE.EXE -> {1} ({2})" -f $v.Sev, $scr, $v.Why) }
     else { "[OK] Screensaver is a Microsoft-signed system binary: $scr" }
-    if ("$scrSecure" -eq '0') { $scrFlagged = $true; $scrSev = Get-MaxSev $scrSev 'WARNING'; '[WARNING] ScreenSaverIsSecure=0 -- screensaver does NOT require a password to resume (unlock bypass).' }
+    # INFO, not WARNING. ScreenSaverIsSecure=0 is what Windows leaves behind
+    # whenever someone picks a screensaver and does not tick "On resume,
+    # display logon screen" -- i.e. the default. Raising it put a finding in
+    # the persistence section and a non-zero exit code on ordinary machines
+    # with nothing wrong with them. It is a real local-access weakness and the
+    # advice stays, but it is a user preference, not a compromise indicator,
+    # and the same call was already made for ADFS / Azure AD Connect.
+    if ("$scrSecure" -eq '0') { '[INFO] ScreenSaverIsSecure=0 -- the screensaver does not require a password to resume, so an unattended machine stays unlocked. This is the Windows default and not a compromise indicator; tick "On resume, display logon screen" in Screen Saver Settings to harden it.' }
 } else {
     '[OK] No custom screensaver configured.'
 }

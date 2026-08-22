@@ -118,7 +118,14 @@ try {
             # check, which is precisely the account someone monitoring a
             # partner or employee would create.
             if ($psNoteProps -contains $p.Name) { continue }
-            if ([int]$p.Value -eq 0) { $hidden += $p.Name }
+            # -as [int], not a hard [int] cast. The cast THROWS on a REG_SZ or
+            # REG_BINARY value, and the try/catch wraps this whole loop -- so a
+            # single junk entry aborted the entire scan and the code below then
+            # printed "[OK] No accounts are hidden from the sign-in screen" on a
+            # machine that had one. Anything non-numeric simply is not a
+            # hide-flag, so skip that value and keep going.
+            $flag = $p.Value -as [int]
+            if ($null -ne $flag -and $flag -eq 0) { $hidden += $p.Name }
         }
     }
 } catch {}

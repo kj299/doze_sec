@@ -292,13 +292,33 @@ jobs:
               if (-not (Test-Path $mp)) { throw ("planted vector wrote no marker: {0}" -f $pair.Marker) }
               if ((Get-Content $mp).Trim() -ne 'CRITICAL') { throw ("{0}: expected CRITICAL, got {1}" -f $pair.Marker, (Get-Content $mp)) }
             }
+
+            # A BRACKETED KEY NAME MUST NOT MAKE AN ENTRY DISAPPEAR. The value
+            # reads used -Path, which treats the attacker-controlled subkey name
+            # as a WILDCARD -- so a port monitor called "Std [TCP] Mon" matched
+            # nothing, -EA SilentlyContinue hid the error, the entry was dropped
+            # without being counted, and the section still reported every
+            # registered monitor as validly Microsoft-signed. spoolsv loads port
+            # monitors as SYSTEM at boot, so this is a real evasion.
+            $wild = 'HKLM:\SYSTEM\CurrentControlSet\Control\Print\Monitors\dz_ci [TCP] probe'
+            New-Item -Path $wild -Force | Out-Null
+            Set-ItemProperty -LiteralPath $wild -Name 'Driver' -Value 'dz_ci_probe_missing.dll' -Force
+            $md4 = Join-Path $md 'wild'
+            New-Item -ItemType Directory -Path $md4 -Force | Out-Null
+            $out3 = (.\tools\persistence_extra.ps1 -MarkerDir $md4) -join "`n"
+            Write-Host ($out3 -split "`n" | Where-Object { $_ -match 'dz_ci \[TCP\] probe|unreadable driver value|port monitor' })
+            if ($out3 -notmatch 'dz_ci \[TCP\] probe') { throw 'a port monitor with brackets in its key name vanished from the scan' }
+            $mp4 = Join-Path $md4 'dz_portmon.txt'
+            if (-not (Test-Path $mp4)) { throw 'bracketed port monitor wrote no marker -- it was silently skipped' }
+            Remove-Item -LiteralPath $wild -Recurse -Force -EA SilentlyContinue
           } finally {
+            Remove-Item -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Print\Monitors\dz_ci [TCP] probe' -Recurse -Force -EA SilentlyContinue
             Remove-ItemProperty -Path $netsh -Name 'dz_ci_probe' -EA SilentlyContinue
             Remove-Item -LiteralPath $mon   -Recurse -Force -EA SilentlyContinue
             Remove-Item -LiteralPath $pproc -Recurse -Force -EA SilentlyContinue
             Remove-Item $md -Recurse -Force -EA SilentlyContinue
           }
-          Write-Host "persistence_extra.ps1 OK"
+          Write-Host "persistence_extra.ps1 OK (incl. bracketed-key-name evasion)"
           exit 0
 
       - name: audit_policy_check.ps1 (auditing visibility; locale-independent cmdline signal)
@@ -383,11 +403,48 @@ jobs:
             if ($out2 -notmatch 'dz_ci_probe_driver\.sys') { throw 'planted unsigned driver not reported' }
             $m = Join-Path $md 'dz_driver.txt'
             if (-not (Test-Path $m)) { throw 'planted unsigned driver wrote no marker' }
+
+            # ATTACK SURFACE vs EVIDENCE OF COMPROMISE. A known-abusable driver
+            # name that is VALIDLY SIGNED and in the normal drivers directory is
+            # most likely legitimate software (VirtualBox ships vboxdrv.sys,
+            # Sysinternals ships procexp152.sys). The old rule set CRITICAL on
+            # the name alone and skipped the signature check entirely, so a
+            # developer machine got "CRITICAL findings present -- review NOW"
+            # and exit code 8. Copy a real signed Microsoft driver to a
+            # known-abusable NAME in each location and check the severities.
+            $srcSigned = Join-Path $env:SystemRoot 'System32\drivers\tcpip.sys'
+            $inPlace = Join-Path $env:SystemRoot 'System32\drivers\gdrv.sys'
+            $staged  = 'C:\Users\Public\gdrv.sys'
+            $md2 = Join-Path $env:TEMP ("dz_drv_ci2_{0}" -f $PID)
+            New-Item -ItemType Directory -Path $md2 -Force | Out-Null
+            try {
+              Copy-Item -LiteralPath $srcSigned -Destination $inPlace -Force
+              $o3 = (.\tools\driver_audit.ps1 -MarkerDir $md2) -join "`n"
+              $l3 = (($o3 -split "`n") | Where-Object { $_ -match 'gdrv\.sys' } | Select-Object -First 1)
+              if (-not $l3) { throw 'signed known-abusable driver in the normal location was not reported at all' }
+              if ($l3 -match '^\[CRITICAL\]') { throw ("validly signed driver in System32\drivers was reported CRITICAL (false positive): $l3") }
+              if ($l3 -notmatch '^\[WARNING\]') { throw ("expected WARNING for signed known-abusable driver, got: $l3") }
+              Remove-Item -LiteralPath $inPlace -Force -EA SilentlyContinue
+              # Same name, same valid signature, but STAGED outside the drivers
+              # directory -- that is the real BYOVD pattern and must stay CRITICAL.
+              Copy-Item -LiteralPath $srcSigned -Destination $staged -Force
+              $md3 = Join-Path $env:TEMP ("dz_drv_ci3_{0}" -f $PID)
+              New-Item -ItemType Directory -Path $md3 -Force | Out-Null
+              $o4 = (.\tools\driver_audit.ps1 -MarkerDir $md3) -join "`n"
+              $l4 = (($o4 -split "`n") | Where-Object { $_ -match 'Public\\gdrv\.sys' } | Select-Object -First 1)
+              if (-not $l4) { throw 'staged known-abusable driver was not reported' }
+              if ($l4 -notmatch '^\[CRITICAL\]') { throw ("staged known-abusable driver must stay CRITICAL, got: $l4") }
+              Remove-Item $md3 -Recurse -Force -EA SilentlyContinue
+            } finally {
+              Remove-Item -LiteralPath $inPlace -Force -EA SilentlyContinue
+              Remove-Item -LiteralPath $staged -Force -EA SilentlyContinue
+              Remove-Item $md2 -Recurse -Force -EA SilentlyContinue
+            }
           } finally {
             Remove-Item $plant -Force -EA SilentlyContinue
             Remove-Item $md -Recurse -Force -EA SilentlyContinue
           }
-          Write-Host "driver_audit.ps1 OK"
+          Write-Host "driver_audit.ps1 OK (incl. signed-vendor-driver severity split)"
           exit 0
 
       - name: report_safety.ps1 (Tier 0 preamble + coverage framing)
@@ -635,12 +692,29 @@ jobs:
             # A hidden account is suspicious, not proof -- legitimate software
             # hides service accounts. The wording must not condemn.
             if ($out2 -notmatch 'legitimate software') { throw 'hidden-account finding lacks the not-necessarily-malicious framing' }
+
+            # A JUNK VALUE MUST NOT KILL THE SCAN. `[int]$p.Value` threw on any
+            # non-numeric UserList value and the try/catch wrapped the WHOLE
+            # loop, so one REG_SZ entry aborted the scan and the tool then
+            # printed "No accounts are hidden from the sign-in screen" on a
+            # machine that had one. This is the check that models an abusive
+            # partner; a silent false clean here is the worst outcome in the
+            # tool. Plant junk ALONGSIDE the real hidden account.
+            Set-ItemProperty -Path $ul -Name 'dz_ci_junk_value' -Value 'n/a' -Type String -Force
+            $md3 = Join-Path $md 'junk'
+            New-Item -ItemType Directory -Path $md3 -Force | Out-Null
+            $out3 = (.\tools\stalkerware_check.ps1 -MarkerDir $md3) -join "`n"
+            Write-Host ($out3 -split "`n" | Where-Object { $_ -match 'dz_ci_probe_user|hidden from the sign-in' })
+            if ($out3 -notmatch 'dz_ci_probe_user') { throw 'a non-numeric UserList value aborted the hidden-account scan -- the real hidden account was not reported' }
+            if ($out3 -match 'No accounts are hidden from the sign-in screen') { throw 'reported a clean hidden-account verdict while an account was hidden' }
+            Remove-ItemProperty -Path $ul -Name 'dz_ci_junk_value' -EA SilentlyContinue
           } finally {
+            Remove-ItemProperty -Path $ul -Name 'dz_ci_junk_value' -EA SilentlyContinue
             Remove-ItemProperty -Path $ul -Name 'dz_ci_probe_user' -EA SilentlyContinue
             if ($madeUl) { Remove-Item $ul -Force -EA SilentlyContinue }
             Remove-Item $md -Recurse -Force -EA SilentlyContinue
           }
-          Write-Host "stalkerware_check.ps1 OK"
+          Write-Host "stalkerware_check.ps1 OK (incl. junk-value resilience)"
           exit 0
 
       - name: attack_matrix.ps1 (coverage matrix derived from code; completeness enforced)
@@ -855,7 +929,33 @@ jobs:
             throw "logon_persistence flagged a CRITICAL on a clean runner (false positive)"
           }
           Remove-Item "$env:TEMP\dz_logon_*.txt" -Force -EA SilentlyContinue
-          Write-Host "logon_persistence OK"
+
+          # A BARE MODULE NAME IS NOT A MISSING DLL. Winlogon Notify DllName is
+          # by design just a module name, which the loader resolves against
+          # System32. Get-DllVerdict ran Test-Path on the raw value, resolved it
+          # against the PowerShell working directory, failed, and returned
+          # CRITICAL "DLL not found" -- a critical finding and a non-zero exit
+          # on a healthy machine carrying a legitimate signed Notify handler.
+          $nk = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\Notify\dz_ci_bare'
+          New-Item -Path $nk -Force | Out-Null
+          # A real, Microsoft-signed System32 DLL referenced the way the API
+          # expects: bare name, no path.
+          Set-ItemProperty -LiteralPath $nk -Name 'DllName' -Value 'wlnotify.dll' -Force
+          if (-not (Test-Path (Join-Path ([Environment]::GetFolderPath('System')) 'wlnotify.dll'))) {
+            Set-ItemProperty -LiteralPath $nk -Name 'DllName' -Value 'netlogon.dll' -Force
+          }
+          try {
+            $out2 = (.\tools\logon_persistence.ps1) -join "`n"
+            $ln = (($out2 -split "`n") | Where-Object { $_ -match 'dz_ci_bare' } | Select-Object -First 1)
+            Write-Host $ln
+            if (-not $ln) { throw 'planted Notify subkey was not reported at all' }
+            if ($ln -match 'DLL not found') { throw ("a bare Notify DllName was misreported as a missing DLL: $ln") }
+            if ($ln -match '^\[CRITICAL\]') { throw ("legitimate signed Notify handler reported CRITICAL (false positive): $ln") }
+          } finally {
+            Remove-Item -LiteralPath $nk -Recurse -Force -EA SilentlyContinue
+            Remove-Item "$env:TEMP\dz_logon_*.txt" -Force -EA SilentlyContinue
+          }
+          Write-Host "logon_persistence OK (incl. bare Notify DllName resolution)"
           exit 0
 
       - name: INIT-path extractions (self_update_check / disk_info / smart_health)
