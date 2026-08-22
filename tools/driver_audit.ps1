@@ -84,13 +84,25 @@ if (-not $HashList) {
     $HashList = Join-Path (Split-Path -Parent $PSCommandPath) '..\ThreatLists\ioc_hashes.txt'
 }
 $badHashes = @{}
+$malformedHashes = @()
 if (Test-Path -LiteralPath $HashList) {
     foreach ($ln in (Get-Content -LiteralPath $HashList -EA SilentlyContinue)) {
         $t = $ln.Trim()
         if (-not $t -or $t.StartsWith('#')) { continue }
         $h = ($t -split '\|')[0].Trim().ToLower()
+        # A malformed hash must never fail SILENTLY: an entry that does not load
+        # is a detection this tool claims to have and does not. Count and report
+        # them -- a 65-char DBUtil_2_3.sys hash sat unnoticed in this list until a
+        # retrospective found it, meaning that BYOVD driver was never matched by
+        # hash at all (the filename rule still covered it, but the hash path --
+        # the one that survives renaming -- was dead).
         if ($h -match '^[0-9a-f]{64}$') { $badHashes[$h] = $true }
+        elseif ($h -match '^[0-9a-fA-F]{8,}$') { $malformedHashes += $h }
     }
+}
+if ($malformedHashes.Count -gt 0) {
+    "[WARNING] $($malformedHashes.Count) entr(y/ies) in the known-bad hash list are not valid SHA256 values and were NOT loaded -- those drivers are not covered by hash matching. Fix the list: $((@($malformedHashes | ForEach-Object { $_.Substring(0, [Math]::Min(12, $_.Length)) + '...' })) -join ', ')"
+    $sev = Get-MaxSev $sev 'WARNING'
 }
 
 # Build the candidate set: loaded drivers (authoritative -- these are running in

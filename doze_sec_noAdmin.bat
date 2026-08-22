@@ -2213,9 +2213,9 @@ echo.>> "%REPORT%"
 echo.>> "%REPORT%"
 echo --- Covert Monitoring ^(is someone watching this person?^) --->> "%REPORT%"
 echo  Command: powershell -File tools\stalkerware_check.ps1>> "%REPORT%"
-echo  Models an attacker who wants the PERSON rather than the machine: hidden
-echo  accounts, silent RDP shadowing, camera/mic/location grants, and consumer
-echo  monitoring products. Often signed, legitimate software used abusively --
+echo  Models an attacker who wants the PERSON rather than the machine: hidden>> "%REPORT%"
+echo  accounts, silent RDP shadowing, camera/mic/location grants, and consumer>> "%REPORT%"
+echo  monitoring products. Often signed, legitimate software used abusively -->> "%REPORT%"
 echo  which is exactly why the rest of the audit walks past it.>> "%REPORT%"
 del "%TEMP%\dz_stalkerware.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\stalkerware_check.ps1" (
@@ -4118,7 +4118,7 @@ echo. >> "%PSRUN%"
 
 :: ===== COMPOSE AND OUTPUT SUMMARY ====================================
 echo $bar = '#' * 70 >> "%PSRUN%"
-echo $status = if($cr -gt 0){'ACTION REQUIRED  --  '+$cr+' CRITICAL  /  '+$wa+' WARNING  /  '+$pa+' PASSED'}elseif($wa -gt 0){'REVIEW RECOMMENDED  --  0 CRITICAL  /  '+$wa+' WARNING  /  '+$pa+' PASSED'}else{'ALL '+$pa+' CHECKS PASSED  --  System appears clean'} >> "%PSRUN%"
+echo $status = if($cr -gt 0){'ACTION REQUIRED  --  '+$cr+' CRITICAL  /  '+$wa+' WARNING  /  '+$pa+' PASSED'}elseif($wa -gt 0){'REVIEW RECOMMENDED  --  0 CRITICAL  /  '+$wa+' WARNING  /  '+$pa+' PASSED'}else{'NO ISSUES FOUND IN '+$pa+' CHECKS  --  not a statement that the system is clean'} >> "%PSRUN%"
 echo if($isAdmin -eq '0'){$status+='  /  '+$inf+' DEFERRED (admin required)'} >> "%PSRUN%"
 echo '' >> "%PSRUN%"
 echo $bar >> "%PSRUN%"
@@ -4141,12 +4141,12 @@ echo '  3. Image the drive before any remediation (forensic preservation)' >> "%
 echo '  4. Apply the Fix listed next to each CRITICAL item above' >> "%PSRUN%"
 echo '  5. Report nation-state indicators to CISA: cisa.gov/report' >> "%PSRUN%"
 echo } elseif ($wa -gt 0) { >> "%PSRUN%"
-echo '  NEXT STEPS -- No active compromise found. Apply these improvements:' >> "%PSRUN%"
+echo '  NEXT STEPS -- No compromise indicators in the checks that ran. Apply these improvements:' >> "%PSRUN%"
 echo '  1. Apply the Fix listed next to each WARNING above' >> "%PSRUN%"
 echo '  2. Priority: Credential ^> Defender ^> Attack Surface ^> Hardening' >> "%PSRUN%"
 echo '  3. Re-run this audit after fixing to confirm clean' >> "%PSRUN%"
 echo } else { >> "%PSRUN%"
-echo '  System security posture is good.' >> "%PSRUN%"
+echo '  No issues surfaced by the checks that ran. That is not proof the system is clean -- read the READ THIS FIRST block at the top of this report.' >> "%PSRUN%"
 echo '  Recommendation: re-run this audit monthly.' >> "%PSRUN%"
 echo } >> "%PSRUN%"
 echo if ($isAdmin -eq '0') { >> "%PSRUN%"
@@ -4319,7 +4319,7 @@ rem references and annotated with what fired this run. Informational; raises
 rem no finding. Placed just before COVERAGE & CONFIDENCE.
 if exist "%SCRIPT_DIR%tools\attack_matrix.ps1" (
     echo.>> "%REPORT%"
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\attack_matrix.ps1" -SourceDir "%SCRIPT_DIR%." -Report "%REPORT%">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\attack_matrix.ps1" -SourceDir "%SCRIPT_DIR%." -Report "%REPORT%" -Ledger "%LEDGER%">> "%REPORT%" 2>&1
 )
 rem Tier 0 COVERAGE & CONFIDENCE block -- reads the finished report and
 rem states how much was actually covered, so a clean pass is never read as

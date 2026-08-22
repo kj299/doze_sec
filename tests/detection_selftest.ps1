@@ -858,6 +858,36 @@ try {
         Write-Host "  [ REGRESS  ] boot-chain audit did not run -- Section 13 wiring broken"; $requiredFail++
     }
 
+    # RETROSPECTIVE REGRESSION GUARDS. A three-pass retrospective found the tool
+    # still asserting safety it cannot verify, in the most-read part of the
+    # report. Tier 0 exists to prevent exactly that, so these are required: the
+    # phrasing must never come back, in any section, on any run.
+    foreach ($claim in @('System appears clean', 'No active compromise found', 'security posture is good')) {
+        if ([regex]::IsMatch($text, [regex]::Escape($claim))) {
+            Write-Host ("  [ REGRESS  ] report asserts unverifiable safety: '{0}' -- a user-mode audit cannot support this claim" -f $claim); $requiredFail++
+        } else {
+            Write-Host ("  [ OK       ] report does not assert '{0}'" -f $claim)
+        }
+    }
+    # The ATT&CK matrix's per-run FIRED annotation must come from the ledger, not
+    # from grepping report text: ~14 section headers print technique ids
+    # unconditionally, so a text scan marks every technique as fired even on a
+    # clean machine. Assert the matrix never claims MORE techniques fired than
+    # the ledger actually recorded.
+    if ($ledger) {
+        $ledgerCodes = @{}
+        foreach ($l in $lg) { $lf = $l.Split('|'); if ($lf.Count -ge 3 -and $lf[2] -match '^T1\d{3}(\.\d{3})?$') { $ledgerCodes[$lf[2]] = $true } }
+        $firedM = [regex]::Match($text, '(?m)^Of those, (\d+) raised at least one finding')
+        if ($firedM.Success) {
+            $claimedFired = [int]$firedM.Groups[1].Value
+            if ($claimedFired -le @($ledgerCodes.Keys).Count) {
+                Write-Host ("  [ OK       ] ATT&CK matrix fired-count ({0}) is consistent with the ledger ({1} technique codes)" -f $claimedFired, @($ledgerCodes.Keys).Count)
+            } else {
+                Write-Host ("  [ REGRESS  ] ATT&CK matrix claims {0} techniques fired but the ledger records only {1} -- fired-annotation is not ledger-derived" -f $claimedFired, @($ledgerCodes.Keys).Count); $requiredFail++
+            }
+        }
+    }
+
     # Exit-code architecture (code-review W1-W3): a planted CRITICAL (WDigest=1)
     # must drive the process exit code to 8. PROMOTED to required 2026-07-18
     # after it fired on CI -- the path is exactly the fragile summary block W3
