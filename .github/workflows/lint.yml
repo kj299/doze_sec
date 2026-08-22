@@ -26,3 +26,16 @@ jobs:
       # covered the day it is added.
       - name: Run lint_unraised_findings.ps1
         run: pwsh -NoProfile -File tools/lint_unraised_findings.ps1
+
+  docs-drift-lint:
+    name: "Docs lint: the README matches the code"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # A retrospective found the README claiming 48 techniques when the audit
+      # referenced 81, and three implemented switches -- including -baseline,
+      # the tool's strongest signal against a signature-less targeted implant --
+      # documented only in the script's own -help and absent from the project
+      # page. Nothing read the prose, so nothing caught it.
+      - name: Run lint_docs_drift.ps1
+        run: pwsh -NoProfile -File tools/lint_docs_drift.ps1

@@ -593,6 +593,21 @@ jobs:
           Write-Host "lint_unraised_findings.ps1 OK"
           exit 0
 
+      - name: lint_docs_drift.ps1 (documented claims match the code)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = (.\tools\lint_docs_drift.ps1 -Root .) -join "`n"
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw 'lint_docs_drift found documentation that does not match the code' }
+          # Guard the guard: if the parsers stop finding switches or techniques,
+          # every comparison becomes trivially true and the lint passes having
+          # verified nothing.
+          $m = [regex]::Match($out, 'Checked (\d+) documented claim')
+          if (-not $m.Success -or [int]$m.Groups[1].Value -lt 10) { throw "docs lint checked only $($m.Groups[1].Value) claims -- a parser regressed, so a clean result means nothing" }
+          Write-Host "lint_docs_drift.ps1 OK"
+          exit 0
+
       - name: emulation_coverage.ps1 (adversary-emulation corpus; -Strict guards drift)
         shell: powershell
         run: |
@@ -914,10 +929,17 @@ jobs:
   # Detection-regression harness. full-run above proves the audit COMPLETES;
   # this proves it DETECTS. It plants known-bad artifacts (WDigest=1, a HOSTS
   # hijack, a Run-key backdoor, an IFEO Debugger on notepad, an enabled Guest
-  # account), runs the audit, and asserts the report flags them. Detections
-  # that work today are "required" (a regression fails the job); the gaps the
-  # code review found are "pending" and never fail the job -- they flip to
-  # required as the fixes land. Every artifact is removed in a finally block.
+  # account), runs the audit, and asserts the report flags them. Every case is
+  # "required": a regression fails the job. (The "pending" tier this comment
+  # used to describe is empty -- every gap the original code review found was
+  # promoted on 2026-07-18 -- so nothing here is exempt from failing.)
+  #
+  # A plant that FAILS also fails the job unless the case declares MaySkip with
+  # a reason. A silently skipped case is a detection that stopped being tested,
+  # and a green job would then mean "checked nothing here" while looking
+  # identical to "checked and fine".
+  #
+  # Every artifact is removed in a finally block.
   detection-selftest:
     name: "detection regression harness (plant known-bad -> assert verdict)"
     runs-on: windows-latest

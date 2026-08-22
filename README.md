@@ -58,7 +58,10 @@ doze_sec.bat -help
 | `-sdu` | Both | Skip threat intel list update from GitHub |
 | `-nosrp` | Both | Skip System Restore Point creation |
 | `-noAdmin` | noAdmin only | Run without elevation; defers admin-only checks |
+| `-baseline` | Both | Capture/refresh a **baseline snapshot** of security-relevant state (drivers, services, scheduled tasks, autoruns, listening ports, local admins, root CAs). Once a baseline exists, every later run reports what is NEW, CHANGED or REMOVED — the strongest signal available against a targeted implant that matches no known signature. Capture it as early as possible: **a baseline taken on an already-compromised PC records the implant as normal** |
+| `-noBaseline` | Both | Skip baseline capture and differential analysis |
 | `-updateTTP` | Admin only | Refresh ThreatLists/ via SENTINEL-X CTI skill (requires Claude Code CLI) |
+| `-resetTTP` | Both | Restore the runtime ThreatLists (`C:\SecurityAudit`) to the pristine shipped baseline before the audit, so a prior `-updateTTP` pull cannot leave stale indicators behind. Combine with `-updateTTP` for a clean slate then a fresh pull |
 | `-importTTP <file>` | Admin only | Merge TTP rows from a pipe-delimited file (offline alternative to `-updateTTP`; no Claude CLI needed) |
 | `-vt` | Both | Section 18j+18l: query VirusTotal for SHA256 of priority files + remote IP reputation. Requires `~/.vt_token` |
 | `-dnsprobe` | Both | Section 3: active DNS integrity probe. Resolves a fixed list of **legitimate** update/security domains and flags DNS/HOSTS blackholing (T1562.001). Never resolves attacker/C2 domains. Off by default |
