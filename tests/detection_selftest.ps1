@@ -839,6 +839,25 @@ try {
         }
     }
 
+    # Boot-chain audit (T1542): read-only ground truth. Compare the report's
+    # nointegritychecks verdict against live bcdedit -- we never toggle boot
+    # integrity flags on the runner (they need a reboot and can break boot).
+    $bcdOut = ''
+    try { $bcdOut = (& bcdedit /enum ALL 2>$null | Out-String) } catch {}
+    if ($bcdOut) {
+        $niLive = [bool]([regex]::IsMatch($bcdOut, '(?im)^\s*nointegritychecks\s+Yes\b'))
+        $niRpt  = [bool]([regex]::IsMatch($text, 'nointegritychecks = Yes'))
+        if ($niLive -eq $niRpt) { Write-Host ("  [ OK       ] boot-chain nointegritychecks verdict matches live bcdedit (set: {0})" -f $niLive) }
+        else { Write-Host ("  [ REGRESS  ] boot-chain nointegritychecks verdict disagrees with bcdedit (live: {0}; report flags: {1})" -f $niLive, $niRpt); $requiredFail++ }
+    } else {
+        Write-Host "  [ SKIP     ] bcdedit unavailable -- boot-chain nointegritychecks ground-truth check skipped"
+    }
+    if ([regex]::IsMatch($text, 'Boot-chain configuration audit')) {
+        Write-Host "  [ OK       ] boot-chain audit ran (Section 13 wiring)"
+    } else {
+        Write-Host "  [ REGRESS  ] boot-chain audit did not run -- Section 13 wiring broken"; $requiredFail++
+    }
+
     # Exit-code architecture (code-review W1-W3): a planted CRITICAL (WDigest=1)
     # must drive the process exit code to 8. PROMOTED to required 2026-07-18
     # after it fired on CI -- the path is exactly the fragile summary block W3

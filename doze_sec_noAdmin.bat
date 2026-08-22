@@ -2528,6 +2528,29 @@ goto :sec13_drvsig_done
 echo  [DEFERRED - ADMIN REQUIRED] bcdedit requires admin.>> "%REPORT%"
 set /a DEFERRED_COUNT+=1
 :sec13_drvsig_done
+echo.>> "%REPORT%"
+echo --- Boot-Chain Configuration ^(config + known-bad indicators; NOT a firmware scan^) --->> "%REPORT%"
+echo  Command: powershell -File tools\boot_chain_check.ps1>> "%REPORT%"
+echo  Audits boot-loader integrity flags, Secure Boot setup mode / revocation list,>> "%REPORT%"
+echo  and memory-integrity state ^(T1542^) -- boot-chain CONFIG, not a firmware scan.>> "%REPORT%"
+if "%IS_ADMIN%"=="0" goto :sec13_bootchain_noadmin
+del "%TEMP%\dz_bootchain.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\boot_chain_check.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\boot_chain_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo  [INFO] tools\boot_chain_check.ps1 not found -- boot-chain audit skipped.>> "%REPORT%"
+)
+if exist "%TEMP%\dz_bootchain.txt" (
+    set "_BCSEV="
+    set /p _BCSEV=<"%TEMP%\dz_bootchain.txt"
+    call :dz_finding !_BCSEV! 13 T1542.003 "Boot-chain configuration weakness - bootkit/rootkit enabler"
+    del "%TEMP%\dz_bootchain.txt" 2>nul
+)
+goto :sec13_bootchain_done
+:sec13_bootchain_noadmin
+echo  [DEFERRED - ADMIN REQUIRED] boot-chain audit needs admin ^(bcdedit / UEFI vars^).>> "%REPORT%"
+set /a DEFERRED_COUNT+=1
+:sec13_bootchain_done
 
 echo.>> "%REPORT%"
 echo --- AutoRun/AutoPlay: SAFE=NoDriveTypeAutoRun=0xFF --->> "%REPORT%"

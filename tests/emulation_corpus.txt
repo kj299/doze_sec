@@ -68,3 +68,6 @@ UNTESTABLE|T1195|supply-chain compromise has no benign on-host artifact to plant
 UNTESTABLE|T1204.002|requires a human to open a malicious file; not safely automatable
 UNTESTABLE|T1210|exploiting a remote service is not safe to emulate on a shared runner
 UNTESTABLE|T1566.001|spearphishing attachment has no safe on-host plant
+UNTESTABLE|T1542|boot-chain config change needs a reboot and risks unbootability; UEFI vars cannot be planted on a shared VM runner
+UNTESTABLE|T1542.001|Secure Boot setup mode / keys cannot be safely toggled on a shared runner
+UNTESTABLE|T1542.003|bcdedit nointegritychecks/bootdebug only take effect after reboot and risk boot; not safe to plant
