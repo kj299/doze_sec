@@ -138,7 +138,39 @@ jobs:
           if ($html -notmatch 'CTI IOC sweep: 1 category matches found') { Write-Host 'critical finding not surfaced'; exit 1 }
           if ($html -notmatch 'href="#sec18"') { Write-Host 'critical not linked to its section'; exit 1 }
           if ($html -notmatch '<div class="card card-crit"><h3>1</h3>') { Write-Host 'dashboard crit count not taken from verdict line'; exit 1 }
-          Write-Host 'report_html OK (Findings Index, section link, verdict-based counts)'
+
+          # The HTML page is what doze_sec.bat opens in the browser. It used to
+          # drop every line before the first section banner -- the report
+          # header, the whole Tier 0 READ THIS FIRST block, and the table of
+          # contents -- because $inPre starts false and the preamble is pure
+          # prose. Findings told the reader to "read the READ THIS FIRST
+          # section at the top of this report" before remediating (it can alert
+          # an abusive partner and destroys evidence) and that section was not
+          # there. Assert the real preamble survives, and that it is NOT buried
+          # in a collapsed <details>.
+          $r2 = Join-Path $env:TEMP 'dz_ci_html_preamble.txt'
+          $h2 = Join-Path $env:TEMP 'dz_ci_html_preamble.html'
+          $pre = .\tools\report_safety.ps1 -Mode Preamble
+          $pre + @(
+            '  TABLE OF CONTENTS'
+            '===================================================================='
+            ' [13/18] SYSTEM HARDENING'
+            '===================================================================='
+            '[OK] placeholder'
+          ) | Set-Content -LiteralPath $r2 -Encoding UTF8
+          .\tools\report_html.ps1 -Report $r2 -HtmlPath $h2
+          $html2 = Get-Content -LiteralPath $h2 -Raw
+          foreach ($must in @('READ THIS FIRST', 'accessnow.org/help', 'stopstalkerware.org', 'PRESERVE EVIDENCE', 'TABLE OF CONTENTS')) {
+            if ($html2 -notmatch [regex]::Escape($must)) { Write-Host "preamble content missing from HTML: $must"; exit 1 }
+          }
+          if ($html2 -notmatch 'id="readfirst"') { Write-Host 'no readfirst panel in the HTML'; exit 1 }
+          # The panel must be reachable without expanding anything: everything
+          # from the panel open tag to its close must contain no <details>.
+          $panel = [regex]::Match($html2, 'id="readfirst"[\s\S]*?</div>')
+          if (-not $panel.Success) { Write-Host 'readfirst panel not delimited'; exit 1 }
+          if ($panel.Value -match '<details') { Write-Host 'READ THIS FIRST is hidden inside a <details> -- it must be visible without interaction'; exit 1 }
+          Remove-Item $r2, $h2 -Force -EA SilentlyContinue
+          Write-Host 'report_html OK (Findings Index, section link, verdict-based counts, visible READ THIS FIRST)'
           exit 0
 
       - name: ioc_hash_check.ps1 (real Get-FileHash, capped)
@@ -377,7 +409,31 @@ jobs:
             if ($cov -notmatch 'Checks SKIPPED    : 1') { throw 'skipped count not surfaced' }
             if ($cov -notmatch 'Audit visibility  : REDUCED') { throw 'reduced audit visibility not surfaced' }
           } finally { Remove-Item $rp -Force -EA SilentlyContinue }
-          Write-Host "report_safety.ps1 OK"
+
+          # A MISSING HELPER IS A CHECK THAT DID NOT RUN. doze_sec.bat reports
+          # those as "[INFO] tools\X.ps1 not found -- ... skipped", which the
+          # [SKIPPED] test never matched -- so deleting stalkerware_check.ps1,
+          # the one check that models an abusive partner, left this block
+          # asserting "every attempted check produced a result".
+          # And the counters were unanchored, so the TOP FINDINGS block
+          # top_findings.ps1 prepends (which QUOTES each finding) counted every
+          # finding a second time.
+          $rp2 = Join-Path $env:TEMP ("dz_rs_ci2_{0}.txt" -f $PID)
+          Set-Content -LiteralPath $rp2 -Encoding ASCII -Value @(
+            '  TOP FINDINGS'
+            '  1. [CRITICAL] quoted copy of the finding below'
+            '  2. [WARNING] quoted copy of a warning'
+            '[CRITICAL] the one real critical'
+            '[INFO] tools\stalkerware_check.ps1 not found -- covert-monitoring check skipped.'
+          )
+          try {
+            $cov2 = (.\tools\report_safety.ps1 -Mode Coverage -Report $rp2) -join "`n"
+            Write-Host $cov2
+            if ($cov2 -notmatch 'Checks SKIPPED    : 1') { throw 'a missing helper was not counted as a skipped check' }
+            if ($cov2 -notmatch '1 critical, 0 warning') { throw ('quoted TOP FINDINGS lines inflated the counts: ' + $cov2) }
+            if ($cov2 -match 'every attempted check produced a result') { throw 'coverage block certified full coverage while a helper was missing' }
+          } finally { Remove-Item $rp2 -Force -EA SilentlyContinue }
+          Write-Host "report_safety.ps1 OK (incl. missing-helper skips and anchored counting)"
           exit 0
 
       - name: baseline_diff.ps1 (save/diff round-trip; new item must be detected)
@@ -412,11 +468,28 @@ jobs:
             $m = Join-Path $md 'dz_baseline.txt'
             if (-not (Test-Path $m)) { throw 'baseline diff wrote no marker for a new persistence value' }
             if ((Get-Content $m).Trim() -ne 'WARNING') { throw ("expected WARNING marker, got {0}" -f (Get-Content $m)) }
+
+            # A NEW SERVICE HOSTED BY A SIGNED LOLBIN MUST NOT BE DOWNGRADED.
+            # The signature gate keyed on the host binary only, so
+            # `rundll32.exe <staging>\x.dll,Run` resolved to a Microsoft-signed
+            # image, became INFO, was excluded from the WARNING set, raised no
+            # severity and wrote no marker -- and the INFO line omitted the
+            # command line, so the malicious argument never even appeared. That
+            # is LOLBin persistence rendered as a Windows-update notice in the
+            # check that exists to catch implants matching no signature.
+            & sc.exe create dz_ci_lolbin binPath= 'C:\Windows\System32\rundll32.exe C:\ProgramData\dz_ci_stage\x.dll,Run' start= demand | Out-Null
+            $diff2 = (.\tools\baseline_diff.ps1 -Mode Diff -Path $snap -MarkerDir $md) -join "`n"
+            Write-Host ($diff2 -split "`n" | Where-Object { $_ -match 'dz_ci_lolbin' })
+            if ($diff2 -notmatch 'dz_ci_lolbin') { throw 'new LOLBin-hosted service missing from the diff entirely' }
+            $line = (($diff2 -split "`n") | Where-Object { $_ -match 'dz_ci_lolbin' } | Select-Object -First 1)
+            if ($line -notmatch '^\[WARNING\]') { throw ("LOLBin-hosted service was not raised as WARNING: $line") }
+            if ($line -notmatch 'rundll32') { throw ("the command line was omitted from the finding: $line") }
           } finally {
+            & sc.exe delete dz_ci_lolbin 2>&1 | Out-Null
             Remove-ItemProperty -Path $runKey -Name 'dz_ci_baseline_probe' -EA SilentlyContinue
             Remove-Item $md -Recurse -Force -EA SilentlyContinue
           }
-          Write-Host "baseline_diff.ps1 OK"
+          Write-Host "baseline_diff.ps1 OK (incl. signed-LOLBin service not downgraded)"
           exit 0
 
       - name: cross_api_check.ps1 (rootkit discrepancy; race-tolerance + Tarrask logic)
@@ -467,11 +540,26 @@ jobs:
             New-Item -ItemType Directory -Path $md3 -Force | Out-Null
             $t2 = (.\tools\cross_api_check.ps1 -MarkerDir $md3 -TreeRoot "$tc\Tree" -TasksRoot "$tc\Tasks") -join "`n"
             if ($t2 -match 'NO security descriptor') { throw 'task WITH an SD was still reported as hidden (false positive)' }
+            # (c) SCHEDULER UNAVAILABLE = the check CANNOT run. The rule is
+            # "missing SD AND absent from the scheduler", so without the
+            # scheduler no hit is reachable -- yet the tool used to print
+            # "[INFO] ... ran without its second signal" and then "[OK] No
+            # hidden scheduled tasks ... all carry a security descriptor". Two
+            # false statements on exactly the host an implant that just planted
+            # a hidden task would produce. It must now decline to claim a clean
+            # result and raise the blind spot instead.
+            $md4 = Join-Path $md 'nolive'
+            New-Item -ItemType Directory -Path $md4 -Force | Out-Null
+            $t3 = (.\tools\cross_api_check.ps1 -MarkerDir $md4 -TreeRoot "$tc\Tree" -TasksRoot "$tc\Tasks" -SkipLiveTaskCompare) -join "`n"
+            Write-Host ($t3 -split "`n" | Where-Object { $_ -match 'hidden|scheduler|Scheduler' })
+            if ($t3 -match '\[OK\] No hidden scheduled tasks') { throw 'claimed a clean hidden-task result while the check could not run' }
+            if ($t3 -notmatch '\[SKIPPED\][^\r\n]*hidden-task') { throw 'degraded hidden-task path did not report itself as SKIPPED' }
+            if (-not (Test-Path (Join-Path $md4 'dz_crossapi.txt'))) { throw 'degraded hidden-task path raised no finding at all' }
           } finally {
             Remove-Item $tc -Recurse -Force -EA SilentlyContinue
             Remove-Item $md -Recurse -Force -EA SilentlyContinue
           }
-          Write-Host "cross_api_check.ps1 OK"
+          Write-Host "cross_api_check.ps1 OK (incl. honest degradation when the scheduler is unavailable)"
           exit 0
 
       - name: module_inspect.ps1 (injection detection; staged DLL must be caught)

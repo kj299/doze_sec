@@ -44,6 +44,19 @@ $warnList = New-Object System.Collections.Generic.List[string]
 
 $secNum = 0
 $inPre = $false
+# Everything before the first [N/18] section banner -- the report header, the
+# Tier 0 READ THIS FIRST block, and the table of contents -- used to be DROPPED
+# from the HTML entirely. $inPre starts $false and only a matching branch opens
+# it, so the preamble (which is pure prose: not one line begins with a severity
+# tag) fell to the final `else` and was discarded. doze_sec.bat opens this page
+# in the browser, so the artifact people actually read carried none of the
+# safety guidance -- while stalkerware_check.ps1 tells the reader to "read the
+# READ THIS FIRST section at the top of this report" before remediating,
+# because remediating can alert an abusive partner and destroys evidence. That
+# section did not exist here. It is now captured and rendered as an
+# always-visible panel, never inside a collapsed <details>.
+$preamble = [System.Text.StringBuilder]::new()
+$seenSection = $false
 $inSummary = $false
 $haveSummary = $false
 $sumAnchor = ''
@@ -118,10 +131,21 @@ foreach ($line in $lines) {
         continue
     }
 
+    # ---- Pre-section region: header / READ THIS FIRST / contents ----
+    # Captured verbatim until the first section banner. Kept out of the
+    # severity counters too: the TOP FINDINGS block top_findings.ps1 prepends
+    # quotes each finding, and counting those as well as the per-section lines
+    # double-counted every finding in the dashboard fallback.
+    if (-not $seenSection -and $line -notmatch '^\s*\[(\d+)/18\]\s+(.+)$') {
+        [void]$preamble.AppendLine($esc)
+        continue
+    }
+
     # ---- Normal per-section rendering ----
     # Severity tokens are anchored to the start of the line so incidental
     # "[CRITICAL]" mentions in descriptive text are not mis-colored/counted.
     if ($line -match '^\s*\[(\d+)/18\]\s+(.+)$') {
+        $seenSection = $true
         if ($inPre) { [void]$body.AppendLine('</pre></details>'); $inPre = $false }
         $secNum = $Matches[1]; $secTitle = $Matches[2].Trim()
         [void]$nav.AppendLine('<a href="#sec' + $secNum + '">' + $secNum + '. ' + (Enc $secTitle) + '</a>')
@@ -223,6 +247,7 @@ $html = [System.Text.StringBuilder]::new()
 [void]$html.AppendLine('summary:hover{color:#56cfe1}')
 [void]$html.AppendLine('pre{background:#0a0a1a;padding:12px;border-radius:4px;font-size:12px;line-height:1.4;color:#c8c8c8;max-height:400px;overflow-x:auto;overflow-y:auto;white-space:pre-wrap;overflow-wrap:anywhere}')
 [void]$html.AppendLine('.dashboard{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px}')
+[void]$html.AppendLine('pre.preamble{white-space:pre-wrap;word-break:break-word;color:#e6e6e6;background:#1b1b2f;border-left:4px solid #ffd166;padding:12px;margin:0}')
 [void]$html.AppendLine('.card{padding:16px;border-radius:6px;text-align:center}')
 [void]$html.AppendLine('.card h3{margin:0;font-size:28px}')
 [void]$html.AppendLine('.card p{margin:4px 0 0;font-size:12px}')
@@ -234,6 +259,7 @@ $html = [System.Text.StringBuilder]::new()
 [void]$html.AppendLine('<div class="wrap"><nav><h2>DOZE_SEC AUDIT</h2>')
 [void]$html.AppendLine('<a href="#dashboard">Dashboard</a>')
 if ($index -ne '') { [void]$html.AppendLine('<a href="#findings" style="color:#ff8888">Findings Index</a>') }
+[void]$html.AppendLine('<a href="#readfirst" style="color:#ffd166">Read this first</a>')
 if ($haveSummary)  { [void]$html.AppendLine('<a href="#summary">Live Summary</a>') }
 [void]$html.AppendLine($nav.ToString())
 [void]$html.AppendLine('<a href="#remediation" style="color:#ffc107">Rollback Script</a>')
@@ -245,6 +271,14 @@ if ($haveSummary)  { [void]$html.AppendLine('<a href="#summary">Live Summary</a>
 [void]$html.AppendLine('<div class="card card-ok"><h3>' + $cPass + '</h3><p>PASSED</p></div>')
 [void]$html.AppendLine('<div class="card card-info"><h3>' + $infoCount + '</h3><p>INFO</p></div>')
 [void]$html.AppendLine('</div></div>')
+if ($preamble.Length -gt 0) {
+    # Always visible -- no <details>. An at-risk reader must not have to expand
+    # anything to find the "this can alert whoever installed it / preserve
+    # evidence first" guidance.
+    [void]$html.AppendLine('<div class="section" id="readfirst"><h2>Read this first</h2><pre class="preamble">')
+    [void]$html.AppendLine($preamble.ToString().TrimEnd())
+    [void]$html.AppendLine('</pre></div>')
+}
 if ($index -ne '') { [void]$html.AppendLine($index) }
 if ($haveSummary)  { [void]$html.AppendLine($summary.ToString()) }
 [void]$html.AppendLine('<div class="section">')
