@@ -53,6 +53,7 @@ T1016|Discovery|System Network Config|Volt Typhoon,Salt Typhoon|Sec 3 network
 #
 # === LATERAL MOVEMENT ===
 T1021.001|Lateral Movement|Remote Desktop|All groups|Sec 10 RDP config
+T1021.004|Lateral Movement|Remote Services: SSH|-|Sec 18 OpenSSH sshd running
 T1021.002|Lateral Movement|SMB/Admin Shares|All groups|Sec 10 SMB config
 T1021.006|Lateral Movement|WinRM|APT29,Volt Typhoon|Sec 10 WinRM status
 T1570|Lateral Movement|Lateral Tool Transfer|All groups|Sec 3 network shares
@@ -105,6 +106,7 @@ T1430|Collection|Location Tracking|-|Sec 10 stalkerware (location consent)
 T1528|Credential Access|Steal Application Access Token|-|Sec 18 cloud cred stores
 T1543|Persistence|Create or Modify System Process|-|Sec 7 services / baseline
 T1546.002|Persistence|Event Triggered Execution: Screensaver|-|Sec 5 logon_persistence
+T1546.003|Persistence|Windows Management Instrumentation Event Subscription|APT29,Turla|Sec 17 WMI EventFilter/Consumer check
 T1546.007|Persistence|Netsh Helper DLL|-|Sec 5 persistence_extra
 T1546.009|Persistence|AppCert DLLs|-|Sec 5 startup_eval
 T1546.010|Persistence|AppInit DLLs|-|Sec 5 Winlogon/AppInit
@@ -119,6 +121,9 @@ T1548|Priv Esc|Abuse Elevation Control Mechanism|-|Sec 13 UAC
 T1550.001|Lateral Movement|Application Access Token|-|Sec 12 token theft context
 T1550.002|Lateral Movement|Pass the Hash|-|Sec 12 NTLM/WDigest
 T1553.006|Defense Evasion|Code Signing Policy Modification|-|Sec 13 testsigning
+T1553.004|Defense Evasion|Install Root Certificate|Ruby Sleet|Sec 17 recent root certificate check
+T1553.005|Defense Evasion|Mark-of-the-Web Bypass|-|Sec 13 SaveZoneInformation check
+T1027.006|Defense Evasion|Obfuscated Files: HTML Smuggling|Midnight Blizzard,Aqua Blizzard|Sec 17 oversized HTML/HTA in TEMP
 T1555.003|Credential Access|Credentials from Web Browsers|-|Sec 18 browser cred stores
 T1555.004|Credential Access|Windows Credential Manager|-|Sec 12/18 cred stores
 T1556.002|Credential Access|Password Filter DLL|-|Sec 5 logon_persistence (LSA)

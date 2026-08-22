@@ -535,6 +535,52 @@ jobs:
           Write-Host "attack_matrix.ps1 OK"
           exit 0
 
+      - name: block_sev.ps1 (severity read-back that :dz_ps_scan depends on)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # :dz_ps_scan decides whether a block raises a finding purely from
+          # what this script returns. If it under-reads, a detection goes
+          # silent again -- exactly the failure the mechanism exists to fix --
+          # so every parsing rule is asserted here on real 5.1.
+          $f = Join-Path $env:TEMP ("dz_blocksev_ci_{0}.txt" -f $PID)
+          function Sev($lines) { $lines | Set-Content -LiteralPath $f -Encoding UTF8; (.\tools\block_sev.ps1 -Path $f).Trim() }
+
+          if ((Sev @('[OK] nothing to see', '[INFO] context', '[SKIPPED] not run')) -ne 'OK') { throw 'clean block did not read OK' }
+          if ((Sev @('[OK] fine', '[WARNING] Non-default WMI EventFilters found:')) -ne 'WARNING') { throw 'WARNING not detected' }
+          if ((Sev @('[WARNING] a', '[CRITICAL] Known malware staging files found:')) -ne 'CRITICAL') { throw 'CRITICAL must win over WARNING' }
+          if ((Sev @('  [CRITICAL] indented finding')) -ne 'CRITICAL') { throw 'indented finding missed' }
+          if ((Sev @('[WARNING][T1574.001] Unsigned DLLs in system paths:')) -ne 'WARNING') { throw 'tag+technique form missed' }
+          if ((Sev @('Word 16.0: [WARNING] blockcontentexecutionfrominternet=0')) -ne 'WARNING') { throw 'mid-line form missed' }
+          # Prose must never inflate a block: these are the shapes that would
+          # turn a clean machine into a false positive.
+          if ((Sev @('[OK] No AMSI bypass patterns in recent PowerShell logs')) -ne 'OK') { throw '[OK] line inflated severity' }
+          if ((Sev @('[INFO] Review [WARNING] and [CRITICAL] entries above')) -ne 'OK') { throw '[INFO] prose inflated severity' }
+          if ((Sev @('[SKIPPED] WMI subscription query failed -- check NOT performed.')) -ne 'OK') { throw '[SKIPPED] inflated severity' }
+          # An unreadable input must not invent a finding.
+          if (((.\tools\block_sev.ps1 -Path (Join-Path $env:TEMP 'dz_no_such_file.txt')).Trim()) -ne 'OK') { throw 'missing file did not read OK' }
+          Remove-Item $f -Force -EA SilentlyContinue
+          Write-Host "block_sev.ps1 OK (10 parsing cases)"
+          exit 0
+
+      - name: lint_unraised_findings.ps1 (no check prints a severity it never raises)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Also run under Windows PowerShell 5.1, not just the Linux lint job:
+          # this is the gate that keeps printed-but-unraised findings out, and
+          # it must work on the same runtime the project targets.
+          $out = (.\tools\lint_unraised_findings.ps1 -Root .) -join "`n"
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw 'lint_unraised_findings found checks that print a severity without raising it' }
+          if ($out -notmatch 'routed through :dz_ps_scan') { throw 'lint did not report block routing -- staged-block scan regressed' }
+          # Guard the guard: if the block scanner ever stops finding blocks, the
+          # lint would pass vacuously and the whole class could return.
+          $m = [regex]::Match($out, 'Scanned (\d+) staged PowerShell block')
+          if (-not $m.Success -or [int]$m.Groups[1].Value -lt 100) { throw "lint scanned only $($m.Groups[1].Value) blocks -- the parser regressed, so a clean result means nothing" }
+          Write-Host "lint_unraised_findings.ps1 OK"
+          exit 0
+
       - name: emulation_coverage.ps1 (adversary-emulation corpus; -Strict guards drift)
         shell: powershell
         run: |

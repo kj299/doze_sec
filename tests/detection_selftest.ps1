@@ -351,8 +351,17 @@ $cases = @(
         Expect = 'Firewall DISABLED on'
         Plant  = { $script:fwPrevEnabled = (Get-NetFirewallProfile -Profile $fwProfile).Enabled
                    Set-NetFirewallProfile -Profile $fwProfile -Enabled False }
-        Cleanup= { if ($null -ne $script:fwPrevEnabled) { Set-NetFirewallProfile -Profile $fwProfile -Enabled $script:fwPrevEnabled }
-                   else { Set-NetFirewallProfile -Profile $fwProfile -Enabled True } }
+        # Cleanup restores the profile to ENABLED unconditionally, and never to
+        # the state observed at plant time. If a previous interrupted run left
+        # the profile off, "restore what I saw" would record off as the normal
+        # state and cement it -- a test harness silently leaving a machine with
+        # its firewall down. Turning a firewall back on can only over-protect;
+        # a developer who deliberately disabled theirs can disable it again,
+        # and the message below tells them it happened.
+        Cleanup= { Set-NetFirewallProfile -Profile $fwProfile -Enabled True
+                   if ("$script:fwPrevEnabled" -ne 'True') {
+                       Write-Host ("  NOTE: {0} firewall profile read as '{1}' before this run and has been left ENABLED." -f $fwProfile, $script:fwPrevEnabled)
+                   } }
     },
     @{
         Name   = 'Defender path exclusion -> Section 9 verdict ISSUES FOUND (Div-1 wiring)'
@@ -457,10 +466,16 @@ try {
     # (and only cases that actually planted get asserted / cleaned up).
     Write-Host "== Planting known-bad artifacts =="
     foreach ($c in $cases) {
+        # Register for cleanup BEFORE planting, not after. A multi-step plant
+        # that throws halfway (New-Item succeeds, Set-ItemProperty fails) has
+        # already changed the machine; recording it only on success meant the
+        # finally block skipped exactly the cases that left debris behind. The
+        # cleanups are all idempotent -EA SilentlyContinue removals, so running
+        # one for a plant that never happened is harmless.
+        $planted += $c
         try {
             & $c.Plant
             $c.Planted = $true
-            $planted += $c
             Write-Host ("  planted: {0}" -f $c.Name)
         } catch {
             $c.Planted = $false
@@ -532,6 +547,45 @@ try {
         $badFloor = ($fc -lt $dashCount)
     }
 
+    # REQUIRED: no section may print a finding it never raised.
+    #
+    # This is the invariant that a retrospective found broken on ~25 checks at
+    # once. A check would write '[CRITICAL] ...' straight into the report while
+    # the ledger -- which drives the section verdict, FINDINGS COUNTED and the
+    # exit code -- knew nothing about it, so the same section could print a
+    # Cobalt Strike named pipe and then declare itself "CLEAN -- no issues
+    # detected". Every one of this harness's own Expect patterns matched report
+    # TEXT, so they all passed while the finding never reached a verdict.
+    #
+    # The rule: within a section body, a line that OPENS with [CRITICAL] or
+    # [WARNING] is a finding, and that section's verdict must therefore read
+    # ISSUES FOUND. Prose that merely mentions a tag does not open with it, and
+    # anything before the first section banner (the TOP FINDINGS block, INIT) is
+    # outside every section body and is skipped.
+    $sectionMismatch = @()
+    $curSec = 0
+    $secHasFinding = $false
+    foreach ($ln in ($text -split "`r?`n")) {
+        $banner = [regex]::Match($ln, '^\s*\[(\d{1,2})/18\]\s')
+        if ($banner.Success) {
+            $curSec = [int]$banner.Groups[1].Value
+            $secHasFinding = $false
+            continue
+        }
+        if ($curSec -eq 0) { continue }
+        $verdict = [regex]::Match($ln, '^\s*\[SECTION (\d{1,2})/18 RESULT:\s*(\S+)')
+        if ($verdict.Success) {
+            if ($secHasFinding -and $verdict.Groups[2].Value -notmatch '^ISSUES') {
+                $sectionMismatch += ("Section {0} printed a finding but its verdict reads '{1}'" -f $verdict.Groups[1].Value, $verdict.Groups[2].Value)
+            }
+            $curSec = 0
+            $secHasFinding = $false
+            continue
+        }
+        if ($ln -match '^\s*\[(CRITICAL|WARNING)\]') { $secHasFinding = $true }
+    }
+    $badSectionSync = ($sectionMismatch.Count -gt 0)
+
     Write-Host ""
     Write-Host "== Detection scoreboard =="
     $requiredFail = 0
@@ -567,6 +621,12 @@ try {
     else           { Write-Host "  [ OK       ] FINDINGS COUNTED is not below the dashboard's CRITICAL/WARNING tally (Div-2 floor)" }
     if ($badLedger) { Write-Host "  [ REGRESS  ] findings ledger missing or has no WARNING|3| (HOSTS) entry -- :dz_finding plumbing broke (Option B PR 2)"; $requiredFail++ }
     else            { Write-Host "  [ OK       ] findings ledger populated by converted sites (HOSTS WARNING|3| present)" }
+    if ($badSectionSync) {
+        Write-Host "  [ REGRESS  ] a section printed a finding that never reached the ledger -- the section verdict, FINDINGS COUNTED and the exit code all understate what the audit saw:"
+        foreach ($m in $sectionMismatch) { Write-Host ("               {0}" -f $m) }
+        $requiredFail++
+    }
+    else { Write-Host "  [ OK       ] every section that printed a finding also declared ISSUES FOUND (nothing printed-but-unraised)" }
 
     # False-positive guard with a dynamic expectation: the summary's firewall
     # verdict must agree with what Get-NetFirewallProfile actually reports.
