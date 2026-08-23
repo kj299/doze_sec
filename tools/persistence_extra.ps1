@@ -71,6 +71,52 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
+# Timestamps on a persistence finding: WHEN did this appear? For someone working
+# out whether an implant predates a relationship, a job, or a break-in, that is
+# the question the finding itself never answered. Both halves are optional --
+# whichever is unavailable is simply omitted.
+#
+# TWO LIMITS, STATED IN THE REPORT TOO, because a timestamp presented without
+# them is worse than none:
+#   * Registry last-write is per KEY, not per value. Changing ANY value in a Run
+#     key updates the whole key, so this is an upper bound on when THIS entry
+#     appeared, not a precise date for it.
+#   * File times are trivially forged (timestomping, T1070.006). An attacker who
+#     cares sets them to whatever they like.
+function Get-WhenLine {
+    param([string]$KeyPath = '', [string]$FilePath = '')
+    $parts = @()
+    if ($KeyPath) {
+        try {
+            $k = Get-Item -LiteralPath $KeyPath -EA Stop
+            $lw = $k.LastWriteTime
+            if ($null -ne $lw) { $parts += ("registry key last modified {0}" -f $lw.ToString('yyyy-MM-dd HH:mm:ss')) }
+        } catch {}
+    }
+    if ($FilePath) {
+        try {
+            $f = Get-Item -LiteralPath $FilePath -EA Stop
+            $parts += ("file written {0}" -f $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))
+            # Creation AFTER last-write is the classic timestomp tell, so show
+            # creation whenever the two disagree in either direction.
+            if ($f.CreationTime -and $f.CreationTime -ne $f.LastWriteTime) {
+                $parts += ("created {0}" -f $f.CreationTime.ToString('yyyy-MM-dd HH:mm:ss'))
+            }
+        } catch {}
+    }
+    if ($parts.Count -eq 0) { return $null }
+    return ("  when: {0}" -f ($parts -join '  |  '))
+}
+
+# Emitted once, immediately before the first timestamped finding in this tool's
+# output, so the numbers are never read as more precise than they are.
+$script:whenCaveatShown = $false
+function Write-WhenCaveat {
+    if ($script:whenCaveatShown) { return }
+    $script:whenCaveatShown = $true
+    '  note: registry times are per KEY (any value change updates them) and file times can be forged (timestomping, T1070.006) -- treat them as leads, not proof.'
+}
+
 # PowerShell adds these note-properties to every Get-ItemProperty result; they
 # are not registry values. Matched by EXACT name -- a '^PS' prefix match would
 # also swallow real values whose names start with "PS".
@@ -172,6 +218,9 @@ if (-not $nsOk) {
         $v = Get-DllVerdict -Path $dll
         if ($v.Sev -ne 'OK') {
             "[$($v.Sev)] Netsh helper '$($p.Name)' => $($v.Why)"
+            Write-WhenCaveat
+            $w = Get-WhenLine -KeyPath $netshKey -FilePath $dll
+            if ($w) { $w }
             $netshSev = Get-MaxSev $netshSev $v.Sev
         }
     }
@@ -212,6 +261,9 @@ try {
                 $v = Get-DllVerdict -Path $dll
                 if ($v.Sev -ne 'OK') {
                     "[$($v.Sev)] Print processor '$($proc.PSChildName)' ($($envKey.PSChildName)) => $($v.Why)"
+                    Write-WhenCaveat
+                    $w = Get-WhenLine -KeyPath $proc.PSPath -FilePath $dll
+                    if ($w) { $w }
                     $ppSev = Get-MaxSev $ppSev $v.Sev
                 }
             }
@@ -253,6 +305,9 @@ try {
             $v = Get-DllVerdict -Path $dll
             if ($v.Sev -ne 'OK') {
                 "[$($v.Sev)] Port monitor '$($mon.PSChildName)' => $($v.Why)"
+                Write-WhenCaveat
+                $w = Get-WhenLine -KeyPath $mon.PSPath -FilePath $dll
+                if ($w) { $w }
                 $pmSev = Get-MaxSev $pmSev $v.Sev
             }
         }
@@ -353,6 +408,9 @@ foreach ($pp in $profilePaths) {
         "[OK] PowerShell profile present, no suspicious content: $pp"
     } else {
         "[$sev] PowerShell profile $pp -- $why (T1546.013: runs on every interactive PowerShell start)"
+        Write-WhenCaveat
+        $w = Get-WhenLine -FilePath $pp
+        if ($w) { $w }
         $profSev = Get-MaxSev $profSev $sev
     }
 }
@@ -384,6 +442,9 @@ try {
             $v = Get-DllVerdict -Path $dll
             if ($v.Sev -ne 'OK') {
                 "[$($v.Sev)] Time provider '$($tp.PSChildName)' => $($v.Why)"
+                Write-WhenCaveat
+                $w = Get-WhenLine -KeyPath $tp.PSPath -FilePath $dll
+                if ($w) { $w }
                 $tpSev = Get-MaxSev $tpSev $v.Sev
             }
         }

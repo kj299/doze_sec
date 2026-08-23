@@ -44,13 +44,59 @@ param()
 
 $ErrorActionPreference = 'Continue'
 
+# Timestamps on a persistence finding: WHEN did this appear? For someone working
+# out whether an implant predates a relationship, a job, or a break-in, that is
+# the question the finding itself never answered. Both halves are optional --
+# whichever is unavailable is simply omitted.
+#
+# TWO LIMITS, STATED IN THE REPORT TOO, because a timestamp presented without
+# them is worse than none:
+#   * Registry last-write is per KEY, not per value. Changing ANY value in a Run
+#     key updates the whole key, so this is an upper bound on when THIS entry
+#     appeared, not a precise date for it.
+#   * File times are trivially forged (timestomping, T1070.006). An attacker who
+#     cares sets them to whatever they like.
+function Get-WhenLine {
+    param([string]$KeyPath = '', [string]$FilePath = '')
+    $parts = @()
+    if ($KeyPath) {
+        try {
+            $k = Get-Item -LiteralPath $KeyPath -EA Stop
+            $lw = $k.LastWriteTime
+            if ($null -ne $lw) { $parts += ("registry key last modified {0}" -f $lw.ToString('yyyy-MM-dd HH:mm:ss')) }
+        } catch {}
+    }
+    if ($FilePath) {
+        try {
+            $f = Get-Item -LiteralPath $FilePath -EA Stop
+            $parts += ("file written {0}" -f $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))
+            # Creation AFTER last-write is the classic timestomp tell, so show
+            # creation whenever the two disagree in either direction.
+            if ($f.CreationTime -and $f.CreationTime -ne $f.LastWriteTime) {
+                $parts += ("created {0}" -f $f.CreationTime.ToString('yyyy-MM-dd HH:mm:ss'))
+            }
+        } catch {}
+    }
+    if ($parts.Count -eq 0) { return $null }
+    return ("  when: {0}" -f ($parts -join '  |  '))
+}
+
+# Emitted once, immediately before the first timestamped finding in this tool's
+# output, so the numbers are never read as more precise than they are.
+$script:whenCaveatShown = $false
+function Write-WhenCaveat {
+    if ($script:whenCaveatShown) { return }
+    $script:whenCaveatShown = $true
+    '  note: registry times are per KEY (any value change updates them) and file times can be forged (timestomping, T1070.006) -- treat them as leads, not proof.'
+}
+
 $trusted    = '\bMicrosoft\b|\bWindows\b'
 $badPathRx  = '\\Temp\\|\\AppData\\|\\Downloads\\|\\Public\\'
 
 # Classify a DLL path: returns 'CRITICAL' | 'WARNING' | 'OK' plus a reason.
 function Get-DllVerdict {
     param([string]$Path)
-    if (-not $Path) { return @{ Sev = 'CRITICAL'; Why = 'no DLL path' } }
+    if (-not $Path) { return @{ Sev = 'CRITICAL'; Why = 'no DLL path'; Path = '' } }
     $p = [Environment]::ExpandEnvironmentVariables($Path.Trim().Trim('"'))
     if ($p -match '^\\\?\?\\') { $p = $p.Substring(4) }
     # A BARE module name is not a missing DLL. Winlogon Notify DllName is by
@@ -66,13 +112,13 @@ function Get-DllVerdict {
         $cand  = Join-Path $sys32 $p
         if (Test-Path -LiteralPath $cand -PathType Leaf) { $p = $cand }
     }
-    if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { return @{ Sev = 'CRITICAL'; Why = "DLL not found: $p" } }
-    if ($p -match $badPathRx) { return @{ Sev = 'CRITICAL'; Why = "DLL under staging path: $p" } }
+    if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { return @{ Sev = 'CRITICAL'; Why = "DLL not found: $p"; Path = '' } }
+    if ($p -match $badPathRx) { return @{ Sev = 'CRITICAL'; Why = "DLL under staging path: $p"; Path = $p } }
     $sig = $null
     try { $sig = Get-AuthenticodeSignature -FilePath $p -EA Stop } catch {}
-    if (-not $sig -or $sig.Status -ne 'Valid') { return @{ Sev = 'CRITICAL'; Why = "unsigned/invalid signature: $p" } }
-    if ($sig.SignerCertificate.Subject -notmatch $trusted) { return @{ Sev = 'WARNING'; Why = "non-Microsoft signer ($p) -- verify (MFA/VPN?)" } }
-    return @{ Sev = 'OK'; Why = "Microsoft-signed: $p" }
+    if (-not $sig -or $sig.Status -ne 'Valid') { return @{ Sev = 'CRITICAL'; Why = "unsigned/invalid signature: $p"; Path = $p } }
+    if ($sig.SignerCertificate.Subject -notmatch $trusted) { return @{ Sev = 'WARNING'; Why = "non-Microsoft signer ($p) -- verify (MFA/VPN?)"; Path = $p } }
+    return @{ Sev = 'OK'; Why = "Microsoft-signed: $p"; Path = $p }
 }
 
 # Escalate a running severity ('OK' < 'WARNING' < 'CRITICAL').
@@ -96,6 +142,9 @@ if (-not $ok) {
         $v = Get-DllVerdict -Path $dll
         $sev = Get-MaxSev $sev $v.Sev
         ("[{0}] Winlogon Notify subkey '{1}' -> {2} ({3})" -f (@{CRITICAL='CRITICAL';WARNING='WARNING';OK='WARNING'}[$v.Sev]), $s.PSChildName, $dll, $v.Why)
+        Write-WhenCaveat
+        $w = Get-WhenLine -KeyPath $s.PSPath -FilePath $v.Path
+        if ($w) { $w }
     }
     Write-Marker 'notify' $sev
 }
@@ -141,6 +190,9 @@ try {
             if ($v.Sev -eq 'OK') { continue }
             $flagged = $true; $sev = Get-MaxSev $sev $v.Sev
             ("[{0}] Credential provider {1} -> {2} ({3})" -f $v.Sev, $guid, $dll, $v.Why)
+            Write-WhenCaveat
+            $w = Get-WhenLine -KeyPath ("HKLM:\SOFTWARE\Classes\CLSID\{0}\InprocServer32" -f $guid) -FilePath $v.Path
+            if ($w) { $w }
         }
     }
 } catch { $ok = $false }
@@ -166,6 +218,9 @@ try {
             if ($v.Sev -eq 'OK') { continue }
             $lsaFlagged = $true; $lsaSev = Get-MaxSev $lsaSev $v.Sev
             ("[{0}] LSA {1} package '{2}' -> {3} ({4})" -f $v.Sev, $setName, $pkg, $dllp, $v.Why)
+            Write-WhenCaveat
+            $w = Get-WhenLine -KeyPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -FilePath $v.Path
+            if ($w) { $w }
         }
     }
 } catch { $lsaOk = $false }
@@ -182,7 +237,13 @@ $scrSecure = (Get-ItemProperty -Path $desk -Name 'ScreenSaverIsSecure' -EA Silen
 $scrFlagged = $false; $scrSev = 'OK'
 if ($scr) {
     $v = Get-DllVerdict -Path $scr
-    if ($v.Sev -ne 'OK') { $scrFlagged = $true; $scrSev = Get-MaxSev $scrSev $v.Sev; ("[{0}] Screensaver SCRNSAVE.EXE -> {1} ({2})" -f $v.Sev, $scr, $v.Why) }
+    if ($v.Sev -ne 'OK') {
+        $scrFlagged = $true; $scrSev = Get-MaxSev $scrSev $v.Sev
+        ("[{0}] Screensaver SCRNSAVE.EXE -> {1} ({2})" -f $v.Sev, $scr, $v.Why)
+        Write-WhenCaveat
+        $w = Get-WhenLine -KeyPath $desk -FilePath $v.Path
+        if ($w) { $w }
+    }
     else { "[OK] Screensaver is a Microsoft-signed system binary: $scr" }
     # INFO, not WARNING. ScreenSaverIsSecure=0 is what Windows leaves behind
     # whenever someone picks a screensaver and does not tick "On resume,

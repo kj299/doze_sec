@@ -34,6 +34,7 @@ T1068|Priv Esc|Exploitation for Privilege Escalation|All groups|Sec 1 patch leve
 T1562.001|Defense Evasion|Disable Security Tools|All ransomware,Scattered Spider|Sec 9 Defender, Sec 18 registry
 T1562.004|Defense Evasion|Disable Firewall|Various|Sec 8 firewall
 T1070.001|Defense Evasion|Clear Event Logs|All APT|Sec 16 Event 1102
+T1070.006|Defense Evasion|Timestomp|-|Sec 5 persistence timestamps (caveat: file times are forgeable)
 T1036|Defense Evasion|Masquerading|Volt Typhoon,Salt Typhoon|Sec 4 process paths
 T1197|Defense Evasion|BITS Jobs|Various|Sec 18 LOLBin patterns
 T1140|Defense Evasion|Deobfuscate/Decode Files|Various|Sec 18 certutil patterns
