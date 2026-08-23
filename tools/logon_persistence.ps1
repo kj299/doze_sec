@@ -44,6 +44,41 @@ param()
 
 $ErrorActionPreference = 'Continue'
 
+# Registry key last-write time. PowerShell's registry provider does NOT expose
+# it -- Get-Item on a key returns a RegistryKey with no LastWriteTime -- so it
+# has to come from RegQueryInfoKey. The type is defined once per process and
+# every failure path degrades to $null, which simply omits the registry half of
+# the "when:" line rather than inventing a date.
+function Get-RegKeyLastWrite {
+    param([string]$KeyPath)
+    if (-not $KeyPath) { return $null }
+    try {
+        if (-not ([System.Management.Automation.PSTypeName]'DozeSec.RegTime').Type) {
+            Add-Type -ErrorAction Stop -Namespace DozeSec -Name RegTime -MemberDefinition @'
+[DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+public static extern int RegQueryInfoKey(IntPtr hKey, System.Text.StringBuilder lpClass,
+    IntPtr lpcchClass, IntPtr lpReserved, IntPtr lpcSubKeys, IntPtr lpcbMaxSubKeyLen,
+    IntPtr lpcbMaxClassLen, IntPtr lpcValues, IntPtr lpcbMaxValueNameLen,
+    IntPtr lpcbMaxValueLen, IntPtr lpcbSecurityDescriptor, out long lpftLastWriteTime);
+'@
+        }
+    } catch { return $null }
+    $key = $null
+    try {
+        # Accept both provider paths (HKLM:\...) and PSPath forms.
+        $p = $KeyPath -replace '^Microsoft\.PowerShell\.Core\\Registry::', ''
+        $p = $p -replace '^HKEY_LOCAL_MACHINE\\', 'HKLM:\' -replace '^HKEY_CURRENT_USER\\', 'HKCU:\'
+        $key = Get-Item -LiteralPath $p -EA Stop
+        $ft = [long]0
+        $rc = [DozeSec.RegTime]::RegQueryInfoKey($key.Handle.DangerousGetHandle(),
+            $null, [IntPtr]::Zero, [IntPtr]::Zero, [IntPtr]::Zero, [IntPtr]::Zero,
+            [IntPtr]::Zero, [IntPtr]::Zero, [IntPtr]::Zero, [IntPtr]::Zero,
+            [IntPtr]::Zero, [ref]$ft)
+        if ($rc -ne 0 -or $ft -le 0) { return $null }
+        return [datetime]::FromFileTime($ft)
+    } catch { return $null }
+}
+
 # Timestamps on a persistence finding: WHEN did this appear? For someone working
 # out whether an implant predates a relationship, a job, or a break-in, that is
 # the question the finding itself never answered. Both halves are optional --
@@ -60,11 +95,8 @@ function Get-WhenLine {
     param([string]$KeyPath = '', [string]$FilePath = '')
     $parts = @()
     if ($KeyPath) {
-        try {
-            $k = Get-Item -LiteralPath $KeyPath -EA Stop
-            $lw = $k.LastWriteTime
-            if ($null -ne $lw) { $parts += ("registry key last modified {0}" -f $lw.ToString('yyyy-MM-dd HH:mm:ss')) }
-        } catch {}
+        $lw = Get-RegKeyLastWrite $KeyPath
+        if ($null -ne $lw) { $parts += ("registry key last modified {0}" -f $lw.ToString('yyyy-MM-dd HH:mm:ss')) }
     }
     if ($FilePath) {
         try {

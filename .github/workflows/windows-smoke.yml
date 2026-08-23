@@ -484,7 +484,15 @@ jobs:
           $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
           $probe  = 'dz_ci_when_probe'
           if (-not (Test-Path $runKey)) { New-Item -Path $runKey -Force | Out-Null }
-          Set-ItemProperty -Path $runKey -Name $probe -Value 'powershell -w hidden -enc ZQBjAGgAbwA=' -Force
+          # Point the autorun at a REAL FILE in a staging path, so the file half
+          # of the "when:" line is exercised too and the assertion does not
+          # depend solely on the registry P/Invoke succeeding. (PowerShell's
+          # registry provider does not expose a key's LastWriteTime, so that
+          # half comes from RegQueryInfoKey and degrades to omitted, never to a
+          # made-up date.)
+          $probeFile = 'C:\Users\Public\dz_ci_when_probe.exe'
+          Set-Content -LiteralPath $probeFile -Value 'MZ not a real binary' -Encoding ASCII
+          Set-ItemProperty -Path $runKey -Name $probe -Value "$probeFile -w hidden" -Force
           try {
             $pe = (.\tools\persistence_eval.ps1) -join "`n"
             Write-Host (($pe -split "`n" | Where-Object { $_ -match "$probe|when:|note:" }) -join "`n")
@@ -502,8 +510,13 @@ jobs:
             foreach ($l in $lines) {
               if ($l -match '^\s*\[(CRITICAL|WARNING)\].*when:') { throw "a 'when:' line opened with a severity tag: $l" }
             }
+            # Both halves must be reachable: the file time always, and the
+            # registry time whenever RegQueryInfoKey works on this host.
+            if ($window -notmatch 'file written') { throw "the file half of the when: line is missing: $window" }
+            if ($window -notmatch 'registry key last modified') { Write-Host '  NOTE: registry key time unavailable on this host -- file half only (degradation is by design)' }
           } finally {
             Remove-ItemProperty -Path $runKey -Name $probe -EA SilentlyContinue
+            Remove-Item -LiteralPath $probeFile -Force -EA SilentlyContinue
           }
           Write-Host "report_seal + persistence timestamps OK"
           exit 0
