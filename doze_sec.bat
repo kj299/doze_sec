@@ -3211,6 +3211,26 @@ echo  Command: wevtutil qe Security /q:"*[System[^(EventID=4732^)]]" /c:10 /rd:t
 wevtutil qe Security /q:"*[System[(EventID=4732)]]" /c:10 /rd:true /f:text>> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
+echo.>> "%REPORT%"
+echo --- Event-Log Gaps ^(records missing with NO clear event^) --->> "%REPORT%"
+echo  Command: powershell -File tools\log_gap_check.ps1>> "%REPORT%"
+echo  1102 only fires when the WHOLE log is cleared. Removing individual records,>> "%REPORT%"
+echo  or shrinking a log so ordinary activity rolls it over, leaves no event at>> "%REPORT%"
+echo  all -- and every event-based check above then reads a truncated log and>> "%REPORT%"
+echo  reports clean. This asks whether each log's own record numbering adds up.>> "%REPORT%"
+del "%TEMP%\dz_loggap.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\log_gap_check.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\log_gap_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo  [INFO] tools\log_gap_check.ps1 not found -- event-log gap check skipped.>> "%REPORT%"
+)
+if exist "%TEMP%\dz_loggap.txt" (
+    set "_LGSEV="
+    set /p _LGSEV=<"%TEMP%\dz_loggap.txt"
+    call :dz_finding !_LGSEV! 16 T1070.001 "Event-log records missing with no clear event, or retention set to self-erase"
+    del "%TEMP%\dz_loggap.txt" 2>nul
+)
+
 echo --- Log Tampering and Account Changes (evaluated) --->> "%REPORT%"
 del "%TEMP%\dz_ev1102_hit.txt" 2>nul
 del "%TEMP%\dz_ev104_hit.txt" 2>nul
