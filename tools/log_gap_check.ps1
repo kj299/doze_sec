@@ -16,9 +16,16 @@
 # accounting add up?
 #
 # THE CENTREPIECE: RECORD-NUMBER ARITHMETIC.
-#   For a healthy log, (newestRecordId - OldestRecordNumber + 1) == RecordCount.
-#   Circular rollover does NOT break that -- dropping the oldest records raises
-#   OldestRecordNumber and lowers RecordCount together, so the identity holds.
+#   For a healthy log, (newest record id - oldest SURVIVING record id + 1) ==
+#   RecordCount. Circular rollover does NOT break that -- dropping the oldest
+#   records raises the oldest surviving id and lowers RecordCount together, so
+#   the identity holds.
+#
+#   Both ids come from the ACTUAL EVENTS. The config's OldestRecordNumber field
+#   looks like the right source and is not: on a runner whose Application log
+#   had rolled over it read 1 while the newest id was 3852 and only 142 records
+#   remained, which would have reported 3710 deleted records on a healthy
+#   machine. Trusting a property because of its name is how that happens.
 #   Removing records from the MIDDLE does break it: the span stays wide while
 #   the count falls. That asymmetry is what makes this worth checking, and it is
 #   cheap: two property reads and one event read per log.
@@ -66,9 +73,9 @@ function Get-MaxSev {
 # race between reading the config and reading the newest record on a log that
 # is being written to while we look at it.
 function Get-RecordGap {
-    param($OldestRecordNumber, $RecordCount, $NewestRecordId, [int]$Tolerance = 25)
-    if ($null -eq $OldestRecordNumber -or $null -eq $RecordCount -or $null -eq $NewestRecordId) { return -1 }
-    $o = [int64]$OldestRecordNumber; $c = [int64]$RecordCount; $n = [int64]$NewestRecordId
+    param($OldestRecordId, $RecordCount, $NewestRecordId, [int]$Tolerance = 25)
+    if ($null -eq $OldestRecordId -or $null -eq $RecordCount -or $null -eq $NewestRecordId) { return -1 }
+    $o = [int64]$OldestRecordId; $c = [int64]$RecordCount; $n = [int64]$NewestRecordId
     if ($c -le 0 -or $n -lt $o) { return -1 }
     $span = $n - $o + 1
     $gap  = $span - $c
@@ -83,6 +90,10 @@ if ($SelfTest) {
         @{ Name = 'rolled over (oldest raised, count lower)'; O = 3001;  C = 2000;  N = 5000;  Expect = 0 },
         @{ Name = 'within tolerance (live writes)';           O = 1;     C = 4990;  N = 5000;  Expect = 0 },
         @{ Name = 'records removed from the middle';          O = 1;     C = 1000;  N = 5000;  Expect = 4000 },
+        # The exact shape that produced a false positive on a CI runner when
+        # this read the config's OldestRecordNumber (which said 1) instead of
+        # the oldest surviving record's real id. Kept as a permanent case.
+        @{ Name = 'rolled log, real oldest id (was a false positive)'; O = 3711; C = 142; N = 3852; Expect = 0 },
         @{ Name = 'unreadable RecordCount';                   O = 1;     C = $null; N = 5000;  Expect = -1 },
         @{ Name = 'zero records';                             O = 1;     C = 0;     N = 0;     Expect = -1 }
     )
@@ -124,24 +135,32 @@ foreach ($name in $LogNames) {
         continue
     }
 
-    # Newest record id. Read AFTER the config so a log being written to during
-    # the check yields a newest id >= the config's view, which the tolerance in
-    # Get-RecordGap absorbs.
+    # Read the oldest and newest record ids from the ACTUAL EVENTS, not from
+    # the config's OldestRecordNumber field.
+    #
+    # OldestRecordNumber does NOT reliably track the oldest surviving record: on
+    # a runner whose Application log had rolled over it read 1 while the newest
+    # id was 3852 and only 142 records were present, which made this check
+    # report 3710 deleted records on a perfectly healthy machine. CI caught it.
+    # The events themselves are authoritative, and asking for one record from
+    # each end costs no more than the boot-time read below already does.
     $newest = $null
+    $oldest = $null
     try { $newest = (Get-WinEvent -LogName $name -MaxEvents 1 -EA Stop).RecordId } catch {}
+    try { $oldest = (Get-WinEvent -LogName $name -MaxEvents 1 -Oldest -EA Stop).RecordId } catch {}
 
-    $gap = Get-RecordGap $cfg.OldestRecordNumber $cfg.RecordCount $newest
+    $gap = Get-RecordGap $oldest $cfg.RecordCount $newest
     if ($gap -lt 0) {
         "[SKIPPED] Log '$name': record accounting unavailable (RecordCount or record ids unreadable) -- gap check NOT performed for it."
         $sev = Get-MaxSev $sev 'WARNING'
     } elseif ($gap -gt 0) {
         $s = if ($isSecurity) { 'CRITICAL' } else { 'WARNING' }
-        "[$s] Event log '$name': $gap record(s) are missing from the middle of its numbering (oldest #$($cfg.OldestRecordNumber), newest #$newest, but only $($cfg.RecordCount) present). Normal rollover does NOT cause this -- dropping the oldest records lowers the count and raises the oldest number together. Selective deletion does (T1070.001), and it leaves no 1102 clear event."
+        "[$s] Event log '$name': $gap record(s) are missing from the middle of its numbering (oldest surviving #$oldest, newest #$newest, but only $($cfg.RecordCount) present). Normal rollover does NOT cause this -- dropping the oldest records lowers the count and raises the oldest number together. Selective deletion does (T1070.001), and it leaves no 1102 clear event."
         '  what this is: an inconsistency in the log''s own accounting, not proof of deletion. Log-service restarts and some backup/archival tools can also disturb numbering.'
         '  what to check next: whether a 1102/104 clear event exists above, and whether a SIEM, log-forwarding or backup copy of this log covers the missing range.'
         $sev = Get-MaxSev $sev $s
     } else {
-        "[OK] Event log '$name': record numbering is consistent ($($cfg.RecordCount) records, #$($cfg.OldestRecordNumber)-#$newest)."
+        "[OK] Event log '$name': record numbering is consistent ($($cfg.RecordCount) records, #$oldest-#$newest)."
     }
 
     # Retention posture. An undersized log erases its own history under ordinary

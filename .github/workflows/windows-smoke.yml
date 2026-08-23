@@ -536,7 +536,8 @@ jobs:
           if ($st -notmatch 'records removed from the middle') { throw 'self-test no longer covers the middle-removal case' }
           if ($st -notmatch 'rolled over') { throw 'self-test no longer covers normal rollover -- the false-positive guard is unproven' }
           $cases = ([regex]::Matches($st, '(?m)^\[OK\]')).Count
-          if ($cases -lt 6) { throw "self-test ran only $cases case(s) -- it is not exercising the decision function" }
+          if ($cases -lt 7) { throw "self-test ran only $cases case(s) -- it is not exercising the decision function" }
+          if ($st -notmatch 'was a false positive') { throw 'the rolled-log regression case was removed -- the CI false positive can return' }
 
           # LIVE RUN. A healthy runner must not raise: normal circular rollover
           # keeps the numbering consistent, so a finding here would be a false
