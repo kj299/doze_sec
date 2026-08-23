@@ -447,6 +447,80 @@ jobs:
           Write-Host "driver_audit.ps1 OK (incl. signed-vendor-driver severity split)"
           exit 0
 
+      - name: report_seal.ps1 (tamper-evidence digest) + persistence timestamps
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # ---- Seal ------------------------------------------------------
+          # The report is written to the machine under suspicion. Without a
+          # digest, whoever compromised that machine can edit the report --
+          # delete the finding naming their implant -- and nothing in the file
+          # would show it.
+          $rp = Join-Path $env:TEMP ("dz_seal_ci_{0}.txt" -f $PID)
+          $hp = Join-Path $env:TEMP ("dz_seal_ci_{0}.html" -f $PID)
+          Set-Content -LiteralPath $rp -Value @('[CRITICAL] example finding','more text') -Encoding UTF8
+          Set-Content -LiteralPath $hp -Value '<html>x</html>' -Encoding UTF8
+          try {
+            $out = (.\tools\report_seal.ps1 -Report $rp -HtmlReport $hp) -join "`n"
+            Write-Host $out
+            $seal = "$rp.sha256"
+            if (-not (Test-Path $seal)) { throw 'no digest sidecar written' }
+            $real = (Get-FileHash -LiteralPath $rp -Algorithm SHA256).Hash.ToUpper()
+            if ((Get-Content $seal -Raw) -notmatch [regex]::Escape($real)) { throw 'sidecar digest does not match the file' }
+            if ($out -notmatch [regex]::Escape($real)) { throw 'digest was not printed to the console' }
+            # The honest limit must be stated, not implied.
+            if ((Get-Content $seal -Raw) -notmatch 'does not prove the audit itself') { throw 'seal omits the "this is not attestation" limit' }
+            # A one-byte edit must break it -- otherwise the seal proves nothing.
+            Add-Content -LiteralPath $rp -Value 'tampered'
+            $after = (Get-FileHash -LiteralPath $rp -Algorithm SHA256).Hash.ToUpper()
+            if ($after -eq $real) { throw 'digest did not change after the file was edited' }
+            if ((Get-Content $seal -Raw) -match [regex]::Escape($after)) { throw 'sidecar somehow matches the tampered file' }
+          } finally { Remove-Item $rp, $hp, "$rp.sha256" -Force -EA SilentlyContinue }
+
+          # ---- Persistence timestamps ------------------------------------
+          # A finding says WHAT was found; until now it never said WHEN it
+          # appeared -- the question that decides whether an implant predates a
+          # relationship, a job, or a break-in.
+          $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+          $probe  = 'dz_ci_when_probe'
+          if (-not (Test-Path $runKey)) { New-Item -Path $runKey -Force | Out-Null }
+          # Point the autorun at a REAL FILE in a staging path, so the file half
+          # of the "when:" line is exercised too and the assertion does not
+          # depend solely on the registry P/Invoke succeeding. (PowerShell's
+          # registry provider does not expose a key's LastWriteTime, so that
+          # half comes from RegQueryInfoKey and degrades to omitted, never to a
+          # made-up date.)
+          $probeFile = 'C:\Users\Public\dz_ci_when_probe.exe'
+          Set-Content -LiteralPath $probeFile -Value 'MZ not a real binary' -Encoding ASCII
+          Set-ItemProperty -Path $runKey -Name $probe -Value "$probeFile -w hidden" -Force
+          try {
+            $pe = (.\tools\persistence_eval.ps1) -join "`n"
+            Write-Host (($pe -split "`n" | Where-Object { $_ -match "$probe|when:|note:" }) -join "`n")
+            $lines = $pe -split "`r?`n"
+            $ix = -1
+            for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -match [regex]::Escape($probe)) { $ix = $i; break } }
+            if ($ix -lt 0) { throw 'planted autorun was not reported at all' }
+            $window = ($lines[$ix..([Math]::Min($ix + 4, $lines.Count - 1))]) -join "`n"
+            if ($window -notmatch '(?m)^\s+when:.*\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}') { throw "finding carries no timestamped 'when:' line: $window" }
+            # The caveat is what keeps the timestamp from being read as proof.
+            if ($pe -notmatch 'timestomping') { throw 'timestamp caveat (per-key / timestomping) is missing' }
+            # The continuation line must NOT open with a tag -- block_sev.ps1,
+            # report_safety.ps1 and the findings lint all key on the leading
+            # tag, so a tagged continuation would inflate every severity count.
+            foreach ($l in $lines) {
+              if ($l -match '^\s*\[(CRITICAL|WARNING)\].*when:') { throw "a 'when:' line opened with a severity tag: $l" }
+            }
+            # Both halves must be reachable: the file time always, and the
+            # registry time whenever RegQueryInfoKey works on this host.
+            if ($window -notmatch 'file written') { throw "the file half of the when: line is missing: $window" }
+            if ($window -notmatch 'registry key last modified') { Write-Host '  NOTE: registry key time unavailable on this host -- file half only (degradation is by design)' }
+          } finally {
+            Remove-ItemProperty -Path $runKey -Name $probe -EA SilentlyContinue
+            Remove-Item -LiteralPath $probeFile -Force -EA SilentlyContinue
+          }
+          Write-Host "report_seal + persistence timestamps OK"
+          exit 0
+
       - name: report_safety.ps1 (Tier 0 preamble + coverage framing)
         shell: powershell
         run: |

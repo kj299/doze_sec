@@ -4529,12 +4529,55 @@ echo.
 :: ====================================================================
 :: GENERATE HTML REPORT
 :: ====================================================================
+rem ---- Tamper-evidence guidance, then the seal ------------------------
+rem Appended BEFORE the digest is computed (it is static text, so there is no
+rem circularity) and before the HTML is generated from this file.
+echo.>> "%REPORT%"
+echo ====================================================================>> "%REPORT%"
+echo   KEEPING THIS REPORT TRUSTWORTHY>> "%REPORT%"
+echo   ------------------------------------------------------------------>> "%REPORT%"
+echo   This file was written to the machine it audited. If that machine is>> "%REPORT%"
+echo   compromised, whoever compromised it can edit this report -- remove the>> "%REPORT%"
+echo   finding that names their implant, change a verdict -- and nothing in>> "%REPORT%"
+echo   the file itself would show it.>> "%REPORT%"
+echo.>> "%REPORT%"
+echo   COPY THIS REPORT OFF THIS DEVICE NOW, before remediating anything.>> "%REPORT%"
+echo   Remediation destroys evidence; so does an attacker who notices you>> "%REPORT%"
+echo   looking. A copy on a phone, a USB stick or an email to yourself is>> "%REPORT%"
+echo   enough.>> "%REPORT%"
+echo.>> "%REPORT%"
+echo   A SHA256 digest of this report was printed on screen when the audit>> "%REPORT%"
+echo   finished and written alongside it as SecurityReport_*.sha256. Verify>> "%REPORT%"
+echo   at any time with:>> "%REPORT%"
+echo       Get-FileHash '^<this file^>' -Algorithm SHA256>> "%REPORT%"
+echo   and compare. A mismatch means the file changed after the audit.>> "%REPORT%"
+echo.>> "%REPORT%"
+echo   THE LIMIT, PLAINLY: that digest proves only that this FILE has not>> "%REPORT%"
+echo   changed since the audit ran. It does not prove the audit itself was>> "%REPORT%"
+echo   not interfered with -- an implant with kernel access could have fed>> "%REPORT%"
+echo   the audit false answers, and the digest would faithfully seal those>> "%REPORT%"
+echo   false answers. It is tamper-evidence for the report, not proof the>> "%REPORT%"
+echo   machine is sound.>> "%REPORT%"
+echo ====================================================================>> "%REPORT%"
+
 echo %C_CYAN%Generating HTML report...%C_RESET%
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\report_html.ps1" -Report "%REPORT%" -HtmlPath "%REPORT_HTML%" -RemediationPath "%REMEDIATION%" 2>&1
 if exist "%REPORT_HTML%" (
     echo %C_GREEN%[OK]%C_RESET% HTML report: %REPORT_HTML%
 ) else (
     echo %C_YELLOW%[WARN]%C_RESET% HTML generation failed. Text report available.
+)
+
+rem ---- Seal the finished reports --------------------------------------
+rem Both files are complete at this point. The digests go to the console as
+rem well as to the sidecar, because the sidecar lives on the same disk as the
+rem report and is editable by anyone who can edit the report; what is on
+rem screen (and in AuditConsole_*.log) can be photographed or sent to yourself
+rem immediately, which is what makes it useful.
+if exist "%SCRIPT_DIR%tools\report_seal.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\report_seal.ps1" -Report "%REPORT%" -HtmlReport "%REPORT_HTML%"
+) else (
+    echo %C_YELLOW%[WARN]%C_RESET% tools\report_seal.ps1 not found -- no integrity digest was produced for this report.
 )
 if exist "%REPORT_HTML%" (
     echo Opening HTML report...

@@ -54,6 +54,84 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
+# Registry key last-write time. PowerShell's registry provider does NOT expose
+# it -- Get-Item on a key returns a RegistryKey with no LastWriteTime -- so it
+# has to come from RegQueryInfoKey. The type is defined once per process and
+# every failure path degrades to $null, which simply omits the registry half of
+# the "when:" line rather than inventing a date.
+function Get-RegKeyLastWrite {
+    param([string]$KeyPath)
+    if (-not $KeyPath) { return $null }
+    try {
+        if (-not ([System.Management.Automation.PSTypeName]'DozeSec.RegTime').Type) {
+            Add-Type -ErrorAction Stop -Namespace DozeSec -Name RegTime -MemberDefinition @'
+[DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+public static extern int RegQueryInfoKey(IntPtr hKey, System.Text.StringBuilder lpClass,
+    IntPtr lpcchClass, IntPtr lpReserved, IntPtr lpcSubKeys, IntPtr lpcbMaxSubKeyLen,
+    IntPtr lpcbMaxClassLen, IntPtr lpcValues, IntPtr lpcbMaxValueNameLen,
+    IntPtr lpcbMaxValueLen, IntPtr lpcbSecurityDescriptor, out long lpftLastWriteTime);
+'@
+        }
+    } catch { return $null }
+    $key = $null
+    try {
+        # Accept both provider paths (HKLM:\...) and PSPath forms.
+        $p = $KeyPath -replace '^Microsoft\.PowerShell\.Core\\Registry::', ''
+        $p = $p -replace '^HKEY_LOCAL_MACHINE\\', 'HKLM:\' -replace '^HKEY_CURRENT_USER\\', 'HKCU:\'
+        $key = Get-Item -LiteralPath $p -EA Stop
+        $ft = [long]0
+        $rc = [DozeSec.RegTime]::RegQueryInfoKey($key.Handle.DangerousGetHandle(),
+            $null, [IntPtr]::Zero, [IntPtr]::Zero, [IntPtr]::Zero, [IntPtr]::Zero,
+            [IntPtr]::Zero, [IntPtr]::Zero, [IntPtr]::Zero, [IntPtr]::Zero,
+            [IntPtr]::Zero, [ref]$ft)
+        if ($rc -ne 0 -or $ft -le 0) { return $null }
+        return [datetime]::FromFileTime($ft)
+    } catch { return $null }
+}
+
+# Timestamps on a persistence finding: WHEN did this appear? For someone working
+# out whether an implant predates a relationship, a job, or a break-in, that is
+# the question the finding itself never answered. Both halves are optional --
+# whichever is unavailable is simply omitted.
+#
+# TWO LIMITS, STATED IN THE REPORT TOO, because a timestamp presented without
+# them is worse than none:
+#   * Registry last-write is per KEY, not per value. Changing ANY value in a Run
+#     key updates the whole key, so this is an upper bound on when THIS entry
+#     appeared, not a precise date for it.
+#   * File times are trivially forged (timestomping, T1070.006). An attacker who
+#     cares sets them to whatever they like.
+function Get-WhenLine {
+    param([string]$KeyPath = '', [string]$FilePath = '')
+    $parts = @()
+    if ($KeyPath) {
+        $lw = Get-RegKeyLastWrite $KeyPath
+        if ($null -ne $lw) { $parts += ("registry key last modified {0}" -f $lw.ToString('yyyy-MM-dd HH:mm:ss')) }
+    }
+    if ($FilePath) {
+        try {
+            $f = Get-Item -LiteralPath $FilePath -EA Stop
+            $parts += ("file written {0}" -f $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))
+            # Creation AFTER last-write is the classic timestomp tell, so show
+            # creation whenever the two disagree in either direction.
+            if ($f.CreationTime -and $f.CreationTime -ne $f.LastWriteTime) {
+                $parts += ("created {0}" -f $f.CreationTime.ToString('yyyy-MM-dd HH:mm:ss'))
+            }
+        } catch {}
+    }
+    if ($parts.Count -eq 0) { return $null }
+    return ("  when: {0}" -f ($parts -join '  |  '))
+}
+
+# Emitted once, immediately before the first timestamped finding in this tool's
+# output, so the numbers are never read as more precise than they are.
+$script:whenCaveatShown = $false
+function Write-WhenCaveat {
+    if ($script:whenCaveatShown) { return }
+    $script:whenCaveatShown = $true
+    '  note: registry times are per KEY (any value change updates them) and file times can be forged (timestomping, T1070.006) -- treat them as leads, not proof.'
+}
+
 # PowerShell adds these note-properties to every Get-ItemProperty result; they
 # are not registry values. Matched by EXACT name -- a '^PS' prefix match would
 # also swallow real values whose names start with "PS".
@@ -193,6 +271,9 @@ if (-not $folders.Count) {
                 "[OK] Startup item: $($it.Name)  ($why)"
             } else {
                 "[$sev] Startup item '$($it.Name)' in $folder -- $why"
+                Write-WhenCaveat
+                $w = Get-WhenLine -FilePath $it.FullName
+                if ($w) { $w }
                 $startupSev = Get-MaxSev $startupSev $sev
             }
         }
@@ -230,6 +311,9 @@ if (-not $acOk) {
         # process-wide injection point, so OK degrades to WARNING here.
         $sev = if ($v.Sev -eq 'OK') { 'WARNING' } else { $v.Sev }
         "[$sev] AppCert DLL '$($p.Name)' => $val -- $($v.Why)"
+        Write-WhenCaveat
+        $w = Get-WhenLine -KeyPath $acKey -FilePath $val
+        if ($w) { $w }
         $appcertSev = Get-MaxSev $appcertSev $sev
     }
     if (-not $any) { '[OK] AppCertDlls not present or empty (stock Windows).' }
