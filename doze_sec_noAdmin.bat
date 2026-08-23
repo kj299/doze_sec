@@ -4321,6 +4321,14 @@ echo Write-Output '##  After running, re-run doze_sec to verify.' >> "%PSRUN%"
 echo Write-Output '######################################################################' >> "%PSRUN%"
 echo Write-Output '' >> "%PSRUN%"
 
+:: ---- Calibrate each CLEAN verdict against the checks that could not run ----
+:: A section whose checks all [SKIPPED] read exactly like one where they all
+:: passed. Runs before report_format/top_findings/HTML/seal so the calibrated
+:: verdict flows into every downstream artifact.
+if exist "%SCRIPT_DIR%tools\section_coverage.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\section_coverage.ps1" -Report "%REPORT%" >nul 2>&1
+)
+
 :: ---- Format the report: insert section terminators for unambiguous boundaries ----
 if exist "%SCRIPT_DIR%tools\report_format.ps1" (
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\report_format.ps1" -Report "%REPORT%" 2>nul
