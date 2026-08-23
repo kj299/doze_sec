@@ -200,8 +200,16 @@ $cases = @(
         Expect = '(?im)\[CRITICAL\] AppInit_DLLs is set \(T1546\.010\)'
         Plant  = { $script:appInitPrev = (Get-ItemProperty -Path $appInitKey -Name 'AppInit_DLLs' -EA SilentlyContinue).AppInit_DLLs
                    Set-ItemProperty -Path $appInitKey -Name 'AppInit_DLLs' -Value $comDll -Force }
-        Cleanup= { if ($null -ne $script:appInitPrev) { Set-ItemProperty -Path $appInitKey -Name 'AppInit_DLLs' -Value $script:appInitPrev -Force }
-                   else { Set-ItemProperty -Path $appInitKey -Name 'AppInit_DLLs' -Value '' -Force } }
+        # Same rule as the screensaver case: a captured "previous" that is the
+        # plant itself (leftover from an interrupted run) must never be restored
+        # -- AppInit_DLLs loads into every GUI process, so re-registering the
+        # planted DLL would be the most damaging thing this harness could do.
+        Cleanup= { if (($null -ne $script:appInitPrev) -and ("$script:appInitPrev" -notmatch 'dz_selftest|dz_evil|\\Users\\Public\\')) {
+                       Set-ItemProperty -Path $appInitKey -Name 'AppInit_DLLs' -Value $script:appInitPrev -Force
+                   } else {
+                       if ($script:appInitPrev) { Write-Host "  NOTE: prior AppInit_DLLs read as '$script:appInitPrev' (a leftover plant); clearing rather than restoring it." }
+                       Set-ItemProperty -Path $appInitKey -Name 'AppInit_DLLs' -Value '' -Force
+                   } }
     },
     @{
         Name   = 'HKCU COM CLSID InprocServer32 hijack -> flagged (T1546.015)'
@@ -448,10 +456,20 @@ $cases = @(
         Attack = @('T1546.002')
         Tier   = 'required'
         Expect = '(?im)Screensaver SCRNSAVE\.EXE -> C:\\Users\\Public\\dz_evil\.scr'
+        # NEVER restore a captured value that is the plant itself. If a previous
+        # run was interrupted after planting, the "previous" value read here is
+        # C:\Users\Public\dz_evil.scr -- and restoring it would permanently
+        # register a code-load path under a world-writable directory on the
+        # developer's machine. Same defect as the firewall case fixed earlier;
+        # it was fixed there only for that one case.
         Plant  = { $script:scrPrev = (Get-ItemProperty -Path $scrDeskKey -Name 'SCRNSAVE.EXE' -EA SilentlyContinue).'SCRNSAVE.EXE'
                    Set-ItemProperty -Path $scrDeskKey -Name 'SCRNSAVE.EXE' -Value 'C:\Users\Public\dz_evil.scr' -Force }
-        Cleanup= { if ($script:scrPrev) { Set-ItemProperty -Path $scrDeskKey -Name 'SCRNSAVE.EXE' -Value $script:scrPrev -Force }
-                   else { Remove-ItemProperty -Path $scrDeskKey -Name 'SCRNSAVE.EXE' -EA SilentlyContinue } }
+        Cleanup= { if ($script:scrPrev -and ("$script:scrPrev" -notmatch 'dz_evil|\\Users\\Public\\')) {
+                       Set-ItemProperty -Path $scrDeskKey -Name 'SCRNSAVE.EXE' -Value $script:scrPrev -Force
+                   } else {
+                       if ($script:scrPrev) { Write-Host "  NOTE: prior SCRNSAVE.EXE read as '$script:scrPrev' (a leftover plant); removing rather than restoring it." }
+                       Remove-ItemProperty -Path $scrDeskKey -Name 'SCRNSAVE.EXE' -EA SilentlyContinue
+                   } }
     },
     @{
         Name   = 'UserInitMprLogonScript logon script -> flagged'

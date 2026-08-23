@@ -794,6 +794,28 @@ if "%NETWORK_AVAIL%"=="1" if "%VT_SELF_SKIP%"=="0" if exist "%USERPROFILE%\.vt_t
             call :dz_finding CRITICAL INIT VTSELF "Pre-flight VirusTotal check flagged a script-critical binary - audit aborted"
             echo %C_RED%[CRITICAL]%C_RESET% Script-critical binary flagged by VirusTotal. Audit aborted.
             echo %C_RED%[CRITICAL]%C_RESET% See %REPORT% for the offending hash and engine count.
+            rem The abort jumps straight to :final_exit, bypassing :end_script, so
+            rem the report used to end with two [CRITICAL] lines and nothing else:
+            rem no COVERAGE ^& CONFIDENCE block, no EXIT CODE / FINDINGS COUNTED
+            rem footer, and no statement of how little of the audit ran. A reader
+            rem could not tell whether the remaining sections were clean or never
+            rem executed. Say which it was.
+            echo.>> "%REPORT%"
+            echo ====================================================================>> "%REPORT%"
+            echo   AUDIT ABORTED AT PRE-FLIGHT -- ALMOST NOTHING WAS CHECKED>> "%REPORT%"
+            echo   ------------------------------------------------------------------>> "%REPORT%"
+            echo   A binary this script itself depends on was flagged by VirusTotal,>> "%REPORT%"
+            echo   so the audit stopped before running ANY of its 18 sections.>> "%REPORT%"
+            echo   Nothing else on this machine was examined. This is NOT a clean>> "%REPORT%"
+            echo   result and NOT a statement about the rest of the system -- it is>> "%REPORT%"
+            echo   the audit refusing to trust its own tools.>> "%REPORT%"
+            echo.>> "%REPORT%"
+            echo   Next: verify the flagged hash yourself, since a single-engine hit>> "%REPORT%"
+            echo   is often a false positive. If it is real, treat this machine as>> "%REPORT%"
+            echo   compromised and follow the guidance in READ THIS FIRST above.>> "%REPORT%"
+            echo.>> "%REPORT%"
+            echo   EXIT CODE: 7    FINDINGS COUNTED: !FINDINGS!>> "%REPORT%"
+            echo ====================================================================>> "%REPORT%"
             set "EXIT_CODE=7"
             goto :final_exit
         )
@@ -2820,8 +2842,14 @@ dir "%APPDATA%" /s /a /b 2>nul | findstr /i /c:".exe" /c:".dll">> "%REPORT%" 2>&
 echo.>> "%REPORT%"
 echo --- NTFS Alternate Data Streams in Temp --->> "%REPORT%"
 echo  Command: powershell -Command "Get-ChildItem -Path $env:TEMP -Recurse -EA SilentlyContinue">> "%REPORT%"
-echo $f=$false; if(-not (Test-Path $env:TEMP)){'[SKIPPED] TEMP path unavailable -- ADS check NOT performed.'}else{Get-ChildItem -Path $env:TEMP -Recurse -EA SilentlyContinue ^| ForEach-Object {try{$s=Get-Item $_.FullName -Stream * -EA Stop ^| Where-Object {$_.Stream -ne ':$DATA' -and $_.Stream -ne 'Zone.Identifier'}; if($s){$f=$true;'[ADS FOUND] '+$_.FullName+' :: '+($s.Stream -join ', ')}}catch{}}; if(-not $f){'[OK] No suspicious ADS in Temp.'}} > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+rem The tag was '[ADS FOUND]', which is not a severity, so this check could reach
+rem neither the ledger nor the findings lint -- and Section 14 had no marker and
+rem no :dz_finding anywhere, meaning :dz_section_clean 14 could only ever return
+rem CLEAN. The section printed alternate-data-stream hits and then declared
+rem itself free of issues. It is a real hiding technique (T1564.004), so it is
+rem tagged and routed like every other finding.
+echo $f=$false; if(-not (Test-Path $env:TEMP)){'[SKIPPED] TEMP path unavailable -- ADS check NOT performed.'}else{Get-ChildItem -Path $env:TEMP -Recurse -EA SilentlyContinue ^| ForEach-Object {try{$s=Get-Item $_.FullName -Stream * -EA Stop ^| Where-Object {$_.Stream -ne ':$DATA' -and $_.Stream -ne 'Zone.Identifier'}; if($s){$f=$true;'[WARNING] Alternate data stream (T1564.004): '+$_.FullName+' :: '+($s.Stream -join ', ')}}catch{}}; if(-not $f){'[OK] No suspicious ADS in Temp.'}} > "%PSRUN%"
+call :dz_ps_scan 14 T1564.004 "Alternate data stream in TEMP - content hidden from ordinary file listings"
 
 echo.>> "%REPORT%"
 echo --- System32 Executables Modified Last 14 Days --->> "%REPORT%"
@@ -4356,7 +4384,18 @@ if exist "%SUMCOUNT%" (
 set "SUM_COUNT=%SUM_COUNT: =%"
 set /a SUM_COUNT+=0 2>nul
 if !SUM_COUNT! GTR !FINDINGS! (
-    if defined LEDGER_TOTAL (echo  [INFO] Dashboard tallied !SUM_COUNT! condition^(s^) but the ledger holds !FINDINGS! -- an in-section raise is missing; floored to the dashboard tally.)>> "%REPORT%"
+    rem The alarm used to be gated on `if defined LEDGER_TOTAL`, but that
+    rem variable is only set when the ledger file exists and yields a TOTAL --
+    rem i.e. it is UNDEFINED in exactly the case this alarm is for: the
+    rem dashboard saw conditions and the ledger holds nothing at all. The
+    rem flooring below ran either way, so the worst divergence was the one
+    rem silently corrected. Report both cases, and name the empty-ledger one
+    rem for what it is.
+    if defined LEDGER_TOTAL (
+        echo  [INFO] Dashboard tallied !SUM_COUNT! condition^(s^) but the ledger holds !FINDINGS! -- an in-section raise is missing; floored to the dashboard tally.
+    ) else (
+        echo  [INFO] Dashboard tallied !SUM_COUNT! condition^(s^) but the findings ledger is EMPTY or unreadable -- no section raised anything, so every verdict on this run derives from the dashboard fallback rather than the ledger. Treat the section verdicts with caution and report this.
+    )>> "%REPORT%"
     set "FINDINGS=!SUM_COUNT!"
 )
 if exist "%SUMFILE%" del "%SUMFILE%" >nul 2>&1
@@ -4366,7 +4405,16 @@ if exist "%SUMFILE%" del "%SUMFILE%" >nul 2>&1
 :: audit signal is more actionable for the user than the reboot one. Keep the
 :: reboot-pending message in the report; the exit code now reflects "non-admin
 :: partial audit, also reboot pending" via 6 alone.
-if "%IS_ADMIN%"=="0" if %EXIT_CODE% LSS 5 set "EXIT_CODE=6"
+rem Escalate ONLY from codes that carry no finding information: 0 (nothing
+rem found) and 4 (reboot pending). `LSS 5` also swallowed 1 and 3 -- fatal
+rem errors, reported to the user as a partial audit -- and, worse, 2, which is
+rem the ledger-derived "findings were raised" verdict. A non-admin run that
+rem actually found warnings reported "Partial audit (non-admin)" and discarded
+rem the authoritative derivation that every other exit code comes from. The
+rem partial-audit fact is still in the report and in DEFERRED_COUNT; the exit
+rem code carries the finding.
+if "%IS_ADMIN%"=="0" if %EXIT_CODE%==0 set "EXIT_CODE=6"
+if "%IS_ADMIN%"=="0" if %EXIT_CODE%==4 set "EXIT_CODE=6"
 
 echo.
 echo %C_BOLD%====================================================================%C_RESET%

@@ -91,8 +91,21 @@ if ($detected.Count -eq 0) {
 $harnessEmu = New-Object System.Collections.Generic.HashSet[string]
 if (Test-Path -LiteralPath $Harness) {
     $ht = Get-Content -LiteralPath $Harness -Raw -EA SilentlyContinue
-    foreach ($m in ([regex]::Matches($ht, "Attack\s*=\s*@\(([^)]*)\)"))) {
-        foreach ($t in (Read-Techniques $m.Groups[1].Value)) { [void]$harnessEmu.Add($t) }
+    # Credit a technique ONLY when the case that carries the tag actually plants
+    # the attack. An Invert case plants a BENIGN state and asserts the detection
+    # does NOT fire -- it is a false-positive guard, the opposite of emulation.
+    # Counting its tag let a CORE technique's "must stay emulated" invariant be
+    # satisfied by a test that proves the detection stays silent, which is the
+    # inverse of what the invariant promises.
+    # `\},?` so the LAST case in the array -- which ends `}` with no trailing
+    # comma -- is not silently skipped. Dropping it would make its technique
+    # look unemulated and fail -Strict on a corpus that is actually correct.
+    foreach ($m in ([regex]::Matches($ht, "(?s)@\{(.*?)\n\s*\},?\r?\n"))) {
+        $case = $m.Groups[1].Value
+        if ($case -match 'Invert\s*=\s*\$true') { continue }
+        foreach ($a in ([regex]::Matches($case, "Attack\s*=\s*@\(([^)]*)\)"))) {
+            foreach ($t in (Read-Techniques $a.Groups[1].Value)) { [void]$harnessEmu.Add($t) }
+        }
     }
 } else {
     "[SKIPPED] Harness not found at $Harness -- emulation coverage not computed."

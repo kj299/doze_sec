@@ -610,6 +610,13 @@ jobs:
             $t3 = (.\tools\cross_api_check.ps1 -MarkerDir $md4 -TreeRoot "$tc\Tree" -TasksRoot "$tc\Tasks" -SkipLiveTaskCompare) -join "`n"
             Write-Host ($t3 -split "`n" | Where-Object { $_ -match 'hidden|scheduler|Scheduler' })
             if ($t3 -match '\[OK\] No hidden scheduled tasks') { throw 'claimed a clean hidden-task result while the check could not run' }
+            # The proportion guard is the OTHER path that empties $noSd and
+            # declares the check not performed; it used to print the SKIPPED
+            # line and then, one branch later, "all carry a security
+            # descriptor" -- contradicting itself in adjacent lines.
+            $src = Get-Content .\tools\cross_api_check.ps1 -Raw
+            if ($src -notmatch '\$sdSuppressed') { throw 'the proportion-guard suppression flag is gone -- the self-contradicting [OK] can return' }
+            if ($src -notmatch '\$noSd\.Count -eq 0 -and \$liveOk -and -not \$sdSuppressed') { throw 'the hidden-task [OK] is no longer guarded on both degradation paths' }
             if ($t3 -notmatch '\[SKIPPED\][^\r\n]*hidden-task') { throw 'degraded hidden-task path did not report itself as SKIPPED' }
             if (-not (Test-Path (Join-Path $md4 'dz_crossapi.txt'))) { throw 'degraded hidden-task path raised no finding at all' }
           } finally {
@@ -656,6 +663,37 @@ jobs:
             Remove-Item $md -Recurse -Force -EA SilentlyContinue
           }
           Write-Host "module_inspect.ps1 OK"
+          exit 0
+
+      - name: module_inspect / emulation_coverage regression guards (batch 4)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # An UNBACKED module -- mapped into a process with no file on disk --
+          # is the classic in-memory injection signal. It used to be folded into
+          # the $unsignedOther tally and then explained away as "common for
+          # legitimate third-party software", so the one thing this check exists
+          # to surface was counted as benign.
+          $mi = Get-Content .\tools\module_inspect.ps1 -Raw
+          if ($mi -notmatch "elseif \(\`$v\.Why -match 'not found on disk'\)") { throw 'unbacked modules are no longer separated from the benign unsigned tally' }
+          if ($mi -notmatch 'reflective or unbacked load') { throw 'the unbacked-load finding text is gone' }
+          # Staged paths must be inspected BEFORE the cap can discard them.
+          if ($mi -notmatch '\$ordered = ') { throw 'staged-path-first ordering was removed; the cap can again drop exactly what the check looks for' }
+
+          # An Invert case plants a BENIGN state and asserts the detection does
+          # NOT fire. Counting its Attack tag let a CORE technique's "must stay
+          # emulated" invariant be satisfied by a test proving the detection
+          # stays silent. Prove the parser now skips Invert cases AND still
+          # finds every CORE plant (a too-strict parser would fail -Strict on a
+          # corpus that is actually correct).
+          $out = (.\tools\emulation_coverage.ps1 -SourceDir . -Strict) -join "`n"
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw 'emulation_coverage -Strict failed after the Invert-case fix -- a CORE plant was lost' }
+          $ec = Get-Content .\tools\emulation_coverage.ps1 -Raw
+          if ($ec -notmatch 'Invert[^\r\n]*continue') { throw 'the Invert-case exclusion is gone' }
+          $m = [regex]::Match($out, 'Emulated by a plant\s+:\s+(\d+)')
+          if (-not $m.Success -or [int]$m.Groups[1].Value -lt 20) { throw "per-case parser found only $($m.Groups[1].Value) emulated techniques -- it is dropping cases" }
+          Write-Host "batch 4 regression guards OK"
           exit 0
 
       - name: stalkerware_check.ps1 (covert monitoring; consent inventory must not accuse)
