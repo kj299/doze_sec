@@ -521,6 +521,53 @@ jobs:
           Write-Host "report_seal + persistence timestamps OK"
           exit 0
 
+      - name: log_gap_check.ps1 (records missing with no clear event)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # THE ARITHMETIC, PROVEN. Selective record deletion cannot be planted
+          # safely on a runner, so the decision lives in a pure function and
+          # -SelfTest runs it over fixed inputs. Without this the live run below
+          # would only prove the script executes, not that it can tell a rolled
+          # log from a gutted one -- and those two cases are the whole point.
+          $st = (.\tools\log_gap_check.ps1 -SelfTest) -join "`n"
+          Write-Host $st
+          if ($LASTEXITCODE -ne 0) { throw 'log_gap_check -SelfTest failed: the gap arithmetic is wrong' }
+          if ($st -notmatch 'records removed from the middle') { throw 'self-test no longer covers the middle-removal case' }
+          if ($st -notmatch 'rolled over') { throw 'self-test no longer covers normal rollover -- the false-positive guard is unproven' }
+          $cases = ([regex]::Matches($st, '(?m)^\[OK\]')).Count
+          if ($cases -lt 7) { throw "self-test ran only $cases case(s) -- it is not exercising the decision function" }
+          if ($st -notmatch 'was a false positive') { throw 'the rolled-log regression case was removed -- the CI false positive can return' }
+
+          # LIVE RUN. A healthy runner must not raise: normal circular rollover
+          # keeps the numbering consistent, so a finding here would be a false
+          # positive of exactly the kind this project keeps fixing.
+          $md = Join-Path $env:TEMP ("dz_lg_ci_{0}" -f $PID)
+          New-Item -ItemType Directory -Path $md -Force | Out-Null
+          try {
+            $out = (.\tools\log_gap_check.ps1 -MarkerDir $md) -join "`n"
+            Write-Host $out
+            $seen = ([regex]::Matches($out, "Event log '")).Count
+            if ($seen -lt 3) { throw "only $seen log(s) were inspected -- the check verified almost nothing" }
+            if ($out -notmatch 'event log\(s\) inspected') { throw 'no inspection tally emitted' }
+            $m = Join-Path $md 'dz_loggap.txt'
+            if (Test-Path $m) {
+              $sev = (Get-Content $m).Trim()
+              # A WARNING is acceptable on a runner (the Security log is often
+              # capped small, and PowerShell/Operational may be absent); a
+              # CRITICAL would mean it thinks records were deleted, which on a
+              # fresh CI VM is a false positive worth failing on.
+              if ($sev -eq 'CRITICAL') { throw "log_gap_check reported CRITICAL on a clean runner (false positive): $out" }
+              Write-Host "  (marker $sev on the runner -- acceptable; CRITICAL would not be)"
+            }
+            # The honest framing must survive: this reports an accounting
+            # inconsistency, not proven deletion.
+            $src = Get-Content .\tools\log_gap_check.ps1 -Raw
+            if ($src -notmatch 'not proof of deletion') { throw 'the "inconsistency, not proof" framing was removed' }
+          } finally { Remove-Item $md -Recurse -Force -EA SilentlyContinue }
+          Write-Host "log_gap_check.ps1 OK"
+          exit 0
+
       - name: report_safety.ps1 (Tier 0 preamble + coverage framing)
         shell: powershell
         run: |
