@@ -75,9 +75,13 @@ $lines = @(
     '# and compare the value below. A mismatch means the file changed after the'
     '# audit finished.'
     '#'
-    '# LIMIT: this proves the FILE has not changed since the audit ran. It does'
-    '# not prove the audit itself was not interfered with on a compromised'
-    '# machine. Keep a copy of the digest somewhere off this device.'
+    '# LIMIT: this proves the FILE has not changed since the audit ran.'
+    '# It does not prove the audit itself was not interfered with -- an implant'
+    '# with kernel access could have fed the audit false answers, and this'
+    '# digest would faithfully seal those false answers. Tamper-evidence for'
+    '# the report, not attestation of the machine.'
+    '#'
+    '# Keep a copy of the digest somewhere off this device.'
     ''
     ("SHA256  {0}  {1}  ({2} bytes)" -f $txt.Hash, $txt.Name, $txt.Size)
 )
