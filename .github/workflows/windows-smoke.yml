@@ -568,6 +568,59 @@ jobs:
           Write-Host "log_gap_check.ps1 OK"
           exit 0
 
+      - name: section_coverage.ps1 (a CLEAN verdict must not cover checks that never ran)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $rp = Join-Path $env:TEMP ("dz_sc_ci_{0}.txt" -f $PID)
+          # Section 9 skipped two checks; section 10 skipped none but MENTIONS
+          # the word in prose; section 11 skipped one but found issues, so its
+          # verdict must be left alone.
+          Set-Content -LiteralPath $rp -Encoding UTF8 -Value @(
+            '===================================================================='
+            ' [9/18] DEFENDER AND AV STATUS'
+            '===================================================================='
+            '[SKIPPED] Get-MpPreference failed -- path-exclusion check NOT performed.'
+            '[OK] something fine'
+            '[SKIPPED] Get-MpComputerStatus failed -- core status NOT evaluated.'
+            ' [SECTION 9/18 RESULT: CLEAN -- no issues detected]'
+            '===================================================================='
+            ' [10/18] SMB, RDP, REMOTE ACCESS'
+            '===================================================================='
+            '[OK] everything ran'
+            '[INFO] this line mentions [SKIPPED] in prose but is not one'
+            ' [SECTION 10/18 RESULT: CLEAN -- no issues detected]'
+            '===================================================================='
+            ' [11/18] POWERSHELL'
+            '===================================================================='
+            '[SKIPPED] provider unavailable'
+            ' [SECTION 11/18 RESULT: ISSUES FOUND -- review [WARNING] entries above]'
+          )
+          try {
+            $out = (.\tools\section_coverage.ps1 -Report $rp) -join "`n"
+            Write-Host $out
+            $m = [regex]::Match($out, 'Calibrated (\d+) section verdict')
+            if (-not $m.Success) { throw 'no calibration tally emitted' }
+            if ([int]$m.Groups[1].Value -ne 1) { throw "expected exactly 1 calibrated verdict, got $($m.Groups[1].Value)" }
+            $txt = Get-Content -LiteralPath $rp -Raw
+            # Section 9: calibrated, and CLEAN is still the FIRST token after
+            # RESULT: -- detection_selftest's section-sync assertion reads that
+            # token, and every other consumer keys on 'ISSUES FOUND'.
+            if ($txt -notmatch '\[SECTION 9/18 RESULT: CLEAN -- no issues detected, but 2 checks in this section could NOT run') { throw 'section 9 verdict was not calibrated' }
+            # Section 10: prose mention must NOT count.
+            if ($txt -notmatch '\[SECTION 10/18 RESULT: CLEAN -- no issues detected\]') { throw 'section 10 was calibrated from a prose mention of [SKIPPED]' }
+            # Section 11: ISSUES FOUND is never touched.
+            if ($txt -notmatch '\[SECTION 11/18 RESULT: ISSUES FOUND') { throw 'an ISSUES FOUND verdict was rewritten' }
+            # No denominator invented: the tool cannot know how many checks ran.
+            if ($txt -match 'of \d+ checks') { throw 'a checks-attempted ratio was invented' }
+            # Idempotent: running twice must not double-append.
+            $out2 = (.\tools\section_coverage.ps1 -Report $rp) -join "`n"
+            $m2 = [regex]::Match($out2, 'Calibrated (\d+) section verdict')
+            if ([int]$m2.Groups[1].Value -ne 0) { throw 'second run re-calibrated an already-calibrated verdict' }
+          } finally { Remove-Item $rp -Force -EA SilentlyContinue }
+          Write-Host "section_coverage.ps1 OK"
+          exit 0
+
       - name: report_safety.ps1 (Tier 0 preamble + coverage framing)
         shell: powershell
         run: |
