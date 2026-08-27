@@ -2052,6 +2052,26 @@ echo  Command: powershell -Command "Get-MpPreference">> "%REPORT%"
 echo Get-MpPreference ^| Select-Object DisableRealtimeMonitoring,DisableBehaviorMonitoring,DisableIOAVProtection,DisableScriptScanning,DisableBlockAtFirstSeen,MAPSReporting ^| Format-List > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 echo.>> "%REPORT%"
+echo.>> "%REPORT%"
+echo --- Endpoint Telemetry: what is installed, and is it running? --->> "%REPORT%"
+echo  Command: powershell -File tools\edr_presence.ps1>> "%REPORT%"
+echo  Defender is not the only thing that can watch this machine -- and an agent>> "%REPORT%"
+echo  that is INSTALLED BUT STOPPED is a finding, because someone chose to>> "%REPORT%"
+echo  protect this PC and that protection is not running now. Absence of EDR is>> "%REPORT%"
+echo  reported as context, not as a fault: most home machines have none.>> "%REPORT%"
+del "%TEMP%\dz_edr.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\edr_presence.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\edr_presence.ps1">> "%REPORT%" 2>&1
+) else (
+    echo  [INFO] tools\edr_presence.ps1 not found -- endpoint telemetry check skipped.>> "%REPORT%"
+)
+if exist "%TEMP%\dz_edr.txt" (
+    set "_EDRSEV="
+    set /p _EDRSEV=<"%TEMP%\dz_edr.txt"
+    call :dz_finding !_EDRSEV! 9 T1562.001 "Endpoint protection agent installed but not running"
+    del "%TEMP%\dz_edr.txt" 2>nul
+)
+
 echo --- Defender Core Status: EVALUATED --->> "%REPORT%"
 echo THREAT: the two field dumps above are EVIDENCE, not a verdict. Until this>> "%REPORT%"
 echo check existed, "RealTimeProtectionEnabled : False" and "IsTamperProtected :>> "%REPORT%"

@@ -621,6 +621,52 @@ jobs:
           Write-Host "section_coverage.ps1 OK"
           exit 0
 
+      - name: edr_presence.ps1 (telemetry inventory; a stopped agent is the finding)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $md = Join-Path $env:TEMP ("dz_edr_ci_{0}" -f $PID)
+          New-Item -ItemType Directory -Path $md -Force | Out-Null
+          try {
+            # CLEAN RUNNER: no third-party EDR, no Sysmon. That is the NORM on
+            # a consumer machine, so it must be [INFO] and must NOT write a
+            # marker -- raising it would fire on nearly every home PC and teach
+            # the reader to skip Section 9, the exact false-positive pattern
+            # fixed for ADFS, Azure AD Connect and the default screensaver.
+            $out = (.\tools\edr_presence.ps1 -MarkerDir $md) -join "`n"
+            Write-Host $out
+            if (Test-Path (Join-Path $md 'dz_edr.txt')) {
+              throw ("edr_presence raised on a clean runner (false positive): " + (Get-Content (Join-Path $md 'dz_edr.txt')))
+            }
+            if ($out -notmatch 'Sysmon is not installed') { throw 'no Sysmon verdict emitted' }
+            if ($out -notmatch 'inspected') { throw 'no inspection tally emitted' }
+            # Guard the guard: a run that enumerated nothing must not look clean.
+            $m = [regex]::Match($out, '(\d+) security product/agent\(s\) inspected')
+            if (-not $m.Success) { throw 'inspection tally not parseable' }
+            # The honest framing must survive: absence is context, not a fault.
+            if ($out -notmatch 'Not a fault') { throw 'the "absence is not a fault" framing was removed' }
+
+            # THE ONE BRANCH THAT PRODUCES A FINDING must be proven, not
+            # assumed: plant a STOPPED service using an EDR name the tool
+            # knows, and require a WARNING plus a marker.
+            & sc.exe create SentinelAgent binPath= 'C:\Windows\System32\cmd.exe /c rem dz_ci_probe' start= demand | Out-Null
+            $md2 = Join-Path $env:TEMP ("dz_edr_ci2_{0}" -f $PID)
+            New-Item -ItemType Directory -Path $md2 -Force | Out-Null
+            try {
+              $out2 = (.\tools\edr_presence.ps1 -MarkerDir $md2) -join "`n"
+              Write-Host (($out2 -split "`n" | Where-Object { $_ -match 'SentinelOne|NOT RUNNING' }) -join "`n")
+              if ($out2 -notmatch 'INSTALLED BUT NOT RUNNING') { throw 'a stopped EDR service was not reported' }
+              $m2 = Join-Path $md2 'dz_edr.txt'
+              if (-not (Test-Path $m2)) { throw 'stopped EDR service wrote no marker -- the finding never reaches the ledger' }
+              if ((Get-Content $m2).Trim() -ne 'WARNING') { throw ("expected WARNING, got " + (Get-Content $m2)) }
+            } finally {
+              & sc.exe delete SentinelAgent 2>&1 | Out-Null
+              Remove-Item $md2 -Recurse -Force -EA SilentlyContinue
+            }
+          } finally { Remove-Item $md -Recurse -Force -EA SilentlyContinue }
+          Write-Host "edr_presence.ps1 OK"
+          exit 0
+
       - name: report_safety.ps1 (Tier 0 preamble + coverage framing)
         shell: powershell
         run: |
