@@ -22,6 +22,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Manual kick. Without this there is no way to re-run these checks except by
+  # pushing a commit -- which is exactly the wrong tool when the checks failed
+  # for a reason that has nothing to do with the diff (a runner outage, an
+  # expired token, a transient registry fetch). Keep it: the day you need it,
+  # adding it requires the push you were trying to avoid.
+  workflow_dispatch:
 
 jobs:
   helpers-ps51:
