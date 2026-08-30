@@ -1473,6 +1473,41 @@ jobs:
           .\tests\detection_selftest.ps1 -BatPath .\doze_sec.bat
           exit $LASTEXITCODE
 
+      # A field test on a WSL machine got a credential-capture WARNING for
+      # Microsoft's own P9NP provider (p9np.dll): the netprov branch upgraded
+      # Microsoft-signed-System32 verdicts to WARNING to keep a pre-WSL
+      # three-name allowlist authoritative. Pin the fix: a provider whose DLL
+      # is a Microsoft-signed System32 binary must be [INFO] with no marker.
+      # (The true-positive side is already pinned by detection_selftest.ps1,
+      # which plants dz_selftest_np with a staging-path DLL and requires the
+      # CRITICAL.) Testable at all only because this PR gave the tool a
+      # -MarkerDir parameter.
+      - name: "Network provider: Microsoft-signed System32 provider is context, not a finding"
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $npOrder = 'HKLM:\SYSTEM\CurrentControlSet\Control\NetworkProvider\Order'
+          $prev = (Get-ItemProperty -Path $npOrder -Name ProviderOrder).ProviderOrder
+          $svc = 'HKLM:\SYSTEM\CurrentControlSet\Services\dz_ci_msnp\NetworkProvider'
+          $md = Join-Path $env:TEMP ("dz_np_ci_{0}" -f $PID)
+          try {
+            Set-ItemProperty -Path $npOrder -Name ProviderOrder -Value ($prev + ',dz_ci_msnp')
+            New-Item -Path $svc -Force | Out-Null
+            Set-ItemProperty -Path $svc -Name ProviderPath -Value 'C:\Windows\System32\ntlanman.dll'
+            $out = (.\tools\logon_persistence.ps1 -MarkerDir $md) -join "`n"
+            if (-not $out) { throw 'logon_persistence produced no output -- nothing was tested' }
+            $npLines = ($out -split "`n" | Where-Object { $_ -match 'dz_ci_msnp' }) -join "`n"
+            Write-Host $npLines
+            if ($npLines -notmatch '\[INFO\]') { throw 'a Microsoft-signed System32 provider was not reported as INFO (the WSL/P9NP false positive)' }
+            if ($npLines -match '\[WARNING\]|\[CRITICAL\]') { throw 'a Microsoft-signed System32 provider was flagged as a finding' }
+            if (Test-Path (Join-Path $md 'dz_logon_netprov.txt')) { throw 'a Microsoft-signed System32 provider raised the netprov marker' }
+            Write-Host 'Microsoft-signed provider correctly reported as context'
+          } finally {
+            Set-ItemProperty -Path $npOrder -Name ProviderOrder -Value $prev
+            Remove-Item 'HKLM:\SYSTEM\CurrentControlSet\Services\dz_ci_msnp' -Recurse -Force -EA SilentlyContinue
+            Remove-Item $md -Recurse -Force -EA SilentlyContinue
+          }
+
       # A real machine's report (field test, 2026-08-30) flagged "System event
       # log was cleared" off a smart-card-reader driver's Event 104: event IDs
       # are unique only PER PROVIDER, and the query matched the bare ID. This
