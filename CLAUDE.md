@@ -82,7 +82,13 @@ body prints a finding must declare `ISSUES FOUND`.
 
 The lint above is Linux/pwsh and cannot exercise cmd.exe, Windows
 PowerShell 5.1 runtime behavior, real WMI/CIM, `findstr`, or detect a
-runtime hang. `windows-smoke.yml` runs on a real `windows-latest` runner:
+runtime hang. `windows-smoke.yml` runs on a real `windows-latest` runner —
+**on pushes to `main` and manual dispatch only**, not on PRs: the repo is
+private (metered minutes) and these five Windows jobs bill at 2x, which
+exhausted a month's quota mid-cycle. PRs are gated by the Linux lint plus
+`tests\manual_ci.ps1` run elevated on a real Windows machine (it mirrors
+these jobs' invocations and prints a PASS/FAIL summary; during the 2026-08
+outage that manual route caught five real bugs CI had never seen). The jobs:
 
 - **helpers-ps51**: parses every `tools/*.ps1` with the 5.1 parser and
   executes the read-only ones (scheduled tasks, browser extensions,

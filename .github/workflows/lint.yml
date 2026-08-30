@@ -11,6 +11,10 @@ on:
   # adding it requires the push you were trying to avoid.
   workflow_dispatch:
 
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   batch-comment-lint:
     name: "Batch lint: no '::' inside ( ) blocks"
