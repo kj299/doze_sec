@@ -26,6 +26,10 @@
 # remove them again in their cleanup blocks -- run this only on a machine
 # where that is acceptable, and read any FAIL before re-running.
 #
+# If this run is HARD-KILLED (window closed, machine reset) mid-flight, the
+# planted artifacts may be left behind. The fix is to run the standalone panic
+# button once, elevated:  .\tests\cleanup_selftest.ps1
+#
 # Windows PowerShell 5.1 compatible. Requires elevation (the harnesses do).
 # Exit 0 = every step passed. Exit 1 = something failed or nothing ran.
 
@@ -106,14 +110,33 @@ try {
         Write-Host ''
         Write-Host '(-Quick: skipping both detection harnesses)'
     } else {
-        Invoke-Step 'detection harness (doze_sec.bat)' {
-            & .\tests\detection_selftest.ps1 -BatPath .\doze_sec.bat
-            if ($LASTEXITCODE -ne 0) { throw ("exit code {0}" -f $LASTEXITCODE) }
-        }
+        # The harnesses plant known-bad artifacts. Whatever happens to the
+        # assertions -- pass, fail, or an exception mid-run -- the teardown must
+        # run so the machine is never left carrying a plant. (A hard kill of this
+        # process, e.g. closing the window, still bypasses this; the fix then is
+        # to run tests\cleanup_selftest.ps1 by hand -- see the note at the top.)
+        try {
+            Invoke-Step 'detection harness (doze_sec.bat)' {
+                & .\tests\detection_selftest.ps1 -BatPath .\doze_sec.bat
+                if ($LASTEXITCODE -ne 0) { throw ("exit code {0}" -f $LASTEXITCODE) }
+            }
 
-        Invoke-Step 'detection harness (doze_sec_noAdmin.bat, elevated adaptive path)' {
-            & .\tests\detection_selftest.ps1 -BatPath .\doze_sec_noAdmin.bat
-            if ($LASTEXITCODE -ne 0) { throw ("exit code {0}" -f $LASTEXITCODE) }
+            Invoke-Step 'detection harness (doze_sec_noAdmin.bat, elevated adaptive path)' {
+                & .\tests\detection_selftest.ps1 -BatPath .\doze_sec_noAdmin.bat
+                if ($LASTEXITCODE -ne 0) { throw ("exit code {0}" -f $LASTEXITCODE) }
+            }
+        } finally {
+            Write-Host ''
+            Write-Host '== Post-run teardown (planted artifacts) =='
+            # Hygiene, not a graded step: a teardown problem is printed loudly
+            # but does not by itself flip the suite verdict.
+            try { & .\tests\cleanup_selftest.ps1 -Quiet }
+            catch { Write-Host ("[WARNING] teardown raised: {0} -- run tests\cleanup_selftest.ps1 by hand" -f $_.Exception.Message) }
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host '[WARNING] teardown reported an error -- run tests\cleanup_selftest.ps1 by hand and review.'
+            } else {
+                Write-Host '[OK] planted artifacts removed (or already absent).'
+            }
         }
     }
 } finally { Pop-Location }
