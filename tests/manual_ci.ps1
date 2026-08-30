@@ -48,6 +48,19 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 $root = Split-Path -Parent $PSScriptRoot
 $results = @()
 
+# The detection harnesses plant a known-bad state, run the audit, and assert the
+# scanner reported exactly that state -- so they assume the machine holds still
+# for the duration. Changing security settings mid-run (enabling the firewall,
+# turning on audit policy, editing Defender) moves the ground truth underneath a
+# harness and makes its strict checks flag a mismatch that is not a real defect.
+# A field run hit exactly this. So: do not change security settings while this
+# runs, and let any you just made settle first.
+Write-Host ''
+Write-Host 'NOTE: the detection harnesses assume a quiescent machine. Do not change'
+Write-Host '      security settings (firewall, audit policy, Defender, accounts)'
+Write-Host '      while this is running -- it will take ~15-25 minutes.'
+Write-Host ''
+
 function Invoke-Step {
     param([string]$Name, [scriptblock]$Body)
     Write-Host ''
