@@ -18,16 +18,28 @@ name: windows-smoke
 # Server-edition OS gate; -sdu/-nosrp skip the network threat-list pull and
 # the restore point.
 
+# TRIGGER ECONOMICS: this repository is private, so Actions minutes are
+# metered, and these five windows-latest jobs bill at 2x with 20-35 minute
+# timeouts. Running them on every PR push exhausted the month's quota
+# mid-cycle (2026-08), after which every run "failed" in seconds with zero
+# billable compute. So this suite runs on pushes to main and on manual
+# dispatch only; PRs are gated by the Linux lint workflow plus a manual pass
+# of tests/manual_ci.ps1 on a real Windows machine -- the route that, during
+# the outage, caught five real bugs CI had never seen.
 on:
   push:
     branches: [main]
-  pull_request:
   # Manual kick. Without this there is no way to re-run these checks except by
   # pushing a commit -- which is exactly the wrong tool when the checks failed
   # for a reason that has nothing to do with the diff (a runner outage, an
   # expired token, a transient registry fetch). Keep it: the day you need it,
   # adding it requires the push you were trying to avoid.
   workflow_dispatch:
+
+# A superseded run's minutes are pure waste at 2x billing.
+concurrency:
+  group: windows-smoke-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   helpers-ps51:

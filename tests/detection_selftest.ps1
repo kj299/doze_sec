@@ -381,6 +381,17 @@ $cases = @(
         # classify a disabled profile as off. The harness previously only ever
         # planted the all-enabled state, so the disabled path went untested.
         Expect = 'Firewall DISABLED on'
+        # On a real workstation, Windows Security / Defender Firewall
+        # auto-remediation or a Group Policy refresh can turn a disabled profile
+        # back ON during the ~10 minutes the audit takes. The detector is then
+        # correctly reporting an enabled firewall and there is nothing to find.
+        # A field run hit this on two consecutive attempts, failing a DIFFERENT
+        # bat each time -- the coin-flip signature of a race, not a code defect.
+        # Void the case only when the profile is observably enabled again at
+        # scoreboard time (before cleanup restores it), so a genuine miss --
+        # profile still off, detector silent -- still counts as a regression.
+        VoidIf     = { (Get-NetFirewallProfile -Profile 'Private' -EA SilentlyContinue).Enabled -eq $true }
+        VoidReason = "the Private firewall profile was re-enabled by the environment (Windows Security auto-remediation or Group Policy) before the audit read it, so the disabled-firewall path had nothing to detect"
         Plant  = { $script:fwPrevEnabled = (Get-NetFirewallProfile -Profile $fwProfile).Enabled
                    Set-NetFirewallProfile -Profile $fwProfile -Enabled False }
         # Cleanup restores the profile to ENABLED unconditionally, and never to
@@ -655,6 +666,21 @@ try {
         # Invert cases plant a BENIGN state: the pattern must be ABSENT
         # (false-positive guard); a match means the audit cried wolf.
         $pass = if ($c.Invert) { -not $hit } else { $hit }
+        # A case may declare VoidIf: a post-audit test for "the environment
+        # undid my plant while the audit was running", which means the detector
+        # was never given anything to detect. Only consulted when the detection
+        # did NOT fire, and it reads LIVE state rather than trusting a flag --
+        # so a genuine regression (planted state still in place, detector
+        # silent) still fails. Reported as SKIP, never as a pass: an untested
+        # detection must never look like a verified one.
+        if ((-not $pass) -and $c.VoidIf) {
+            $voided = $false
+            try { $voided = [bool](& $c.VoidIf) } catch { $voided = $false }
+            if ($voided) {
+                Write-Host ("  [ SKIP     ] {0}  -- NOT TESTED this run: {1}" -f $c.Name, $c.VoidReason)
+                continue
+            }
+        }
         if ($c.Tier -eq 'required') {
             if ($pass) { Write-Host ("  [ OK       ] {0}" -f $c.Name) }
             elseif ($c.Invert) { Write-Host ("  [ REGRESS  ] {0}  -- false positive fired on a benign state" -f $c.Name); $requiredFail++ }
