@@ -16,7 +16,9 @@
 #        HKLM\SYSTEM\CurrentControlSet\Control\NetworkProvider\Order\ProviderOrder
 #        + HKLM\SYSTEM\CurrentControlSet\Services\<name>\NetworkProvider\ProviderPath
 #        A rogue network provider captures CLEARTEXT credentials at every logon.
-#        Legit order is only RDPNP,LanmanWorkstation,webclient.
+#        Default order is RDPNP,LanmanWorkstation,webclient; other providers
+#        whose DLL is Microsoft-signed under System32 (WSL's P9NP being the
+#        common case) are reported as [INFO] context, per the tiering below.
 #
 #   3. Credential Providers / Filters (LogonUI, logon + unlock)
 #        HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\
@@ -211,11 +213,21 @@ if (-not $ok) {
         $any = $true
         $pp = (Get-ItemProperty -Path ("HKLM:\SYSTEM\CurrentControlSet\Services\{0}\NetworkProvider" -f $np) -Name ProviderPath -EA SilentlyContinue).ProviderPath
         $v = Get-DllVerdict -Path $pp
-        $sev = Get-MaxSev $sev $v.Sev
-        ("[{0}] Non-default network provider '{1}' -> {2} ({3})" -f (@{CRITICAL='CRITICAL';WARNING='WARNING';OK='WARNING'}[$v.Sev]), $np, $pp, $v.Why)
+        if ($v.Sev -eq 'OK') {
+            # Microsoft-signed under System32 is clean, exactly as the tiering
+            # header promises. This branch used to upgrade OK verdicts to
+            # WARNING to keep its pre-WSL three-name allowlist authoritative --
+            # and a field test then flagged WSL's own P9NP (p9np.dll, shipped
+            # by Windows on every WSL machine) as credential capture. Surface
+            # the provider as context, not as a finding.
+            ("[INFO] Non-default network provider '{0}' -> {1} ({2}) -- Microsoft-signed system DLL; WSL's P9NP is the common case." -f $np, $pp, $v.Why)
+        } else {
+            $sev = Get-MaxSev $sev $v.Sev
+            ("[{0}] Non-default network provider '{1}' -> {2} ({3})" -f $v.Sev, $np, $pp, $v.Why)
+        }
     }
-    if ($any) { if ($sev -eq 'OK') { $sev = 'WARNING' }; Write-Marker 'netprov' $sev }
-    else { '[OK] Only default network providers present (RDPNP, LanmanWorkstation, webclient).' }
+    if ($sev -ne 'OK') { Write-Marker 'netprov' $sev }
+    elseif (-not $any) { '[OK] Only default network providers present (RDPNP, LanmanWorkstation, webclient).' }
 }
 
 # ---- 3. Credential Providers / Filters -----------------------------------
