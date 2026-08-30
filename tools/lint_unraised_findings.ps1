@@ -185,6 +185,35 @@ if ($staleAllow.Count -gt 0) {
     foreach ($a in $staleAllow) { "  - [$($a.File)] $($a.Match)" }
 }
 
+# ---- Marker writes must not be able to fail silently ----------------------
+# A field test on a real Windows machine found Write-Marker doing Set-Content
+# -EA SilentlyContinue into a directory it never created: the write failed, the
+# failure was swallowed, and a real [WARNING] printed into the report while the
+# ledger -- and so the section verdict, the findings count and the exit code --
+# never heard about it. Twelve tools carried the identical function.
+#
+# This lint is static and cannot prove a write LANDS; tests/marker_selftest.ps1
+# does that at runtime. What it can do is refuse the two shapes that made the
+# write losable in the first place.
+$markerBad = @()
+foreach ($tf in (Get-ChildItem -LiteralPath (Join-Path $Root 'tools') -Filter '*.ps1' | Sort-Object Name)) {
+    $txt = Get-Content -LiteralPath $tf.FullName -Raw
+    if ($txt -notmatch 'function\s+Write-Marker') { continue }
+    if ($txt -match 'Set-Content[^\r\n]*dz_[^\r\n]*-EA\s+SilentlyContinue') {
+        $markerBad += ("{0}: marker Set-Content uses -EA SilentlyContinue -- a failed write silently drops the finding" -f $tf.Name)
+    }
+    if ($txt -notmatch 'Test-Path\s+-LiteralPath\s+\$MarkerDir') {
+        $markerBad += ("{0}: Write-Marker does not ensure its marker directory exists before writing" -f $tf.Name)
+    }
+}
+if ($markerBad.Count) {
+    ''
+    "[FAIL] $($markerBad.Count) marker write(s) can lose a finding between report and ledger:"
+    foreach ($m in $markerBad) { "  - $m" }
+    exit 1
+}
+"[OK] $(@(Get-ChildItem -LiteralPath (Join-Path $Root 'tools') -Filter '*.ps1' | Where-Object { (Get-Content -LiteralPath $_.FullName -Raw) -match 'function\s+Write-Marker' }).Count) marker-writing tool(s) ensure their directory and surface write failures."
+
 if ($failures.Count -eq 0) {
     '[OK] Every check that prints a severity also raises it into the findings ledger.'
     exit 0

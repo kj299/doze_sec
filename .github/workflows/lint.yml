@@ -33,6 +33,21 @@ jobs:
       - name: Run lint_unraised_findings.ps1
         run: pwsh -NoProfile -File tools/lint_unraised_findings.ps1
 
+  marker-selftest:
+    name: "Marker selftest: a finding actually reaches the ledger"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The findings lint is STATIC: it proves a check routes through a marker,
+      # not that the write lands. A field test on a real Windows machine found
+      # twelve tools whose marker write failed silently into a directory they
+      # never created -- the finding printed into the report while the section
+      # verdict, the findings count and the exit code all said clean. This runs
+      # each tool's real Write-Marker against a nonexistent directory and
+      # requires the marker to appear.
+      - name: Run tests/marker_selftest.ps1
+        run: pwsh -NoProfile -File tests/marker_selftest.ps1
+
   docs-drift-lint:
     name: "Docs lint: the README matches the code"
     runs-on: ubuntu-latest

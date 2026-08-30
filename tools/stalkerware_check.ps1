@@ -70,7 +70,14 @@ $psNoteProps = @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider
 function Write-Marker {
     param([string]$Name, [string]$Sev)
     if ($Sev -eq 'OK') { return }
-    Set-Content -LiteralPath (Join-Path $MarkerDir ("dz_{0}.txt" -f $Name)) -Value $Sev -Encoding ASCII -EA SilentlyContinue
+    # The marker IS the route to the findings ledger: a failed write here turns
+    # a real finding into a CLEAN section. Create the directory rather than
+    # assume it, and let a genuine write failure print instead of vanishing --
+    # an -EA SilentlyContinue on this write cost a field test its finding.
+    if (-not (Test-Path -LiteralPath $MarkerDir)) {
+        New-Item -ItemType Directory -Path $MarkerDir -Force -EA SilentlyContinue | Out-Null
+    }
+    Set-Content -LiteralPath (Join-Path $MarkerDir ("dz_{0}.txt" -f $Name)) -Value $Sev -Encoding ASCII
 }
 function Get-MaxSev {
     param([string]$A, [string]$B)
