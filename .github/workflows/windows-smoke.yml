@@ -632,7 +632,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $md = Join-Path $env:TEMP ("dz_edr_ci_{0}" -f $PID)
-          New-Item -ItemType Directory -Path $md -Force | Out-Null
+          # Deliberately NOT pre-created: Write-Marker must create the marker
+          # directory itself. A field test lost a real WARNING to exactly this
+          # -- the write failed silently into a missing directory.
           try {
             # CLEAN RUNNER: no third-party EDR, no Sysmon. That is the NORM on
             # a consumer machine, so it must be [INFO] and must NOT write a
@@ -657,7 +659,6 @@ jobs:
             # knows, and require a WARNING plus a marker.
             & sc.exe create SentinelAgent binPath= 'C:\Windows\System32\cmd.exe /c rem dz_ci_probe' start= demand | Out-Null
             $md2 = Join-Path $env:TEMP ("dz_edr_ci2_{0}" -f $PID)
-            New-Item -ItemType Directory -Path $md2 -Force | Out-Null
             try {
               $out2 = (.\tools\edr_presence.ps1 -MarkerDir $md2) -join "`n"
               Write-Host (($out2 -split "`n" | Where-Object { $_ -match 'SentinelOne|NOT RUNNING' }) -join "`n")
@@ -665,9 +666,35 @@ jobs:
               $m2 = Join-Path $md2 'dz_edr.txt'
               if (-not (Test-Path $m2)) { throw 'stopped EDR service wrote no marker -- the finding never reaches the ledger' }
               if ((Get-Content $m2).Trim() -ne 'WARNING') { throw ("expected WARNING, got " + (Get-Content $m2)) }
+              # The summary must not contradict the finding above it: a stopped
+              # agent was DETECTED, so the report may not also claim none was.
+              if ($out2 -match 'No third-party EDR agent was detected') { throw 'summary claims no third-party EDR while warning about a stopped one' }
             } finally {
               & sc.exe delete SentinelAgent 2>&1 | Out-Null
               Remove-Item $md2 -Recurse -Force -EA SilentlyContinue
+            }
+
+            # A machine never onboarded to Defender for Endpoint ships the
+            # 'Sense' service stopped. That is the NORM on consumer PCs and
+            # must be [INFO] with no marker -- a field test on a real home PC
+            # hit this exact false positive. Only plant if the runner has no
+            # real Sense service of its own.
+            $senseExists = $true
+            try { Get-Service -Name Sense -EA Stop | Out-Null } catch { $senseExists = $false }
+            if (-not $senseExists) {
+              & sc.exe create Sense binPath= 'C:\Windows\System32\cmd.exe /c rem dz_ci_probe' start= demand | Out-Null
+              $md3 = Join-Path $env:TEMP ("dz_edr_ci3_{0}" -f $PID)
+              try {
+                $out3 = (.\tools\edr_presence.ps1 -MarkerDir $md3) -join "`n"
+                if ($out3 -match "INSTALLED BUT NOT RUNNING \(service 'Sense'") { throw 'a never-onboarded Sense service was flagged as a stopped EDR (false positive)' }
+                if ($out3 -notmatch 'never been onboarded') { throw 'no onboarding-state explanation emitted for the inert Sense service' }
+                if (Test-Path (Join-Path $md3 'dz_edr.txt')) { throw 'inert Sense service raised a marker (false positive)' }
+              } finally {
+                & sc.exe delete Sense 2>&1 | Out-Null
+                Remove-Item $md3 -Recurse -Force -EA SilentlyContinue
+              }
+            } else {
+              Write-Host 'Sense exists on this runner; skipping the never-onboarded plant.'
             }
           } finally { Remove-Item $md -Recurse -Force -EA SilentlyContinue }
           Write-Host "edr_presence.ps1 OK"
