@@ -40,7 +40,12 @@
 # Executed by the helpers-ps51 CI job.
 
 [CmdletBinding()]
-param()
+param(
+    # Where the severity markers go. The bat calls this with no arguments, so
+    # the default is the previous hardcoded behavior; the parameter exists so
+    # the marker contract can be tested without writing into the real TEMP.
+    [string]$MarkerDir = $env:TEMP
+)
 
 $ErrorActionPreference = 'Continue'
 
@@ -156,7 +161,17 @@ function Get-DllVerdict {
 # Escalate a running severity ('OK' < 'WARNING' < 'CRITICAL').
 function Get-MaxSev { param($a, $b); if ($a -eq 'CRITICAL' -or $b -eq 'CRITICAL') { 'CRITICAL' } elseif ($a -eq 'WARNING' -or $b -eq 'WARNING') { 'WARNING' } else { 'OK' } }
 
-function Write-Marker { param([string]$Type, [string]$Sev); Set-Content -LiteralPath (Join-Path $env:TEMP ("dz_logon_{0}.txt" -f $Type)) -Value $Sev -Encoding ASCII -EA SilentlyContinue }
+function Write-Marker {
+    param([string]$Type, [string]$Sev)
+    # The marker IS the route to the findings ledger: a failed write here turns
+    # a real finding into a CLEAN section. Create the directory rather than
+    # assume it, and let a genuine write failure print instead of vanishing --
+    # an -EA SilentlyContinue on this write cost a field test its finding.
+    if (-not (Test-Path -LiteralPath $MarkerDir)) {
+        New-Item -ItemType Directory -Path $MarkerDir -Force -EA SilentlyContinue | Out-Null
+    }
+    Set-Content -LiteralPath (Join-Path $MarkerDir ("dz_logon_{0}.txt" -f $Type)) -Value $Sev -Encoding ASCII
+}
 
 # ---- 1. Winlogon Notify --------------------------------------------------
 '--- [T1547.004] Winlogon Notify packages (fire on logon/lock/UNLOCK) ---'
