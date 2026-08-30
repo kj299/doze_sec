@@ -3216,9 +3216,9 @@ echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
 echo --- Log Cleared (1102=Security cleared, 104=System cleared) --->> "%REPORT%"
-echo  Command: wevtutil qe Security /q:"*[System[^(EventID=1102^)]]" /c:10 /rd:true /f:text>> "%REPORT%"
-wevtutil qe Security /q:"*[System[(EventID=1102)]]" /c:10 /rd:true /f:text>> "%REPORT%" 2>&1
-wevtutil qe System /q:"*[System[(EventID=104)]]" /c:10 /rd:true /f:text>> "%REPORT%" 2>&1
+echo  Command: wevtutil qe Security /q:"*[System[Provider[@Name='Microsoft-Windows-Eventlog'] and ^(EventID=1102^)]]" /c:10 /rd:true /f:text>> "%REPORT%"
+wevtutil qe Security /q:"*[System[Provider[@Name='Microsoft-Windows-Eventlog'] and (EventID=1102)]]" /c:10 /rd:true /f:text>> "%REPORT%" 2>&1
+wevtutil qe System /q:"*[System[Provider[@Name='Microsoft-Windows-Eventlog'] and (EventID=104)]]" /c:10 /rd:true /f:text>> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- New Account Created - Event 4720 --->> "%REPORT%"
@@ -3256,8 +3256,8 @@ del "%TEMP%\dz_ev1102_hit.txt" 2>nul
 del "%TEMP%\dz_ev104_hit.txt" 2>nul
 del "%TEMP%\dz_ev4720_hit.txt" 2>nul
 del "%TEMP%\dz_ev4732_hit.txt" 2>nul
-echo $e=Get-WinEvent -FilterHashtable @{LogName='Security';Id=1102} -MaxEvents 1 -EA SilentlyContinue;if($e){'[CRITICAL] Security event log was CLEARED at '+$e.TimeCreated+' -- attacker erased evidence (T1070.001). Treat as active compromise.';Set-Content -LiteralPath "$env:TEMP\dz_ev1102_hit.txt" -Value hit}else{'[OK] Security event log has not been cleared.'} > "%PSRUN%"
-echo $e=Get-WinEvent -FilterHashtable @{LogName='System';Id=104} -MaxEvents 1 -EA SilentlyContinue;if($e){'[WARNING] System event log was cleared at '+$e.TimeCreated+' -- often benign (updates/driver installs/disk cleanup); the Security 1102 check above is the attacker cover-up signal.';Set-Content -LiteralPath "$env:TEMP\dz_ev104_hit.txt" -Value hit}else{'[OK] System event log has not been cleared.'} >> "%PSRUN%"
+echo $e=Get-WinEvent -FilterHashtable @{LogName='Security';Id=1102;ProviderName='Microsoft-Windows-Eventlog'} -MaxEvents 1 -EA SilentlyContinue;if($e){'[CRITICAL] Security event log was CLEARED at '+$e.TimeCreated+' -- attacker erased evidence (T1070.001). Treat as active compromise.';Set-Content -LiteralPath "$env:TEMP\dz_ev1102_hit.txt" -Value hit}else{'[OK] Security event log has not been cleared.'} > "%PSRUN%"
+echo $e=Get-WinEvent -FilterHashtable @{LogName='System';Id=104;ProviderName='Microsoft-Windows-Eventlog'} -MaxEvents 1 -EA SilentlyContinue;if($e){'[WARNING] System event log was cleared at '+$e.TimeCreated+' -- often benign (updates/driver installs/disk cleanup); the Security 1102 check above is the attacker cover-up signal.';Set-Content -LiteralPath "$env:TEMP\dz_ev104_hit.txt" -Value hit}else{'[OK] System event log has not been cleared.'} >> "%PSRUN%"
 echo $e=@(Get-WinEvent -FilterHashtable @{LogName='Security';Id=4720} -MaxEvents 5 -EA SilentlyContinue);if($e.Count -gt 0){'[WARNING] New local account(s) created: '+$e.Count+' event(s) (T1136.001) -- review the names listed above.';Set-Content -LiteralPath "$env:TEMP\dz_ev4720_hit.txt" -Value hit}else{'[OK] No new local account creation events (4720).'} >> "%PSRUN%"
 echo $e=@(Get-WinEvent -FilterHashtable @{LogName='Security';Id=4732} -MaxEvents 5 -EA SilentlyContinue);if($e.Count -gt 0){'[WARNING] Account(s) added to a privileged group: '+$e.Count+' event(s) (T1098) -- review the names listed above.';Set-Content -LiteralPath "$env:TEMP\dz_ev4732_hit.txt" -Value hit}else{'[OK] No unexpected additions to Administrators (4732).'} >> "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
@@ -4308,8 +4308,8 @@ echo. >> "%PSRUN%"
 
 :: ===== ACTIVE COMPROMISE =============================================
 echo sec 'ACTIVE COMPROMISE INDICATORS' >> "%PSRUN%"
-echo $ev=Get-WinEvent -FilterHashtable @{LogName='Security';Id=1102} -MaxEvents 1 -EA SilentlyContinue;if($ev){ck 'CRIT' 'Security event log was CLEARED' ('At '+$ev.TimeCreated+' -- attacker erased evidence. Treat as active compromise.')}else{ck 'PASS' 'Security event log has not been cleared'} >> "%PSRUN%"
-echo $ev=Get-WinEvent -FilterHashtable @{LogName='System';Id=104} -MaxEvents 1 -EA SilentlyContinue;if($ev){ck 'WARN' 'System event log was cleared' ('At '+$ev.TimeCreated+' -- often benign: Windows updates, driver installs and disk cleanup clear the System log. The Security log 1102 is the attacker cover-up target and is checked separately above.')}else{ck 'PASS' 'System event log has not been cleared'} >> "%PSRUN%"
+echo $ev=Get-WinEvent -FilterHashtable @{LogName='Security';Id=1102;ProviderName='Microsoft-Windows-Eventlog'} -MaxEvents 1 -EA SilentlyContinue;if($ev){ck 'CRIT' 'Security event log was CLEARED' ('At '+$ev.TimeCreated+' -- attacker erased evidence. Treat as active compromise.')}else{ck 'PASS' 'Security event log has not been cleared'} >> "%PSRUN%"
+echo $ev=Get-WinEvent -FilterHashtable @{LogName='System';Id=104;ProviderName='Microsoft-Windows-Eventlog'} -MaxEvents 1 -EA SilentlyContinue;if($ev){ck 'WARN' 'System event log was cleared' ('At '+$ev.TimeCreated+' -- often benign: Windows updates, driver installs and disk cleanup clear the System log. The Security log 1102 is the attacker cover-up target and is checked separately above.')}else{ck 'PASS' 'System event log has not been cleared'} >> "%PSRUN%"
 echo $ev=Get-WinEvent -FilterHashtable @{LogName='Security';Id=4720} -MaxEvents 5 -EA SilentlyContinue;if($ev){ck 'WARN' "New local accounts created: $(@($ev).Count) events" 'Review account names in Section 16'}else{ck 'PASS' 'No new local account creation events - 4720'} >> "%PSRUN%"
 echo $ev=Get-WinEvent -FilterHashtable @{LogName='Security';Id=4732} -MaxEvents 5 -EA SilentlyContinue;if($ev){ck 'WARN' "Users added to Administrators: $(@($ev).Count) events" 'Review account names in Section 16'}else{ck 'PASS' 'No unexpected additions to Administrators group - 4732'} >> "%PSRUN%"
 echo $pp=(netsh interface portproxy show all 2^>$null)^|Out-String;if($pp -match '\d+\.\d+'){ck 'CRIT' 'netsh portproxy tunnel rules are ACTIVE' 'Volt Typhoon C2 IOC. Remove: netsh interface portproxy reset. See Section 17.'}else{ck 'PASS' 'No netsh portproxy tunnel rules - Volt Typhoon check'} >> "%PSRUN%"

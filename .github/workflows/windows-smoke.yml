@@ -1473,6 +1473,60 @@ jobs:
           .\tests\detection_selftest.ps1 -BatPath .\doze_sec.bat
           exit $LASTEXITCODE
 
+      # A real machine's report (field test, 2026-08-30) flagged "System event
+      # log was cleared" off a smart-card-reader driver's Event 104: event IDs
+      # are unique only PER PROVIDER, and the query matched the bare ID. This
+      # pins the provider-filtered query in BOTH directions, and tests the
+      # SHIPPED fragment extracted from doze_sec.bat -- not a copy that can
+      # drift. Runs after the main harness because direction (b) clears this
+      # ephemeral runner's System log.
+      - name: "Event 104 provider filter: benign 104 stays quiet, a real clear fires"
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $line = (Select-String -Path .\doze_sec.bat -Pattern '^echo .*dz_ev104_hit' | Select-Object -First 1).Line
+          if (-not $line) { throw 'could not find the ev104 fragment in doze_sec.bat' }
+          $lineNA = (Select-String -Path .\doze_sec_noAdmin.bat -Pattern '^echo .*dz_ev104_hit' | Select-Object -First 1).Line
+          if ($lineNA -ne $line) { throw 'ev104 fragment differs between doze_sec.bat and doze_sec_noAdmin.bat' }
+          foreach ($bat in '.\doze_sec.bat','.\doze_sec_noAdmin.bat') {
+            $l1102 = (Select-String -Path $bat -Pattern '^echo .*dz_ev1102_hit' | Select-Object -First 1).Line
+            if ($l1102 -notmatch "ProviderName='Microsoft-Windows-Eventlog'") { throw "$bat 1102 query lost its provider filter" }
+          }
+          $frag = $line -replace '^\s*echo ', '' -replace ' >> "%PSRUN%"\s*$', ''
+          if ($frag -notmatch "ProviderName='Microsoft-Windows-Eventlog'") { throw 'the ev104 query lost its provider filter' }
+          $marker = Join-Path $env:TEMP 'dz_ev104_hit.txt'
+
+          # (a) FALSE-POSITIVE direction -- the field report's exact shape: a
+          # non-eventlog provider's 104 in the System log must NOT read as a
+          # cleared log. Skipped only if the runner image somehow already
+          # carries a genuine clear event.
+          $pre = Get-WinEvent -FilterHashtable @{LogName='System';Id=104;ProviderName='Microsoft-Windows-Eventlog'} -MaxEvents 1 -EA SilentlyContinue
+          if ($pre) {
+            Write-Host 'runner image already carries a genuine 104; skipping direction (a)'
+          } else {
+            if (-not [System.Diagnostics.EventLog]::SourceExists('dz_ci_benign104')) {
+              New-EventLog -LogName System -Source dz_ci_benign104
+            }
+            Write-EventLog -LogName System -Source dz_ci_benign104 -EventId 104 -EntryType Information -Message 'benign 104: smart-card-reader-shaped noise, not a log clear'
+            Remove-Item $marker -Force -EA SilentlyContinue
+            $out = Invoke-Expression $frag | Out-String
+            Write-Host $out.Trim()
+            if ($out -notmatch '\[OK\]') { throw 'benign non-eventlog 104 was reported as a cleared log (the field false positive)' }
+            if (Test-Path $marker) { throw 'benign 104 raised the marker' }
+          }
+
+          # (b) TRUE-POSITIVE direction, never previously proven: actually
+          # clear this ephemeral runner's System log. The clear itself writes
+          # 104 from Microsoft-Windows-Eventlog into the fresh log.
+          wevtutil cl System
+          Start-Sleep -Seconds 3
+          Remove-Item $marker -Force -EA SilentlyContinue
+          $out2 = Invoke-Expression $frag | Out-String
+          Write-Host $out2.Trim()
+          if ($out2 -notmatch '\[WARNING\]') { throw 'a genuinely cleared System log was NOT detected' }
+          if (-not (Test-Path $marker)) { throw 'cleared-log WARNING wrote no marker -- the finding would never reach the ledger' }
+          Write-Host 'ev104 provider filter holds in both directions'
+
       - name: Upload the selftest audit artifacts
         if: always()
         uses: actions/upload-artifact@v4
