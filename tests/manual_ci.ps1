@@ -132,6 +132,18 @@ function Invoke-Step {
 
 Push-Location $root
 try {
+    # FIRST, before anything touches the machine: prove the harness cannot lock
+    # this user out. If this fails, stop -- do not plant anything.
+    Invoke-Step 'safety invariants (harness cannot lock you out)' {
+        & .\tests\safety_invariants.ps1
+        if ($LASTEXITCODE -ne 0) { throw ("exit code {0}" -f $LASTEXITCODE) }
+    }
+    if ($results | Where-Object { $_.Step -like 'safety invariants*' -and $_.Result -eq 'FAIL' }) {
+        Write-Host ''
+        Write-Host '[ABORT] Safety invariants are broken -- refusing to plant anything on this machine.'
+        exit 1
+    }
+
     Invoke-Step '5.1 parse of tools/*.ps1' {
         $files = @(Get-ChildItem -Path (Join-Path $root 'tools') -Filter '*.ps1')
         # A vacuous pass is a failure: zero files parsed proves nothing.
