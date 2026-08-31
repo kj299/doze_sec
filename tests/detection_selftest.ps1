@@ -36,7 +36,19 @@
 [CmdletBinding()]
 param(
     [string]$BatPath = '.\doze_sec.bat',
-    [string]$OutDir  = 'C:\SecurityAudit'
+    [string]$OutDir  = 'C:\SecurityAudit',
+
+    # DANGER THIS EXISTS FOR: three plants below register things LogonUI loads
+    # to draw the lock and Ctrl+Alt+Del screens -- a credential provider, the
+    # screensaver, and a Winlogon Notify package -- each pointing at a DLL that
+    # deliberately does not exist. On an ephemeral CI runner that is invisible:
+    # nothing ever locks it. On a person's machine, if the screen locks during
+    # the ~10 minutes the plants are live, LogonUI can fail to render a working
+    # unlock UI and Ctrl+Alt+Del does nothing -- a real lockout, which happened
+    # to a real user. Pass this switch on any interactive machine: the three
+    # cases are then reported as an explicit SKIP (never silently dropped) and
+    # every other detection still runs.
+    [switch]$NoLockScreenRisk
 )
 
 $ErrorActionPreference = 'Stop'
@@ -421,6 +433,7 @@ $cases = @(
     },
     @{
         Name   = 'Winlogon Notify package -> flagged (logon/unlock persistence)'
+        LockScreenRisk = 'registers a Winlogon Notify handler on the logon/lock path pointing at a missing DLL'
         Attack = @('T1547.004')
         Tier   = 'required'
         Expect = '(?im)Winlogon Notify subkey[^\r\n]*dz_selftest_evil'
@@ -442,6 +455,7 @@ $cases = @(
     },
     @{
         Name   = 'Rogue Credential Provider DLL -> flagged (logon/unlock capture)'
+        LockScreenRisk = 'registers a credential provider LogonUI must load; a missing DLL here can break the unlock screen'
         Attack = @('T1547')
         Tier   = 'required'
         Expect = '(?im)Credential provider [^\r\n]*deadbeef'
@@ -464,6 +478,7 @@ $cases = @(
     },
     @{
         Name   = 'Malicious screensaver (SCRNSAVE.EXE staging path) -> flagged'
+        LockScreenRisk = 'points SCRNSAVE.EXE at a nonexistent .scr that fires on idle -- exactly when a machine locks'
         Attack = @('T1546.002')
         Tier   = 'required'
         Expect = '(?im)Screensaver SCRNSAVE\.EXE -> C:\\Users\\Public\\dz_evil\.scr'
@@ -526,6 +541,14 @@ try {
         # finally block skipped exactly the cases that left debris behind. The
         # cleanups are all idempotent -EA SilentlyContinue removals, so running
         # one for a plant that never happened is harmless.
+        if ($NoLockScreenRisk -and $c.LockScreenRisk) {
+            # Declared, loud, and counted as a SKIP below -- never a silent
+            # drop that would let a green run imply coverage it did not have.
+            $c.Planted = $false
+            $c.MaySkip = ("-NoLockScreenRisk was passed: {0}" -f $c.LockScreenRisk)
+            Write-Host ("  SKIPPED (lock-screen risk): {0}" -f $c.Name)
+            continue
+        }
         $planted += $c
         try {
             & $c.Plant
