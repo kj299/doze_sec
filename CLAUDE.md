@@ -29,6 +29,33 @@ undergoes `%var%` expansion at parse time — write `date`/`time`, not
 History: this bug class recurred in issues #35, #36, #39, PR #93 review,
 and #108. It is now enforced by lint.
 
+## Never leave the user's machine unusable (REQUIRED)
+
+A command or test handed to a person to run on their own machine must not be
+able to leave that machine unusable. This is not hypothetical: the detection
+harness registers a credential provider, a screensaver and a Winlogon Notify
+handler that all point at DLLs which deliberately do not exist. On an ephemeral
+CI runner that is invisible -- nothing ever locks it. On a real laptop, the
+screen locked mid-run, LogonUI could not draw an unlock UI, Ctrl+Alt+Del did
+nothing, and the owner was locked out of their own machine. The runbook had
+told them to start it and walk away.
+
+So, for anything a user runs locally:
+
+- **Default to the safe path.** Destructive or lock-out-capable behavior is
+  opt-in via an explicit switch, never the default. `manual_ci.ps1` passes
+  `-NoLockScreenRisk` unless `-AllowLockScreenRisk` is given.
+- **Warn in the imperative, up front, and say what the bad outcome is** --
+  "you would be locked out and need a hard power-off", not "may affect logon".
+  A warning that does not name the consequence is not a warning.
+- **A skipped dangerous check is declared, never silent** (`[ SKIP ]` with a
+  reason), so a green run can never imply coverage it did not have.
+- **Ask what happens if this is interrupted**, and ship the recovery: cleanup
+  must be runnable standalone and cold (`tests\cleanup_selftest.ps1`), not only
+  as an in-process `finally`.
+- CI keeps full coverage where the risk does not apply -- a runner has no lock
+  screen to break -- so safety on the user's machine costs no test coverage.
+
 ## Lint (run before committing batch changes)
 
 ```

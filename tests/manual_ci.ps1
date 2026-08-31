@@ -37,7 +37,14 @@
 param(
     # Only the fast checks (parse + marker selftest); skips both detection
     # harnesses. For iterating on a tools/*.ps1 change.
-    [switch]$Quick
+    [switch]$Quick,
+
+    # Opt IN to the three plants that can break the lock screen (credential
+    # provider, screensaver, Winlogon Notify). OFF by default on purpose: a
+    # real user was locked out of their own machine when the screen locked
+    # while those were live. Only pass this on a throwaway VM you can
+    # hard-reset.
+    [switch]$AllowLockScreenRisk
 )
 
 $ErrorActionPreference = 'Stop'
@@ -51,6 +58,9 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 
 $root = Split-Path -Parent $PSScriptRoot
 $results = @()
+# Safe by default: skip the lock-screen-breaking plants unless opted in.
+$riskArgs = @{}
+if (-not $AllowLockScreenRisk) { $riskArgs['NoLockScreenRisk'] = $true }
 
 # The detection harnesses plant a known-bad state, run the audit, and assert the
 # scanner reported exactly that state -- so they assume the machine holds still
@@ -64,6 +74,45 @@ Write-Host 'NOTE: the detection harnesses assume a quiescent machine. Do not cha
 Write-Host '      security settings (firewall, audit policy, Defender, accounts)'
 Write-Host '      while this is running -- it will take ~15-25 minutes.'
 Write-Host ''
+if ($AllowLockScreenRisk) {
+    Write-Host '*** WARNING -- LOCK-SCREEN RISK IS ENABLED ***' -ForegroundColor Red
+    Write-Host '    This run registers a credential provider, a screensaver and a Winlogon' -ForegroundColor Red
+    Write-Host '    Notify handler that all point at DLLs which do not exist. If this'      -ForegroundColor Red
+    Write-Host '    machine LOCKS while they are live, Windows can fail to draw a working'  -ForegroundColor Red
+    Write-Host '    unlock screen and Ctrl+Alt+Del will appear dead -- you would be locked' -ForegroundColor Red
+    Write-Host '    out and need a hard power-off. DO NOT lock, sleep, or walk away.'       -ForegroundColor Red
+    Write-Host '    Run this only on a machine you can afford to hard-reset.'               -ForegroundColor Red
+    Write-Host ''
+} else {
+    Write-Host 'SAFE MODE (default): the three plants that can break the lock screen'
+    Write-Host '      (credential provider, screensaver, Winlogon Notify) are SKIPPED and'
+    Write-Host '      reported as such. Pass -AllowLockScreenRisk only on a throwaway VM.'
+    Write-Host ''
+}
+
+# Hold the display on for the duration. The idle lock is what actually bit a
+# real user: the run was started, the machine was left alone as the runbook
+# instructed, the screen locked while a bogus credential provider was
+# registered, and LogonUI could not draw an unlock UI. This does not stop a
+# MANUAL Win+L -- hence the warning above -- but it stops the timer that
+# caused the incident.
+$script:esSet = $false
+try {
+    if (-not ([System.Management.Automation.PSTypeName]'DozeSec.Power').Type) {
+        Add-Type -Namespace DozeSec -Name Power -MemberDefinition @'
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern uint SetThreadExecutionState(uint esFlags);
+'@
+    }
+    # ES_CONTINUOUS(0x80000000) | ES_SYSTEM_REQUIRED(0x1) | ES_DISPLAY_REQUIRED(0x2)
+    [void][DozeSec.Power]::SetThreadExecutionState([uint32]2147483651)
+    $script:esSet = $true
+    Write-Host 'Display kept awake for the duration (idle lock suppressed).'
+    Write-Host ''
+} catch {
+    Write-Host 'NOTE: could not suppress the idle lock -- do not let this machine lock while it runs.'
+    Write-Host ''
+}
 
 function Invoke-Step {
     param([string]$Name, [scriptblock]$Body)
@@ -117,12 +166,12 @@ try {
         # to run tests\cleanup_selftest.ps1 by hand -- see the note at the top.)
         try {
             Invoke-Step 'detection harness (doze_sec.bat)' {
-                & .\tests\detection_selftest.ps1 -BatPath .\doze_sec.bat
+                & .\tests\detection_selftest.ps1 -BatPath .\doze_sec.bat @riskArgs
                 if ($LASTEXITCODE -ne 0) { throw ("exit code {0}" -f $LASTEXITCODE) }
             }
 
             Invoke-Step 'detection harness (doze_sec_noAdmin.bat, elevated adaptive path)' {
-                & .\tests\detection_selftest.ps1 -BatPath .\doze_sec_noAdmin.bat
+                & .\tests\detection_selftest.ps1 -BatPath .\doze_sec_noAdmin.bat @riskArgs
                 if ($LASTEXITCODE -ne 0) { throw ("exit code {0}" -f $LASTEXITCODE) }
             }
         } finally {
@@ -141,6 +190,8 @@ try {
     }
 } finally { Pop-Location }
 
+# Release the display-awake request; the OS resumes its normal idle timers.
+if ($script:esSet) { try { [void][DozeSec.Power]::SetThreadExecutionState([uint32]2147483648) } catch {} }
 Write-Host ''
 Write-Host '==================== SUMMARY ===================='
 foreach ($r in $results) {
