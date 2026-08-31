@@ -52,6 +52,19 @@ jobs:
       - name: Run tests/marker_selftest.ps1
         run: pwsh -NoProfile -File tests/marker_selftest.ps1
 
+  safety-invariants:
+    name: "Safety: the harness cannot lock a user out"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # A real user was locked out of their own machine when the screen locked
+      # while the detection harness had a fake credential provider registered.
+      # Static analysis, so it runs anywhere: every plant on the logon path
+      # must be tagged and skipped before planting, every skip declared, and
+      # manual_ci safe by default.
+      - name: Run tests/safety_invariants.ps1
+        run: pwsh -NoProfile -File tests/safety_invariants.ps1
+
   docs-drift-lint:
     name: "Docs lint: the README matches the code"
     runs-on: ubuntu-latest

@@ -38,10 +38,12 @@ param(
     [string]$BatPath = '.\doze_sec.bat',
     [string]$OutDir  = 'C:\SecurityAudit',
 
-    # DANGER THIS EXISTS FOR: three plants below register things LogonUI loads
-    # to draw the lock and Ctrl+Alt+Del screens -- a credential provider, the
-    # screensaver, and a Winlogon Notify package -- each pointing at a DLL that
-    # deliberately does not exist. On an ephemeral CI runner that is invisible:
+    # DANGER THIS EXISTS FOR: nine plants below sit on the logon, unlock or
+    # authentication path -- a credential provider and Winlogon Notify handler
+    # LogonUI loads, the screensaver, LSA Notification and Authentication
+    # packages lsass loads AT BOOT, a network provider enumerated during logon,
+    # a logon script, and AppInit/AppCert DLLs injected into processes -- each
+    # pointing at a DLL or file that deliberately does not exist. On an ephemeral CI runner that is invisible:
     # nothing ever locks it. On a person's machine, if the screen locks during
     # the ~10 minutes the plants are live, LogonUI can fail to render a working
     # unlock UI and Ctrl+Alt+Del does nothing -- a real lockout, which happened
@@ -181,6 +183,7 @@ $cases = @(
     },
     @{
         Name   = 'AppCert DLL registered -> flagged (T1546.009)'
+        LockScreenRisk = 'loaded on process creation; Winlogon spawns processes during logon'
         Attack = @('T1546.009')
         Tier   = 'required'  # startup_eval.ps1; uncovered sibling of AppInit_DLLs
         Expect = ('(?im)\[(WARNING|CRITICAL)\] AppCert DLL [^\r\n]*{0}' -f $MARK)
@@ -207,6 +210,7 @@ $cases = @(
     },
     @{
         Name   = 'AppInit_DLLs set -> flagged (T1546.010)'
+        LockScreenRisk = 'injected into every user32-linked GUI process -- LogonUI is one of them'
         Attack = @('T1546.010')
         Tier   = 'required'  # emulation corpus; DLL injected into every GUI process
         Expect = '(?im)\[CRITICAL\] AppInit_DLLs is set \(T1546\.010\)'
@@ -243,6 +247,7 @@ $cases = @(
     },
     @{
         Name   = 'Rogue LSA Authentication package -> flagged (T1547.002)'
+        LockScreenRisk = 'lsass loads Authentication Packages AT BOOT; a bogus one can break authentication itself, not just the unlock UI'
         Attack = @('T1547.002')
         Tier   = 'required'  # emulation corpus; sibling of the LSA Notification plant
         Expect = "(?im)LSA Authentication Packages package 'dz_selftest_authpkg'"
@@ -443,6 +448,7 @@ $cases = @(
     },
     @{
         Name   = 'Rogue Network Provider (NPPSPY) -> flagged (cleartext cred capture)'
+        LockScreenRisk = 'network providers are enumerated during logon; a rogue entry pointing at a missing DLL is a known cause of logon hangs'
         Attack = @('T1556.008')
         Tier   = 'required'
         Expect = '(?im)network provider .?dz_selftest_np'
@@ -467,6 +473,7 @@ $cases = @(
     },
     @{
         Name   = 'Rogue LSA Notification package -> flagged (lsass credential capture)'
+        LockScreenRisk = 'lsass loads Notification Packages at boot; a bogus one sits directly on the authentication path'
         Attack = @('T1556.002')
         Tier   = 'required'
         Expect = "(?im)LSA Notification Packages package 'dz_selftest_lsa'"
@@ -499,6 +506,7 @@ $cases = @(
     },
     @{
         Name   = 'UserInitMprLogonScript logon script -> flagged'
+        LockScreenRisk = 'runs a script at every logon; pointing it at a nonexistent .bat can stall the logon sequence'
         Attack = @('T1037.001')
         Tier   = 'required'
         Expect = '(?im)UserInitMprLogonScript is set'
