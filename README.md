@@ -68,6 +68,7 @@ doze_sec.bat -help
 | `-noVtSelf` | Both | Skip the automatic pre-flight VT integrity check on script-critical binaries (default: runs whenever `~/.vt_token` exists and network is up) |
 | `-ctiSkill <file>` | Admin only | Per-run override for the SENTINEL-X CTI skill file used by `-updateTTP` (1.2.0+: `standalone\cyber-threat-intel-prompt.md`; pre-1.2.0: `cyber_threat_skill.yaml`). Beats `DOZESEC_CTI_SKILL` env var and auto-discovery |
 | `-noConsoleLog` | Both | Skip console-output capture (default ON). Without this switch, stdout+stderr are tee'd to `C:\SecurityAudit\AuditConsole_<TS>.log` so crashes leave a debuggable trace |
+| `-readonly` | Both | Inspect only: changes nothing on this machine outside the output folder and the temp folder, and makes no network connections. Skips the RunOnce resume key, the F8 boot-menu change, the restore point and the update checks; refuses `-vt`, `-dnsprobe`, `-updateTTP` and `-importTTP`. Used by `tests\field_test.ps1` for false-positive hunting on a real machine |
 | `-selftest` | Both | Test-harness mode: writes every output under `C:\SecurityAudit\selftest\` (or `%USERPROFILE%\SecurityAudit\selftest\`) and stamps the report `*** TEST RUN -- every finding below was planted ***`, so a report of planted findings can never be mistaken for, or auto-diffed against, a real audit. Used by `tests\detection_selftest.ps1`; not for real audits |
 | `-help` | Both | Show usage guide with section descriptions |
 
@@ -410,6 +411,22 @@ Running a PAT-bearing script on a compromised endpoint exposes the token. Prefer
 - Revoke immediately after incident-response use
 
 If those trade-offs are not acceptable, make the repo public or skip the update check entirely (the script works fine without it).
+
+## Field testing vs detection proving
+
+Two activities, two scripts, and they must not be mixed up:
+
+| On | Run | What it does |
+|----|-----|--------------|
+| **The machine you are sitting at** | `.\tests\field_test.ps1` (any PowerShell; elevated is better) | Runs the audit with `-readonly` -- nothing changes outside `C:\SecurityAudit\` and the temp folder, no network connections -- proves that before and after (RunOnce key, boot configuration, restore points), checks the report against `tests\benign_corpus.txt`, and prints every finding for you to adjudicate. Plants nothing. |
+| **A throwaway VM or CI only** | `.\tests\manual_ci.ps1` (elevated) | The detection harness: plants ~30 known-bad artifacts, runs the audit, asserts every one is detected, removes them. Never on a daily-driver machine -- see `docs\recovery.md`. |
+
+**Reporting a false positive.** A finding that turns out to be something
+legitimate on your machine is a bug in the tool. Record it in
+`tests\benign_corpus.txt` (the file explains the format; `field_test.ps1`
+prints a template) and open an issue or PR with the report line. Every entry
+must name the test that proves the tool handles it; `tools\benign_corpus_check.ps1`
+enforces that.
 
 ## Contributing
 

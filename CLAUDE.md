@@ -66,6 +66,20 @@ So, for anything a user runs locally:
   touches so a declaration cannot be quietly omitted, and requires the cold
   cleanup to cover every declared target. Its `-SelfTest` proves it fails on
   a mutated harness. The harness prints the blast radius before it plants.
+- **Two activities, two scripts.** On the machine a person is sitting at:
+  `tests\field_test.ps1` -- runs the audit with `-readonly` (no change outside
+  the output folder and the temp folder, no network connections), proves that
+  claim before/after, and hands every finding over for adjudication against
+  `tests\benign_corpus.txt`. The plant harness (`manual_ci.ps1`,
+  `detection_selftest.ps1`) is for a throwaway VM or CI only. `-readonly` is
+  kept honest by `tools\lint_readonly.ps1`: every `reg add` / `bcdedit /set` /
+  restore-point / download site in the bats must stay behind a gate.
+- **Every known false positive is catalogued.** `tests\benign_corpus.txt`
+  names each benign look-alike, the tool's line for it, its allowed severity,
+  and the test that proves it (`harness:` Invert case, `ci:` step, or a
+  `field:` reason). `tools\benign_corpus_check.ps1 -Mode Lint` fails on an
+  unresolvable proof or an uncatalogued Invert case; `-Mode Report` grades a
+  real report and is run by `field_test.ps1` and the harness.
 - CI keeps full coverage where the risk does not apply -- a runner has no lock
   screen to break -- so safety on the user's machine costs no test coverage.
 
@@ -153,6 +167,9 @@ cmd escaping and is parsed+executed by the helpers-ps51 CI job. Already
 extracted: `report_html`, `srp_check`, `self_update_check`, `disk_info`,
 `smart_health`, `dns_probe`. Simple single-value one-liners (e.g.
 `(Get-CimInstance ...).Prop`) can stay inline.
+- **readonly-field-test**: runs `tests\field_test.ps1` (the script a person
+  runs on their own machine) and asserts the `-readonly` proof lines executed:
+  RunOnce absent, boot configuration unchanged, READ-ONLY banner, corpus clean.
 - **full-run**: runs `doze_sec.bat -dev -sdu -nosrp` end-to-end under a
   20-minute timeout. A hang (e.g. findstr on multi-KB lines) blows the
   timeout and fails the job; output is uploaded as an artifact.

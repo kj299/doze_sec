@@ -127,6 +127,7 @@ set "BASELINE_SAVE=0"
 set "BASELINE_SKIP=0"
 set "NO_CONSOLE_LOG=0"
 set "SELFTEST_MODE=0"
+set "READONLY_MODE=0"
 set "IOC_HITS=0"
 
 :: ====================================================================
@@ -152,6 +153,7 @@ if /i "%~1"=="-baseline"   set "BASELINE_SAVE=1"
 if /i "%~1"=="-noBaseline" set "BASELINE_SKIP=1"
 if /i "%~1"=="-noConsoleLog" set "NO_CONSOLE_LOG=1"
 if /i "%~1"=="-selftest"   set "SELFTEST_MODE=1"
+if /i "%~1"=="-readonly"   set "READONLY_MODE=1"
 shift
 goto :parse_args
 :parse_importttp_noadmin
@@ -174,7 +176,25 @@ if "%UPDATE_TTP%"=="1" (
     echo  Continuing audit without TTP update.
     set "UPDATE_TTP=0"
 )
+:: -readonly: change nothing on this machine outside OUTDIR and the temp
+:: folder, and make no network connections. Forces the skips that keep the
+:: run inspect-only and refuses the switches that require the network.
+:: tools\lint_readonly.ps1 enforces that every mutation/egress site in this
+:: script stays behind one of these gates.
+if "%READONLY_MODE%"=="1" set "SKIP_SRP=1"
+if "%READONLY_MODE%"=="1" set "SKIP_THREAT_UPDATE=1"
+if "%READONLY_MODE%"=="1" set "VT_SELF_SKIP=1"
+if "%READONLY_MODE%"=="1" if "%VT_CHECK%"=="1" goto :readonly_conflict
+if "%READONLY_MODE%"=="1" if "%DNS_PROBE%"=="1" goto :readonly_conflict
+if "%READONLY_MODE%"=="1" if "%UPDATE_TTP%"=="1" goto :readonly_conflict
 goto :help_done
+
+:readonly_conflict
+echo.
+echo  [ERROR] -readonly cannot be combined with -vt, -dnsprobe, -updateTTP or -importTTP:
+echo          those switches make network connections. Drop one side and re-run.
+echo  Exit code: 1 -- audit did not run
+endlocal & exit /b 1
 
 :show_help
 echo.
@@ -246,6 +266,12 @@ echo                 is collected. Audit aborts with EXIT_CODE=7 if any
 echo                 binary is flagged malicious by VT.
 echo.
 echo    %C_GREEN%-noConsoleLog%C_RESET%  Skip console-output capture (default ON). By default
+echo    %C_GREEN%-readonly%C_RESET%      Inspect only: change nothing on this machine outside the output
+echo                 folder and the temp folder, and make no network connections.
+echo                 Skips the RunOnce key, F8 boot menu, restore point and update
+echo                 checks; refuses -vt, -dnsprobe, -updateTTP and -importTTP.
+echo                 Used by tests\field_test.ps1 for false-positive hunting on
+echo                 a real machine.
 echo    %C_GREEN%-selftest%C_RESET%      Test-harness mode: write everything under C:\SecurityAudit\selftest\
 echo                 the script self-tees stdout+stderr to
 echo                 C:\SecurityAudit\AuditConsole_^<timestamp^>.log so crashes
@@ -524,6 +550,7 @@ if "%SELFTEST_MODE%"=="1" echo *** TEST RUN -- every finding below was planted b
 if "%SELFTEST_MODE%"=="1" echo *** This is NOT an audit of this machine. Real audit reports live in the ***>> "%REPORT%"
 if "%SELFTEST_MODE%"=="1" echo *** parent directory. Produced by tests\detection_selftest.ps1.          ***>> "%REPORT%"
 if "%SELFTEST_MODE%"=="1" echo ***********************************************************************>> "%REPORT%"
+if "%READONLY_MODE%"=="1" echo *** READ-ONLY RUN -- this audit makes no changes outside %OUTDIR% and the temp folder, and no network connections ***>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 (echo   WIN11 SECURITY FORENSIC AUDIT  v%SCRIPT_VERSION%)>> "%REPORT%"
 (echo   Generated : %date%  %time%)>> "%REPORT%"
@@ -532,7 +559,7 @@ echo ====================================================================>> "%RE
 (echo   Domain    : %USERDOMAIN%)>> "%REPORT%"
 (echo   Script    : %SCRIPT_PATH%)>> "%REPORT%"
 (echo   PS Engine : %PWSH%)>> "%REPORT%"
-(echo   Switches  : Dev=%DEV_MODE%  Resume=%RESUME_MODE%  SkipSRP=%SKIP_SRP%  noAdmin=%NO_ADMIN_MODE%  IsAdmin=%IS_ADMIN%)>> "%REPORT%"
+(echo   Switches  : Dev=%DEV_MODE%  Resume=%RESUME_MODE%  SkipSRP=%SKIP_SRP%  ReadOnly=%READONLY_MODE%  noAdmin=%NO_ADMIN_MODE%  IsAdmin=%IS_ADMIN%)>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 echo.>> "%REPORT%"
 if "%IS_ADMIN%"=="0" (
@@ -732,6 +759,11 @@ echo  re-run the script with the -resume switch on next login.>> "%REPORT%"
 echo  Key: HKCU\...\RunOnce  Value: *%SCRIPT_NAME%_resume>> "%REPORT%"
 echo  The * prefix forces execution even in Safe Mode.>> "%REPORT%"
 
+if "%READONLY_MODE%"=="1" (
+    echo  [SKIP] read-only mode: RunOnce resume key not created -- a reboot mid-run will not auto-resume.>> "%REPORT%"
+    echo %C_GREEN%[INIT 8/14]%C_RESET% Read-only mode - RunOnce key not created.
+    goto :runonce_done
+)
 reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /t REG_SZ /d "\"%~f0\" -resume" /f >nul 2>&1
 if %errorlevel% equ 0 (
     echo  [OK] RunOnce key created successfully.>> "%REPORT%"
@@ -745,6 +777,7 @@ if %errorlevel% equ 0 (
     echo  [WARNING] Could not create RunOnce key. Resume will not be available.>> "%REPORT%"
     echo %C_GREEN%[INIT 8/14]%C_RESET% RunOnce key creation failed - non-fatal.
 )
+:runonce_done
 echo.>> "%REPORT%"
 
 :: ====================================================================
@@ -754,6 +787,11 @@ echo %C_GREEN%[INIT 9/14]%C_RESET% Checking network connectivity...
 echo --- [INIT 9/14] Network Connectivity --->> "%REPORT%"
 echo  Command: ping -n 1 -w 2000 8.8.8.8>> "%REPORT%"
 
+if "%READONLY_MODE%"=="1" (
+    echo  [SKIP] read-only mode: no outbound connections -- network check not performed; update checks are skipped.>> "%REPORT%"
+    echo %C_GREEN%[INIT 9/14]%C_RESET% Read-only mode - no network activity.
+    goto :netcheck_done
+)
 ping -n 1 -w 2000 8.8.8.8 >nul 2>&1
 if %errorlevel% equ 0 (
     set "NETWORK_AVAIL=1"
@@ -843,6 +881,11 @@ echo %C_GREEN%[INIT 10/14]%C_RESET% Checking for script updates...
 echo --- [INIT 10/14] Self-Update Check --->> "%REPORT%"
 echo  Command: Invoke-WebRequest %UPDATE_URL%/version.txt ^&^& powershell -File tools\threat_list_sync.ps1 -BaseUrl ^<URL^> -LocalDir ^<dir^> -StaleDays 60>> "%REPORT%"
 
+if "%READONLY_MODE%"=="1" (
+    echo  [SKIP] read-only mode: self-update check and threat-list sync not performed -- no network connections.>> "%REPORT%"
+    echo %C_GREEN%[INIT 10/14]%C_RESET% Read-only mode - update checks skipped.
+    goto :update_done
+)
 if "%NETWORK_AVAIL%"=="0" (
     echo  [SKIP] No network available.>> "%REPORT%"
     echo %C_GREEN%[INIT 10/14]%C_RESET% Skipped - no network available.
@@ -916,6 +959,12 @@ if exist "%TEMP%\bcd_snap_%TIMESTAMP%.txt" (
     for /f "tokens=2" %%a in ('findstr /i "displaybootmenu" "%TEMP%\bcd_snap_%TIMESTAMP%.txt"') do set "PREV_BOOTMENU=%%a"
     for /f "tokens=2" %%a in ('findstr /i "^timeout" "%TEMP%\bcd_snap_%TIMESTAMP%.txt"') do set "PREV_TIMEOUT=%%a"
     del "%TEMP%\bcd_snap_%TIMESTAMP%.txt" >nul 2>&1
+)
+
+if "%READONLY_MODE%"=="1" (
+    echo  [SKIP] read-only mode: boot menu left as found ^(displaybootmenu=%PREV_BOOTMENU%, timeout=%PREV_TIMEOUT%^) -- nothing written with bcdedit.>> "%REPORT%"
+    echo %C_GREEN%[INIT 11/14]%C_RESET% Read-only mode - boot configuration untouched.
+    goto :f8_done
 )
 
 rem Apply ONLY the settings that are not already at the desired value, so the
@@ -992,6 +1041,11 @@ echo  Note: Vista and later ONLY. Client OS ONLY. Not supported on Server.>> "%R
 echo  Known Win10 bug: SRP creation FAILS in Safe Mode with no workaround.>> "%REPORT%"
 echo  If you require a restore point, always run this script in Normal mode.>> "%REPORT%"
 
+if "%READONLY_MODE%"=="1" (
+    echo  [SKIP] read-only mode: no restore point created; System Protection left as found.>> "%REPORT%"
+    echo %C_GREEN%[INIT 12/14]%C_RESET% Read-only mode - restore point skipped.
+    goto :srp_done
+)
 if "%SKIP_SRP%"=="1" (
     echo  [SKIP] -nosrp switch active.>> "%REPORT%"
     echo %C_GREEN%[INIT 12/14]%C_RESET% SRP skipped via -nosrp switch.

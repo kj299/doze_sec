@@ -1,0 +1,193 @@
+# benign_corpus.txt -- known-BENIGN artifacts that look like attacks.
+#
+# Read by tools/benign_corpus_check.ps1. Every entry is a false-positive
+# twin: something a real machine carries that resembles an indicator, and
+# that the audit must report as context (OK/INFO), or as a finding a person
+# can adjudicate with the note below. Two of these fired as ACTIVE COMPROMISE
+# on the owner's own machine in 2026-08 (P9NP, Event 104) because they had
+# never been tested; a third (never-onboarded Sense) contradicted its own
+# summary. For this audience a false "you are compromised" is the most
+# harmful output the tool can produce.
+#
+# FORMAT -- INI-style blocks (regex-safe; the '|' corpora cannot hold regexes):
+#   [id]                    short slug, unique
+#   class     = QUIET       the tool prints a CONTEXT line for the benign twin;
+#                           every report line matching `signature` must carry
+#                           a leading tag <= maxsev (OK < INFO < WARNING < CRITICAL).
+#                           -Mode Report FAILS on a higher tag.
+#             = ADVISE      `signature` is the FINDING-shaped line that has a
+#                           known benign cause; on a real machine a match prints
+#                           the note (how to verify). The human adjudicates;
+#                           never a failure.
+#   maxsev    = OK|INFO|WARNING   (QUIET only)
+#   proof     = harness:<Name substring of an Invert=$true case in tests/detection_selftest.ps1>
+#             | ci:<step-name substring in .github/workflows/windows-smoke.yml>
+#             | field:<why this cannot be planted -- observable only on a real machine>
+#             several proofs: separate with ';'
+#   signature = .NET regex matched per report line
+#   note      = origin, and how a person verifies it on their machine
+#
+# -Mode Lint fails on: an entry without class/proof/signature/note, an
+# unresolvable proof, an invalid regex, a harness Invert case that no entry
+# catalogues (every false-positive guard must be documented here), or fewer
+# than 10 entries (vacuous). -Mode Report is run by tests/field_test.ps1 on a
+# real machine and by the harness on its own report.
+
+# ---- QUIET: the audit prints context, and must keep it at or below maxsev ----
+
+[netprov-p9np]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:Network provider: Microsoft-signed System32 provider is context
+signature = Non-default network provider .* Microsoft-signed system DLL
+note      = WSL ships p9np.dll and registers P9NP as a network provider on every WSL machine. A Microsoft-signed provider under System32 is context, not credential capture. Field false positive 2026-08-30, fixed in #184. Verify: (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\NetworkProvider\Order').ProviderOrder and Get-AuthenticodeSignature on the ProviderPath.
+
+[sense-never-onboarded]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:edr_presence.ps1
+signature = never been onboarded to Defender for Endpoint
+note      = Windows ships the Defender for Endpoint sensor service ('Sense') inert on every machine never onboarded to MDE; a stopped Sense on a home PC is how Windows ships. Field false positive 2026-08-29, fixed in #183. Verify: HKLM:\SOFTWARE\Microsoft\Windows Advanced Threat Protection\Status OnboardingState (absent or 0 = never onboarded).
+
+[no-third-party-edr]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:edr_presence.ps1
+signature = No third-party EDR agent was detected
+note      = Nearly every home machine has no third-party EDR; Defender alone is the telemetry. Installed software is context, not evidence of compromise.
+
+[sysmon-absent]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:edr_presence.ps1
+signature = Sysmon is not installed
+note      = Sysmon is opt-in tooling; its absence is the consumer default. Reported so a clean result is weighed correctly, never as a fault.
+
+[defender-passive-mode]
+class     = QUIET
+maxsev    = INFO
+proof     = field:requires a second registered antivirus product owning real-time protection; cannot be planted on a runner without installing one
+signature = another antivirus product is in control
+note      = With a third-party AV installed, Defender runs in passive/EDR-block mode and its own real-time flags legitimately read as disabled. Verify: Get-MpComputerStatus AMRunningMode, and that the other product is running and current.
+
+[screensaver-default]
+class     = QUIET
+maxsev    = INFO
+proof     = field:ScreenSaverIsSecure=0 is the Windows default on every fresh profile; the CI step only asserts no CRITICAL on a clean runner
+signature = ScreenSaverIsSecure=0
+note      = The screensaver not requiring a password on resume is the Windows default, not a compromise indicator. Hardening: tick "On resume, display logon screen".
+
+[appdata-signed-tasks]
+class     = QUIET
+maxsev    = INFO
+proof     = field:needs a validly Authenticode-signed per-user updater under %AppData% (Brave, Chrome, Zoom, Teams); nothing signed to plant on a runner
+signature = validly-signed task\(s\) under %AppData%
+note      = Per-user updaters register scheduled tasks whose binary lives under %AppData%. Validly signed ones are legitimate. Verify: Get-AuthenticodeSignature on the task's action path.
+
+[adfs-present]
+class     = QUIET
+maxsev    = INFO
+proof     = field:ADFS is a server role; not installable on the audit's target platform in CI
+signature = ADFS detected -- GoldenSAML attack surface
+note      = Installed software is attack surface, not compromise. Keep patched and monitored.
+
+[aadconnect-present]
+class     = QUIET
+maxsev    = INFO
+proof     = field:Azure AD Connect is a domain-joined server product; not plantable in CI
+signature = Azure AD Connect detected
+note      = Installed software is attack surface, not compromise. Keep patched and monitored.
+
+[tarrask-sd-only]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:cross_api_check.ps1
+signature = lack a readable security descriptor but ARE enumerable by Task Scheduler
+note      = At admin (not SYSTEM) privilege some task security descriptors are unreadable while the task is still enumerable. Tarrask hiding requires BOTH an unreadable SD and absence from enumeration. Verify: schtasks /query names the task.
+
+[cross-api-race]
+class     = QUIET
+maxsev    = INFO
+proof     = field:a process must start and exit between two enumerations; timing cannot be planted reliably
+signature = disagreed across APIs but had exited by the final re-check
+note      = A process that exits between the .NET, WMI and tasklist enumerations shows up in some and not others. The liveness re-check distinguishes that from concealment.
+
+[vbs-off]
+class     = QUIET
+maxsev    = INFO
+proof     = field:VBS/HVCI state depends on firmware and hypervisor; the boot_chain CI step only asserts no CRITICAL on a clean VM
+signature = Virtualization-Based Security is not running
+note      = VBS off is the state of most consumer hardware; optional hardening, not a compromise indicator. Verify: msinfo32 -> Virtualization-based security.
+
+[module-unsigned-other]
+class     = QUIET
+maxsev    = INFO
+proof     = field:legitimate third-party software loads unsigned DLLs into its own processes; the module_inspect CI step only asserts no CRITICAL on a clean runner
+signature = unsigned module\(s\) loaded outside the core security processes
+note      = Unsigned DLLs in ordinary third-party processes are common and are counted, not itemised; only lsass/winlogon/services are held to the signed-only bar.
+
+[driver-signed-byovd-name]
+class     = QUIET
+maxsev    = WARNING
+proof     = ci:driver_audit.ps1
+signature = known BYOVD-abusable driver, but validly signed and in the normal drivers directory
+note      = vboxdrv.sys, procexp152.sys, gdrv.sys and similar are abusable by a local attacker but most often installed by legitimate software. Validly signed and in System32\drivers stays WARNING, never CRITICAL. Verify which product installed it; remove it if that product is gone.
+
+[loopback-dns]
+class     = QUIET
+maxsev    = INFO
+proof     = field:only observable with -dnsprobe, which -readonly refuses (it resolves names); DoH clients and local proxies set a 127.0.0.1 resolver
+signature = loopback DNS resolver is configured
+note      = DNS-over-HTTPS clients and local filtering proxies point the resolver at 127.0.0.1. Verify you installed it: Get-DnsClientServerAddress.
+
+[browser-ext-nonstore-norisk]
+class     = QUIET
+maxsev    = INFO
+proof     = field:a sideloaded extension with no malware-favored permission needs a real browser profile; not planted in CI
+signature = \(no risky capability\)
+note      = A sideloaded or non-store extension that holds no risky permission is inventoried as INFO. Verify its origin in the browser's extension page.
+
+[vt-low-credibility]
+class     = QUIET
+maxsev    = INFO
+proof     = field:needs a VirusTotal token and -vt, which -readonly refuses; single-engine hits are noise
+signature = LOW-credibility hits \(1 engine, non-top-tier\)
+note      = One non-top-tier engine flagging an IP is usually a false positive; reported as INFO only.
+
+# ---- ADVISE: a finding with a known benign cause; the person adjudicates ----
+
+[ev104-smartcard]
+class     = ADVISE
+proof     = ci:Event 104 provider filter
+signature = System event log was cleared
+note      = Event IDs are unique only per provider. Smart-card readers (WudfUsbccidDriver) log Event 104 too; the check filters to Microsoft-Windows-Eventlog since #184. If this still fires, verify: Get-WinEvent -FilterHashtable @{LogName='System';Id=104;ProviderName='Microsoft-Windows-Eventlog'} -MaxEvents 5 -- a genuine clear shows here, and the log-gap check nearby would show a record-number break.
+
+[startup-signed-lnk]
+class     = ADVISE
+proof     = harness:Benign signed shortcut in Startup
+signature = Startup item .*\.lnk
+note      = OneDrive, Teams and vendor updaters drop .lnk files into Startup constantly; a shortcut to a Microsoft-signed binary is not flagged. Verify the target: Get-AuthenticodeSignature on what the shortcut points at.
+
+[sbl-amsi-self]
+class     = ADVISE
+proof     = harness:ScriptBlockLogging ON
+signature = AMSI bypass attempts
+note      = With Script Block Logging on, the audit's own script blocks contain the AMSI pattern list; the CTI section excludes its own events. If this fires, check the 4104 events' script path is not AuditPS_*.ps1 or the audit .bat.
+
+[svc-unquoted-signed]
+class     = ADVISE
+proof     = harness:Signed service at unquoted spaced path
+signature = ^(?!\s*\[INFO\]).*\bno-file\b
+note      = A signed vendor service registered with an unquoted path containing spaces used to be reported as missing its binary. Verify: (Get-CimInstance Win32_Service -Filter "Name='<name>'").PathName and that the file exists.
+
+[run-hidden-window]
+class     = ADVISE
+proof     = harness:Benign hidden-window autorun
+signature = Suspicious Run-key autorun
+note      = A legitimate updater running "-WindowStyle Hidden -File <path>" with no download or encode token is not flagged. If this fires, look for iex/DownloadString/-enc in the command line before treating it as a backdoor.
+
+[new-account-4720]
+class     = ADVISE
+proof     = field:creating a local account on the runner is done by the standard-user smoke test in another job; the benign cause is developer tooling on a real machine
+signature = New local account\(s\) created
+note      = Developer tooling and agent sandboxes (the retrospective names Codex) create local accounts; each 4720 event is then legitimate. Verify the names: Get-WinEvent -FilterHashtable @{LogName='Security';Id=4720} -MaxEvents 5 | Format-List TimeCreated,Message -- and Get-LocalUser for accounts you did not create.
