@@ -74,10 +74,16 @@ function Check { param([bool]$Ok, [string]$Label, [string]$Why)
 $before = Get-Snapshot
 $t0 = Get-Date
 Push-Location $root
+# The audit writes ordinary diagnostics to stderr (e.g. a reg query on an
+# absent key). Under $ErrorActionPreference='Stop' with redirection, Windows
+# PowerShell 5.1 turns each such line into a terminating NativeCommandError,
+# so relax it for the invocation only and stream everything as text.
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
 try {
-    & $BatPath @batArgs
+    & $BatPath @batArgs 2>&1 | ForEach-Object { "$_" }
     $auditExit = $LASTEXITCODE
-} finally { Pop-Location }
+} finally { $ErrorActionPreference = $prevEap; Pop-Location }
 $after = Get-Snapshot
 Write-Host ''
 Write-Host ("== Audit finished: exit code {0} in {1:n0}s ==" -f $auditExit, ((Get-Date) - $t0).TotalSeconds)

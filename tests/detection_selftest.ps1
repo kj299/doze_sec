@@ -887,7 +887,7 @@ try {
     # no QUIET entry may be reported above its allowed severity here either.
     $bcTool = Join-Path (Split-Path -Parent $PSCommandPath) '..\tools\benign_corpus_check.ps1'
     if (Test-Path -LiteralPath $bcTool) {
-        $bcOut = (& $bcTool -Mode Report -Report $report.FullName -AllowTestRun) -join "`n"
+        $bcOut = (& $bcTool -Mode Report -Report $report.FullName -AllowTestRun *>&1 | ForEach-Object { "$_" }) -join "`n"
         if ($LASTEXITCODE -eq 0 -and $bcOut -match 'observed \d+ of \d+ corpus entries') {
             Write-Host "  [ OK       ] benign corpus: no known look-alike reported above its allowed severity"
         } else {

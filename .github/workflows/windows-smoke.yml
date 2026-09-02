@@ -1488,8 +1488,11 @@ jobs:
       - name: Run the field test (read-only audit + read-only proof + corpus check)
         shell: powershell
         run: |
-          $ErrorActionPreference = 'Stop'
-          $out = (& .\tests\field_test.ps1 -BatPath .\doze_sec.bat -NoConsoleLog *>&1 | Out-String)
+          # Continue, not Stop: the audit writes diagnostics to stderr, and 5.1
+          # would turn them into terminating errors under redirection. The
+          # script's exit code and its printed proof lines are the verdict.
+          $ErrorActionPreference = 'Continue'
+          $out = (& .\tests\field_test.ps1 -BatPath .\doze_sec.bat -NoConsoleLog *>&1 | ForEach-Object { "$_" }) -join "`n"
           $rc = $LASTEXITCODE
           Write-Host $out
           Write-Host ("field_test.ps1 exit code: {0}" -f $rc)

@@ -177,7 +177,7 @@ note      = With Script Block Logging on, the audit's own script blocks contain 
 [svc-unquoted-signed]
 class     = ADVISE
 proof     = harness:Signed service at unquoted spaced path
-signature = no-file
+signature = ^(?!\s*\[INFO\]).*\bno-file\b
 note      = A signed vendor service registered with an unquoted path containing spaces used to be reported as missing its binary. Verify: (Get-CimInstance Win32_Service -Filter "Name='<name>'").PathName and that the file exists.
 
 [run-hidden-window]
