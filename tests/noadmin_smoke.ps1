@@ -26,6 +26,19 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Blast-radius manifest (checked by tests\safety_invariants.ps1): everything
+# this smoke test changes on the host, and which risk axes it can touch. A
+# plant verb below (New-LocalUser, icacls, Set-Service, WDigest) with no
+# matching kind here fails the build.
+$Touches = @(
+    'account:local user dzsmoke (created for the run, removed in finally; a pre-existing user of that name is REMOVED first)',
+    'service:seclogon startup type -> Manual and started (not reverted; Manual is the Windows default)',
+    'file:<repo> ACL grant BUILTIN\Users (OI)(CI)RX (not reverted; read/execute on a checkout)',
+    'registry:HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest\UseLogonCredential (restored to the prior value in finally)'
+)
+$Affects = @('defense')
+
 $fail = 0
 
 $bat  = (Resolve-Path -LiteralPath $BatPath).Path

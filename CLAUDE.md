@@ -58,6 +58,14 @@ So, for anything a user runs locally:
   opens with `*** TEST RUN -- every finding below was planted ***`. A report of
   planted findings must never be mistakable for, or auto-diffed against, a real
   audit -- the owner opened one and asked how to fix their computer.
+- **Every plant declares its blast radius.** Each case in
+  `tests/detection_selftest.ps1` carries `Touches` (every host mutation, as
+  `kind:target`) and `Affects` (which of logon / boot / network / defense it
+  can hit). `tests/safety_invariants.ps1` reads the harness AST and fails on
+  any plant without a declaration, infers the axes from what the plant body
+  touches so a declaration cannot be quietly omitted, and requires the cold
+  cleanup to cover every declared target. Its `-SelfTest` proves it fails on
+  a mutated harness. The harness prints the blast radius before it plants.
 - CI keeps full coverage where the risk does not apply -- a runner has no lock
   screen to break -- so safety on the user's machine costs no test coverage.
 
