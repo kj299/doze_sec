@@ -133,3 +133,71 @@ second source of truth that can itself drift, which is exactly the failure the
 live scan was built to avoid. The current approximation is honest as long as it
 is documented, which is what this entry does. Revisit if the drift becomes real
 rather than theoretical.
+
+---
+
+## Status of the entries above (2026-09-02)
+
+Shipped since this file was written: **Sysmon / EDR presence** (#183, with
+the config-quality read deliberately left out — grading it would mean
+executing the vendor binary on a machine under suspicion), **tamper-evident
+reports** (#180), **event-log gaps** (#181). The `attack_matrix` "detected"
+semantics entry stands as a documented non-decision. The coverage-denominator
+item remains deferred.
+
+## Recommendations from the 2026-08 field-testing retrospective
+
+Source and reasoning: `docs/design/retrospective-2026-08-field-testing.md`.
+The systemic finding is that the verification strategy tested the tool on an
+environment (ephemeral Server 2022 runners) that is not its deployment target
+(a person's Windows 10/11 laptop). Every real bug of the period, and the
+lockout incident, lived in that gap. Priorities reflect harm to the tool's
+audience, not effort.
+
+### P0 — safety and trust
+
+1. **Quarantine test output.** Harness runs write to
+   `C:\SecurityAudit\selftest\` and stamp a `*** TEST RUN ***` banner on the
+   report's first lines and the HTML header. A test report must never be
+   mistakable for a real one — the owner opened one and asked how to fix
+   their computer.
+2. **Read-only field-test mode + benign-baseline corpus.** False-positive
+   hunting (read-only, safe on any real machine) separated from detection
+   proving (the plant harness, VM/CI only). `tests/benign_corpus.txt`
+   catalogs known-benign look-alikes (`P9NP`, never-onboarded `Sense`,
+   `WudfUsbccidDriver` Event 104, Codex sandbox accounts, …) and they are
+   regression-tested.
+3. **Blast-radius manifest for the harness.** Every plant declares what it
+   touches and whether it can affect logon, boot, or the network;
+   `safety_invariants` fails on any plant without a declaration.
+
+### P1 — detection quality
+
+4. **False-positive parity** — every must-fire case names its benign twin;
+   the emulation-corpus lint enforces it (32 must-fire vs ~12 must-not-fire
+   today).
+5. **Provider-qualified event queries as a lint** — any `Get-WinEvent` /
+   `wevtutil` query by bare event ID fails.
+6. **Apply "Microsoft-signed under System32 is context" consistently** —
+   audit every DLL-path verdict for the allowlist-overrides-signature
+   pattern.
+
+### P2 — engineering hygiene
+
+7. **Non-vacuity as a lint over `tests/*.ps1`** — every test asserts a
+   minimum examined count.
+8. **`docs/recovery.md`** — shipped with the retrospective.
+9. **CI economics** — keep the trigger diet; decide between a public repo, a
+   self-hosted Windows runner, or manual PR gating.
+10. **Agent working rule in `CLAUDE.md`** — audit the full space before
+    shipping a fix; never say "verified" without a test that fails when the
+    claim is false.
+
+### Explicitly not recommended
+
+- Collapsing the twelve `Write-Marker` copies into a shared file (a
+  missing-file failure mode that breaks every tool at once; the lint is the
+  propagation mechanism).
+- The two older deferred items above.
+- Any further plant-harness runs on a daily-driver machine until item 2
+  exists.
