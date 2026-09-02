@@ -21,14 +21,24 @@ name: windows-smoke
 # TRIGGER ECONOMICS: this repository is private, so Actions minutes are
 # metered, and these five windows-latest jobs bill at 2x with 20-35 minute
 # timeouts. Running them on every PR push exhausted the month's quota
-# mid-cycle (2026-08), after which every run "failed" in seconds with zero
-# billable compute. So this suite runs on pushes to main and on manual
-# dispatch only; PRs are gated by the Linux lint workflow plus a manual pass
-# of tests/manual_ci.ps1 on a real Windows machine -- the route that, during
-# the outage, caught five real bugs CI had never seen.
+# mid-cycle (2026-08). The first response removed the suite from PRs entirely
+# -- which meant a bug fix or feature got only the Linux lint before merge and
+# the Windows suite only after landing on main. That is backwards: the diet
+# must never cost coverage of a functional change. So the suite runs on any
+# PR that touches functional code (the bats, tools/, tests/, threat lists,
+# the workflows) and skips only docs-only PRs; the concurrency rule below
+# stops a superseded push from billing a second full suite.
 on:
   push:
     branches: [main]
+  pull_request:
+    paths:
+      - 'doze_sec.bat'
+      - 'doze_sec_noAdmin.bat'
+      - 'tools/**'
+      - 'tests/**'
+      - 'ThreatLists/**'
+      - '.github/workflows/**'
   # Manual kick. Without this there is no way to re-run these checks except by
   # pushing a commit -- which is exactly the wrong tool when the checks failed
   # for a reason that has nothing to do with the diff (a runner outage, an
@@ -1544,23 +1554,32 @@ jobs:
           $marker = Join-Path $env:TEMP 'dz_ev104_hit.txt'
 
           # (a) FALSE-POSITIVE direction -- the field report's exact shape: a
-          # non-eventlog provider's 104 in the System log must NOT read as a
-          # cleared log. Skipped only if the runner image somehow already
-          # carries a genuine clear event.
-          $pre = Get-WinEvent -FilterHashtable @{LogName='System';Id=104;ProviderName='Microsoft-Windows-Eventlog'} -MaxEvents 1 -EA SilentlyContinue
-          if ($pre) {
-            Write-Host 'runner image already carries a genuine 104; skipping direction (a)'
-          } else {
-            if (-not [System.Diagnostics.EventLog]::SourceExists('dz_ci_benign104')) {
-              New-EventLog -LogName System -Source dz_ci_benign104
-            }
-            Write-EventLog -LogName System -Source dz_ci_benign104 -EventId 104 -EntryType Information -Message 'benign 104: smart-card-reader-shaped noise, not a log clear'
-            Remove-Item $marker -Force -EA SilentlyContinue
-            $out = Invoke-Expression $frag | Out-String
-            Write-Host $out.Trim()
-            if ($out -notmatch '\[OK\]') { throw 'benign non-eventlog 104 was reported as a cleared log (the field false positive)' }
-            if (Test-Path $marker) { throw 'benign 104 raised the marker' }
+          # non-eventlog provider's Event 104 in the System log must not be
+          # what the check matches. This CANNOT be asserted on the fragment's
+          # whole output: the runner image already carries a genuine
+          # Microsoft-Windows-Eventlog 104, and 'wevtutil cl' writes another
+          # into the fresh log, so no reachable state is free of genuine
+          # clears -- the first version of this step silently skipped here and
+          # then claimed "both directions". Test the discriminating PROPERTY
+          # instead, using the provider name taken from the SHIPPED fragment:
+          # the bare-ID query (the field bug) must match the planted benign
+          # event, and the shipped provider-filtered query must exclude it.
+          # Holds on any image; no skip path.
+          $prov = ([regex]::Match($frag, "ProviderName='([^']+)'")).Groups[1].Value
+          if (-not $prov) { throw 'could not extract the provider filter from the shipped ev104 fragment' }
+          if (-not [System.Diagnostics.EventLog]::SourceExists('dz_ci_benign104')) {
+            New-EventLog -LogName System -Source dz_ci_benign104
           }
+          Write-EventLog -LogName System -Source dz_ci_benign104 -EventId 104 -EntryType Information -Message 'benign 104: smart-card-reader-shaped noise, not a log clear'
+          Start-Sleep -Seconds 2
+          $bare = @(Get-WinEvent -FilterHashtable @{LogName='System';Id=104} -EA SilentlyContinue | Where-Object { $_.ProviderName -eq 'dz_ci_benign104' })
+          if ($bare.Count -lt 1) { throw 'benign 104 did not land in the System log -- direction (a) could not be tested (this is a failure, not a skip)' }
+          Write-Host ("direction (a): bare-ID query matches the planted benign 104 ({0} event(s)) -- the field bug shape reproduces" -f $bare.Count)
+          $filtered = @(Get-WinEvent -FilterHashtable @{LogName='System';Id=104;ProviderName=$prov} -EA SilentlyContinue)
+          $leak = @($filtered | Where-Object { $_.ProviderName -ne $prov })
+          if ($leak.Count -gt 0) { throw ("the shipped provider filter let {0} non-{1} event(s) through -- the field false positive is NOT fixed" -f $leak.Count, $prov) }
+          Write-Host ("direction (a): shipped filter ({0}) returns {1} event(s), zero from the benign source -- discrimination PASS" -f $prov, $filtered.Count)
+          Remove-Item $marker -Force -EA SilentlyContinue
 
           # (b) TRUE-POSITIVE direction, never previously proven: actually
           # clear this ephemeral runner's System log. The clear itself writes
@@ -1572,7 +1591,7 @@ jobs:
           Write-Host $out2.Trim()
           if ($out2 -notmatch '\[WARNING\]') { throw 'a genuinely cleared System log was NOT detected' }
           if (-not (Test-Path $marker)) { throw 'cleared-log WARNING wrote no marker -- the finding would never reach the ledger' }
-          Write-Host 'ev104 provider filter holds in both directions'
+          Write-Host 'ev104: benign-source discrimination PASS; genuine-clear detection PASS'
 
       - name: Upload the selftest audit artifacts
         if: always()
