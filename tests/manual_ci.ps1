@@ -160,6 +160,10 @@ try {
         }
         if ($bad) { throw ("{0} file(s) failed to parse" -f $bad) }
         Write-Host ("[OK] {0} tool file(s) parse clean on this PowerShell." -f $files.Count)
+        # Parsing is not enough: an orphaned else parses as a command and only
+        # fails at runtime. The AST lint catches it.
+        & .\tools\lint_orphan_else.ps1
+        if ($LASTEXITCODE -ne 0) { throw ("orphaned else/elseif detected (exit {0})" -f $LASTEXITCODE) }
     }
 
     Invoke-Step 'marker selftest (finding reaches the ledger)' {

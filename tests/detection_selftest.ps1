@@ -739,11 +739,11 @@ try {
     Write-Host ""
     Write-Host "== Report integrity =="
     if ($badName) { Write-Host ("  [ REGRESS  ] report filename lacks a valid timestamp: '{0}' -- timestamp derivation broke (see the wmic-less fallback fix)" -f $report.Name); $requiredFail++ }
+    else          { Write-Host ("  [ OK       ] report filename timestamp is well-formed ({0})" -f $report.Name) }
     if ($badBanner) { Write-Host "  [ REGRESS  ] test-run report carries no TEST RUN banner -- a planted report could be mistaken for a real audit"; $requiredFail++ }
     else { Write-Host "  [ OK       ] test-run report is banner-stamped as planted" }
     if ($badDir) { Write-Host ("  [ REGRESS  ] test-run report landed outside selftest\ ({0}) -- it would sit beside real audits" -f $report.DirectoryName); $requiredFail++ }
     else { Write-Host "  [ OK       ] test-run report is quarantined under selftest\" }
-    else          { Write-Host ("  [ OK       ] report filename timestamp is well-formed ({0})" -f $report.Name) }
     if ($badFind) { Write-Host "  [ REGRESS  ] FINDINGS COUNTED missing or zero despite planted findings -- findings accumulator broke"; $requiredFail++ }
     else          { Write-Host "  [ OK       ] exit handler reports a non-zero findings count" }
     if ($badCrit) { Write-Host "  [ REGRESS  ] exit-8 escalation note emitted as [CRITICAL] -- top_findings.ps1 will re-list it as a phantom finding (should be [INFO])"; $requiredFail++ }

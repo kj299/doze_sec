@@ -65,6 +65,17 @@ jobs:
       - name: Run tests/safety_invariants.ps1
         run: pwsh -NoProfile -File tests/safety_invariants.ps1
 
+  orphan-else-lint:
+    name: "Orphaned else: no clause detached from its if (parses, then dies at runtime)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # An orphaned `else` is syntactically a command name, so a parse check
+      # passes and the script dies at runtime after printing its OK lines.
+      # The AST sees it; this runs anywhere.
+      - name: Run tools/lint_orphan_else.ps1
+        run: pwsh -NoProfile -File tools/lint_orphan_else.ps1
+
   docs-drift-lint:
     name: "Docs lint: the README matches the code"
     runs-on: ubuntu-latest
