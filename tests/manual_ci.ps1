@@ -160,6 +160,10 @@ try {
         }
         if ($bad) { throw ("{0} file(s) failed to parse" -f $bad) }
         Write-Host ("[OK] {0} tool file(s) parse clean on this PowerShell." -f $files.Count)
+        # Parsing is not enough: an orphaned else parses as a command and only
+        # fails at runtime. The AST lint catches it.
+        & .\tools\lint_orphan_else.ps1
+        if ($LASTEXITCODE -ne 0) { throw ("orphaned else/elseif detected (exit {0})" -f $LASTEXITCODE) }
     }
 
     Invoke-Step 'marker selftest (finding reaches the ledger)' {
@@ -219,6 +223,10 @@ if ($failed.Count) {
     exit 1
 }
 Write-Host ("[OK] All {0} step(s) passed." -f $results.Count)
+Write-Host ''
+Write-Host 'Test-run reports from the harnesses above are quarantined under'
+Write-Host '  C:\SecurityAudit\selftest\  and are banner-stamped TEST RUN -- every'
+Write-Host '  finding in them was planted. Real audits stay in C:\SecurityAudit\.'
 Write-Host ''
 Write-Host 'Not run by this script (run when the change touches INIT, section plumbing,'
 Write-Host 'or the deferral contract):'

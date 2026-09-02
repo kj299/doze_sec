@@ -28,7 +28,9 @@
 
 [CmdletBinding()]
 param(
-    [string]$OutDir = 'C:\SecurityAudit',
+    # The harness quarantines its output under selftest\ (-selftest); the
+    # seeded baseline snapshot lives there too.
+    [string]$OutDir = 'C:\SecurityAudit\selftest',
     [switch]$Quiet
 )
 
@@ -175,6 +177,14 @@ Remove-Path 'C:\Users\Public\dz_selftest_flag_svc.exe'          'Flag-service bi
 Remove-Path 'C:\Program Files\dz selftest fp'                   'FP-service directory'
 Remove-Path 'C:\dz_selftest_excl_dir'                           'Defender exclusion directory'
 Remove-Path (Join-Path $OutDir 'baseline.snapshot')            'Seeded baseline snapshot'
+# A harness run BEFORE the -selftest quarantine seeded its baseline into the
+# real output dir. That snapshot is captured pre-plant, so it carries no marker
+# and is indistinguishable from a user's own -baseline capture -- deleting it
+# could destroy real data, so it is reported, never removed.
+$stray = 'C:\SecurityAudit\baseline.snapshot'
+if (Test-Path -LiteralPath $stray) {
+    Write-Host ("  [NOTE   ] {0} exists. If you never ran the audit with -baseline yourself, a pre-quarantine harness run seeded it and your next real run would diff against test state: delete it, or re-run with -baseline to recapture." -f $stray)
+}
 
 # --- HOSTS: drop only the marker lines -------------------------------------
 $hostsPath = Join-Path $env:SystemRoot 'System32\drivers\etc\hosts'

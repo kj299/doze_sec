@@ -1456,6 +1456,10 @@ jobs:
           rem exist if the audit actually ran to the end.
           findstr /c:"EXIT CODE:" "%REP%" >nul || ( echo AUDIT DID NOT REACH EXIT HANDLER -- early exit or crash & exit /b 1 )
           findstr /c:"[18/18]" "%REP%" >nul || ( echo AUDIT DID NOT REACH SECTION 18 -- early exit & exit /b 1 )
+          rem A REAL run (no -selftest) must never carry the test banner nor land
+          rem in the selftest quarantine; the harness jobs assert the inverse.
+          findstr /c:"TEST RUN -- every finding below was planted" "%REP%" >nul && ( echo REAL RUN CARRIES THE TEST BANNER & exit /b 1 )
+          echo %REP% | findstr /i /c:"\selftest\" >nul && ( echo REAL RUN LANDED IN THE SELFTEST QUARANTINE & exit /b 1 )
           echo Completed end-to-end through Section 18 and the exit handler.
           exit /b 0
 
@@ -1464,7 +1468,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: securityaudit-output
-          path: C:\SecurityAudit\*
+          path: C:\SecurityAudit\**
           if-no-files-found: ignore
 
   # Detection-regression harness. full-run above proves the audit COMPLETES;
@@ -1598,7 +1602,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: detection-selftest-output
-          path: C:\SecurityAudit\*
+          path: C:\SecurityAudit\**
           if-no-files-found: ignore
 
   # The same plant/assert harness against doze_sec_noAdmin.bat, elevated.
@@ -1625,7 +1629,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: detection-selftest-noadmin-output
-          path: C:\SecurityAudit\*
+          path: C:\SecurityAudit\**
           if-no-files-found: ignore
 
   # The path CI never executed before: doze_sec_noAdmin.bat as a REAL standard

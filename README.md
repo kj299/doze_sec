@@ -68,6 +68,7 @@ doze_sec.bat -help
 | `-noVtSelf` | Both | Skip the automatic pre-flight VT integrity check on script-critical binaries (default: runs whenever `~/.vt_token` exists and network is up) |
 | `-ctiSkill <file>` | Admin only | Per-run override for the SENTINEL-X CTI skill file used by `-updateTTP` (1.2.0+: `standalone\cyber-threat-intel-prompt.md`; pre-1.2.0: `cyber_threat_skill.yaml`). Beats `DOZESEC_CTI_SKILL` env var and auto-discovery |
 | `-noConsoleLog` | Both | Skip console-output capture (default ON). Without this switch, stdout+stderr are tee'd to `C:\SecurityAudit\AuditConsole_<TS>.log` so crashes leave a debuggable trace |
+| `-selftest` | Both | Test-harness mode: writes every output under `C:\SecurityAudit\selftest\` (or `%USERPROFILE%\SecurityAudit\selftest\`) and stamps the report `*** TEST RUN -- every finding below was planted ***`, so a report of planted findings can never be mistaken for, or auto-diffed against, a real audit. Used by `tests\detection_selftest.ps1`; not for real audits |
 | `-help` | Both | Show usage guide with section descriptions |
 
 ## Output Files

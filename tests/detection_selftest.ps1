@@ -36,7 +36,9 @@
 [CmdletBinding()]
 param(
     [string]$BatPath = '.\doze_sec.bat',
-    [string]$OutDir  = 'C:\SecurityAudit',
+    # Quarantined: a test run writes under selftest\ so a report full of PLANTED
+    # findings can never be mistaken for, or auto-diffed against, a real audit.
+    [string]$OutDir  = 'C:\SecurityAudit\selftest',
 
     # DANGER THIS EXISTS FOR: nine plants below sit on the logon, unlock or
     # authentication path -- a credential provider and Winlogon Notify handler
@@ -572,7 +574,7 @@ try {
     # PowerShell launches the .bat directly and captures its exit code in
     # $LASTEXITCODE (no cmd /c quoting hazard). -noConsoleLog skips the
     # self-tee re-exec so the exit code is the audit's own, not Tee-Object's.
-    & $BatPath -dev -sdu -nosrp -resetTTP -noConsoleLog | Out-Null
+    & $BatPath -dev -sdu -nosrp -resetTTP -noConsoleLog -selftest | Out-Null
     $runExit = $LASTEXITCODE
     Write-Host ("  audit exit code: {0}" -f $runExit)
 
@@ -605,6 +607,12 @@ try {
     # last-ditch fallback for a broken PowerShell -- on this runner PowerShell
     # provably works, so NODATE here would also be a regression.)
     $badName = $report.Name -notmatch '^SecurityReport_\d{8}_\d{6}\.txt$'
+
+    # REQUIRED: a test-harness report must be unmistakable as one. -selftest
+    # stamps a banner and quarantines output under selftest\; a real user opened
+    # a planted report and asked how to fix their computer.
+    $badBanner = $text -notmatch 'TEST RUN -- every finding below was planted by the test harness'
+    $badDir    = $report.DirectoryName -notmatch '\\selftest$'
 
     # REQUIRED: the exit handler must report a non-zero findings count when
     # findings were planted -- this is the accumulator the section verdicts
@@ -732,6 +740,10 @@ try {
     Write-Host "== Report integrity =="
     if ($badName) { Write-Host ("  [ REGRESS  ] report filename lacks a valid timestamp: '{0}' -- timestamp derivation broke (see the wmic-less fallback fix)" -f $report.Name); $requiredFail++ }
     else          { Write-Host ("  [ OK       ] report filename timestamp is well-formed ({0})" -f $report.Name) }
+    if ($badBanner) { Write-Host "  [ REGRESS  ] test-run report carries no TEST RUN banner -- a planted report could be mistaken for a real audit"; $requiredFail++ }
+    else { Write-Host "  [ OK       ] test-run report is banner-stamped as planted" }
+    if ($badDir) { Write-Host ("  [ REGRESS  ] test-run report landed outside selftest\ ({0}) -- it would sit beside real audits" -f $report.DirectoryName); $requiredFail++ }
+    else { Write-Host "  [ OK       ] test-run report is quarantined under selftest\" }
     if ($badFind) { Write-Host "  [ REGRESS  ] FINDINGS COUNTED missing or zero despite planted findings -- findings accumulator broke"; $requiredFail++ }
     else          { Write-Host "  [ OK       ] exit handler reports a non-zero findings count" }
     if ($badCrit) { Write-Host "  [ REGRESS  ] exit-8 escalation note emitted as [CRITICAL] -- top_findings.ps1 will re-list it as a phantom finding (should be [INFO])"; $requiredFail++ }

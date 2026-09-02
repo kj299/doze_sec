@@ -126,6 +126,7 @@ set "VT_SELF_SKIP=0"
 set "BASELINE_SAVE=0"
 set "BASELINE_SKIP=0"
 set "NO_CONSOLE_LOG=0"
+set "SELFTEST_MODE=0"
 set "IOC_HITS=0"
 
 :: ====================================================================
@@ -150,6 +151,7 @@ if /i "%~1"=="-noVtSelf"   set "VT_SELF_SKIP=1"
 if /i "%~1"=="-baseline"   set "BASELINE_SAVE=1"
 if /i "%~1"=="-noBaseline" set "BASELINE_SKIP=1"
 if /i "%~1"=="-noConsoleLog" set "NO_CONSOLE_LOG=1"
+if /i "%~1"=="-selftest"   set "SELFTEST_MODE=1"
 shift
 goto :parse_args
 :parse_importttp_noadmin
@@ -244,6 +246,7 @@ echo                 is collected. Audit aborts with EXIT_CODE=7 if any
 echo                 binary is flagged malicious by VT.
 echo.
 echo    %C_GREEN%-noConsoleLog%C_RESET%  Skip console-output capture (default ON). By default
+echo    %C_GREEN%-selftest%C_RESET%      Test-harness mode: write everything under C:\SecurityAudit\selftest\
 echo                 the script self-tees stdout+stderr to
 echo                 C:\SecurityAudit\AuditConsole_^<timestamp^>.log so crashes
 echo                 leave a debuggable trace alongside the report.
@@ -414,6 +417,7 @@ if "%NO_ADMIN_MODE%"=="1" (
 ) else (
     set "OUTDIR=C:\SecurityAudit"
 )
+if "%SELFTEST_MODE%"=="1" set "OUTDIR=%OUTDIR%\selftest"
 if not exist "%OUTDIR%"             mkdir "%OUTDIR%"
 if not exist "%OUTDIR%\SmartData"   mkdir "%OUTDIR%\SmartData"
 if not exist "%OUTDIR%\EventExports" mkdir "%OUTDIR%\EventExports"
@@ -516,6 +520,10 @@ if %errorlevel% equ 0 (
 )
 
 :: ---- Create report header (admin check done, report is safe to write) ----
+if "%SELFTEST_MODE%"=="1" echo *** TEST RUN -- every finding below was planted by the test harness ***>> "%REPORT%"
+if "%SELFTEST_MODE%"=="1" echo *** This is NOT an audit of this machine. Real audit reports live in the ***>> "%REPORT%"
+if "%SELFTEST_MODE%"=="1" echo *** parent directory. Produced by tests\detection_selftest.ps1.          ***>> "%REPORT%"
+if "%SELFTEST_MODE%"=="1" echo ***********************************************************************>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 (echo   WIN11 SECURITY FORENSIC AUDIT  v%SCRIPT_VERSION%)>> "%REPORT%"
 (echo   Generated : %date%  %time%)>> "%REPORT%"
