@@ -49,9 +49,10 @@ param(
     # nothing ever locks it. On a person's machine, if the screen locks during
     # the ~10 minutes the plants are live, LogonUI can fail to render a working
     # unlock UI and Ctrl+Alt+Del does nothing -- a real lockout, which happened
-    # to a real user. Pass this switch on any interactive machine: the three
-    # cases are then reported as an explicit SKIP (never silently dropped) and
-    # every other detection still runs.
+    # to a real user. Pass this switch on any interactive machine: every case
+    # whose blast-radius manifest declares Affects 'logon' (nine today) is then
+    # reported as an explicit SKIP (never silently dropped) and every other
+    # detection still runs.
     [switch]$NoLockScreenRisk
 )
 
@@ -116,11 +117,29 @@ $baselineFile = Join-Path $OutDir 'baseline.snapshot'
 
 # Each case: Name, Tier, Plant/Cleanup script blocks, and Expect -- a regex that
 # must appear in the final report text for the detection to count as firing.
+#
+# BLAST-RADIUS MANIFEST (required on every case; tests\safety_invariants.ps1
+# fails the build on any case without one, and infers the axes from what the
+# Plant body touches, so a declaration cannot be quietly omitted):
+#   Touches = @('<kind>:<target>[|<coldkey>]', ...)  every host mutation the
+#             Plant makes. kind is one of registry, file, service, account,
+#             network, firewall, defender, hosts. <coldkey> is the substring
+#             tests\cleanup_selftest.ps1 must contain to prove the standalone
+#             cold recovery removes it (default: the text after the last '\').
+#   Affects = @(...) subset of 'logon' (LogonUI / Winlogon / lsass / credential
+#             path -- the lockout class), 'boot' (loaded before any user
+#             session), 'network' (changes exposure or name resolution),
+#             'defense' (leaves the machine LESS protected while planted, so an
+#             interrupted run matters). @() when none.
+#   A case with 'logon' in Affects must carry LockScreenRisk (the reason shown
+#   when -NoLockScreenRisk skips it) and vice versa. Literal strings only.
 $cases = @(
     @{
         Name   = 'WDigest UseLogonCredential=1 -> CRITICAL (plaintext creds in RAM)'
         Attack = @('T1003.001')
         Tier   = 'required'
+        Touches= @('registry:HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest\UseLogonCredential')
+        Affects= @('defense')
         Expect = 'WDigest ENABLED'
         Plant  = { New-Item -Path $wdigestKey -Force | Out-Null
                    Set-ItemProperty -Path $wdigestKey -Name UseLogonCredential -Value 1 -Type DWord -Force }
@@ -129,6 +148,8 @@ $cases = @(
     @{
         Name   = 'HOSTS entry mapping a domain to a public IP -> WARNING (DNS hijack)'
         Tier   = 'required'
+        Touches= @('hosts:%SystemRoot%\System32\drivers\etc\hosts|drivers\etc\hosts')
+        Affects= @('network')
         Expect = 'Non-standard entries found in HOSTS'
         Plant  = { Add-Content -LiteralPath $hostsPath -Value ("203.0.113.5 {0}.example" -f $MARK) }
         # Read and write with the SAME explicit encoding. The old cleanup read
@@ -146,6 +167,8 @@ $cases = @(
         Name   = 'Run-key backdoor (encoded PowerShell) -> flagged as suspicious'
         Attack = @('T1547.001')
         Tier   = 'required'  # persistence_eval.ps1 evaluates Run keys (issue #138)
+        Touches= @('registry:HKCU:\Software\Microsoft\Windows\CurrentVersion\Run\dz_selftest_evil|Run-key backdoor (encoded PowerShell)')
+        Affects= @()
         Expect = ('(?im)(\[(WARNING|CRITICAL)\][^\r\n]*{0}|{0}[^\r\n]*(suspicious|encoded|backdoor))' -f $MARK)
         Plant  = { if (-not (Test-Path $runKey)) { New-Item -Path $runKey -Force | Out-Null }
                    Set-ItemProperty -Path $runKey -Name $MARK -Value 'powershell -w hidden -enc ZQBjAGgAbwA=' -Force }
@@ -155,6 +178,8 @@ $cases = @(
         Name   = 'Run-key autorun whose VALUE NAME starts with "PS" -> still flagged (note-property filter evasion)'
         Attack = @('T1547.001')
         Tier   = 'required'
+        Touches= @('registry:HKCU:\Software\Microsoft\Windows\CurrentVersion\Run\PSdz_selftest_evil|Run-key backdoor (PS-prefixed)')
+        Affects= @()
         # Every registry evaluator skipped PowerShell's synthetic note-properties
         # with `-match '^PS'`, a PREFIX match. That also skipped any real value
         # whose name merely began with "PS", so naming an autorun "PSUpdater"
@@ -170,6 +195,8 @@ $cases = @(
     @{
         Name   = 'IFEO Debugger on a NON-accessibility binary (notepad) -> escalated'
         Tier   = 'required'  # persistence_eval.ps1 escalates ANY IFEO Debugger (issue #138)
+        Touches= @('registry:HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\notepad.exe')
+        Affects= @()
         Expect = '(?im)IFEO Debugger hijack[^\r\n]*notepad'
         Plant  = { New-Item -Path $ifeoKey -Force | Out-Null
                    Set-ItemProperty -Path $ifeoKey -Name Debugger -Value 'cmd.exe' -Force }
@@ -179,6 +206,8 @@ $cases = @(
         Name   = 'Startup-folder script autorun -> flagged (T1547.001)'
         Attack = @('T1547.001')
         Tier   = 'required'  # startup_eval.ps1; same dump-without-verdict class as #138
+        Touches= @('file:<Startup>\dz_selftest_evil.vbs|Startup script (.vbs)')
+        Affects= @()
         Expect = ('(?im)\[(WARNING|CRITICAL)\] Startup item [^\r\n]*{0}' -f $MARK)
         Plant  = { Set-Content -LiteralPath $startupVbs -Value "WScript.Echo ""$MARK""" -Encoding ASCII }
         Cleanup= { Remove-Item -LiteralPath $startupVbs -Force -EA SilentlyContinue }
@@ -188,6 +217,8 @@ $cases = @(
         LockScreenRisk = 'loaded on process creation; Winlogon spawns processes during logon'
         Attack = @('T1546.009')
         Tier   = 'required'  # startup_eval.ps1; uncovered sibling of AppInit_DLLs
+        Touches= @('registry:HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\AppCertDlls\dz_selftest_evil|AppCertDlls')
+        Affects= @('logon')
         Expect = ('(?im)\[(WARNING|CRITICAL)\] AppCert DLL [^\r\n]*{0}' -f $MARK)
         Plant  = { if (-not (Test-Path $appcertKey)) { New-Item -Path $appcertKey -Force | Out-Null }
                    Set-ItemProperty -Path $appcertKey -Name $MARK -Value 'C:\Windows\Temp\dz_selftest_evil.dll' -Force }
@@ -197,6 +228,8 @@ $cases = @(
         Name   = 'Unsigned kernel driver in a drop location -> flagged (BYOVD/T1562.001)'
         Attack = @('T1562.001', 'T1068')
         Tier   = 'required'  # driver_audit.ps1; signature catch-all -- renaming cannot evade
+        Touches= @('file:C:\Users\Public\dz_selftest_evil.sys|Fake kernel driver')
+        Affects= @()
         Expect = ('(?im)\[(WARNING|CRITICAL)\] Driver [^\r\n]*{0}\.sys' -f $MARK)
         Plant  = { Set-Content -LiteralPath $drvPlant -Value 'MZ not-a-real-driver' -Encoding ASCII }
         Cleanup= { Remove-Item -LiteralPath $drvPlant -Force -EA SilentlyContinue }
@@ -205,6 +238,8 @@ $cases = @(
         Name   = 'Account hidden from the sign-in screen -> flagged (T1564.002)'
         Attack = @('T1564.002', 'T1564')
         Tier   = 'required'  # stalkerware_check.ps1; covert-monitoring path
+        Touches= @('registry:HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList\dz_selftest_evil|UserList')
+        Affects= @()
         Expect = ('(?im)\[(WARNING|CRITICAL)\][^\r\n]*HIDDEN[^\r\n]*{0}' -f $MARK)
         Plant  = { if (-not (Test-Path $userListKey)) { New-Item -Path $userListKey -Force | Out-Null }
                    Set-ItemProperty -Path $userListKey -Name $MARK -Value 0 -Type DWord -Force }
@@ -215,6 +250,8 @@ $cases = @(
         LockScreenRisk = 'injected into every user32-linked GUI process -- LogonUI is one of them'
         Attack = @('T1546.010')
         Tier   = 'required'  # emulation corpus; DLL injected into every GUI process
+        Touches= @('registry:HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows\AppInit_DLLs')
+        Affects= @('logon')
         Expect = '(?im)\[CRITICAL\] AppInit_DLLs is set \(T1546\.010\)'
         Plant  = { $script:appInitPrev = (Get-ItemProperty -Path $appInitKey -Name 'AppInit_DLLs' -EA SilentlyContinue).AppInit_DLLs
                    Set-ItemProperty -Path $appInitKey -Name 'AppInit_DLLs' -Value $comDll -Force }
@@ -233,6 +270,8 @@ $cases = @(
         Name   = 'HKCU COM CLSID InprocServer32 hijack -> flagged (T1546.015)'
         Attack = @('T1546.015')
         Tier   = 'required'  # emulation corpus; userland COM persistence
+        Touches= @('registry:HKCU:\Software\Classes\CLSID\{dead1111-0000-0000-0000-00000000c015}')
+        Affects= @()
         Expect = '(?im)\[T1546\.015\][\s\S]{0,800}dz_selftest_evil_com'
         Plant  = { New-Item -Path "$comKey\InprocServer32" -Force | Out-Null
                    Set-ItemProperty -Path "$comKey\InprocServer32" -Name '(default)' -Value $comDll -Force }
@@ -242,6 +281,8 @@ $cases = @(
         Name   = 'Accessibility IFEO hijack on sethc.exe -> flagged (T1546.008)'
         Attack = @('T1546.008')
         Tier   = 'required'  # emulation corpus; nation-state login-screen backdoor
+        Touches= @('registry:HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\sethc.exe')
+        Affects= @()
         Expect = '(?im)\[CRITICAL\] IFEO Debugger hijack: sethc\.exe'
         Plant  = { New-Item -Path $sethcIfeoKey -Force | Out-Null
                    Set-ItemProperty -Path $sethcIfeoKey -Name 'Debugger' -Value 'cmd.exe' -Force }
@@ -252,6 +293,8 @@ $cases = @(
         LockScreenRisk = 'lsass loads Authentication Packages AT BOOT; a bogus one can break authentication itself, not just the unlock UI'
         Attack = @('T1547.002')
         Tier   = 'required'  # emulation corpus; sibling of the LSA Notification plant
+        Touches= @('registry:HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\Authentication Packages')
+        Affects= @('logon', 'boot')
         Expect = "(?im)LSA Authentication Packages package 'dz_selftest_authpkg'"
         Plant  = { $cur = @((Get-ItemProperty -Path $lsaKey -Name 'Authentication Packages' -EA Stop).'Authentication Packages')
                    $script:lsaPrevAuth = $cur
@@ -262,6 +305,8 @@ $cases = @(
         Name   = 'Time provider DLL registered -> flagged (T1547.003)'
         Attack = @('T1547.003')
         Tier   = 'required'  # persistence_extra.ps1; W32Time loads these as SYSTEM
+        Touches= @('registry:HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\TimeProviders\dz_selftest_evil|TimeProviders')
+        Affects= @()
         # Planting the subkey is inert: W32Time only loads providers when the
         # service starts, and the harness never restarts it.
         Expect = ('(?im)\[(WARNING|CRITICAL)\] Time provider [^\r\n]*{0}' -f $MARK)
@@ -273,6 +318,8 @@ $cases = @(
         Name   = 'PowerShell profile with a download cradle -> flagged (T1546.013)'
         Attack = @('T1546.013')
         Tier   = 'required'  # persistence_extra.ps1; content is judged, not existence
+        Touches= @('file:<MyDocuments>\WindowsPowerShell\Microsoft.PowerShell_profile.ps1')
+        Affects= @()
         Expect = '(?im)\[(WARNING|CRITICAL)\] PowerShell profile [^\r\n]*'
         Plant  = { if (-not (Test-Path $psProfDir)) { New-Item -ItemType Directory -Path $psProfDir -Force | Out-Null }
                    # Only plant when the user has no profile of their own, so a
@@ -287,6 +334,8 @@ $cases = @(
         Name   = 'Guest account enabled -> WARNING'
         Attack = @('T1078.001')
         Tier   = 'required'  # Section 2 now emits a SID -501 verdict (issue #138)
+        Touches= @('account:guest (enabled)|net user guest')
+        Affects= @('defense')
         Expect = '(?im)\[(WARNING|CRITICAL)\][^\r\n]*guest'
         Plant  = { & net user guest /active:yes | Out-Null }
         Cleanup= { & net user guest /active:no  | Out-Null }
@@ -295,6 +344,8 @@ $cases = @(
         Name   = 'netsh portproxy rule active -> WARNING (Volt Typhoon C2 tunnel IOC)'
         Attack = @('T1090')
         Tier   = 'required'
+        Touches= @('network:portproxy v4tov4 127.0.0.1:53219|listenport=53219')
+        Affects= @('network')
         Expect = '(?im)\[WARNING\] netsh portproxy rules ACTIVE'
         Plant  = { $r = & netsh interface portproxy add v4tov4 listenport=53219 listenaddress=127.0.0.1 connectport=80 connectaddress=127.0.0.1
                    if ($LASTEXITCODE -ne 0) { throw ("netsh portproxy add failed: {0}" -f ($r -join ' ')) } }
@@ -310,6 +361,8 @@ $cases = @(
     @{
         Name   = 'Section 3 verdict reflects the HOSTS finding (verdict unmasking)'
         Tier   = 'required'
+        Touches= @()
+        Affects= @()
         Expect = '\[SECTION 3/18 RESULT: ISSUES FOUND'
         Plant  = { }
         Cleanup= { }
@@ -317,6 +370,8 @@ $cases = @(
     @{
         Name   = 'Section 17 verdict reflects the portproxy finding (verdict unmasking)'
         Tier   = 'required'
+        Touches= @()
+        Affects= @()
         Expect = '\[SECTION 17/18 RESULT: ISSUES FOUND'
         Plant  = { }
         Cleanup= { }
@@ -325,6 +380,8 @@ $cases = @(
     @{
         Name   = 'Benign signed shortcut in Startup -> must NOT be flagged (FP guard)'
         Tier   = 'required'
+        Touches= @('file:<Startup>\dz_selftest_evil_benign.lnk|Startup benign shortcut')
+        Affects= @()
         Invert = $true       # legit installers drop shortcuts here constantly
         # A .lnk to the Microsoft-signed notepad.exe is exactly what OneDrive /
         # Teams / vendor updaters look like. Flagging it would make the new
@@ -340,6 +397,8 @@ $cases = @(
     @{
         Name   = 'ScriptBlockLogging ON -> audit must NOT flag its own AMSI scan'
         Tier   = 'required'
+        Touches= @('registry:HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging\EnableScriptBlockLogging')
+        Affects= @()
         Invert = $true       # regex must be ABSENT from the report
         # With 4104 logging on, the audit's own script blocks contain the AMSI
         # pattern list; without the self-exclusion filter the CTI section
@@ -352,6 +411,9 @@ $cases = @(
     @{
         Name   = 'Signed service at unquoted spaced path -> must NOT be "no-file"'
         Tier   = 'required'
+        Touches= @('service:dz_selftest_fp_svc',
+                   'file:C:\Program Files\dz selftest fp')
+        Affects= @()
         Invert = $true
         # The old parser split the unquoted PathName at the first space
         # ("C:\Program"), failed to find the binary, and reported signed
@@ -369,6 +431,9 @@ $cases = @(
         Name   = 'Flagged service (bad path) drives Section 7 verdict to ISSUES FOUND (wiring)'
         Attack = @('T1543.003', 'T1543')
         Tier   = 'required'
+        Touches= @('service:dz_selftest_flag_svc',
+                   'file:C:\Users\Public\dz_selftest_flag_svc.exe')
+        Affects= @()
         # A service binary under \Users\Public\ is flagged by
         # service_signature_check.ps1 (bad-path). Before the fix, the helper's
         # [WARNING] never incremented FINDINGS, so Section 7's verdict read
@@ -383,6 +448,8 @@ $cases = @(
     @{
         Name   = 'Benign hidden-window autorun -> must NOT be flagged (FP guard)'
         Tier   = 'required'
+        Touches= @('registry:HKCU:\Software\Microsoft\Windows\CurrentVersion\Run\dz_selftest_evil_benign|Run-key benign autorun')
+        Affects= @()
         Invert = $true
         # A legitimate updater that runs "-WindowStyle Hidden -File <path>" with
         # no download/encode token must NOT trip persistence_eval. Before the fix,
@@ -396,6 +463,8 @@ $cases = @(
         Name   = 'Disabled firewall profile -> summary reports DISABLED (enum-robust)'
         Attack = @('T1562.004')
         Tier   = 'required'
+        Touches= @('firewall:Private profile disabled|Firewall Private profile')
+        Affects= @('network', 'defense')
         # Get-NetFirewallProfile.Enabled is a GpoBoolean enum; the summary must
         # classify a disabled profile as off. The harness previously only ever
         # planted the all-enabled state, so the disabled path went untested.
@@ -428,6 +497,8 @@ $cases = @(
     @{
         Name   = 'Defender path exclusion -> Section 9 verdict ISSUES FOUND (Div-1 wiring)'
         Tier   = 'required'
+        Touches= @('defender:ExclusionPath C:\dz_selftest_excl_dir|dz_selftest_excl_dir')
+        Affects= @('defense')
         # A Defender path exclusion (T1562.001, AV-blinding) emits [WARNING] in
         # Section 9 but never incremented FINDINGS, so the section verdict read
         # CLEAN. Assert it now flips. (If Defender is unavailable on the runner,
@@ -443,6 +514,8 @@ $cases = @(
         LockScreenRisk = 'registers a Winlogon Notify handler on the logon/lock path pointing at a missing DLL'
         Attack = @('T1547.004')
         Tier   = 'required'
+        Touches= @('registry:HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\Notify\dz_selftest_evil|Winlogon\Notify')
+        Affects= @('logon')
         Expect = '(?im)Winlogon Notify subkey[^\r\n]*dz_selftest_evil'
         Plant  = { New-Item -Path $notifyKey -Force | Out-Null
                    Set-ItemProperty -Path $notifyKey -Name DllName -Value 'C:\Users\Public\dz_evil_notify.dll' -Force }
@@ -453,6 +526,9 @@ $cases = @(
         LockScreenRisk = 'network providers are enumerated during logon; a rogue entry pointing at a missing DLL is a known cause of logon hangs'
         Attack = @('T1556.008')
         Tier   = 'required'
+        Touches= @('registry:HKLM:\SYSTEM\CurrentControlSet\Control\NetworkProvider\Order\ProviderOrder',
+                   'registry:HKLM:\SYSTEM\CurrentControlSet\Services\dz_selftest_np')
+        Affects= @('logon', 'network')
         Expect = '(?im)network provider .?dz_selftest_np'
         Plant  = { $script:npPrevOrder = (Get-ItemProperty -Path $npOrderKey -Name ProviderOrder -EA Stop).ProviderOrder
                    Set-ItemProperty -Path $npOrderKey -Name ProviderOrder -Value ($script:npPrevOrder + ',dz_selftest_np') -Force
@@ -466,6 +542,9 @@ $cases = @(
         LockScreenRisk = 'registers a credential provider LogonUI must load; a missing DLL here can break the unlock screen'
         Attack = @('T1547')
         Tier   = 'required'
+        Touches= @('registry:HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\{deadbeef-0000-0000-0000-00000000d123}',
+                   'registry:HKLM:\SOFTWARE\Classes\CLSID\{deadbeef-0000-0000-0000-00000000d123}')
+        Affects= @('logon')
         Expect = '(?im)Credential provider [^\r\n]*deadbeef'
         Plant  = { New-Item -Path $cpKey -Force | Out-Null
                    New-Item -Path ("{0}\InprocServer32" -f $cpClsidKey) -Force | Out-Null
@@ -478,6 +557,8 @@ $cases = @(
         LockScreenRisk = 'lsass loads Notification Packages at boot; a bogus one sits directly on the authentication path'
         Attack = @('T1556.002')
         Tier   = 'required'
+        Touches= @('registry:HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\Notification Packages')
+        Affects= @('logon', 'boot')
         Expect = "(?im)LSA Notification Packages package 'dz_selftest_lsa'"
         # Inert until reboot (lsass only re-reads at boot); restored in cleanup.
         Plant  = { $cur = @((Get-ItemProperty -Path $lsaKey -Name 'Notification Packages' -EA Stop).'Notification Packages')
@@ -490,6 +571,8 @@ $cases = @(
         LockScreenRisk = 'points SCRNSAVE.EXE at a nonexistent .scr that fires on idle -- exactly when a machine locks'
         Attack = @('T1546.002')
         Tier   = 'required'
+        Touches= @('registry:HKCU:\Control Panel\Desktop\SCRNSAVE.EXE')
+        Affects= @('logon')
         Expect = '(?im)Screensaver SCRNSAVE\.EXE -> C:\\Users\\Public\\dz_evil\.scr'
         # NEVER restore a captured value that is the plant itself. If a previous
         # run was interrupted after planting, the "previous" value read here is
@@ -511,11 +594,41 @@ $cases = @(
         LockScreenRisk = 'runs a script at every logon; pointing it at a nonexistent .bat can stall the logon sequence'
         Attack = @('T1037.001')
         Tier   = 'required'
+        Touches= @('registry:HKCU:\Environment\UserInitMprLogonScript')
+        Affects= @('logon')
         Expect = '(?im)UserInitMprLogonScript is set'
         Plant  = { Set-ItemProperty -Path $envKey -Name UserInitMprLogonScript -Value 'C:\Users\Public\dz_evil.bat' -Force }
         Cleanup= { Remove-ItemProperty -Path $envKey -Name UserInitMprLogonScript -EA SilentlyContinue }
     }
 )
+
+# ---- Blast-radius manifest: validated BEFORE anything is planted ----------
+# The static twin of this check is tests\safety_invariants.ps1 (CI and
+# manual_ci step 1). This runtime check exists so that running the harness by
+# hand, outside either gate, still cannot plant an undeclared artifact.
+$dzKinds = @('registry', 'file', 'service', 'account', 'network', 'firewall', 'defender', 'hosts')
+$dzAxes  = @('logon', 'boot', 'network', 'defense')
+$manifestErrors = @()
+foreach ($c in $cases) {
+    if (-not $c.ContainsKey('Touches')) { $manifestErrors += ("{0}: no Touches declaration" -f $c.Name); continue }
+    if (-not $c.ContainsKey('Affects')) { $manifestErrors += ("{0}: no Affects declaration" -f $c.Name); continue }
+    $t = @($c.Touches); $a = @($c.Affects)
+    $plantEmpty = ([string]$c.Plant).Trim().Length -eq 0
+    if ($plantEmpty -and $t.Count)        { $manifestErrors += ("{0}: declares Touches but plants nothing" -f $c.Name) }
+    if (-not $plantEmpty -and -not $t.Count) { $manifestErrors += ("{0}: plants something but declares no Touches" -f $c.Name) }
+    foreach ($e in $t) {
+        if ($e -notmatch '^(registry|file|service|account|network|firewall|defender|hosts):\S') { $manifestErrors += ("{0}: malformed Touches entry '{1}'" -f $c.Name, $e) }
+    }
+    foreach ($x in $a) { if ($dzAxes -notcontains $x) { $manifestErrors += ("{0}: unknown Affects axis '{1}'" -f $c.Name, $x) } }
+    $hasLogon = ($a -contains 'logon')
+    if ($hasLogon -and -not $c.LockScreenRisk) { $manifestErrors += ("{0}: Affects logon but has no LockScreenRisk reason" -f $c.Name) }
+    if ($c.LockScreenRisk -and -not $hasLogon) { $manifestErrors += ("{0}: has LockScreenRisk but does not declare Affects logon -- it would NOT be skipped by -NoLockScreenRisk" -f $c.Name) }
+}
+if ($manifestErrors.Count) {
+    Write-Host ("[FAIL] blast-radius manifest is incomplete ({0} problem(s)) -- refusing to plant anything:" -f $manifestErrors.Count)
+    $manifestErrors | ForEach-Object { Write-Host ("  - " + $_) }
+    exit 1
+}
 
 function Get-LatestReport {
     param([string]$Dir)
@@ -543,6 +656,32 @@ try {
 
     # Plant per-case with a catch so one bad plant cannot abort the whole run
     # (and only cases that actually planted get asserted / cleaned up).
+    # Blast radius, declared by every case and printed BEFORE the first plant,
+    # so the person running this sees what it is about to do to their machine.
+    $kindCounts = @{}; $axisCounts = @{}; $axisSkipped = @{}
+    foreach ($c in $cases) {
+        foreach ($e in @($c.Touches)) { $k = ($e -split ':', 2)[0]; $kindCounts[$k] = 1 + [int]$kindCounts[$k] }
+        $isLogon = (@($c.Affects) -contains 'logon')
+        foreach ($x in @($c.Affects)) {
+            $axisCounts[$x] = 1 + [int]$axisCounts[$x]
+            if ($NoLockScreenRisk -and $isLogon) { $axisSkipped[$x] = 1 + [int]$axisSkipped[$x] }
+        }
+    }
+    $kindLine = @(); foreach ($k in $dzKinds) { if ($kindCounts[$k]) { $kindLine += ("{0} {1}" -f $k, $kindCounts[$k]) } }
+    $axisLine = @()
+    foreach ($x in $dzAxes) {
+        if (-not $axisCounts[$x]) { continue }
+        $s = "{0} {1}" -f $x, $axisCounts[$x]
+        if ($axisSkipped[$x]) {
+            if ($axisSkipped[$x] -eq $axisCounts[$x]) { $s += " (all SKIPPED: -NoLockScreenRisk)" } else { $s += (" ({0} SKIPPED: -NoLockScreenRisk)" -f $axisSkipped[$x]) }
+        }
+        $axisLine += $s
+    }
+    Write-Host "== Blast radius (declared by every plant) =="
+    Write-Host ("   touches:    " + ($kindLine -join ' / '))
+    Write-Host ("   can affect: " + ($axisLine -join ' / '))
+    Write-Host "   if this run is interrupted: tests\cleanup_selftest.ps1 removes every item above by marker"
+    Write-Host ""
     Write-Host "== Planting known-bad artifacts =="
     foreach ($c in $cases) {
         # Register for cleanup BEFORE planting, not after. A multi-step plant
@@ -551,7 +690,7 @@ try {
         # finally block skipped exactly the cases that left debris behind. The
         # cleanups are all idempotent -EA SilentlyContinue removals, so running
         # one for a plant that never happened is harmless.
-        if ($NoLockScreenRisk -and $c.LockScreenRisk) {
+        if ($NoLockScreenRisk -and (@($c.Affects) -contains 'logon')) {
             # Declared, loud, and counted as a SKIP below -- never a silent
             # drop that would let a green run imply coverage it did not have.
             $c.Planted = $false

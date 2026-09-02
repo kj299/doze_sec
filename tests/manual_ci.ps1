@@ -39,11 +39,12 @@ param(
     # harnesses. For iterating on a tools/*.ps1 change.
     [switch]$Quick,
 
-    # Opt IN to the three plants that can break the lock screen (credential
-    # provider, screensaver, Winlogon Notify). OFF by default on purpose: a
-    # real user was locked out of their own machine when the screen locked
-    # while those were live. Only pass this on a throwaway VM you can
-    # hard-reset.
+    # Opt IN to the nine plants on the logon/unlock/authentication path
+    # (credential provider, Winlogon Notify, screensaver, LSA Notification and
+    # Authentication packages, network provider, logon script, AppInit and
+    # AppCert DLLs). OFF by default on purpose: a real user was locked out of
+    # their own machine when the screen locked while those were live. Only
+    # pass this on a throwaway VM you can hard-reset.
     [switch]$AllowLockScreenRisk
 )
 
@@ -76,17 +77,22 @@ Write-Host '      while this is running -- it will take ~15-25 minutes.'
 Write-Host ''
 if ($AllowLockScreenRisk) {
     Write-Host '*** WARNING -- LOCK-SCREEN RISK IS ENABLED ***' -ForegroundColor Red
-    Write-Host '    This run registers a credential provider, a screensaver and a Winlogon' -ForegroundColor Red
-    Write-Host '    Notify handler that all point at DLLs which do not exist. If this'      -ForegroundColor Red
-    Write-Host '    machine LOCKS while they are live, Windows can fail to draw a working'  -ForegroundColor Red
-    Write-Host '    unlock screen and Ctrl+Alt+Del will appear dead -- you would be locked' -ForegroundColor Red
-    Write-Host '    out and need a hard power-off. DO NOT lock, sleep, or walk away.'       -ForegroundColor Red
-    Write-Host '    Run this only on a machine you can afford to hard-reset.'               -ForegroundColor Red
+    Write-Host '    This run registers NINE plants on the logon path -- a credential provider,' -ForegroundColor Red
+    Write-Host '    a Winlogon Notify handler, a screensaver, LSA Notification and'           -ForegroundColor Red
+    Write-Host '    Authentication packages (loaded by lsass AT BOOT), a network provider,'   -ForegroundColor Red
+    Write-Host '    a logon script, and AppInit/AppCert DLLs -- all pointing at files that'   -ForegroundColor Red
+    Write-Host '    do not exist. If this machine LOCKS while they are live, Windows can'     -ForegroundColor Red
+    Write-Host '    fail to draw a working unlock screen and Ctrl+Alt+Del will appear dead'   -ForegroundColor Red
+    Write-Host '    -- you would be locked out and need a hard power-off; a reboot with the'  -ForegroundColor Red
+    Write-Host '    LSA packages live can break sign-in itself. DO NOT lock, sleep, reboot,'  -ForegroundColor Red
+    Write-Host '    or walk away. Run this only on a machine you can afford to hard-reset.'   -ForegroundColor Red
     Write-Host ''
 } else {
-    Write-Host 'SAFE MODE (default): the three plants that can break the lock screen'
-    Write-Host '      (credential provider, screensaver, Winlogon Notify) are SKIPPED and'
-    Write-Host '      reported as such. Pass -AllowLockScreenRisk only on a throwaway VM.'
+    Write-Host 'SAFE MODE (default): the nine plants on the logon/unlock/authentication'
+    Write-Host '      path (credential provider, Winlogon Notify, screensaver, LSA packages,'
+    Write-Host '      network provider, logon script, AppInit/AppCert DLLs) are SKIPPED and'
+    Write-Host '      reported as such. The harness prints its full blast radius before it'
+    Write-Host '      plants anything. Pass -AllowLockScreenRisk only on a throwaway VM.'
     Write-Host ''
 }
 
@@ -137,6 +143,10 @@ try {
     Invoke-Step 'safety invariants (harness cannot lock you out)' {
         & .\tests\safety_invariants.ps1
         if ($LASTEXITCODE -ne 0) { throw ("exit code {0}" -f $LASTEXITCODE) }
+        # A check that cannot fail is not a check: prove it fails on a
+        # mutated copy (undeclared plant, missing reason, missing cleanup).
+        & .\tests\safety_invariants.ps1 -SelfTest
+        if ($LASTEXITCODE -ne 0) { throw ("self-test exit code {0}" -f $LASTEXITCODE) }
     }
     if ($results | Where-Object { $_.Step -like 'safety invariants*' -and $_.Result -eq 'FAIL' }) {
         Write-Host ''

@@ -156,7 +156,7 @@ audience, not effort.
 
 ### P0 — safety and trust
 
-1. **Quarantine test output.** Harness runs write to
+1. **Quarantine test output** (done, #189). Harness runs write to
    `C:\SecurityAudit\selftest\` and stamp a `*** TEST RUN ***` banner on the
    report's first lines and the HTML header. A test report must never be
    mistakable for a real one — the owner opened one and asked how to fix
@@ -167,9 +167,10 @@ audience, not effort.
    catalogs known-benign look-alikes (`P9NP`, never-onboarded `Sense`,
    `WudfUsbccidDriver` Event 104, Codex sandbox accounts, …) and they are
    regression-tested.
-3. **Blast-radius manifest for the harness.** Every plant declares what it
-   touches and whether it can affect logon, boot, or the network;
-   `safety_invariants` fails on any plant without a declaration.
+3. **Blast-radius manifest for the harness** (done). Every plant declares
+   what it touches and whether it can affect logon, boot, network, or
+   defense; `safety_invariants` fails on any plant without a declaration,
+   infers the axes from the plant body, and self-tests against mutations.
 
 ### P1 — detection quality
 
