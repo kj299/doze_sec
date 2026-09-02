@@ -1471,6 +1471,49 @@ jobs:
           path: C:\SecurityAudit\**
           if-no-files-found: ignore
 
+  # Read-only field test. full-run above proves the audit completes; this
+  # proves the -readonly promise on a real Windows machine using the exact
+  # script a person runs on their own machine (tests\field_test.ps1): the
+  # RunOnce key, the boot configuration and the restore-point count are
+  # captured before and after and must be unchanged; the report must carry
+  # the READ-ONLY banner and declare every skipped step; and the benign
+  # look-alike corpus must grade it with no known false positive returning.
+  readonly-field-test:
+    name: "tests/field_test.ps1: -readonly changes nothing on the machine (proven before/after)"
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the field test (read-only audit + read-only proof + corpus check)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = (& .\tests\field_test.ps1 -BatPath .\doze_sec.bat -NoConsoleLog *>&1 | Out-String)
+          $rc = $LASTEXITCODE
+          Write-Host $out
+          Write-Host ("field_test.ps1 exit code: {0}" -f $rc)
+          if ($rc -ne 0) { throw "field_test.ps1 failed (see above)" }
+          # The proof lines must have actually executed -- not skipped -- on this elevated runner.
+          foreach ($must in @('RunOnce resume key: absent after the run', 'boot configuration (bcdedit /enum {bootmgr}): unchanged',
+                              'report carries the READ-ONLY banner', 'report carries no TEST RUN banner',
+                              'read-only skip declared: boot menu left as found', 'no known benign look-alike is reported above')) {
+            if ($out -notmatch [regex]::Escape($must)) { throw ("field_test output lacks the proof line: {0}" -f $must) }
+          }
+          if ($out -match '\[FAIL') { throw 'field_test printed a FAIL line' }
+          # Independent check, not trusting the script under test: the key is really absent.
+          $ro = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce' -EA SilentlyContinue
+          if ($ro -and ($ro.PSObject.Properties.Name -contains '*doze_sec_resume')) { throw 'RunOnce resume value exists after a -readonly run' }
+          Write-Host 'read-only field test: proven on this runner.'
+
+      - name: Upload the audit artifacts for inspection
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: readonly-field-test-output
+          path: C:\SecurityAudit\**
+          if-no-files-found: ignore
+
   # Detection-regression harness. full-run above proves the audit COMPLETES;
   # this proves it DETECTS. It plants known-bad artifacts (WDigest=1, a HOSTS
   # hijack, a Run-key backdoor, an IFEO Debugger on notepad, an enabled Guest

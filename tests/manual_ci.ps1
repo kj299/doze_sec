@@ -147,6 +147,15 @@ try {
         # mutated copy (undeclared plant, missing reason, missing cleanup).
         & .\tests\safety_invariants.ps1 -SelfTest
         if ($LASTEXITCODE -ne 0) { throw ("self-test exit code {0}" -f $LASTEXITCODE) }
+        # -readonly's promise (nothing changed outside OUTDIR/TEMP, no network)
+        # rests on every mutation/egress site staying gated; and every known
+        # false positive must be catalogued with the test that proves it.
+        & .\tools\lint_readonly.ps1
+        if ($LASTEXITCODE -ne 0) { throw ("lint_readonly exit code {0}" -f $LASTEXITCODE) }
+        & .\tools\lint_readonly.ps1 -SelfTest
+        if ($LASTEXITCODE -ne 0) { throw ("lint_readonly self-test exit code {0}" -f $LASTEXITCODE) }
+        & .\tools\benign_corpus_check.ps1 -Mode Lint
+        if ($LASTEXITCODE -ne 0) { throw ("benign_corpus_check exit code {0}" -f $LASTEXITCODE) }
     }
     if ($results | Where-Object { $_.Step -like 'safety invariants*' -and $_.Result -eq 'FAIL' }) {
         Write-Host ''
@@ -237,6 +246,12 @@ Write-Host ''
 Write-Host 'Test-run reports from the harnesses above are quarantined under'
 Write-Host '  C:\SecurityAudit\selftest\  and are banner-stamped TEST RUN -- every'
 Write-Host '  finding in them was planted. Real audits stay in C:\SecurityAudit\.'
+Write-Host ''
+Write-Host 'On the machine you are sitting at, do NOT run this script -- run'
+Write-Host '  .\tests\field_test.ps1'
+Write-Host '  instead: read-only, no plants, no network. It runs the audit with -readonly,'
+Write-Host '  proves nothing changed, and hands you every finding to adjudicate against'
+Write-Host '  tests\benign_corpus.txt. This script (the plant harness) is for a VM or CI.'
 Write-Host ''
 Write-Host 'Not run by this script (run when the change touches INIT, section plumbing,'
 Write-Host 'or the deferral contract):'

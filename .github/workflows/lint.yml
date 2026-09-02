@@ -73,6 +73,34 @@ jobs:
       - name: The check must fail on a mutated harness
         run: pwsh -NoProfile -File tests/safety_invariants.ps1 -SelfTest
 
+  readonly-lint:
+    name: "Read-only tripwire: every mutation/egress site in the bats stays gated"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # -readonly promises a person that the audit changes nothing on their
+      # machine outside the output folder and the temp folder and makes no
+      # network connections. This lint fails if any reg/bcdedit/restore-point/
+      # download site loses its gate.
+      - name: Run tools/lint_readonly.ps1
+        run: pwsh -NoProfile -File tools/lint_readonly.ps1
+      - name: The lint must fail on an ungated site
+        run: pwsh -NoProfile -File tools/lint_readonly.ps1 -SelfTest
+
+  benign-corpus-lint:
+    name: "Benign corpus: every known false positive is catalogued with the test that proves it"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # tests/benign_corpus.txt catalogues benign look-alikes (P9NP, a
+      # never-onboarded Sense, a smart-card reader's Event 104, ...). Every
+      # entry must resolve to a harness Invert case, a windows-smoke step, or a
+      # stated field-only reason, and every Invert case must be catalogued.
+      - name: Run tools/benign_corpus_check.ps1 -Mode Lint
+        run: pwsh -NoProfile -File tools/benign_corpus_check.ps1 -Mode Lint
+      - name: The check must fail on a broken corpus and grade reports correctly
+        run: pwsh -NoProfile -File tools/benign_corpus_check.ps1 -SelfTest
+
   orphan-else-lint:
     name: "Orphaned else: no clause detached from its if (parses, then dies at runtime)"
     runs-on: ubuntu-latest

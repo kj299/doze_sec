@@ -107,3 +107,9 @@ account, turns on WDigest, opens a portproxy, and plants IFEO hijacks. None of
 those can lock you out, but the machine is briefly less hardened. Prefer a
 throwaway VM or CI. Never pass `-AllowLockScreenRisk` on a machine you are
 sitting at.
+
+
+For the machine you are sitting at, use `tests\field_test.ps1` instead: it
+runs the audit with `-readonly` (no change outside the output folder and the
+temp folder, no network connections), proves that before and after, and hands
+you every finding to adjudicate. It plants nothing and cannot lock you out.

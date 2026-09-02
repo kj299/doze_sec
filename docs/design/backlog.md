@@ -161,7 +161,8 @@ audience, not effort.
    report's first lines and the HTML header. A test report must never be
    mistakable for a real one — the owner opened one and asked how to fix
    their computer.
-2. **Read-only field-test mode + benign-baseline corpus.** False-positive
+2. **Read-only field-test mode + benign-baseline corpus** (done: `-readonly`,
+   `tests/field_test.ps1`, `tests/benign_corpus.txt`, `lint_readonly`). False-positive
    hunting (read-only, safe on any real machine) separated from detection
    proving (the plant harness, VM/CI only). `tests/benign_corpus.txt`
    catalogs known-benign look-alikes (`P9NP`, never-onboarded `Sense`,

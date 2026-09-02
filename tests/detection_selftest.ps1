@@ -883,6 +883,21 @@ try {
     else { Write-Host "  [ OK       ] test-run report is banner-stamped as planted" }
     if ($badDir) { Write-Host ("  [ REGRESS  ] test-run report landed outside selftest\ ({0}) -- it would sit beside real audits" -f $report.DirectoryName); $requiredFail++ }
     else { Write-Host "  [ OK       ] test-run report is quarantined under selftest\" }
+    # Benign look-alike corpus: the planted Invert twins are in this report, so
+    # no QUIET entry may be reported above its allowed severity here either.
+    $bcTool = Join-Path (Split-Path -Parent $PSCommandPath) '..\tools\benign_corpus_check.ps1'
+    if (Test-Path -LiteralPath $bcTool) {
+        $bcOut = (& $bcTool -Mode Report -Report $report.FullName -AllowTestRun) -join "`n"
+        if ($LASTEXITCODE -eq 0 -and $bcOut -match 'observed \d+ of \d+ corpus entries') {
+            Write-Host "  [ OK       ] benign corpus: no known look-alike reported above its allowed severity"
+        } else {
+            Write-Host "  [ REGRESS  ] benign corpus: a known benign look-alike is reported as a finding (or the check did not run):"
+            ($bcOut -split "`n") | ForEach-Object { Write-Host ("               " + $_) }
+            $requiredFail++
+        }
+    } else {
+        Write-Host "  [ REGRESS  ] tools\benign_corpus_check.ps1 is missing -- the false-positive corpus was not checked"; $requiredFail++
+    }
     if ($badFind) { Write-Host "  [ REGRESS  ] FINDINGS COUNTED missing or zero despite planted findings -- findings accumulator broke"; $requiredFail++ }
     else          { Write-Host "  [ OK       ] exit handler reports a non-zero findings count" }
     if ($badCrit) { Write-Host "  [ REGRESS  ] exit-8 escalation note emitted as [CRITICAL] -- top_findings.ps1 will re-list it as a phantom finding (should be [INFO])"; $requiredFail++ }
