@@ -220,6 +220,10 @@ if ($failed.Count) {
 }
 Write-Host ("[OK] All {0} step(s) passed." -f $results.Count)
 Write-Host ''
+Write-Host 'Test-run reports from the harnesses above are quarantined under'
+Write-Host '  C:\SecurityAudit\selftest\  and are banner-stamped TEST RUN -- every'
+Write-Host '  finding in them was planted. Real audits stay in C:\SecurityAudit\.'
+Write-Host ''
 Write-Host 'Not run by this script (run when the change touches INIT, section plumbing,'
 Write-Host 'or the deferral contract):'
 Write-Host ''

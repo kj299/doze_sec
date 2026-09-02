@@ -53,6 +53,11 @@ So, for anything a user runs locally:
 - **Ask what happens if this is interrupted**, and ship the recovery: cleanup
   must be runnable standalone and cold (`tests\cleanup_selftest.ps1`), not only
   as an in-process `finally`.
+- **Test artifacts are quarantined and stamped.** A harness run passes
+  `-selftest`: output goes under `…\SecurityAudit\selftest\` and the report
+  opens with `*** TEST RUN -- every finding below was planted ***`. A report of
+  planted findings must never be mistakable for, or auto-diffed against, a real
+  audit -- the owner opened one and asked how to fix their computer.
 - CI keeps full coverage where the risk does not apply -- a runner has no lock
   screen to break -- so safety on the user's machine costs no test coverage.
 

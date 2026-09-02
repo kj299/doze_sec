@@ -40,7 +40,7 @@ function Invoke-NonAdminAudit {
     # it a non-elevated run aborts FATAL); -dev because CI runners are Server
     # SKUs; -noConsoleLog avoids the tee re-exec so the exit code is direct.
     $p = Start-Process -FilePath $env:ComSpec `
-        -ArgumentList '/c', ('"{0}" -noAdmin -dev -sdu -nosrp -noConsoleLog' -f $bat) `
+        -ArgumentList '/c', ('"{0}" -noAdmin -dev -sdu -nosrp -noConsoleLog -selftest' -f $bat) `
         -Credential $Cred -LoadUserProfile -WorkingDirectory $repo `
         -RedirectStandardOutput $out -RedirectStandardError $err -PassThru
     # Cache the handle NOW: a -PassThru Process object acquires it lazily, and
@@ -124,7 +124,7 @@ try {
     $sid = (Get-LocalUser -Name $UserName).SID.Value
     $prof = (Get-CimInstance Win32_UserProfile -Filter "SID='$sid'").LocalPath
     if (-not $prof) { throw "no profile materialized for $UserName -- -LoadUserProfile failed" }
-    $outDir = Join-Path $prof 'SecurityAudit'
+    $outDir = Join-Path $prof 'SecurityAudit\selftest'   # -selftest quarantines test output
     $report1 = Get-NewestFile -Dir $outDir -Filter 'SecurityReport_*.txt'
     if (-not $report1) { throw "run 1 produced no report under $outDir (exit $code1)" }
     $text1 = Get-Content -LiteralPath $report1.FullName -Raw
