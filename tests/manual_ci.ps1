@@ -156,6 +156,11 @@ try {
         if ($LASTEXITCODE -ne 0) { throw ("lint_readonly self-test exit code {0}" -f $LASTEXITCODE) }
         & .\tools\benign_corpus_check.ps1 -Mode Lint
         if ($LASTEXITCODE -ne 0) { throw ("benign_corpus_check exit code {0}" -f $LASTEXITCODE) }
+        # The remediation script is the one artifact a person runs elevated.
+        & .\tools\lint_remediation.ps1
+        if ($LASTEXITCODE -ne 0) { throw ("lint_remediation exit code {0}" -f $LASTEXITCODE) }
+        & .\tools\lint_remediation.ps1 -SelfTest
+        if ($LASTEXITCODE -ne 0) { throw ("lint_remediation self-test exit code {0}" -f $LASTEXITCODE) }
     }
     if ($results | Where-Object { $_.Step -like 'safety invariants*' -and $_.Result -eq 'FAIL' }) {
         Write-Host ''

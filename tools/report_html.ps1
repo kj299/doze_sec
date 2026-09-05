@@ -294,9 +294,9 @@ if ($RemediationPath -and (Test-Path -LiteralPath $RemediationPath)) {
             $fixes += [PSCustomObject]@{ Desc = $l.Substring(2).Trim(); Cmd = $n.Trim() }
         }
     }
-    [void]$html.AppendLine('<div class="section" id="remediation" style="border-color:#ffc107"><h2 style="color:#ffc107;border-bottom-color:#ffc107">Rollback Script: Proposed Fixes</h2>')
+    [void]$html.AppendLine('<div class="section" id="remediation" style="border-color:#ffc107"><h2 style="color:#ffc107;border-bottom-color:#ffc107">Proposed Fixes (forward changes -- no automatic undo)</h2>')
     [void]$html.AppendLine('<p><strong>Location:</strong> <code>' + (Enc $RemediationPath) + '</code></p>')
-    [void]$html.AppendLine('<p>This script reverts risky configurations detected above back to safe defaults. <strong>Review every command before running.</strong></p>')
+    [void]$html.AppendLine('<p>This script APPLIES the changes listed below. It does not revert anything and there is no automatic undo, so be sure you can reverse each one yourself first. It refuses to run until you set <code>$IReadAndUnderstand=$true</code>, and it stops if it is not elevated. <strong>Review every command before running.</strong></p>')
     if ($fixes.Count -gt 0) {
         [void]$html.AppendLine('<p><strong>' + $fixes.Count + ' auto-fix command(s) queued:</strong></p>')
         [void]$html.AppendLine('<ul style="list-style:none;padding-left:0">')

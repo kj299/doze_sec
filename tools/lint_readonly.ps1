@@ -86,7 +86,12 @@ foreach ($b in $bats) {
     for ($i = 0; $i -lt $lines.Count; $i++) {
         $t = $lines[$i].TrimStart()
         if (-not $t) { continue }
-        # Text, not code: echoed commands, comments, and lines written into the report/undo script.
+        # Text, not code: echoed commands, comments, and lines written into the
+        # report/undo script. An `addfix` payload also lands here -- it is a
+        # command the USER may later run, never one the audit runs, so it is not
+        # a read-only violation. Those payloads are not unchecked: they are the
+        # subject of tools/lint_remediation.ps1, and the assertion below proves
+        # the audit never executes the file it generates.
         if ($t -match '^(\(?echo\b|rem\b|::)') { continue }
         # Event-log searches pass attacker command strings as needles; they are data.
         if ($t -match 'select_lines\.ps1') { continue }
@@ -113,6 +118,16 @@ foreach ($b in $bats) {
     }
     if ($src -notmatch '(?m)^:readonly_conflict') { $fail += ("{0}: :readonly_conflict label missing" -f $b) }
     if ($src -notmatch 'READ-ONLY RUN -- this audit makes no changes') { $fail += ("{0}: the read-only banner is missing from the report header" -f $b) }
+    # The audit GENERATES a remediation script full of machine-changing commands.
+    # It must never RUN it -- that would break the read-only promise in the most
+    # direct way possible. Any invocation of %REMEDIATION% outside an echo is a fail.
+    foreach ($ln in $lines) {
+        $tt = $ln.TrimStart()
+        if ($tt -match '^(\(?echo\b|rem\b|::)') { continue }
+        if ($tt -match '%REMEDIATION%' -and $tt -notmatch '^set\s' -and $tt -notmatch '>>?\s*"%REMEDIATION%"' -and $tt -notmatch 'if exist' -and $tt -notmatch '-RemediationPath') {
+            $fail += ("{0}: the audit appears to EXECUTE the remediation script it generated: {1}" -f $b, $tt)
+        }
+    }
 }
 if ($fail.Count) {
     Write-Host ("[FAIL] {0} read-only invariant(s) broken -- -readonly could change a user's machine or reach the network:" -f $fail.Count)
