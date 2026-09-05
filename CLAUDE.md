@@ -235,6 +235,17 @@ paste with `%VAR%` already expanded.
 - `-ClassifyOnly` runs the gate without executing anything; `-SelfTest` proves
   a malformed command fails, a mutating one is refused, and an unclassifiable
   one fails.
+- A trailing `   [note]` on a printed line is documentation, and is stripped
+  before execution. It was not, and `reg` received `[also the HKLM twin]` as
+  arguments and answered *ERROR: Invalid syntax*.
+- **A per-command timeout is not enough.** Two runs of the same tree went from
+  3 slow commands to 29, taking the probe from 2.5 to 8.7 minutes; the worst
+  case blows the job's own timeout and reads as a hang. `-BudgetSeconds` caps
+  total wall clock and DECLARES the remainder as un-probed; the `-MinProbed`
+  floor is what keeps that from passing as coverage. A slow command still
+  counts as executed, because argument-binding and syntax errors surface in the
+  first moments — one still working at the timeout has already shown it is
+  well-formed.
 
 **Never use `continue` inside a PowerShell `switch` to skip a loop iteration.**
 It leaves the switch, not the loop. An early version of the probe fell through

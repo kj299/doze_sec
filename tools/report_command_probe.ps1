@@ -33,7 +33,8 @@
 [CmdletBinding()]
 param(
     [string]$Report,
-    [int]$TimeoutSeconds = 15,
+    [int]$TimeoutSeconds = 8,
+    [int]$BudgetSeconds = 420,
     [int]$MinProbed = 120,   # the real run executes 136; see readonly-field-test
     [switch]$ClassifyOnly,
     [switch]$SelfTest
@@ -130,6 +131,13 @@ function Get-ReportCommands {
 function Get-Classification {
     # -> @{ Action = 'exec-ps'|'exec-native'|'skip'|'fail'; Payload; Reason }
     param([string]$Text)
+
+    # A trailing "   [note]" is documentation appended to the printed line, not
+    # part of the command. The powershell form already tolerated it in its
+    # regex; a native line did not, so `reg query "...\Attachments" /v X
+    # [also the HKLM twin]` handed reg the note as arguments and it answered
+    # "ERROR: Invalid syntax." Strip it once, here, for every form.
+    $Text = [regex]::Replace($Text, '\s{2,}\[[^\]]*\]\s*$', '')
 
     # An elided command cannot be run as printed. Catching this statically
     # matters because the runtime signal is not reliable: `reg query
@@ -278,10 +286,17 @@ function Invoke-ProbeRun {
     # -Classify runs the allowlist gate WITHOUT executing anything. It answers
     # "is every printed line something this probe can account for", which is
     # the half that works off Windows; it is never a substitute for the run.
-    param([string]$ReportPath, [int]$Timeout, [int]$Floor, [switch]$Classify)
+    #
+    # $Budget caps total wall-clock. Per-command timeouts alone are not enough:
+    # a run that went from 3 slow commands to 29 on an identical tree took the
+    # probe from 2.5 to 8.7 minutes, and the worst case would blow the job's
+    # own timeout and look like a hang. On exhaustion the remaining commands
+    # are DECLARED un-probed and counted, never silently dropped.
+    param([string]$ReportPath, [int]$Timeout, [int]$Floor, [int]$Budget = 0, [switch]$Classify)
+    $clock = [System.Diagnostics.Stopwatch]::StartNew()
 
     $cmds = @(Get-ReportCommands -Path $ReportPath)
-    $bad = @(); $nExec = 0; $nSkip = 0; $nSlow = 0
+    $bad = @(); $nExec = 0; $nSkip = 0; $nSlow = 0; $nUnprobed = 0
     foreach ($c in $cmds) {
         $cls = Get-Classification -Text $c.Text
         # if/continue, never `switch`/`continue`: see the note in Invoke-Probe.
@@ -292,6 +307,7 @@ function Invoke-ProbeRun {
             continue
         }
         if ($Classify) { $nExec++; continue }
+        if ($Budget -gt 0 -and $clock.Elapsed.TotalSeconds -gt $Budget) { $nUnprobed++; continue }
         $r = Invoke-Probe -Kind $cls.Action -Payload $cls.Payload -Timeout $Timeout
         if ($r.Status -eq 'ok')   { $nExec++ }
         if ($r.Status -eq 'slow') { $nSlow++; $nExec++; Write-Output ("[SLOW ] line {0}: {1}" -f $c.Line, $r.Detail) }
@@ -307,9 +323,12 @@ function Invoke-ProbeRun {
         else { Write-Output ("[SKIP ] {0} -- {1}" -f $k.Match, $k.Why) }
     }
     if ($cmds.Count -eq 0) { $bad += "no 'Command:' lines found in $ReportPath -- the extractor is broken, not the report" }
+    if ($nUnprobed -gt 0) {
+        Write-Output ("[BUDGET] {0} command(s) NOT probed -- the {1}s wall-clock budget ran out. This is missing coverage, not a pass." -f $nUnprobed, $Budget)
+    }
     if ($nExec -lt $Floor) { $bad += "only $nExec command(s) actually executed (floor $Floor) -- a clean result means nothing" }
 
-    return @{ Bad = $bad; Total = $cmds.Count; Exec = $nExec; Skip = $nSkip; Slow = $nSlow }
+    return @{ Bad = $bad; Total = $cmds.Count; Exec = $nExec; Skip = $nSkip; Slow = $nSlow; Unprobed = $nUnprobed }
 }
 
 if ($SelfTest) {
@@ -328,7 +347,8 @@ if ($SelfTest) {
         ' Command: Invoke-WebRequest http://example.invalid/version.txt',
         ' Command: frobnicate --all',
         ' Command: reg query "...\Policies\Attachments" /v SaveZoneInformation',
-        ' Command: reg query "HKLM\...\Explorer" /v SmartScreenEnabled'
+        ' Command: reg query "HKLM\...\Explorer" /v SmartScreenEnabled',
+        ' Command: powershell -Command "Get-Date -NoSuchSwitchYY"   [a bracket note must not become an argument]'
     )
     Set-Content -LiteralPath $tmp -Value $fixture
     foreach ($k in ($script:KnownMutating + $script:KnownDescriptive)) { $k.Remove('Hit') | Out-Null }
@@ -340,7 +360,8 @@ if ($SelfTest) {
         @{ Need = "'Remove-Item' is not in the read-only allowlist";                                    Why = 'a mutating cmdlet must be refused, never executed' },
         @{ Need = "unrecognised command 'frobnicate'";                                                 Why = 'an unclassifiable line must FAIL, not skip silently' },
         @{ Need = "elided with.*Policies.Attachments";                                                 Why = 'an elided path reg reports as "Invalid key name" must FAIL' },
-        @{ Need = "elided with.*HKLM.*Explorer";                                                       Why = 'an elided path reg only reports as "key not found" must FAIL too' }
+        @{ Need = "elided with.*HKLM.*Explorer";                                                       Why = 'an elided path reg only reports as "key not found" must FAIL too' },
+        @{ Need = "NoSuchSwitchYY|parameter cannot be found|Cannot bind|Missing an argument";                  Why = 'a line with a trailing [note] still runs the command, and its own defect is caught' }
     )
     $fail = 0
     foreach ($e in $expect) {
@@ -375,9 +396,12 @@ if ($SelfTest) {
 if (-not $Report) { Write-Output '[FAIL] -Report <path> is required (or -SelfTest)'; exit 1 }
 if (-not (Test-Path -LiteralPath $Report)) { Write-Output "[FAIL] report not found: $Report"; exit 1 }
 
-$res = Invoke-ProbeRun -ReportPath $Report -Timeout $TimeoutSeconds -Floor $MinProbed -Classify:$ClassifyOnly
+$res = Invoke-ProbeRun -ReportPath $Report -Timeout $TimeoutSeconds -Floor $MinProbed -Budget $BudgetSeconds -Classify:$ClassifyOnly
 $verb = if ($ClassifyOnly) { 'classified as runnable' } else { 'executed' }
-Write-Output ("-- {0} 'Command:' line(s): {1} {2}, {3} skipped, {4} slow" -f $res.Total, $res.Exec, $verb, $res.Skip, $res.Slow)
+Write-Output ("-- {0} 'Command:' line(s): {1} {2}, {3} skipped, {4} slow, {5} not probed" -f $res.Total, $res.Exec, $verb, $res.Skip, $res.Slow, $res.Unprobed)
+if (-not $ClassifyOnly -and $res.Slow -gt 0) {
+    Write-Output ("   ({0} counted as executed: argument binding and syntax errors surface in the first moments, so a command still working at {1}s has already shown it is well-formed.)" -f $res.Slow, $TimeoutSeconds)
+}
 if ($res.Bad.Count) {
     Write-Output ("[FAIL] {0} printed command(s) the reader could not run:" -f $res.Bad.Count)
     $res.Bad | ForEach-Object { Write-Output ("  - " + $_) }
