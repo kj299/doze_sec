@@ -3038,7 +3038,7 @@ echo  Command: powershell -Command "Get-ItemProperty 'HKCU:\Control Panel\Access
 echo $stickyFlags = (Get-ItemProperty 'HKCU:\Control Panel\Accessibility\StickyKeys' -Name Flags -EA SilentlyContinue).Flags > "%PSRUN%"
 echo $utilFlags   = (Get-ItemProperty 'HKCU:\Control Panel\Accessibility\UtilityManager' -Name Flags -EA SilentlyContinue).Flags >> "%PSRUN%"
 echo if ($null -ne $stickyFlags) { >> "%PSRUN%"
-echo   if (($stickyFlags -band 0x02) -gt 0) { >> "%PSRUN%"
+echo   if (($stickyFlags -band 0x04) -gt 0) { >> "%PSRUN%"
 echo     Write-Output '[WARN] Sticky Keys shortcut ENABLED (Shift x5 activates at login screen)' >> "%PSRUN%"
 echo     Write-Output '       Disable: Settings ^> Accessibility ^> Keyboard ^> Sticky Keys shortcut OFF' >> "%PSRUN%"
 echo   } else { Write-Output '[OK] Sticky Keys shortcut disabled (sethc.exe not triggerable at login)' } >> "%PSRUN%"
@@ -4353,12 +4353,20 @@ echo # REVIEW EVERY LINE BEFORE RUNNING. Some commands reboot or >> "%REMEDIATIO
 echo # change security-critical settings. Run as ADMIN, from a >> "%REMEDIATION%"
 echo # trusted PowerShell session. >> "%REMEDIATION%"
 echo # >> "%REMEDIATION%"
-echo # To enable execution, change $IReadAndUnderstand=$false to $true >> "%REMEDIATION%"
-echo # and remove the 'exit 1' below. >> "%REMEDIATION%"
+echo # There is NO automatic undo. Each change below is applied forward only. >> "%REMEDIATION%"
+echo # Read every command and be sure you can reverse it yourself first. >> "%REMEDIATION%"
+echo # >> "%REMEDIATION%"
+echo # To enable execution, change the next line to $true. Change nothing else. >> "%REMEDIATION%"
 echo # ============================================================== >> "%REMEDIATION%"
 echo $IReadAndUnderstand=$false >> "%REMEDIATION%"
-echo if(-not $IReadAndUnderstand){ Write-Host '[ABORT] Open Remediation script, review commands, flip $IReadAndUnderstand=$true, then re-run.' -Fore Yellow; exit 1 } >> "%REMEDIATION%"
-echo Write-Host 'Applying remediation commands. Press Ctrl+C now to abort.' -Fore Cyan; Start-Sleep -Seconds 3 >> "%REMEDIATION%"
+rem The guard text must be legible with NO colour: colour is stripped by
+rem redirection, transcripts and high-contrast themes, and a safety message
+rem that is only visible in yellow is not a safety message.
+echo if(-not $IReadAndUnderstand){ Write-Host '*** ABORT -- nothing was applied. ***'; Write-Host '*** Open this file, review every command, set $IReadAndUnderstand=$true, then re-run. ***'; exit 1 } >> "%REMEDIATION%"
+echo $__id=[Security.Principal.WindowsIdentity]::GetCurrent() >> "%REMEDIATION%"
+echo if(-not (New-Object Security.Principal.WindowsPrincipal($__id^)^).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator^)){ Write-Host '*** ABORT -- this must run in an ELEVATED PowerShell. Nothing was applied. ***'; Write-Host '*** Run without elevation and only the per-user change would apply, leaving the machine half-fixed. ***'; exit 1 } >> "%REMEDIATION%"
+echo $ErrorActionPreference='Continue'; $__errBefore=$Error.Count >> "%REMEDIATION%"
+echo Write-Host '*** Applying remediation commands. Press Ctrl+C now to abort. ***'; Start-Sleep -Seconds 3 >> "%REMEDIATION%"
 echo. >> "%REMEDIATION%"
 
 :: ---- Write PS summary script ----------------------------------------
@@ -4389,9 +4397,9 @@ echo. >> "%PSRUN%"
 
 :: ===== CREDENTIAL PROTECTION =========================================
 echo sec 'CREDENTIAL PROTECTION  (Section 12)' >> "%PSRUN%"
-echo $v=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name RunAsPPL -EA SilentlyContinue).RunAsPPL;if($v -eq 1){ck 'PASS' 'LSASS PPL protection enabled (RunAsPPL=1)'}elseif($null -eq $v){ck 'WARN' 'LSASS PPL not configured' 'Add RunAsPPL=dword:1 to HKLM\SYSTEM\...\Lsa and reboot. Prevents Mimikatz credential dump.'}else{ck 'CRIT' ('LSASS PPL DISABLED (RunAsPPL='+$v+')') 'Set RunAsPPL=1 in HKLM\SYSTEM\...\Lsa and reboot. Mimikatz can dump all credentials.'} >> "%PSRUN%"
+echo $v=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name RunAsPPL -EA SilentlyContinue).RunAsPPL;if($v -eq 1 -or $v -eq 2){ck 'PASS' ('LSASS PPL protection enabled (RunAsPPL='+$v+')')}elseif($null -eq $v){ck 'WARN' 'LSASS PPL not configured' 'Set RunAsPPL=dword:2 (protected, still removable) in HKLM\SYSTEM\...\Lsa and reboot. Prevents Mimikatz credential dump. Do NOT use 1: that writes a UEFI variable you cannot undo from the registry, and any smart-card driver, cryptographic plug-in or password filter that is not Microsoft-signed then fails to load and you may be unable to sign in.'}else{ck 'CRIT' ('LSASS PPL DISABLED (RunAsPPL='+$v+')') 'Set RunAsPPL=dword:2 (protected, still removable) in HKLM\SYSTEM\...\Lsa and reboot. Do NOT use 1: it writes a UEFI variable that the registry cannot undo, and unsigned smart-card/crypto/password-filter plug-ins then fail to load.'} >> "%PSRUN%"
 echo $v=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' -Name UseLogonCredential -EA SilentlyContinue).UseLogonCredential;if($v -eq 1){ck 'CRIT' 'WDigest ENABLED -- plaintext passwords are cached in RAM' 'Set UseLogonCredential=0 in HKLM\...\WDigest and reboot immediately'}elseif($v -eq 0){ck 'PASS' 'WDigest disabled (UseLogonCredential=0)'}else{ck 'PASS' 'WDigest not set (default off on Win8.1+)'} >> "%PSRUN%"
-echo $v=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name LmCompatibilityLevel -EA SilentlyContinue).LmCompatibilityLevel;if($v -ge 5){ck 'PASS' ('NTLM hardened: NTLMv2 only (Level='+$v+')')}elseif($v -ge 3){ck 'WARN' ('NTLM partially hardened (Level='+$v+')') 'Set LmCompatibilityLevel=5. GPO: Network security: LAN Manager authentication level.'}else{ck 'WARN' ('NTLMv1 allowed (Level='+$v+')') 'Set LmCompatibilityLevel=5 in HKLM\...\Lsa. NTLMv1 is crackable and relayable.'} >> "%PSRUN%"
+echo $v=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name LmCompatibilityLevel -EA SilentlyContinue).LmCompatibilityLevel;if($v -ge 5){ck 'PASS' ('NTLM hardened: NTLMv2 only (Level='+$v+')')}elseif($v -ge 3){ck 'WARN' ('NTLM partially hardened (Level='+$v+')') 'Set LmCompatibilityLevel=5. GPO: Network security: LAN Manager authentication level.'}elseif($null -eq $v){ck 'INFO' 'NTLM level not explicitly set -- the Windows default applies (NTLMv2 response only). Not a finding; set it explicitly to pin the behaviour.'}else{ck 'WARN' ('NTLMv1 allowed (Level='+$v+')') 'Set LmCompatibilityLevel=5 in HKLM\...\Lsa. NTLMv1 is crackable and relayable.'} >> "%PSRUN%"
 echo. >> "%PSRUN%"
 
 :: ===== WINDOWS DEFENDER ==============================================
@@ -4414,7 +4422,7 @@ echo. >> "%PSRUN%"
 echo sec 'SYSTEM HARDENING  (Sections 11, 13)' >> "%PSRUN%"
 echo $lua=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name EnableLUA -EA SilentlyContinue).EnableLUA;$cpb=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name ConsentPromptBehaviorAdmin -EA SilentlyContinue).ConsentPromptBehaviorAdmin;if($lua -eq 1 -and ($cpb -eq 2 -or $cpb -eq 5)){ck 'PASS' ('UAC on with prompt (EnableLUA=1, ConsentPrompt='+$cpb+')')}elseif($lua -eq 0){ck 'CRIT' 'UAC DISABLED -- all processes auto-elevate silently' 'Set EnableLUA=1 in HKLM\...\Policies\System and reboot'}elseif($cpb -eq 0){ck 'WARN' 'UAC auto-elevates without prompting (ConsentPromptBehaviorAdmin=0)' 'Set ConsentPromptBehaviorAdmin=2 for secure desktop confirmation'}else{ck 'WARN' ('UAC not fully hardened (EnableLUA='+$lua+', ConsentPrompt='+$cpb+')') 'Recommend: EnableLUA=1, ConsentPromptBehaviorAdmin=2'} >> "%PSRUN%"
 echo $ts=bcdedit /enum 2^>$null^|Select-String 'testsigning\s+yes';if($ts){ck 'WARN' 'Driver signature enforcement DISABLED (testsigning=Yes)' 'Unsigned kernel drivers can load. Fix: bcdedit /set testsigning off'}else{ck 'PASS' 'Driver signature enforcement active'} >> "%PSRUN%"
-echo try{$bl=Get-BitLockerVolume -MountPoint $env:SystemDrive -EA Stop;if($bl.ProtectionStatus -eq 'On'){ck 'PASS' ('BitLocker ON for '+$env:SystemDrive+' ('+$bl.EncryptionMethod+')')}else{ck 'WARN' ('BitLocker OFF for '+$env:SystemDrive) 'Drive unencrypted -- data readable if drive removed. Enable: manage-bde -on C:'}}catch{ck 'INFO' 'BitLocker status unavailable -- see Section 13'} >> "%PSRUN%"
+echo try{$bl=Get-BitLockerVolume -MountPoint $env:SystemDrive -EA Stop;if($bl.ProtectionStatus -eq 'On'){ck 'PASS' ('BitLocker ON for '+$env:SystemDrive+' ('+$bl.EncryptionMethod+')')}else{ck 'WARN' ('BitLocker OFF for '+$env:SystemDrive) 'Drive unencrypted -- data readable if the drive is removed. BEFORE enabling: save the recovery key OFF this machine (manage-bde -protectors -get C:) or back it up to your Microsoft account. Without it, a later firmware, TPM or boot-config change makes every file on C: permanently unrecoverable. Then: manage-bde -on C:'}}catch{ck 'INFO' 'BitLocker status unavailable -- see Section 13'} >> "%PSRUN%"
 echo $sbl=(Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' -Name EnableScriptBlockLogging -EA SilentlyContinue).EnableScriptBlockLogging;if($sbl -eq 1){ck 'PASS' 'PS Script Block Logging enabled (Event 4104 active)'}else{ck 'WARN' 'PS Script Block Logging NOT enabled' 'Set EnableScriptBlockLogging=1 in HKLM\...\ScriptBlockLogging via GPO'} >> "%PSRUN%"
 echo. >> "%PSRUN%"
 
@@ -4436,7 +4444,7 @@ echo $sysDir = "$env:SystemRoot\System32"; $badSig = @() >> "%PSRUN%"
 echo foreach ($b in $accBins) { $f = Join-Path $sysDir $b; if (Test-Path $f) { $sig = Get-AuthenticodeSignature $f; if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'Microsoft') { $badSig += $b } } } >> "%PSRUN%"
 echo if ($badSig.Count -gt 0) { ck 'CRIT' ('Accessibility binary signature INVALID: '+($badSig -join ', ')) 'Binaries may have been replaced with cmd.exe. Run: sfc /scannow or restore from WinRE.' } else { ck 'PASS' 'All 7 accessibility binaries carry valid Microsoft signatures' } >> "%PSRUN%"
 echo $sf = (Get-ItemProperty 'HKCU:\Control Panel\Accessibility\StickyKeys' -Name Flags -EA SilentlyContinue).Flags >> "%PSRUN%"
-echo if ($null -ne $sf -and ($sf -band 0x02) -gt 0) { ck 'WARN' 'Sticky Keys shortcut enabled (Shift x5 triggers at login screen)' 'Reduces attack surface: Settings ^> Accessibility ^> Keyboard ^> Sticky Keys shortcut OFF' } else { ck 'PASS' 'Sticky Keys shortcut disabled (no unauthenticated login-screen trigger)' } >> "%PSRUN%"
+echo if ($null -ne $sf -and ($sf -band 0x04) -gt 0) { ck 'WARN' 'Sticky Keys shortcut enabled (Shift x5 triggers at login screen)' 'Reduces attack surface: Settings ^> Accessibility ^> Keyboard ^> Sticky Keys shortcut OFF' } else { ck 'PASS' 'Sticky Keys shortcut disabled (no unauthenticated login-screen trigger)' } >> "%PSRUN%"
 echo. >> "%PSRUN%"
 
 :: ===== DISK HEALTH ===================================================
@@ -4447,7 +4455,7 @@ echo. >> "%PSRUN%"
 :: ===== CTI IOC SWEEP ================================================
 echo sec 'CTI IOC SWEEP  (Section 18 - SENTINEL-X)' >> "%PSRUN%"
 echo $iocHits='%IOC_HITS%' >> "%PSRUN%"
-echo if($iocHits -gt 0){ck 'CRIT' "CTI IOC sweep: $iocHits category matches found" 'Review Section 18 for specific IOC matches. Investigate all CRITICAL and WARNING entries.'}else{ck 'PASS' 'CTI IOC sweep: no threat indicator matches across all categories'} >> "%PSRUN%"
+echo if($iocHits -gt 0){ck 'WARN' "CTI IOC sweep: $iocHits category matches found" 'Review Section 18. An IOC CATEGORY match is a lead to check, not proof of compromise -- Section 18 grades each hit on its own line.'}else{ck 'PASS' 'CTI IOC sweep: no threat indicator matches across all categories'} >> "%PSRUN%"
 echo. >> "%PSRUN%"
 
 :: ===== COMPOSE AND OUTPUT SUMMARY ====================================
@@ -4493,7 +4501,9 @@ echo ($cr + $wa) ^| Out-File $scnt -Encoding ASCII >> "%PSRUN%"
 :: intentionally excluded.
 echo function addfix($tag,$cmd){ Add-Content -LiteralPath $rem -Value ('# '+$tag); Add-Content -LiteralPath $rem -Value $cmd; Add-Content -LiteralPath $rem -Value '' } >> "%PSRUN%"
 echo $joined = ($r -join "`n") >> "%PSRUN%"
-echo if($joined -match 'LSASS PPL DISABLED^|LSASS PPL not configured'){ addfix 'Enable LSASS PPL protection (reboot required)' "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name RunAsPPL -Value 1 -Type DWord -Force; Write-Host 'RunAsPPL set. Reboot required.'" } >> "%PSRUN%"
+rem LSASS PPL is deliberately NOT auto-queued: RunAsPPL=1 writes a UEFI variable that
+rem the registry cannot undo, and RunAsPPL=2 is only enforced on Win11 22H2+. An
+rem irreversible change on the authentication path is advice, not an auto-fix.
 echo if($joined -match 'WDigest ENABLED'){ addfix 'Disable WDigest plaintext credential cache (reboot required)' "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' -Name UseLogonCredential -Value 0 -Type DWord -Force" } >> "%PSRUN%"
 echo if($joined -match 'NTLMv1 allowed^|NTLM partially hardened'){ addfix 'Harden NTLM to NTLMv2-only' "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name LmCompatibilityLevel -Value 5 -Type DWord -Force" } >> "%PSRUN%"
 echo if($joined -match 'Firewall DISABLED'){ addfix 'Enable all Windows Firewall profiles' "Set-NetFirewallProfile -All -Enabled True" } >> "%PSRUN%"
@@ -4506,15 +4516,21 @@ echo if($joined -match 'UAC auto-elevates'){ addfix 'Restore UAC prompt on secur
 echo if($joined -match 'testsigning=Yes^|testsigning\s*=\s*Yes'){ addfix 'Disable test-signing (re-enforce driver signatures)' "bcdedit /set testsigning off" } >> "%PSRUN%"
 echo if($joined -match 'PS Script Block Logging NOT'){ addfix 'Enable PowerShell Script Block Logging' "New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' -Force | Out-Null; Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' -Name EnableScriptBlockLogging -Value 1 -Type DWord -Force" } >> "%PSRUN%"
 echo if($joined -match 'AppInit_DLLs set'){ addfix 'Clear AppInit_DLLs (remove DLL injection vector)' "Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows' -Name AppInit_DLLs -Value '' -Force; Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows' -Name LoadAppInit_DLLs -Value 0 -Type DWord -Force" } >> "%PSRUN%"
-echo if($joined -match 'Sticky Keys shortcut enabled'){ addfix 'Disable Sticky Keys shortcut at login screen' "Set-ItemProperty -Path 'HKCU:\Control Panel\Accessibility\StickyKeys' -Name Flags -Value '506' -Force" } >> "%PSRUN%"
-echo if($joined -match 'portproxy tunnel rules are ACTIVE'){ addfix 'Remove netsh portproxy tunnels (Volt Typhoon IOC)' "netsh interface portproxy reset" } >> "%PSRUN%"
-echo if($joined -match 'WMI EventFilter subscriptions present'){ addfix 'Remove non-default WMI permanent EventFilter subscriptions (preserves Microsoft defaults)' "$ms=@('SCM Event Log Filter','BVTConsumer','BVTFilter','RmAssistEventLog'); Get-CimInstance -Namespace root\subscription -ClassName __EventFilter -EA SilentlyContinue ^| Where-Object { $_.Name -notin $ms } ^| Remove-CimInstance; Get-CimInstance -Namespace root\subscription -ClassName __EventConsumer -EA SilentlyContinue ^| Where-Object { $_.Name -notin $ms } ^| Remove-CimInstance; Get-CimInstance -Namespace root\subscription -ClassName __FilterToConsumerBinding -EA SilentlyContinue ^| Where-Object { $_.Filter -notmatch ($ms -join '^|') } ^| Remove-CimInstance" } >> "%PSRUN%"
+echo if($joined -match 'Sticky Keys shortcut enabled'){ addfix 'Disable the Shift-x5 Sticky Keys shortcut (this user AND the logon screen)' 'foreach ($h in @(''HKCU:\Control Panel\Accessibility\StickyKeys'',''Registry::HKEY_USERS\.DEFAULT\Control Panel\Accessibility\StickyKeys'')) { $cur = (Get-ItemProperty -LiteralPath $h -Name Flags -EA SilentlyContinue).Flags; if ($null -ne $cur) { Set-ItemProperty -LiteralPath $h -Name Flags -Value ([string]([int]$cur -band -bnot 0x04)) -Force } }; Write-Host ''Sticky Keys itself is unchanged; only the Shift-x5 shortcut is off. Re-enable: Settings > Accessibility > Keyboard.''' } >> "%PSRUN%"
+echo if($joined -match 'portproxy tunnel rules are ACTIVE'){ addfix 'Review netsh portproxy rules (LISTS ONLY -- reset would delete WSL/dev forwards too)' 'netsh interface portproxy show all; Write-Host ''Delete ONLY the rule you do not recognise: netsh interface portproxy delete v4tov4 listenport=<port> listenaddress=<addr>. WSL2 and Hyper-V port forwarding look identical to this IOC.''' } >> "%PSRUN%"
+echo if($joined -match 'WMI EventFilter subscriptions present'){ addfix 'Review non-default WMI EventFilter subscriptions (LISTS ONLY -- deletion is manual on purpose)' 'Get-CimInstance -Namespace root/subscription -ClassName __EventFilter -EA SilentlyContinue | Where-Object { $_.Name -notin @(''SCM Event Log Filter'',''BVTFilter'') } | Format-List Name,Query; Write-Host ''Review each filter above. A permanent WMI subscription is normal for management agents (ConfigMgr, Dell/HP/Lenovo, EDR). Delete one only after you know what registered it: Get-CimInstance -Namespace root/subscription -ClassName __EventFilter | Where-Object Name -eq <name> | Remove-CimInstance''' } >> "%PSRUN%"
 echo if($joined -match 'Accessibility binary signature INVALID'){ addfix 'Restore corrupted system binaries' "sfc /scannow; DISM /Online /Cleanup-Image /RestoreHealth" } >> "%PSRUN%"
-echo if($joined -match 'Real-time protection DISABLED'){ addfix 'Re-enable Defender real-time protection' "Set-MpPreference -DisableRealtimeMonitoring \$false" } >> "%PSRUN%"
+echo if($joined -match 'Real-time protection DISABLED'){ addfix 'Re-enable Defender real-time protection' "Set-MpPreference -DisableRealtimeMonitoring `$false" } >> "%PSRUN%"
 echo if($joined -match 'Signatures OUTDATED^|Signatures aging'){ addfix 'Update Defender signatures' "Update-MpSignature" } >> "%PSRUN%"
 echo if($joined -match 'Tamper protection disabled'){ addfix 'Enable Defender tamper protection (via Windows Security UI)' "Write-Host 'Tamper Protection is UI-managed. Open: Windows Security > Virus and threat protection > Manage settings > Tamper Protection > On'" } >> "%PSRUN%"
-echo if(-not (Get-Content -LiteralPath $rem ^| Where-Object { $_ -match '^Set-^|^Disable-^|^Enable-^|^netsh^|^bcdedit^|^Update-^|^Stop-^|^sfc^|^New-^|^Get-^|^Remove-' })){ Add-Content -LiteralPath $rem -Value '# No auto-fixable findings detected. The system is either clean or the findings require manual remediation (see the report).' } >> "%PSRUN%"
-echo $fixCount = @(Get-Content -LiteralPath $rem ^| Where-Object { $_ -match '^Set-^|^Disable-^|^Enable-^|^netsh^|^bcdedit^|^Update-^|^Stop-^|^sfc^|^New-^|^Get-^|^Remove-' }).Count >> "%PSRUN%"
+rem \A anchors instead of ^: cmd eats a caret outside double quotes, which
+rem silently turned this into unanchored substring matching (it counted the
+rem word 'netsh' inside a tag comment as a queued fix).
+echo if(-not (Get-Content -LiteralPath $rem ^| Where-Object { $_ -match '\ASet-^|\ADisable-^|\AEnable-^|\Anetsh^|\Abcdedit^|\AUpdate-^|\AStop-^|\Asfc^|\ANew-^|\AGet-^|\ARemove-^|\AWrite-Host^|\Aforeach' })){ Add-Content -LiteralPath $rem -Value '# No auto-fixable findings detected. The system is either clean or the findings require manual remediation (see the report).' } >> "%PSRUN%"
+echo Add-Content -LiteralPath $rem -Value '' >> "%PSRUN%"
+echo Add-Content -LiteralPath $rem -Value 'if($Error.Count -gt $__errBefore){ Write-Host (\"*** {0} command(s) FAILED. The machine is now PARTLY changed. Review the errors above before re-running. ***\" -f ($Error.Count-$__errBefore)); exit 1 }' >> "%PSRUN%"
+echo Add-Content -LiteralPath $rem -Value 'Write-Host \"*** All queued commands applied. Some settings need a reboot. There is no automatic undo. ***\"; exit 0' >> "%PSRUN%"
+echo $fixCount = @(Get-Content -LiteralPath $rem ^| Where-Object { $_ -match '\ASet-^|\ADisable-^|\AEnable-^|\Anetsh^|\Abcdedit^|\AUpdate-^|\AStop-^|\Asfc^|\ANew-^|\AGet-^|\ARemove-^|\AWrite-Host^|\Aforeach' }).Count >> "%PSRUN%"
 echo Write-Output '' >> "%PSRUN%"
 echo Write-Output '######################################################################' >> "%PSRUN%"
 echo Write-Output '##  REMEDIATION SCRIPT' >> "%PSRUN%"

@@ -101,6 +101,21 @@ jobs:
       - name: The check must fail on a broken corpus and grade reports correctly
         run: pwsh -NoProfile -File tools/benign_corpus_check.ps1 -SelfTest
 
+  remediation-lint:
+    name: "Remediation: every command the user is told to run elevated actually works"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The remediation script is the only artifact this tool hands a person to
+      # run elevated. Two of its commands shipped broken: one passed \False to a
+      # boolean, the other was a parse error that voided the whole file -- and
+      # both fired only when something was genuinely wrong. This reproduces the
+      # cmd + PowerShell expansion and parses what would really land on disk.
+      - name: Run tools/lint_remediation.ps1
+        run: pwsh -NoProfile -File tools/lint_remediation.ps1
+      - name: The lint must fail on a reintroduced expansion bug
+        run: pwsh -NoProfile -File tools/lint_remediation.ps1 -SelfTest
+
   orphan-else-lint:
     name: "Orphaned else: no clause detached from its if (parses, then dies at runtime)"
     runs-on: ubuntu-latest
