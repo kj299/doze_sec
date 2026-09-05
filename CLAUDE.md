@@ -210,6 +210,39 @@ payload that does not parse under the 5.1-level AST parser. `-SelfTest` proves
 it fails on each class; it reports 210 defects against the code that shipped
 them. CI runs it in `lint.yml`, and `manual_ci.ps1` runs it in step 1.
 
+### Parsing is not running (REQUIRED — enforced by probe)
+
+`lint_report_echo` proves a printed `Command:` line parses. That is a weaker
+claim than the line makes: the report says "here is how to check this
+yourself". This project has already paid for the difference once — two
+remediation commands parsed cleanly and could never execute.
+
+`tools/report_command_probe.ps1 -Report <report>` runs them, against the report
+a `-readonly` audit just produced, so it tests the exact text a reader would
+paste with `%VAR%` already expanded.
+
+- It executes **nothing it cannot prove read-only**, by allowlist — a deny-list
+  misses what it has not seen, and this is the one part that touches a machine.
+  Six printed lines are genuinely not read-only (the RunOnce `reg add`, the
+  `ping`, the self-update `Invoke-WebRequest`); they honestly document the
+  audit's own INIT actions, and are skipped **by name with a reason**.
+- A line it cannot classify at all is a **failure**, not a skip. Adding a check
+  whose `Command:` line uses something new will fail until the allowlist is
+  taught what it is — that friction is the point.
+- It grades **well-formedness, not findings**. Finding nothing is success; a
+  missing path, service, log or optional module is machine state. Do not read a
+  green run as more than "the printed line is well-formed and invocable".
+- `-ClassifyOnly` runs the gate without executing anything; `-SelfTest` proves
+  a malformed command fails, a mutating one is refused, and an unclassifiable
+  one fails.
+
+**Never use `continue` inside a PowerShell `switch` to skip a loop iteration.**
+It leaves the switch, not the loop. An early version of the probe fell through
+after deciding to *skip* the RunOnce `reg add` and tried to execute it; on
+Linux it died for want of `cmd.exe`, on Windows it would have written the key.
+Use `if`/`continue`, and give any executor a guard that refuses a kind it was
+never meant to run.
+
 ## Real-Windows CI (`.github/workflows/windows-smoke.yml`)
 
 The lint above is Linux/pwsh and cannot exercise cmd.exe, Windows

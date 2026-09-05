@@ -1508,7 +1508,7 @@ echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
 echo --- All Processes: PID, PPID, Name, Path --->> "%REPORT%"
-echo  Command: powershell -Command "Get-CimInstance Win32_Process (single bulk query)">> "%REPORT%"
+echo  Command: powershell -Command "Get-CimInstance Win32_Process"   [single bulk query]>> "%REPORT%"
 rem One bulk Win32_Process query carries ProcessId/ParentProcessId/Name/Path.
 rem The previous version called Get-CimInstance once PER process to resolve the
 rem parent PID (N+1 WMI round-trips) -- on a host with hundreds of processes
@@ -3665,7 +3665,7 @@ if exist "%TEMP%\dz_iochit_18d.txt" (
 
 echo.>> "%REPORT%"
 echo --- [18e] Scheduled Task IOC Match --->> "%REPORT%"
-echo  Command: powershell -Command "schtasks /query /fo CSV /v | ConvertFrom-Csv"   matched against %IOCDIR%\ioc_scheduled_tasks.txt>> "%REPORT%"
+echo  Command: powershell -Command "schtasks /query /fo CSV /v | ConvertFrom-Csv"   [matched against %IOCDIR%\ioc_scheduled_tasks.txt]>> "%REPORT%"
 echo  Matching scheduled task NAMES and ACTIONS against ioc_scheduled_tasks.txt>> "%REPORT%"
 echo $iocFile = '%IOCDIR%\ioc_scheduled_tasks.txt' > "%PSRUN%"
 echo $patterns = if (Test-Path $iocFile) { Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'} } >> "%PSRUN%"
