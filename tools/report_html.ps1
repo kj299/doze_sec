@@ -290,8 +290,12 @@ if ($RemediationPath -and (Test-Path -LiteralPath $RemediationPath)) {
     $fixes = @()
     for ($i = 0; $i -lt $remLines.Count - 1; $i++) {
         $l = $remLines[$i]; $n = $remLines[$i+1]
-        if ($l.StartsWith('# ') -and $n -match '^(Set-|Disable-|Enable-|netsh|bcdedit|Update-|Stop-|sfc|New-|Get-|Remove-|Write-Host)') {
-            $fixes += [PSCustomObject]@{ Desc = $l.Substring(2).Trim(); Cmd = $n.Trim() }
+        # Key on the generator's '# FIX: ' marker, not on a hand-maintained list
+        # of command verbs. The verb list silently dropped any fix starting with
+        # a verb nobody remembered to add, while still writing it into the file
+        # the user runs -- invisible in the panel but live on the machine.
+        if ($l.StartsWith('# FIX: ') -and $n -and -not $n.StartsWith('#') -and $n.Trim()) {
+            $fixes += [PSCustomObject]@{ Desc = $l.Substring(7).Trim(); Cmd = $n.Trim() }
         }
     }
     [void]$html.AppendLine('<div class="section" id="remediation" style="border-color:#ffc107"><h2 style="color:#ffc107;border-bottom-color:#ffc107">Proposed Fixes (forward changes -- no automatic undo)</h2>')

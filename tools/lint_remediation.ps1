@@ -65,39 +65,55 @@ function Get-BareCmdOperators {
 }
 
 function Get-EmittedCommands {
-    param([string]$BatPath, [ref]$RuleCount)
+    param([string]$BatPath, [ref]$RuleCount, [ref]$ShapeErrors)
     $emitted = @()
+    $bad = @()
     $lines = [IO.File]::ReadAllLines($BatPath)
     $rules = @()
     foreach ($ln in $lines) {
         $t = $ln.TrimStart()
         if (-not $t.StartsWith('echo ')) { continue }
-        if ($t -notmatch '\baddfix\b') { continue }
-        # The line that DEFINES addfix also contains the word; it is not a rule.
-        if ($t -match 'function\s+addfix') { continue }
+        if ($t -notmatch '\b(addfix|addenforce)\b') { continue }
+        # The lines that DEFINE the helpers also contain the words; not rules.
+        if ($t -match 'function\s+(addfix|addenforce|remwrite)') { continue }
         $t = $t.Substring(5)
         $t = [regex]::Replace($t, '\s*>>\s*"%PSRUN%"\s*$', '')
         $t = Expand-CmdEscapes $t
-        # strip the trigger so every rule is exercised
-        $t = [regex]::Replace($t, '^if\(\$joined -match .*?\)\{', '')
+        # Strip the trigger so every rule is exercised. Two shapes exist:
+        # the prose form `if($joined -match '...'){` and the ledger form
+        # `if(led '...' '...' '...' '...'){`. The closing-brace strip below is
+        # unconditional, so a trigger shape this does NOT match would leave an
+        # unbalanced brace and the child runner would fail to parse -- which
+        # surfaces as the misleading "produced NO commands".
+        $t = [regex]::Replace($t, '^if\((?:\$\w+ -match|led )[^{]*?\)\{', '')
+        if ($t -match '^\s*if\(') { $bad += ("unrecognised trigger shape (the strip below will unbalance it): {0}" -f $t.Substring(0, [Math]::Min(90, $t.Length))) }
         $t = [regex]::Replace($t, '\}\s*$', '')
         $rules += $t.Trim()
     }
     $RuleCount.Value = $rules.Count
+    if ($ShapeErrors) { $ShapeErrors.Value = $bad }
     # Run the real addfix in a child PowerShell so the SAME expansion happens.
     $tmp = Join-Path ([IO.Path]::GetTempPath()) ("dz_remlint_{0}" -f [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $tmp -Force | Out-Null
     try {
         $out = Join-Path $tmp 'out.ps1'
         $runner = Join-Path $tmp 'run.ps1'
+        $enfOut = Join-Path $tmp 'enf.ps1'
+        $undOut = Join-Path $tmp 'und.ps1'
         $body = @()
         $body += ('$rem = ' + ("'" + $out.Replace("'", "''") + "'"))
-        $body += 'function addfix($tag,$cmd){ Add-Content -LiteralPath $rem -Value (''# ''+$tag); Add-Content -LiteralPath $rem -Value $cmd; Add-Content -LiteralPath $rem -Value '''' }'
+        $body += ('$enf = ' + ("'" + $enfOut.Replace("'", "''") + "'"))
+        $body += ('$und = ' + ("'" + $undOut.Replace("'", "''") + "'"))
+        # Mirror the real helpers so the emitted text is byte-identical to what
+        # the audit would write, including the '# FIX: ' marker the counter keys on.
+        $body += 'function remwrite($f,$tag,$cmd,$undo){ Add-Content -LiteralPath $f -Value (''# FIX: ''+$tag); Add-Content -LiteralPath $f -Value $cmd; if($undo){ Add-Content -LiteralPath $f -Value (''# UNDO: ''+$undo) }; Add-Content -LiteralPath $f -Value ''''; if($undo){ Add-Content -LiteralPath $und -Value $undo } }'
+        $body += 'function addfix($tag,$cmd,$undo){ remwrite $rem $tag $cmd $undo }'
+        $body += 'function addenforce($tag,$cmd,$undo){ remwrite $enf $tag $cmd $undo }'
         $body += $rules
         [IO.File]::WriteAllLines($runner, $body)
         $exe = (Get-Process -Id $PID).Path
         & $exe -NoProfile -File $runner *>&1 | Out-Null
-        if (Test-Path -LiteralPath $out) { $emitted = @([IO.File]::ReadAllLines($out)) }
+        foreach ($o in @($out, $enfOut, $undOut)) { if (Test-Path -LiteralPath $o) { $emitted += @([IO.File]::ReadAllLines($o)) } }
     } finally { Remove-Item -LiteralPath $tmp -Recurse -Force -EA SilentlyContinue }
     return $emitted
 }
@@ -110,8 +126,9 @@ function Invoke-Check {
     foreach ($b in $bats) {
         $path = Join-Path $R $b
         if (-not (Test-Path -LiteralPath $path)) { return @(("missing: {0}" -f $b)) }
-        $n = 0
-        $emitted = Get-EmittedCommands -BatPath $path -RuleCount ([ref]$n)
+        $n = 0; $shape = @()
+        $emitted = Get-EmittedCommands -BatPath $path -RuleCount ([ref]$n) -ShapeErrors ([ref]$shape)
+        foreach ($sh in $shape) { $fail += ("{0}: {1}" -f $b, $sh) }
         $allCounts += $n
         $src = [IO.File]::ReadAllText($path)
 
@@ -127,6 +144,19 @@ function Invoke-Check {
             # user runs. (I shipped exactly this bug into this lint's own source.)
             if ($payload -match '\\"') {
                 $fail += ("{0}: addfix line contains a backslash-escaped quote -- PowerShell escapes with a backtick, so this lands as a literal \\ in the generated script: {1}" -f $b, $t.Substring(0, [Math]::Min(120, $t.Length)))
+            }
+            # Every fix must state its reversal. A rule with no safe undo passes
+            # '' and the generated line says so; silence is not allowed.
+            if ($t -match '\b(addfix|addenforce)\b' -and $t -notmatch 'function\s+') {
+                # Count only the arguments AFTER the call, or the trigger's own
+                # quoted string inflates the count and the check never fires.
+                $callAt = $payload.IndexOf('addfix ')
+                if ($callAt -lt 0) { $callAt = $payload.IndexOf('addenforce ') }
+                $tail = if ($callAt -ge 0) { $payload.Substring($callAt) } else { $payload }
+                $args = [regex]::Matches($tail, "'(?:[^']|'')*'|`"(?:[^`"]|`"`")*`"")
+                if ($args.Count -lt 3) {
+                    $fail += ("{0}: this rule supplies no UNDO argument -- pass '' if there is genuinely no reversal, so the file says so: {1}" -f $b, $t.Substring(0, [Math]::Min(110, $t.Length)))
+                }
             }
             $bare = Get-BareCmdOperators $payload
             if ($bare.Count) {
@@ -166,10 +196,27 @@ function Invoke-Check {
         if ($src -match "Write-Host '\[ABORT\][^']*'\s*-Fore") {
             $fail += ("{0}: the abort guard depends on colour; colour is stripped by redirection, transcripts and high-contrast themes" -f $b)
         }
+        # 3b. A ledger trigger must name a finding the audit can actually raise,
+        #     or it is a fix that can never fire -- the failure this change exists
+        #     to remove, reintroduced in a new form.
+        foreach ($m in [regex]::Matches($src, "if\(led '([^']*)' '([^']*)' '([^']*)' '([^']*)'\)")) {
+            $sec = $m.Groups[2].Value; $code = $m.Groups[3].Value; $msg = $m.Groups[4].Value
+            $siteRx = ('call :dz_(finding|ps_scan)\s+(CRITICAL\s+|WARNING\s+)?' + [regex]::Escape($sec) + '\s+' + [regex]::Escape($code) + '\s')
+            $site = @([regex]::Matches($src, $siteRx))
+            if ($site.Count -eq 0) {
+                $fail += ("{0}: ledger trigger {1}/{2} matches no :dz_finding or :dz_ps_scan call site -- this fix could never fire" -f $b, $sec, $code)
+            } elseif ($src.IndexOf($msg, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+                $fail += ("{0}: ledger trigger message '{1}' appears nowhere in the script -- the message discriminator is stale" -f $b, $msg)
+            }
+        }
+
         # 4. The fix counter must be anchored. cmd eats ^ outside double quotes,
         #    which silently turned '^netsh' into a substring match on the tag comment.
         if ($src -match "match '\^Set-") {
             $fail += ("{0}: the fix-count regex uses ^ anchors that cmd will eat -- use \A" -f $b)
+        }
+        if ($src -notmatch "fixCount = @\(Get-Content[^\r\n]*'# FIX: \*'") {
+            $fail += ("{0}: the fix counter no longer keys on the '# FIX: ' marker -- a verb list silently drops fixes it does not know" -f $b)
         }
     }
     if ($sig.Count -eq 2 -and $sig[$bats[0]] -ne $sig[$bats[1]]) {
@@ -191,12 +238,26 @@ if ($SelfTest) {
            Find = [regex]::Escape('addfix ''Update Defender signatures'' "Update-MpSignature"')
            Repl = 'addfix ''Update Defender signatures'' ''Update-MpSignature | Out-Null'''
            Expect = 'UNESCAPED cmd operator' },
+        @{ Name = 'a fix with no UNDO argument'
+           Find = [regex]::Escape('addfix ''Update Defender signatures'' "Update-MpSignature" ''''')
+           Repl = 'addfix ''Update Defender signatures'' "Update-MpSignature"'
+           Expect = 'supplies no UNDO argument'
+           BothBats = $true },
+        @{ Name = 'a ledger trigger that can never fire'
+           Find = 'if\(led ''WARNING'' ''9'' ''T1562.001'''; Repl = 'if(led ''WARNING'' ''99'' ''T9999.999'''
+           Expect = 'matches no :dz_finding or :dz_ps_scan call site' },
+        @{ Name = 'the fix counter reverted to a verb list'
+           Find = '\$fixCount = @\(Get-Content -LiteralPath \$rem \^\| Where-Object \{ \$_ -like ''# FIX: \*'' \}\^\)'
+           Repl = '$fixCount = @(Get-Content -LiteralPath $rem ^| Where-Object { $$_ -like ''XX'' }^)'
+           Expect = 'no longer keys on the ''# FIX: '' marker'
+           BothBats = $true },
         @{ Name = 'the elevation assert removed'
            Find = '(?m)^echo if\(-not \(New-Object Security\.Principal\.WindowsPrincipal[^\r\n]*\r?\n'; Repl = ''
            Expect = 'no elevation assert' },
         @{ Name = 'caret anchors back in the fix counter'
-           Find = "match '\\ASet-"; Repl = "match '^Set-"
-           Expect = 'cmd will eat' }
+           Find = '\$_ -like ''# FIX: \*'''; Repl = '$$_ -match ''^Set-'''
+           Expect = 'cmd will eat'
+           BothBats = $true }
     )
     $tmpBase = Join-Path ([IO.Path]::GetTempPath()) ("dz_remlint_st_{0}" -f [guid]::NewGuid().ToString('N'))
     $bad = @(); $ran = 0
@@ -205,11 +266,18 @@ if ($SelfTest) {
             $dir = Join-Path $tmpBase ("m{0}" -f $ran)
             New-Item -ItemType Directory -Path $dir -Force | Out-Null
             foreach ($b in $bats) { Copy-Item -LiteralPath (Join-Path $Root $b) -Destination $dir -Force }
-            $target = Join-Path $dir 'doze_sec.bat'
-            $src = [IO.File]::ReadAllText($target)
-            $mut = [regex]::Replace($src, $m.Find, $m.Repl, 1)
-            if ($mut -eq $src) { $bad += ("{0}: the mutation did not apply -- the self-test is broken, not the code" -f $m.Name); $ran++; continue }
-            [IO.File]::WriteAllText($target, $mut)
+            # Some checks (the mirror check) would mask the one under test if only
+            # one bat were mutated, so those mutate both.
+            $targets = @(Join-Path $dir 'doze_sec.bat')
+            if ($m.BothBats) { $targets += (Join-Path $dir 'doze_sec_noAdmin.bat') }
+            $applied = $true
+            foreach ($target in $targets) {
+                $src = [IO.File]::ReadAllText($target)
+                $mut = [regex]::Replace($src, $m.Find, $m.Repl, 1)
+                if ($mut -eq $src) { $applied = $false; break }
+                [IO.File]::WriteAllText($target, $mut)
+            }
+            if (-not $applied) { $bad += ("{0}: the mutation did not apply -- the self-test is broken, not the code" -f $m.Name); $ran++; continue }
             $r = Invoke-Check -R $dir
             $msg = ($r.Fail -join "`n")
             if ($r.Fail.Count -eq 0) { $bad += ("{0}: the lint PASSED on the mutated generator" -f $m.Name) }

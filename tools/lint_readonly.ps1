@@ -124,7 +124,9 @@ foreach ($b in $bats) {
     foreach ($ln in $lines) {
         $tt = $ln.TrimStart()
         if ($tt -match '^(\(?echo\b|rem\b|::)') { continue }
-        if ($tt -match '%REMEDIATION%' -and $tt -notmatch '^set\s' -and $tt -notmatch '>>?\s*"%REMEDIATION%"' -and $tt -notmatch 'if exist' -and $tt -notmatch '-RemediationPath') {
+        # `call :dz_seed_rem "%REMEDIATION%" ...` WRITES the script's header; it
+        # does not run it. Passing the path to a writer is not execution.
+        if ($tt -match '%REMEDIATION%' -and $tt -notmatch '^set\s' -and $tt -notmatch '>>?\s*"%REMEDIATION%"' -and $tt -notmatch 'if exist' -and $tt -notmatch '-RemediationPath' -and $tt -notmatch '^call :dz_seed_rem\b') {
             $fail += ("{0}: the audit appears to EXECUTE the remediation script it generated: {1}" -f $b, $tt)
         }
     }

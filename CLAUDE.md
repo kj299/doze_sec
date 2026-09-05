@@ -91,6 +91,18 @@ So, for anything a user runs locally:
   and parses what would really land on disk; its `-SelfTest` proves it fails on
   each bug class. The generated script asserts elevation, states that it has no
   undo, and its guard text must stay legible with no colour.
+- **Remediation is staged, and every fix states its reversal.** `addfix` and
+  `addenforce` take an UNDO argument; a fix with no safe reversal passes `''`
+  and the generated line says so. Stage 1 (`Remediation_<ts>.ps1`) holds the
+  safe, reversible changes; `_enforce.ps1` holds the ones worth observing in
+  audit mode first (ASR block); `_undo.ps1` collects the reversals. Fixes can
+  be triggered from the findings LEDGER, not just the dashboard prose --
+  `if(led 'WARNING' '9' 'T1562.001' '<message substring>')`. The ledger is
+  complete by the time the summary block runs. SECTION+CODE is not unique, so
+  a trigger also matches part of the message. The fix counter keys on the
+  `# FIX: ` marker, never a list of command verbs -- a verb list silently
+  dropped fixes it did not recognise while still writing them into the file
+  the user runs.
 - CI keeps full coverage where the risk does not apply -- a runner has no lock
   screen to break -- so safety on the user's machine costs no test coverage.
 
