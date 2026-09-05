@@ -27,6 +27,12 @@
 # the prose, because the report is the product.
 #
 # Windows PowerShell 5.1 and pwsh; no external dependencies.
+#
+# Output goes to the SUCCESS stream (Write-Output), never Write-Host: CI
+# captures this lint's output to assert it scanned a non-vacuous number of
+# lines, and Write-Host writes to the information stream, where `$out = (...)`
+# captures nothing at all. lint_unraised_findings.ps1 is written the same way
+# for the same reason.
 
 [CmdletBinding()]
 param(
@@ -83,7 +89,7 @@ function Invoke-Lint {
             ForEach-Object { Join-Path $RepoRoot $_ } |
             Where-Object { Test-Path -LiteralPath $_ }
     if ($bats.Count -lt 2) {
-        Write-Host "[FAIL] expected both bats under '$RepoRoot'; found $($bats.Count) -- this lint is broken, not the code"
+        Write-Output "[FAIL] expected both bats under '$RepoRoot'; found $($bats.Count) -- this lint is broken, not the code"
         return @{ Bad = @('missing bats'); Echoes = 0; Commands = 0 }
     }
 
@@ -158,31 +164,31 @@ if ($SelfTest) {
             $src = Get-Content -LiteralPath (Join-Path $Root $f) -Raw
             $mut = & $m.Do $src
             if ($mut -eq $src) {
-                Write-Host "[FAIL] mutation '$($m.Name)' changed nothing in $f -- the self-test is vacuous"
+                Write-Output "[FAIL] mutation '$($m.Name)' changed nothing in $f -- the self-test is vacuous"
                 $failures++
             }
             Set-Content -LiteralPath (Join-Path $tmp $f) -Value $mut -NoNewline
         }
         $r = Invoke-Lint -RepoRoot $tmp
         if ($r.Bad.Count -gt 0) {
-            Write-Host "[OK]   mutation caught: $($m.Name)"
-            Write-Host "         -> $($r.Bad[0])"
+            Write-Output "[OK]   mutation caught: $($m.Name)"
+            Write-Output "         -> $($r.Bad[0])"
         } else {
-            Write-Host "[FAIL] mutation NOT caught: $($m.Name)"
+            Write-Output "[FAIL] mutation NOT caught: $($m.Name)"
             $failures++
         }
     }
     if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
-    if ($failures) { Write-Host "[FAIL] $failures self-test mutation(s) did not fail as required"; exit 1 }
-    Write-Host "[OK] all $($mutations.Count) mutations fail this lint for the right reason."
+    if ($failures) { Write-Output "[FAIL] $failures self-test mutation(s) did not fail as required"; exit 1 }
+    Write-Output "[OK] all $($mutations.Count) mutations fail this lint for the right reason."
     exit 0
 }
 
 $res = Invoke-Lint -RepoRoot $Root
 if ($res.Bad.Count) {
-    Write-Host ("[FAIL] {0} report-echo defect(s):" -f $res.Bad.Count)
-    $res.Bad | ForEach-Object { Write-Host ("  - " + $_) }
+    Write-Output ("[FAIL] {0} report-echo defect(s):" -f $res.Bad.Count)
+    $res.Bad | ForEach-Object { Write-Output ("  - " + $_) }
     exit 1
 }
-Write-Host ("[OK] {0} report echo line(s) scanned, {1} of them 'Command:' lines: every line reaches the report, no caret prints literally, and every printed PowerShell command parses." -f $res.Echoes, $res.Commands)
+Write-Output ("[OK] {0} report echo line(s) scanned, {1} of them 'Command:' lines: every line reaches the report, no caret prints literally, and every printed PowerShell command parses." -f $res.Echoes, $res.Commands)
 exit 0
