@@ -1084,10 +1084,50 @@ jobs:
           if ((Sev @('[OK] No AMSI bypass patterns in recent PowerShell logs')) -ne 'OK') { throw '[OK] line inflated severity' }
           if ((Sev @('[INFO] Review [WARNING] and [CRITICAL] entries above')) -ne 'OK') { throw '[INFO] prose inflated severity' }
           if ((Sev @('[SKIPPED] WMI subscription query failed -- check NOT performed.')) -ne 'OK') { throw '[SKIPPED] inflated severity' }
-          # An unreadable input must not invent a finding.
-          if (((.\tools\block_sev.ps1 -Path (Join-Path $env:TEMP 'dz_no_such_file.txt')).Trim()) -ne 'OK') { throw 'missing file did not read OK' }
+          # An unreadable input must not invent a finding -- but it must not
+          # claim CLEANLINESS either. Reporting OK there shipped: three ASR
+          # warnings reached a user's report while Section 9 read CLEAN and the
+          # finding never entered the ledger. UNREADABLE makes the caller raise
+          # AUDITGAP instead, so the gap is declared rather than silent.
+          if (((.\tools\block_sev.ps1 -Path (Join-Path $env:TEMP 'dz_no_such_file.txt')).Trim()) -ne 'UNREADABLE') { throw 'missing file must read UNREADABLE, not OK -- a read failure is a degradation, not a clean result' }
+          # An empty block is genuinely clean, not unreadable.
+          '' | Set-Content -LiteralPath $f -Encoding UTF8
+          if (((.\tools\block_sev.ps1 -Path $f).Trim()) -ne 'OK') { throw 'an empty block must read OK' }
           Remove-Item $f -Force -EA SilentlyContinue
-          Write-Host "block_sev.ps1 OK (10 parsing cases)"
+          Write-Host "block_sev.ps1 OK (11 parsing cases)"
+          exit 0
+
+      - name: verdict_audit.ps1 (a printed finding must have been raised)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # This is the check a REAL run never had. The harness asserted the
+          # invariant; a user's own audit did not, so a live miss went unseen.
+          $r = Join-Path $env:TEMP ("dz_va_{0}.txt" -f $PID)
+          $m = Join-Path $env:TEMP ("dz_va_m_{0}.txt" -f $PID)
+          $bad = @(' [9/18] DEFENDER', '[WARNING] Key ASR rule not in Block mode: x', ' [SECTION 9/18 RESULT: CLEAN -- no issues detected]')
+          $good = @(' [9/18] DEFENDER', '[WARNING] Key ASR rule not in Block mode: x', ' [SECTION 9/18 RESULT: ISSUES FOUND -- review]')
+          $init = @('[WARNING] Could not create RunOnce key', ' [1/18] SYSTEM', '[OK] fine', ' [SECTION 1/18 RESULT: CLEAN -- no issues detected]')
+
+          $bad | Set-Content -LiteralPath $r -Encoding UTF8
+          Remove-Item $m -Force -EA SilentlyContinue
+          $o = (.\tools\verdict_audit.ps1 -Report $r -MarkerFile $m) -join "`n"
+          if ($o -notmatch 'never reached the findings ledger') { throw "a printed-but-unraised finding was NOT detected: $o" }
+          if (-not (Test-Path $m)) { throw 'no marker written on a real mismatch, so the audit could not raise' }
+
+          $good | Set-Content -LiteralPath $r -Encoding UTF8
+          Remove-Item $m -Force -EA SilentlyContinue
+          $o = (.\tools\verdict_audit.ps1 -Report $r -MarkerFile $m) -join "`n"
+          if ($o -notmatch '^\[OK\]') { throw "a correctly raised finding was flagged: $o" }
+          if (Test-Path $m) { throw 'marker written when there was no mismatch' }
+
+          # Anything before the first section banner is outside every section.
+          $init | Set-Content -LiteralPath $r -Encoding UTF8
+          $o = (.\tools\verdict_audit.ps1 -Report $r) -join "`n"
+          if ($o -notmatch '^\[OK\]') { throw "an INIT-path line was counted against a section: $o" }
+
+          Remove-Item $r, $m -Force -EA SilentlyContinue
+          Write-Host 'verdict_audit.ps1 OK (detects a miss, passes a raise, ignores INIT)'
           exit 0
 
       - name: lint_unraised_findings.ps1 (no check prints a severity it never raises)
