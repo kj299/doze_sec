@@ -144,43 +144,61 @@ function Invoke-Lint {
 }
 
 if ($SelfTest) {
-    # Every class must FAIL on a mutated copy. A lint that cannot fail is not a lint.
+    # Every class must FAIL on a mutated copy. A lint that cannot fail is not a
+    # lint -- and a mutation that changes nothing is worse than no mutation at
+    # all, because it reports OK.
+    #
+    # Mutations are LITERAL .Replace() calls, never a regex with a `$` anchor.
+    # An earlier version anchored one mutation with '(?m)...$'. On this box the
+    # checkout is LF and it matched; on the Windows runner actions/checkout
+    # writes CRLF, the `\r` sat between the closing quote and the line end, and
+    # the mutation silently changed nothing. Windows is the platform this tool
+    # targets, so the self-test now runs every mutation against BOTH a
+    # LF and a CRLF copy and requires it to be caught in each.
     $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("dz_lre_" + [guid]::NewGuid().ToString('N').Substring(0, 8))
     $mutations = @(
         @{ Name = 'odd quotes swallow the redirect'
-           Do   = { param($b) $b -replace '(?m)^echo --- Defender Core Status: EVALUATED --->> "%REPORT%"$', 'echo --- Defender "Core Status: EVALUATED --->> "%REPORT%"' } },
+           From = 'echo --- Defender Core Status: EVALUATED --->> "%REPORT%"'
+           To   = 'echo --- Defender "Core Status: EVALUATED --->> "%REPORT%"' },
         @{ Name = 'caret inside double quotes'
-           Do   = { param($b) $b -replace '\(Get-MpPreference\)\.ExclusionPath', '(Get-MpPreference^).ExclusionPath' } },
+           From = '"(Get-MpPreference).ExclusionPath"'
+           To   = '"(Get-MpPreference^).ExclusionPath"' },
         @{ Name = 'Command: line truncated (unbalanced paren)'
-           Do   = { param($b) $b -replace '"\(Get-MpPreference\)\.ExclusionProcess"', '"Get-MpPreference).ExclusionProcess"' } },
+           From = '"(Get-MpPreference).ExclusionProcess"'
+           To   = '"Get-MpPreference).ExclusionProcess"' },
         @{ Name = 'printed PowerShell command does not parse'
-           Do   = { param($b) $b -replace "\(Get-ItemProperty 'HKCU:\\Control Panel\\Accessibility\\StickyKeys' -Name Flags\)\.Flags", "(Get-ItemProperty 'HKCU:\Control Panel\Accessibility\StickyKeys -Name Flags).Flags" } }
+           From = "(Get-ItemProperty 'HKCU:\Control Panel\Accessibility\StickyKeys' -Name Flags).Flags"
+           To   = "(Get-ItemProperty 'HKCU:\Control Panel\Accessibility\StickyKeys -Name Flags).Flags" }
     )
     $failures = 0
-    foreach ($m in $mutations) {
-        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
-        New-Item -ItemType Directory -Path $tmp -Force | Out-Null
-        foreach ($f in @('doze_sec.bat', 'doze_sec_noAdmin.bat')) {
-            $src = Get-Content -LiteralPath (Join-Path $Root $f) -Raw
-            $mut = & $m.Do $src
-            if ($mut -eq $src) {
-                Write-Output "[FAIL] mutation '$($m.Name)' changed nothing in $f -- the self-test is vacuous"
+    foreach ($eol in @('LF', 'CRLF')) {
+        foreach ($m in $mutations) {
+            if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
+            New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+            foreach ($f in @('doze_sec.bat', 'doze_sec_noAdmin.bat')) {
+                $src = Get-Content -LiteralPath (Join-Path $Root $f) -Raw
+                $src = $src -replace "`r`n", "`n"
+                if ($eol -eq 'CRLF') { $src = $src -replace "`n", "`r`n" }
+                $mut = $src.Replace($m.From, $m.To)
+                if ($mut -eq $src) {
+                    Write-Output "[FAIL] $eol mutation '$($m.Name)' changed nothing in $f -- the self-test is vacuous"
+                    $failures++
+                }
+                [System.IO.File]::WriteAllText((Join-Path $tmp $f), $mut)
+            }
+            $r = Invoke-Lint -RepoRoot $tmp
+            if ($r.Bad.Count -gt 0) {
+                Write-Output "[OK]   $eol mutation caught: $($m.Name)"
+                Write-Output "         -> $($r.Bad[0])"
+            } else {
+                Write-Output "[FAIL] $eol mutation NOT caught: $($m.Name)"
                 $failures++
             }
-            Set-Content -LiteralPath (Join-Path $tmp $f) -Value $mut -NoNewline
-        }
-        $r = Invoke-Lint -RepoRoot $tmp
-        if ($r.Bad.Count -gt 0) {
-            Write-Output "[OK]   mutation caught: $($m.Name)"
-            Write-Output "         -> $($r.Bad[0])"
-        } else {
-            Write-Output "[FAIL] mutation NOT caught: $($m.Name)"
-            $failures++
         }
     }
     if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
     if ($failures) { Write-Output "[FAIL] $failures self-test mutation(s) did not fail as required"; exit 1 }
-    Write-Output "[OK] all $($mutations.Count) mutations fail this lint for the right reason."
+    Write-Output "[OK] all $($mutations.Count) mutations fail this lint for the right reason, on both LF and CRLF checkouts."
     exit 0
 }
 
