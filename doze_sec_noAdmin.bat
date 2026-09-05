@@ -2204,6 +2204,7 @@ echo --- Attack Surface Reduction Rules Audit (T1566.001 / T1003.001 / T1068) --
 echo THREAT: With no ASR rules in Block mode, Office-macro droppers, LSASS credential>> "%REPORT%"
 echo theft, and vulnerable-driver loads are stopped by signature detection alone.>> "%REPORT%"
 echo  Command: powershell -Command "Get-MpPreference^).AttackSurfaceReductionRules_Ids">> "%REPORT%"
+del "%TEMP%\dz_asr_hit.txt" 2>nul
 echo try { $p = Get-MpPreference -ErrorAction Stop } catch { Write-Output '[INFO] Get-MpPreference unavailable - third-party AV active or service restricted. ASR audit skipped.'; exit 0 } > "%PSRUN%"
 echo $ids = @(); if ($p.AttackSurfaceReductionRules_Ids) { $ids = @($p.AttackSurfaceReductionRules_Ids) } >> "%PSRUN%"
 echo $acts = @(); if ($p.AttackSurfaceReductionRules_Actions) { $acts = @($p.AttackSurfaceReductionRules_Actions) } >> "%PSRUN%"
@@ -2254,9 +2255,15 @@ echo $keyRules['c1db55ab-c21a-4637-bb3f-a12568109d35'] = 'Use advanced protectio
 echo $lowIds = @($ids ^| ForEach-Object { ([string]$_).ToLowerInvariant() }) >> "%PSRUN%"
 echo foreach ($k in $keyRules.Keys) { >> "%PSRUN%"
 echo   $ix = [array]::IndexOf($lowIds, $k) >> "%PSRUN%"
-echo   if ($ix -lt 0 -or [int]$acts[$ix] -ne 1) { Write-Output ('[WARNING] Key ASR rule not in Block mode: ' + $keyRules[$k]) } >> "%PSRUN%"
+echo   if ($ix -lt 0 -or [int]$acts[$ix] -ne 1) { Write-Output ('[WARNING] Key ASR rule not in Block mode: ' + $keyRules[$k]); Set-Content -LiteralPath "$env:TEMP\dz_asr_hit.txt" -Value hit } >> "%PSRUN%"
 echo } >> "%PSRUN%"
 call :dz_ps_scan 9 T1562.001 "Defender ASR rules absent or not in Block mode"
+rem Belt and braces. If grading returned OK but the block set its marker,
+rem the grade was wrong and the finding would vanish -- which is exactly
+rem what happened in the field. Raise from the marker instead, and only
+rem then, so a correct grade never double-counts.
+if /i "!DZ_BLKSEV!"=="OK" if exist "%TEMP%\dz_asr_hit.txt" call :dz_finding WARNING 9 T1562.001 "Defender ASR rules absent or not in Block mode"
+del "%TEMP%\dz_asr_hit.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- Defender Threat Detection History --->> "%REPORT%"
@@ -4132,6 +4139,25 @@ if "!DZ_SEC_CLEAN!"=="1" (
     echo  [SECTION 18/18 RESULT: ISSUES FOUND -- review IOC matches above]>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
+rem ---- Audit self-check: a printed finding must have been RAISED ----
+rem A finding printed into the report but missing from the ledger is invisible
+rem in FINDINGS COUNTED, in the section verdict and in the exit code. The
+rem detection harness has asserted this for a long time; a REAL run never
+rem checked itself, so a live ASR miss sat in a user report unnoticed.
+rem The tool reads %REPORT%, so its own output goes to a temp file first --
+rem reading and appending the same file at once is what started all this.
+del "%TEMP%\dz_verdict_gap.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\verdict_audit.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\verdict_audit.ps1" -Report "%REPORT%" -Ledger "%LEDGER%" -MarkerFile "%TEMP%\dz_verdict_gap.txt" > "%TEMP%\dz_vaudit.txt" 2>&1
+    echo.>> "%REPORT%"
+    echo --- Audit self-check: every printed finding reached the ledger --->> "%REPORT%"
+    type "%TEMP%\dz_vaudit.txt">> "%REPORT%"
+    del "%TEMP%\dz_vaudit.txt" 2>nul
+)
+if exist "%TEMP%\dz_verdict_gap.txt" (
+    call :dz_finding WARNING INIT AUDITGAP "A section printed a finding that never reached the findings ledger - see the audit self-check in the report"
+    del "%TEMP%\dz_verdict_gap.txt" 2>nul
+)
 
 :: ====================================================================
 :: POST-AUDIT: FREE SPACE CAPTURE AND LIVE SECURITY SUMMARY
@@ -4858,7 +4884,16 @@ set "DZ_BLKSEV=OK"
 if not exist "%SCRIPT_DIR%tools\block_sev.ps1" goto :dz_ps_scan_nohelper
 for /f "usebackq delims=" %%s in (`"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\block_sev.ps1" -Path "%DZ_BLK%" 2^>nul`) do set "DZ_BLKSEV=%%s"
 del "%DZ_BLK%" 2>nul
+rem UNREADABLE means block_sev could not read the block output at all.
+rem Treating that as OK is how three ASR warnings reached a user report
+rem while the section read CLEAN: a degradation must be declared, never
+rem silently converted into a clean result.
+if /i "!DZ_BLKSEV!"=="UNREADABLE" goto :dz_ps_scan_ungraded
 if not "!DZ_BLKSEV!"=="OK" call :dz_finding !DZ_BLKSEV! %1 %2 %3
+goto :eof
+:dz_ps_scan_ungraded
+echo [WARNING] The block above could not be GRADED -- its output file was unreadable, so any finding in it is not counted. Re-run the audit.>> "%REPORT%"
+call :dz_finding WARNING %1 AUDITGAP "Block output unreadable so its severity was not evaluated - findings in this section may be uncounted"
 goto :eof
 :dz_ps_scan_nohelper
 :: Degrade LOUDLY. Without the helper this block's output cannot be graded, so

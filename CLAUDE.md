@@ -155,6 +155,26 @@ scanned the blocks — a parser regression must not turn into a vacuous pass.
 `tests/detection_selftest.ps1` closes the loop at runtime: any section whose
 body prints a finding must declare `ISSUES FOUND`.
 
+**A REAL run now closes that loop too.** The harness asserted the invariant for
+a long time while an actual audit never checked itself, so the one machine that
+mattered was the only place the check did not run: a field report printed three
+`[WARNING] Key ASR rule not in Block mode` lines into Section 9 and then
+declared `CLEAN`, and the finding never reached the ledger, `FINDINGS COUNTED`,
+the exit code or the remediation script. `tools/verdict_audit.ps1` runs after
+Section 18, reuses `tests/unraised_allowlist.txt` so curated exemptions are not
+duplicated, appends its result to the report, and raises `AUDITGAP` when a
+section printed a finding it never raised.
+
+**A grader that cannot read its input says so.** `tools/block_sev.ps1` returns
+`UNREADABLE`, never `OK`, when the block output cannot be read, and retries
+briefly first because the caller writes that file with one process and reads it
+with the next. `:dz_ps_scan` turns `UNREADABLE` into a declared `AUDITGAP`
+finding. Returning `OK` there was the original defect: not inventing a finding
+is right, but claiming cleanliness is indistinguishable from having checked.
+Checks whose miss would be silent also drop a marker as a backstop (the ASR
+block does, alongside its grade), raised only when the grade came back `OK`, so
+a correct grade never double-counts.
+
 ## Real-Windows CI (`.github/workflows/windows-smoke.yml`)
 
 The lint above is Linux/pwsh and cannot exercise cmd.exe, Windows

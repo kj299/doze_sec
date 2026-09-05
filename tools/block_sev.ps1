@@ -24,9 +24,20 @@
 #     'Word 2016: [WARNING] blockcontentexecutionfrominternet=0'.
 # Indentation is ignored (blocks indent continuation lines).
 #
-# Prints exactly one word so a cmd `for /f` can capture it. Never throws: an
-# unreadable file prints OK, because a scan that cannot read its input must not
-# invent a finding -- the block's own [SKIPPED] line reports the degradation.
+# Prints exactly one word so a cmd `for /f` can capture it. Never throws.
+#
+# A file it cannot read prints UNREADABLE, not OK. Printing OK there was a real
+# defect: a read failure is a DEGRADATION, and reporting it as "clean" is
+# indistinguishable from "I checked and found nothing" -- the exact confusion
+# the findings ledger exists to prevent. It shipped: three ASR warnings were
+# printed into a user's report while Section 9 read CLEAN, the finding never
+# reached the ledger, the exit code, or the fix generator. Not inventing a
+# finding is right; claiming cleanliness is not. The caller raises AUDITGAP on
+# UNREADABLE so the gap is declared, never silent.
+#
+# The read is retried briefly first: the caller writes this file with one
+# process and reads it with the next, so a transient sharing violation is
+# plausible and is worth surviving rather than reporting.
 #
 # Windows PowerShell 5.1 compatible. Read-only. Executed by helpers-ps51 CI.
 
@@ -38,9 +49,19 @@ param(
 $ErrorActionPreference = 'Continue'
 
 $sev = 'OK'
-if (Test-Path -LiteralPath $Path) {
+$lines = $null
+for ($attempt = 0; $attempt -lt 3 -and $null -eq $lines; $attempt++) {
+    if ($attempt -gt 0) { Start-Sleep -Milliseconds 120 }
+    if (-not (Test-Path -LiteralPath $Path)) { continue }
+    try { $lines = @(Get-Content -LiteralPath $Path -EA Stop) } catch { $lines = $null }
+}
+if ($null -eq $lines) {
+    'UNREADABLE'
+    exit 0
+}
+if ($true) {
     try {
-        foreach ($ln in (Get-Content -LiteralPath $Path -EA Stop)) {
+        foreach ($ln in $lines) {
             $t = $ln.TrimStart()
             if (-not $t) { continue }
             # A line that opens with a non-severity tag is descriptive, not a
@@ -55,7 +76,7 @@ if (Test-Path -LiteralPath $Path) {
                 if ($t -match '\[WARNING\]')  { $sev = 'WARNING' }
             }
         }
-    } catch { $sev = 'OK' }
+    } catch { $sev = 'UNREADABLE' }
 }
 
 $sev
