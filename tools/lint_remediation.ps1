@@ -47,6 +47,23 @@ function Expand-CmdEscapes {
     return $sb.ToString()
 }
 
+function Get-BareCmdOperators {
+    # cmd splits a command line on | < > & BEFORE anything else, and it honours
+    # DOUBLE quotes only -- PowerShell single quotes mean nothing to it. So a
+    # payload written as 'Get-CimInstance ... | Where-Object ...' makes cmd try
+    # to pipe the echo, and the audit dies with "| was unexpected at this time"
+    # in the middle of the run. Every such operator must be ^-escaped.
+    param([string]$Text)
+    $hits = @(); $inQ = $false
+    for ($i = 0; $i -lt $Text.Length; $i++) {
+        $c = $Text[$i]
+        if ($c -eq '"') { $inQ = -not $inQ; continue }
+        if ($c -eq '^' -and -not $inQ) { $i++; continue }
+        if (-not $inQ -and '|<>&'.Contains([string]$c)) { $hits += [string]$c }
+    }
+    return $hits
+}
+
 function Get-EmittedCommands {
     param([string]$BatPath, [ref]$RuleCount)
     $emitted = @()
@@ -97,6 +114,25 @@ function Invoke-Check {
         $emitted = Get-EmittedCommands -BatPath $path -RuleCount ([ref]$n)
         $allCounts += $n
         $src = [IO.File]::ReadAllText($path)
+
+        # 0. Before anything else: the generator line must survive cmd itself.
+        foreach ($ln in [IO.File]::ReadAllLines($path)) {
+            $t = $ln.TrimStart()
+            if (-not $t.StartsWith('echo ')) { continue }
+            if ($t -notmatch '\baddfix\b' -and $t -notmatch 'Add-Content -LiteralPath \$rem -Value') { continue }
+            if ($t -match 'function\s+addfix') { continue }
+            $payload = [regex]::Replace($t, '\s*>>\s*"%PSRUN%"\s*$', '')
+            # PowerShell escapes with a backtick; a backslash-quote is a literal
+            # backslash followed by a quote and is a parse error in the file the
+            # user runs. (I shipped exactly this bug into this lint's own source.)
+            if ($payload -match '\\"') {
+                $fail += ("{0}: addfix line contains a backslash-escaped quote -- PowerShell escapes with a backtick, so this lands as a literal \\ in the generated script: {1}" -f $b, $t.Substring(0, [Math]::Min(120, $t.Length)))
+            }
+            $bare = Get-BareCmdOperators $payload
+            if ($bare.Count) {
+                $fail += ("{0}: addfix line has {1} UNESCAPED cmd operator(s) [{2}] outside double quotes -- cmd would split the line and abort the audit mid-run. Escape them as ^{2}: {3}" -f $b, $bare.Count, ($bare -join ''), $t.Substring(0, [Math]::Min(120, $t.Length)))
+            }
+        }
 
         if ($n -lt 15) { $fail += ("{0}: only {1} addfix rule(s) found -- this lint is broken, not the code" -f $b, $n) }
         if ($emitted.Count -eq 0) { $fail += ("{0}: the generator produced NO commands -- expansion failed entirely" -f $b); continue }
@@ -151,6 +187,10 @@ if ($SelfTest) {
            Find = [regex]::Escape("addfix 'Harden NTLM to NTLMv2-only' `"Set-ItemProperty")
            Repl = "addfix 'Harden NTLM to NTLMv2-only' `"`$ms=@('a'); Set-ItemProperty"
            Expect = 'expansion' },
+        @{ Name = 'a bare pipe in an addfix payload (cmd would split the line)'
+           Find = [regex]::Escape('addfix ''Update Defender signatures'' "Update-MpSignature"')
+           Repl = 'addfix ''Update Defender signatures'' ''Update-MpSignature | Out-Null'''
+           Expect = 'UNESCAPED cmd operator' },
         @{ Name = 'the elevation assert removed'
            Find = '(?m)^echo if\(-not \(New-Object Security\.Principal\.WindowsPrincipal[^\r\n]*\r?\n'; Repl = ''
            Expect = 'no elevation assert' },
