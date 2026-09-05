@@ -2835,7 +2835,7 @@ call :dz_ps_scan 13 T1204.002 "Office macro protection weakened"
 
 echo.>> "%REPORT%"
 echo --- Mark-of-the-Web Preservation: SAFE=SaveZoneInformation absent or 0x1 --->> "%REPORT%"
-echo  Command: reg query "...\Policies\Attachments" /v SaveZoneInformation>> "%REPORT%"
+echo  Command: reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Attachments" /v SaveZoneInformation   [also the HKLM\SOFTWARE twin]>> "%REPORT%"
 reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Attachments" /v SaveZoneInformation>> "%REPORT%" 2>nul
 reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Attachments" /v SaveZoneInformation>> "%REPORT%" 2>nul
 set "_MOTW_OFF="
@@ -2853,7 +2853,7 @@ set "_MOTW_OFF="
 
 echo.>> "%REPORT%"
 echo --- SmartScreen for Files: SAFE=Warn or RequireAdmin --->> "%REPORT%"
-echo  Command: reg query "HKLM\...\Explorer" /v SmartScreenEnabled>> "%REPORT%"
+echo  Command: reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" /v SmartScreenEnabled   [also HKLM\SOFTWARE\Policies\Microsoft\Windows\System /v EnableSmartScreen]>> "%REPORT%"
 reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" /v SmartScreenEnabled>> "%REPORT%" 2>nul
 if errorlevel 1 (echo [INFO] SmartScreenEnabled not set -- Windows Security app default applies.)>> "%REPORT%"
 reg query "HKLM\SOFTWARE\Policies\Microsoft\Windows\System" /v EnableSmartScreen>> "%REPORT%" 2>nul

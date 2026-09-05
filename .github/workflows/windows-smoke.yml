@@ -1588,13 +1588,13 @@ jobs:
           $rep = Get-ChildItem 'C:\SecurityAudit\SecurityReport_*.txt' -EA SilentlyContinue |
                  Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if (-not $rep) { throw 'no report to probe -- the field test did not produce one' }
-          $out = (.\tools\report_command_probe.ps1 -Report $rep.FullName -MinProbed 100) -join "`n"
+          $out = (.\tools\report_command_probe.ps1 -Report $rep.FullName -MinProbed 120) -join "`n"
           Write-Host $out
           if ($LASTEXITCODE -ne 0) { throw 'a command the report tells a reader to run does not run' }
           # Guard the guard: a probe that skipped everything would pass vacuously.
           $m = [regex]::Match($out, "(\d+) 'Command:' line\(s\): (\d+) executed, (\d+) skipped")
           if (-not $m.Success) { throw 'report_command_probe did not report what it did -- the extractor regressed' }
-          if ([int]$m.Groups[2].Value -lt 100) { throw "only $($m.Groups[2].Value) command(s) executed -- a clean result means nothing" }
+          if ([int]$m.Groups[2].Value -lt 120) { throw "only $($m.Groups[2].Value) command(s) executed -- a clean result means nothing" }
           if ([int]$m.Groups[3].Value -lt 6)   { throw "only $($m.Groups[3].Value) skipped -- the mutating lines must still be recognised and refused" }
           foreach ($must in @('the RunOnce resume key', 'the INIT 9 connectivity probe', 'the INIT 10 self-update check')) {
             if ($out -notmatch [regex]::Escape($must)) { throw ("probe did not declare the expected skip: {0}" -f $must) }

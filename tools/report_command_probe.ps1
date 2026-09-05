@@ -34,7 +34,7 @@
 param(
     [string]$Report,
     [int]$TimeoutSeconds = 15,
-    [int]$MinProbed = 100,
+    [int]$MinProbed = 120,   # the real run executes 136; see readonly-field-test
     [switch]$ClassifyOnly,
     [switch]$SelfTest
 )
@@ -130,6 +130,24 @@ function Get-ReportCommands {
 function Get-Classification {
     # -> @{ Action = 'exec-ps'|'exec-native'|'skip'|'fail'; Payload; Reason }
     param([string]$Text)
+
+    # An elided command cannot be run as printed. Catching this statically
+    # matters because the runtime signal is not reliable: `reg query
+    # "...\Policies\Attachments"` has no hive and reports "Invalid key name"
+    # (malformed), while `reg query "HKLM\...\Explorer"` parses `...` as a real
+    # subkey name and reports "unable to find the specified registry key",
+    # which is correctly tolerated as machine state. Same defect, different
+    # wording -- so the ellipsis itself is the test, not the error text.
+    if ($Text -match '\.\.\.') {
+        $described = $false
+        foreach ($k in $script:KnownDescriptive) {
+            if ($Text -like ('*' + $k.Match + '*')) { $k.Hit = $true; $described = $true; break }
+        }
+        if (-not $described) {
+            return @{ Action = 'fail'; Reason = "elided with '...' -- the reader cannot run this as printed; print the real path, or add it to `$KnownDescriptive if it is deliberately abbreviated prose" }
+        }
+        return @{ Action = 'skip'; Reason = 'not an invocation -- deliberately abbreviated, and catalogued as such' }
+    }
 
     foreach ($k in $script:KnownMutating) {
         if ($Text -like ('*' + $k.Match + '*')) {
@@ -269,7 +287,7 @@ function Invoke-ProbeRun {
         # if/continue, never `switch`/`continue`: see the note in Invoke-Probe.
         if ($cls.Action -eq 'skip') { $nSkip++; continue }
         if ($cls.Action -eq 'fail') {
-            $bad += "report line $($c.Line): $($cls.Reason)"
+            $bad += "report line $($c.Line): $($cls.Reason) -- from: $($c.Text)"
             Write-Output ("[FAIL ] line {0}: {1}" -f $c.Line, $cls.Reason)
             continue
         }
@@ -308,7 +326,9 @@ if ($SelfTest) {
         ' Command: Get-CimInstance Win32_Process | findstr /i vpn-client-names',
         ' Command: ping -n 1 -w 2000 8.8.8.8',
         ' Command: Invoke-WebRequest http://example.invalid/version.txt',
-        ' Command: frobnicate --all'
+        ' Command: frobnicate --all',
+        ' Command: reg query "...\Policies\Attachments" /v SaveZoneInformation',
+        ' Command: reg query "HKLM\...\Explorer" /v SmartScreenEnabled'
     )
     Set-Content -LiteralPath $tmp -Value $fixture
     foreach ($k in ($script:KnownMutating + $script:KnownDescriptive)) { $k.Remove('Hit') | Out-Null }
@@ -318,7 +338,9 @@ if ($SelfTest) {
     $expect = @(
         @{ Need = 'Get-Date -NoSuchSwitchZZ|parameter cannot be found|Cannot bind|Missing an argument'; Why = 'a malformed switch must FAIL at runtime' },
         @{ Need = "'Remove-Item' is not in the read-only allowlist";                                    Why = 'a mutating cmdlet must be refused, never executed' },
-        @{ Need = "unrecognised command 'frobnicate'";                                                 Why = 'an unclassifiable line must FAIL, not skip silently' }
+        @{ Need = "unrecognised command 'frobnicate'";                                                 Why = 'an unclassifiable line must FAIL, not skip silently' },
+        @{ Need = "elided with.*Policies.Attachments";                                                 Why = 'an elided path reg reports as "Invalid key name" must FAIL' },
+        @{ Need = "elided with.*HKLM.*Explorer";                                                       Why = 'an elided path reg only reports as "key not found" must FAIL too' }
     )
     $fail = 0
     foreach ($e in $expect) {
@@ -329,7 +351,7 @@ if ($SelfTest) {
         }
     }
     # The mutating and descriptive lines must have been skipped, not run.
-    if ($r.Skip -lt 6) { Write-Output "[FAIL] expected >= 6 skips (3 mutating + 4 descriptive share lines); got $($r.Skip)"; $fail++ }
+    if ($r.Skip -lt 6) { Write-Output "[FAIL] expected >= 6 skips (mutating + descriptive); got $($r.Skip)"; $fail++ }
     else { Write-Output "[OK]   $($r.Skip) line(s) skipped without execution (mutating + descriptive)" }
     if ($r.Exec -lt 1) { Write-Output "[FAIL] the good command never executed -- the probe is vacuous"; $fail++ }
     else { Write-Output "[OK]   $($r.Exec) command(s) actually executed" }
