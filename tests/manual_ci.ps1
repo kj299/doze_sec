@@ -161,6 +161,12 @@ try {
         if ($LASTEXITCODE -ne 0) { throw ("lint_remediation exit code {0}" -f $LASTEXITCODE) }
         & .\tools\lint_remediation.ps1 -SelfTest
         if ($LASTEXITCODE -ne 0) { throw ("lint_remediation self-test exit code {0}" -f $LASTEXITCODE) }
+        # The report is the product: a line that never reaches it, or a command
+        # it tells you to paste that will not run, is a defect in the deliverable.
+        & .\tools\lint_report_echo.ps1
+        if ($LASTEXITCODE -ne 0) { throw ("lint_report_echo exit code {0}" -f $LASTEXITCODE) }
+        & .\tools\lint_report_echo.ps1 -SelfTest
+        if ($LASTEXITCODE -ne 0) { throw ("lint_report_echo self-test exit code {0}" -f $LASTEXITCODE) }
     }
     if ($results | Where-Object { $_.Step -like 'safety invariants*' -and $_.Result -eq 'FAIL' }) {
         Write-Host ''

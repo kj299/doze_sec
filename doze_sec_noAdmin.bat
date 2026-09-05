@@ -702,7 +702,7 @@ echo.>> "%REPORT%"
 :: ====================================================================
 echo %C_GREEN%[INIT 5/14]%C_RESET% Detecting boot mode...
 echo --- [INIT 5/14] Safe Mode Detection --->> "%REPORT%"
-echo  Command: powershell "(Get-CimInstance Win32_ComputerSystem^).BootupState"  [wmic fallback]>> "%REPORT%"
+echo  Command: powershell "(Get-CimInstance Win32_ComputerSystem).BootupState"  [wmic fallback]>> "%REPORT%"
 :: Primary: CIM (works on 24H2+ where wmic is gone); wmic fallback for older hosts.
 set "BOOTSTATE="
 echo (Get-CimInstance Win32_ComputerSystem -EA SilentlyContinue).BootupState > "%PSRUN%"
@@ -1121,7 +1121,7 @@ echo  Command: powershell -Command "Get-PhysicalDisk -EA SilentlyContinue">> "%R
 
 echo.>> "%REPORT%"
 echo --- Free Space on System Drive Before Audit --->> "%REPORT%"
-echo  Command: powershell -Command "Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='%SystemDrive%'" -EA SilentlyContinue^).FreeSpace">> "%REPORT%"
+echo  Command: tools\disk_info.ps1 -Mode FreeSpace -SystemDrive %SystemDrive%   [wmic logicaldisk fallback]>> "%REPORT%"
 :: Primary: PowerShell Get-CimInstance via tools\disk_info.ps1 (works on all Win10/11 incl. 24H2+)
 for /f "usebackq" %%a in (`%PWSH% -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\disk_info.ps1" -Mode FreeSpace -SystemDrive "%SystemDrive%" 2^>nul`) do (
     if not "%%a"=="" if not "%%a"=="0" set "FREE_BEFORE=%%a"
@@ -1272,7 +1272,7 @@ echo Get-HotFix ^| Sort-Object InstalledOn -Descending -EA SilentlyContinue ^| S
 
 echo.>> "%REPORT%"
 echo --- Pending Reboot Check --->> "%REPORT%"
-echo  Command: powershell -Command "Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'^){$reboot=$true">> "%REPORT%"
+echo  Command: powershell -Command "Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'"   [also CBS\RebootPending and PendingFileRenameOperations]>> "%REPORT%"
 echo $reboot=$false > "%PSRUN%"
 echo if(Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'){$reboot=$true; '[REBOOT PENDING] Windows Update requires a reboot.'} >> "%PSRUN%"
 echo if(Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'){$reboot=$true; '[REBOOT PENDING] Component Based Servicing pending reboot.'} >> "%PSRUN%"
@@ -1291,7 +1291,7 @@ if exist "%TEMP%\dz_reboot_needed.txt" (
 
 echo.>> "%REPORT%"
 echo --- Windows Update Last Run --->> "%REPORT%"
-echo  Command: powershell -Command "try{$r=^(New-Object -ComObject Microsoft.Update.AutoUpdate^).Results; $r ^| Select-Object LastSearchSuccessDate,LastInstallationSuccessDate ^| Format-List}catch{'WU COM object unavailable.'}">> "%REPORT%"
+echo  Command: powershell -Command "try{$r=(New-Object -ComObject Microsoft.Update.AutoUpdate).Results; $r | Select-Object LastSearchSuccessDate,LastInstallationSuccessDate | Format-List}catch{'WU COM object unavailable.'}">> "%REPORT%"
 echo try{$r=(New-Object -ComObject Microsoft.Update.AutoUpdate).Results; $r ^| Select-Object LastSearchSuccessDate,LastInstallationSuccessDate ^| Format-List}catch{'WU COM object unavailable.'} > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 echo.>> "%REPORT%"
@@ -2136,8 +2136,8 @@ if exist "%TEMP%\dz_edr.txt" (
 
 echo --- Defender Core Status: EVALUATED --->> "%REPORT%"
 echo THREAT: the two field dumps above are EVIDENCE, not a verdict. Until this>> "%REPORT%"
-echo check existed, "RealTimeProtectionEnabled : False" and "IsTamperProtected :>> "%REPORT%"
-echo False" were printed into the report and reached no verdict at all -- the>> "%REPORT%"
+echo check existed, "RealTimeProtectionEnabled : False" and "IsTamperProtected : False">> "%REPORT%"
+echo were printed into the report and reached no verdict at all -- the>> "%REPORT%"
 echo section could still say CLEAN on a machine whose antivirus had been switched>> "%REPORT%"
 echo off, which is the first thing an intruder does after gaining admin.>> "%REPORT%"
 echo  Command: powershell evaluates Get-MpComputerStatus + Get-MpPreference>> "%REPORT%"
@@ -2176,19 +2176,19 @@ call :dz_ps_scan 9 T1562.001 "Defender core protection disabled, passive without
 del "%TEMP%\dz_defexcl_hit.txt" 2>nul
 echo.>> "%REPORT%"
 echo --- CRITICAL: Exclusion Paths --->> "%REPORT%"
-echo  Command: powershell -Command "Get-MpPreference^).ExclusionPath">> "%REPORT%"
+echo  Command: powershell -Command "(Get-MpPreference).ExclusionPath">> "%REPORT%"
 echo $ok=$true; try{$e=(Get-MpPreference -EA Stop).ExclusionPath}catch{$ok=$false}; if(-not $ok){'[SKIPPED] Get-MpPreference failed -- path-exclusion check NOT performed (Defender disabled or third-party AV?).'}elseif($e){'[WARNING] Exclusion paths found:'; $e; Set-Content -LiteralPath "$env:TEMP\dz_defexcl_hit.txt" -Value hit}else{'[OK] No path exclusions.'} > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- CRITICAL: Exclusion Processes --->> "%REPORT%"
-echo  Command: powershell -Command "Get-MpPreference^).ExclusionProcess">> "%REPORT%"
+echo  Command: powershell -Command "(Get-MpPreference).ExclusionProcess">> "%REPORT%"
 echo $ok=$true; try{$e=(Get-MpPreference -EA Stop).ExclusionProcess}catch{$ok=$false}; if(-not $ok){'[SKIPPED] Get-MpPreference failed -- process-exclusion check NOT performed (Defender disabled or third-party AV?).'}elseif($e){'[WARNING] Exclusion processes found:'; $e; Set-Content -LiteralPath "$env:TEMP\dz_defexcl_hit.txt" -Value hit}else{'[OK] No process exclusions.'} > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- CRITICAL: Exclusion Extensions --->> "%REPORT%"
-echo  Command: powershell -Command "Get-MpPreference^).ExclusionExtension">> "%REPORT%"
+echo  Command: powershell -Command "(Get-MpPreference).ExclusionExtension">> "%REPORT%"
 echo $ok=$true; try{$e=(Get-MpPreference -EA Stop).ExclusionExtension}catch{$ok=$false}; if(-not $ok){'[SKIPPED] Get-MpPreference failed -- extension-exclusion check NOT performed (Defender disabled or third-party AV?).'}elseif($e){'[WARNING] Exclusion extensions found:'; $e; Set-Content -LiteralPath "$env:TEMP\dz_defexcl_hit.txt" -Value hit}else{'[OK] No extension exclusions.'} > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
@@ -2203,7 +2203,7 @@ echo.>> "%REPORT%"
 echo --- Attack Surface Reduction Rules Audit (T1566.001 / T1003.001 / T1068) --->> "%REPORT%"
 echo THREAT: With no ASR rules in Block mode, Office-macro droppers, LSASS credential>> "%REPORT%"
 echo theft, and vulnerable-driver loads are stopped by signature detection alone.>> "%REPORT%"
-echo  Command: powershell -Command "Get-MpPreference^).AttackSurfaceReductionRules_Ids">> "%REPORT%"
+echo  Command: powershell -Command "(Get-MpPreference).AttackSurfaceReductionRules_Ids">> "%REPORT%"
 del "%TEMP%\dz_asr_hit.txt" 2>nul
 echo try { $p = Get-MpPreference -ErrorAction Stop } catch { Write-Output '[INFO] Get-MpPreference unavailable - third-party AV active or service restricted. ASR audit skipped.'; exit 0 } > "%PSRUN%"
 echo $ids = @(); if ($p.AttackSurfaceReductionRules_Ids) { $ids = @($p.AttackSurfaceReductionRules_Ids) } >> "%PSRUN%"
@@ -2418,13 +2418,13 @@ echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
 echo --- Execution Policy All Scopes --->> "%REPORT%"
-echo  Command: powershell -Command "Get-ExecutionPolicy -List ^| Format-Table -AutoSize">> "%REPORT%"
+echo  Command: powershell -Command "Get-ExecutionPolicy -List | Format-Table -AutoSize">> "%REPORT%"
 echo Get-ExecutionPolicy -List ^| Format-Table -AutoSize > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- PowerShell Version Table --->> "%REPORT%"
-echo  Command: powershell -Command "$PSVersionTable ^| Format-Table -AutoSize">> "%REPORT%"
+echo  Command: powershell -Command "$PSVersionTable | Format-Table -AutoSize">> "%REPORT%"
 echo $PSVersionTable ^| Format-Table -AutoSize > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
@@ -2450,7 +2450,7 @@ if exist "%TEMP%\dz_psv2_hit.txt" (
 
 echo.>> "%REPORT%"
 echo --- Logging Policy --->> "%REPORT%"
-echo  Command: powershell -Command "Get-ItemProperty "$base\ScriptBlockLogging" -Name EnableScriptBlockLogging -EA SilentlyContinue^).EnableScriptBlockLogging">> "%REPORT%"
+echo  Command: powershell -Command "(Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' -Name EnableScriptBlockLogging).EnableScriptBlockLogging">> "%REPORT%"
 del "%TEMP%\dz_sbl_hit.txt" 2>nul
 echo $base='HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell' > "%PSRUN%"
 echo $sbl=(Get-ItemProperty "$base\ScriptBlockLogging" -Name EnableScriptBlockLogging -EA SilentlyContinue).EnableScriptBlockLogging >> "%PSRUN%"
@@ -2467,7 +2467,7 @@ if exist "%TEMP%\dz_sbl_hit.txt" (
 
 echo.>> "%REPORT%"
 echo --- Recent PS Command History --->> "%REPORT%"
-echo  Command: powershell -Command "Get-Content '%APPDATA%\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt' -EA SilentlyContinue ^| Select-Object -Last 50">> "%REPORT%"
+echo  Command: powershell -Command "Get-Content '%APPDATA%\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt' -EA SilentlyContinue | Select-Object -Last 50">> "%REPORT%"
 if not exist "%APPDATA%\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt" goto :pshistnone
 echo [FOUND] PS history file. Last 50 commands:>> "%REPORT%"
 echo Get-Content '%APPDATA%\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt' -EA SilentlyContinue ^| Select-Object -Last 50 > "%PSRUN%"
@@ -2634,7 +2634,7 @@ if errorlevel 1 (echo [OK] LocalAccountTokenFilterPolicy not set -- default remo
 
 echo.>> "%REPORT%"
 echo --- Secure Boot --->> "%REPORT%"
-echo  Command: powershell -Command "try{$sb=Confirm-SecureBootUEFI; if^($sb^){'[OK] Secure Boot ENABLED.'}else{'[WARNING] Secure Boot DISABLED.'}}catch{'[INFO] Secure Boot query not supported ^(may be legacy BIOS^).'}">> "%REPORT%"
+echo  Command: powershell -Command "try{$sb=Confirm-SecureBootUEFI; if($sb){'[OK] Secure Boot ENABLED.'}else{'[WARNING] Secure Boot DISABLED.'}}catch{'[INFO] Secure Boot query not supported (may be legacy BIOS).'}">> "%REPORT%"
 if "%IS_ADMIN%"=="0" goto :sec13_secboot_noadmin
 echo try{$sb=Confirm-SecureBootUEFI; if($sb){'[OK] Secure Boot ENABLED.'}else{'[WARNING] Secure Boot DISABLED.'}}catch{'[INFO] Secure Boot query not supported (may be legacy BIOS).'} > "%PSRUN%"
 call :dz_ps_scan 13 T1542.001 "Secure Boot is disabled"
@@ -2763,7 +2763,7 @@ call :dz_ps_scan 13 T1546.008 "IFEO Debugger hijack on an accessibility binary -
 
 echo.>> "%REPORT%"
 echo --- [T1546.008] Accessibility Binary File Signature Check --->> "%REPORT%"
-echo  Command: powershell -Command "Test-Path $f^) {">> "%REPORT%"
+echo  Command: powershell -Command "foreach($b in 'sethc.exe','utilman.exe','osk.exe','Magnify.exe','Narrator.exe','DisplaySwitch.exe','AtBroker.exe'){ Get-AuthenticodeSignature $env:SystemRoot\System32\$b }">> "%REPORT%"
 echo $accBins = @('sethc.exe','utilman.exe','osk.exe','Magnify.exe','Narrator.exe','DisplaySwitch.exe','AtBroker.exe') > "%PSRUN%"
 echo $sysDir = "$env:SystemRoot\System32" >> "%PSRUN%"
 echo $bad = @() >> "%PSRUN%"
@@ -2784,7 +2784,7 @@ call :dz_ps_scan 13 T1546.008 "Accessibility binary is not validly Microsoft-sig
 
 echo.>> "%REPORT%"
 echo --- [T1546.008] Sticky Keys Shortcut Status --->> "%REPORT%"
-echo  Command: powershell -Command "Get-ItemProperty 'HKCU:\Control Panel\Accessibility\StickyKeys' -Name Flags -EA SilentlyContinue^).Flags">> "%REPORT%"
+echo  Command: powershell -Command "(Get-ItemProperty 'HKCU:\Control Panel\Accessibility\StickyKeys' -Name Flags).Flags">> "%REPORT%"
 echo $stickyFlags = (Get-ItemProperty 'HKCU:\Control Panel\Accessibility\StickyKeys' -Name Flags -EA SilentlyContinue).Flags > "%PSRUN%"
 echo $utilFlags   = (Get-ItemProperty 'HKCU:\Control Panel\Accessibility\UtilityManager' -Name Flags -EA SilentlyContinue).Flags >> "%PSRUN%"
 echo if ($null -ne $stickyFlags) { >> "%PSRUN%"
@@ -2918,7 +2918,7 @@ set /a DEFERRED_COUNT+=1
 
 echo.>> "%REPORT%"
 echo --- HTML Smuggling: Large HTML/HTA in Downloads (Midnight Blizzard) --->> "%REPORT%"
-echo  Command: powershell -Command "Get-ChildItem -Path ^([System.Environment]::GetFolderPath^('UserProfile'^)+'\Downloads'^) -Recurse -Include '*.html','*.htm','*.hta' -EA SilentlyContinue">> "%REPORT%"
+echo  Command: powershell -Command "Get-ChildItem -Path ([System.Environment]::GetFolderPath('UserProfile')+'\Downloads') -Recurse -Include '*.html','*.htm','*.hta' -EA SilentlyContinue">> "%REPORT%"
 echo Get-ChildItem -Path ([System.Environment]::GetFolderPath('UserProfile')+'\Downloads') -Recurse -Include '*.html','*.htm','*.hta' -EA SilentlyContinue ^| Where-Object {$_.Length -gt 200000} ^| Select-Object FullName,@{N='SizeKB';E={[math]::Round($_.Length/1024,1)}},LastWriteTime ^| Format-Table -AutoSize > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
@@ -3057,18 +3057,18 @@ echo ====================================================================>> "%RE
 if "%IS_ADMIN%"=="0" goto :sec16_noadmin
 
 echo --- Log Cleared (1102=Security cleared, 104=System cleared) --->> "%REPORT%"
-echo  Command: wevtutil qe Security /q:"*[System[Provider[@Name='Microsoft-Windows-Eventlog'] and ^(EventID=1102^)]]" /c:10 /rd:true /f:text>> "%REPORT%"
+echo  Command: wevtutil qe Security /q:"*[System[Provider[@Name='Microsoft-Windows-Eventlog'] and (EventID=1102)]]" /c:10 /rd:true /f:text>> "%REPORT%"
 wevtutil qe Security /q:"*[System[Provider[@Name='Microsoft-Windows-Eventlog'] and (EventID=1102)]]" /c:10 /rd:true /f:text>> "%REPORT%" 2>&1
 wevtutil qe System /q:"*[System[Provider[@Name='Microsoft-Windows-Eventlog'] and (EventID=104)]]" /c:10 /rd:true /f:text>> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- New Account Created - Event 4720 --->> "%REPORT%"
-echo  Command: wevtutil qe Security /q:"*[System[^(EventID=4720^)]]" /c:10 /rd:true /f:text>> "%REPORT%"
+echo  Command: wevtutil qe Security /q:"*[System[(EventID=4720)]]" /c:10 /rd:true /f:text>> "%REPORT%"
 wevtutil qe Security /q:"*[System[(EventID=4720)]]" /c:10 /rd:true /f:text>> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- Added to Administrators - Event 4732 --->> "%REPORT%"
-echo  Command: wevtutil qe Security /q:"*[System[^(EventID=4732^)]]" /c:10 /rd:true /f:text>> "%REPORT%"
+echo  Command: wevtutil qe Security /q:"*[System[(EventID=4732)]]" /c:10 /rd:true /f:text>> "%REPORT%"
 wevtutil qe Security /q:"*[System[(EventID=4732)]]" /c:10 /rd:true /f:text>> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
@@ -3139,22 +3139,22 @@ if exist "%TEMP%\dz_ev4732_hit.txt" (
 
 echo.>> "%REPORT%"
 echo --- Special Privilege Logon - Event 4672 --->> "%REPORT%"
-echo  Command: wevtutil qe Security /q:"*[System[^(EventID=4672^)]]" /c:20 /rd:true /f:text ^| findstr /c:"TimeCreated" /c:"Account Name" /c:"Privileges">> "%REPORT%"
+echo  Command: wevtutil qe Security /q:"*[System[(EventID=4672)]]" /c:20 /rd:true /f:text ^| findstr /c:"TimeCreated" /c:"Account Name" /c:"Privileges">> "%REPORT%"
 wevtutil qe Security /q:"*[System[(EventID=4672)]]" /c:20 /rd:true /f:text | findstr /c:"TimeCreated" /c:"Account Name" /c:"Privileges">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- Failed Logins - Event 4625 (spray = many accounts, same source) --->> "%REPORT%"
-echo  Command: wevtutil qe Security /q:"*[System[^(EventID=4625^)]]" /c:25 /rd:true /f:text ^| findstr /c:"TimeCreated" /c:"Account Name" /c:"Failure Reason" /c:"Source Network" /c:"Logon Type">> "%REPORT%"
+echo  Command: wevtutil qe Security /q:"*[System[(EventID=4625)]]" /c:25 /rd:true /f:text ^| findstr /c:"TimeCreated" /c:"Account Name" /c:"Failure Reason" /c:"Source Network" /c:"Logon Type">> "%REPORT%"
 wevtutil qe Security /q:"*[System[(EventID=4625)]]" /c:25 /rd:true /f:text | findstr /c:"TimeCreated" /c:"Account Name" /c:"Failure Reason" /c:"Source Network" /c:"Logon Type">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- Successful Logins - Event 4624 --->> "%REPORT%"
-echo  Command: wevtutil qe Security /q:"*[System[^(EventID=4624^)]]" /c:25 /rd:true /f:text ^| findstr /c:"TimeCreated" /c:"Account Name" /c:"Logon Type" /c:"Source Network">> "%REPORT%"
+echo  Command: wevtutil qe Security /q:"*[System[(EventID=4624)]]" /c:25 /rd:true /f:text ^| findstr /c:"TimeCreated" /c:"Account Name" /c:"Logon Type" /c:"Source Network">> "%REPORT%"
 wevtutil qe Security /q:"*[System[(EventID=4624)]]" /c:25 /rd:true /f:text | findstr /c:"TimeCreated" /c:"Account Name" /c:"Logon Type" /c:"Source Network">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- Scheduled Task Changes - Events 4698, 4702 --->> "%REPORT%"
-echo  Command: wevtutil qe Security /q:"*[System[^(EventID=4698 or EventID=4702^)]]" /c:20 /rd:true /f:text ^| findstr /c:"TimeCreated" /c:"Task Name" /c:"Subject">> "%REPORT%"
+echo  Command: wevtutil qe Security /q:"*[System[(EventID=4698 or EventID=4702)]]" /c:20 /rd:true /f:text ^| findstr /c:"TimeCreated" /c:"Task Name" /c:"Subject">> "%REPORT%"
 wevtutil qe Security /q:"*[System[(EventID=4698 or EventID=4702)]]" /c:20 /rd:true /f:text | findstr /c:"TimeCreated" /c:"Task Name" /c:"Subject">> "%REPORT%" 2>&1
 
 :: Compute UTC ISO timestamp for 24h ago. Used by all subsequent
@@ -3166,19 +3166,19 @@ if not defined WEVT_24H_AGO set "WEVT_24H_AGO=1970-01-01T00:00:00.000Z"
 
 echo.>> "%REPORT%"
 echo --- Process Creation - Event 4688 (last 24h) --->> "%REPORT%"
-echo  Command: wevtutil qe Security /q:"*[System[^(EventID=4688^)]]" /c:200 /rd:true /f:text ^| select_lines.ps1 "TimeCreated" "Process Name" "Creator Process" "Command Line">> "%REPORT%"
+echo  Command: wevtutil qe Security /q:"*[System[(EventID=4688)]]" /c:200 /rd:true /f:text ^| select_lines.ps1 "TimeCreated" "Process Name" "Creator Process" "Command Line">> "%REPORT%"
 wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:200 /rd:true /f:text > "%TEMP%\dz_evt.tmp" 2>nul
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" "TimeCreated" "Process Name" "Creator Process" "Command Line">> "%REPORT%" 2>&1
 del "%TEMP%\dz_evt.tmp" 2>nul
 
 echo.>> "%REPORT%"
 echo --- Kerberos RC4 Tickets - Event 4769 (Kerberoasting IOC) --->> "%REPORT%"
-echo  Command: wevtutil qe Security /q:"*[System[^(EventID=4769^)]]" /c:20 /rd:true /f:text ^| findstr /c:"TimeCreated" /c:"Account Name" /c:"Service Name" /c:"Ticket Encryption">> "%REPORT%"
+echo  Command: wevtutil qe Security /q:"*[System[(EventID=4769)]]" /c:20 /rd:true /f:text ^| findstr /c:"TimeCreated" /c:"Account Name" /c:"Service Name" /c:"Ticket Encryption">> "%REPORT%"
 wevtutil qe Security /q:"*[System[(EventID=4769)]]" /c:20 /rd:true /f:text | findstr /c:"TimeCreated" /c:"Account Name" /c:"Service Name" /c:"Ticket Encryption">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- NTLM Auth - Event 4776 (Forest Blizzard relay IOC) --->> "%REPORT%"
-echo  Command: wevtutil qe Security /q:"*[System[^(EventID=4776^)]]" /c:20 /rd:true /f:text ^| findstr /c:"TimeCreated" /c:"Logon Account" /c:"Source Workstation" /c:"Error Code">> "%REPORT%"
+echo  Command: wevtutil qe Security /q:"*[System[(EventID=4776)]]" /c:20 /rd:true /f:text ^| findstr /c:"TimeCreated" /c:"Logon Account" /c:"Source Workstation" /c:"Error Code">> "%REPORT%"
 wevtutil qe Security /q:"*[System[(EventID=4776)]]" /c:20 /rd:true /f:text | findstr /c:"TimeCreated" /c:"Logon Account" /c:"Source Workstation" /c:"Error Code">> "%REPORT%" 2>&1
 
 goto :sec16_admin_done
@@ -3191,7 +3191,7 @@ set /a DEFERRED_COUNT+=1
 :: These event logs can be read without admin
 echo.>> "%REPORT%"
 echo --- New Service Installed - Event 7045 --->> "%REPORT%"
-echo  Command: wevtutil qe System /q:"*[System[^(EventID=7045^)]]" /c:20 /rd:true /f:text>> "%REPORT%"
+echo  Command: wevtutil qe System /q:"*[System[(EventID=7045)]]" /c:20 /rd:true /f:text>> "%REPORT%"
 wevtutil qe System /q:"*[System[(EventID=7045)]]" /c:20 /rd:true /f:text > "%TEMP%\dz_pipe.tmp" 2>nul
 if errorlevel 1 (
     echo [INFO] wevtutil unavailable or System log inaccessible -- 7045 check skipped.>> "%REPORT%"
@@ -3203,7 +3203,7 @@ del "%TEMP%\dz_pipe.tmp" 2>nul
 
 echo.>> "%REPORT%"
 echo --- PS Script Block Executions - Event 4104 --->> "%REPORT%"
-echo  Command: powershell -Command "Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-PowerShell/Operational'">> "%REPORT%"
+echo  Command: powershell -Command "Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-PowerShell/Operational';Id=4104} -MaxEvents 200 -EA SilentlyContinue">> "%REPORT%"
 echo $evts = Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-PowerShell/Operational';Id=4104} -MaxEvents 200 -EA SilentlyContinue > "%PSRUN%"
 echo $skip = 'AuditPS_\d{8}_\d{6}\.ps1^|doze_sec_noAdmin\.bat^|doze_sec\.bat' >> "%PSRUN%"
 echo if($evts){ >> "%PSRUN%"
@@ -3221,7 +3221,7 @@ echo } else { Write-Output '[OK] No PS Script Block events found.' } >> "%PSRUN%
 
 echo.>> "%REPORT%"
 echo --- Defender Alerts: 1116=Detected, 1117=Action --->> "%REPORT%"
-echo  Command: wevtutil qe "Microsoft-Windows-Windows Defender/Operational" /q:"*[System[^(EventID=1116 or EventID=1117^)]]" /c:20 /rd:true /f:text>> "%REPORT%"
+echo  Command: wevtutil qe "Microsoft-Windows-Windows Defender/Operational" /q:"*[System[(EventID=1116 or EventID=1117)]]" /c:20 /rd:true /f:text>> "%REPORT%"
 wevtutil qe "Microsoft-Windows-Windows Defender/Operational" /q:"*[System[(EventID=1116 or EventID=1117)]]" /c:20 /rd:true /f:text>> "%REPORT%" 2>&1
 echo.>> "%REPORT%"
 
@@ -3274,7 +3274,7 @@ set /a DEFERRED_COUNT+=1
 
 echo.>> "%REPORT%"
 echo --- [VOLT TYPHOON] LOLBin Abuse in Event 4688 --->> "%REPORT%"
-echo  Command: wevtutil qe Security /q:"*[System[^(EventID=4688^)]]" /c:500 /rd:true /f:text ^| select_lines.ps1 "certutil" "mshta" "regsvr32" "cmstp" "installutil" "odbcconf">> "%REPORT%"
+echo  Command: wevtutil qe Security /q:"*[System[(EventID=4688)]]" /c:500 /rd:true /f:text ^| select_lines.ps1 "certutil" "mshta" "regsvr32" "cmstp" "installutil" "odbcconf">> "%REPORT%"
 if "%IS_ADMIN%"=="0" goto :sec17_lolbin_noadmin
 wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:500 /rd:true /f:text > "%TEMP%\dz_evt.tmp" 2>nul
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" "certutil" "mshta" "regsvr32" "cmstp" "installutil" "odbcconf">> "%REPORT%" 2>&1
@@ -3287,7 +3287,7 @@ set /a DEFERRED_COUNT+=1
 
 echo.>> "%REPORT%"
 echo --- [VOLT TYPHOON] Discovery Commands in Event 4688 --->> "%REPORT%"
-echo  Command: wevtutil qe Security /q:"*[System[^(EventID=4688^)]]" /c:500 /rd:true /f:text ^| select_lines.ps1 "nltest" "net group" "dsquery" "ldifde" "ntdsutil" "csvde">> "%REPORT%"
+echo  Command: wevtutil qe Security /q:"*[System[(EventID=4688)]]" /c:500 /rd:true /f:text ^| select_lines.ps1 "nltest" "net group" "dsquery" "ldifde" "ntdsutil" "csvde">> "%REPORT%"
 if "%IS_ADMIN%"=="0" goto :sec17_disc_noadmin
 wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:500 /rd:true /f:text > "%TEMP%\dz_evt.tmp" 2>nul
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" "nltest" "net group" "dsquery" "ldifde" "ntdsutil" "csvde">> "%REPORT%" 2>&1
@@ -3318,7 +3318,7 @@ call :dz_ps_scan 17 T1027.006 "Oversized HTML/HTA in TEMP - HTML smuggling stagi
 
 echo.>> "%REPORT%"
 echo --- [FOREST BLIZZARD] CVE-2023-23397 Outlook .msg Artefacts --->> "%REPORT%"
-echo  Command: powershell -Command "Get-ChildItem -Path ^([System.Environment]::GetFolderPath^('LocalApplicationData'^)+'\Microsoft\Outlook'^) -Recurse -Include '*.msg','*.oft' -EA SilentlyContinue">> "%REPORT%"
+echo  Command: powershell -Command "Get-ChildItem -Path ([System.Environment]::GetFolderPath('LocalApplicationData')+'\Microsoft\Outlook') -Recurse -Include '*.msg','*.oft' -EA SilentlyContinue">> "%REPORT%"
 echo $r = @(Get-ChildItem -Path ([System.Environment]::GetFolderPath('LocalApplicationData')+'\Microsoft\Outlook') -Recurse -Include '*.msg','*.oft' -EA SilentlyContinue ^| Where-Object {$_.LastWriteTime -gt (Get-Date).AddDays(-90)}); if($r.Count -gt 0){ '[WARNING] Recent Outlook .msg/.oft artefacts (review for CVE-2023-23397 NTLM relay):'; $r ^| Select-Object FullName,LastWriteTime ^| Format-Table -AutoSize } else { '[OK] No recent Outlook .msg/.oft artefacts (Outlook profile may be absent).' } > "%PSRUN%"
 call :dz_ps_scan 17 T1566.001 "Recent Outlook .msg/.oft artefacts - review for CVE-2023-23397 NTLM relay"
 
@@ -3358,7 +3358,7 @@ set "_AAD_HIT="
 
 echo.>> "%REPORT%"
 echo --- [ALL ACTORS] Password Spray Analysis (Event 4625 unique accounts) --->> "%REPORT%"
-echo  Command: powershell -Command "Get-WinEvent -FilterHashtable @{LogName='Security'">> "%REPORT%"
+echo  Command: powershell -Command "Get-WinEvent -FilterHashtable @{LogName='Security';Id=4625} -MaxEvents 200 -EA SilentlyContinue">> "%REPORT%"
 if "%IS_ADMIN%"=="0" goto :sec17_spray_noadmin
 echo $evts=Get-WinEvent -FilterHashtable @{LogName='Security';Id=4625} -MaxEvents 200 -EA SilentlyContinue > "%PSRUN%"
 echo if($evts){ >> "%PSRUN%"
@@ -3440,7 +3440,7 @@ set "_ENUMVPN="
 echo.>> "%REPORT%"
 
 echo --- [LINEN/VIOLET TYPHOON] Accessibility Login-Screen Backdoor (T1546.008) --->> "%REPORT%"
-echo  Command: powershell -Command "Get-ItemProperty ^(Join-Path $base $b^) -Name Debugger -EA SilentlyContinue">> "%REPORT%"
+echo  Command: powershell -Command "Get-ItemProperty (Join-Path $base $b) -Name Debugger -EA SilentlyContinue">> "%REPORT%"
 echo MITRE T1546.008: Chinese nation-state actors Linen Typhoon and Violet Typhoon were>> "%REPORT%"
 echo observed using accessibility binary hijacking alongside SharePoint CVE exploitation.>> "%REPORT%"
 echo Two methods: (1) WinRE file swap of sethc.exe/utilman.exe with cmd.exe (BitLocker>> "%REPORT%"
@@ -3645,7 +3645,7 @@ if exist "%TEMP%\dz_iochit_18c.txt" (
 
 echo.>> "%REPORT%"
 echo --- [18d] Suspicious File Path IOC Check --->> "%REPORT%"
-echo  Command: powershell -Command "Test-Path $expanded^){$hits+=$expanded}">> "%REPORT%"
+echo  Command: powershell -Command "foreach($p in Get-Content '%IOCDIR%\ioc_file_paths.txt'){ if(Test-Path ([Environment]::ExpandEnvironmentVariables($p))){ $p } }">> "%REPORT%"
 echo  Checking for known malware staging paths from ioc_file_paths.txt>> "%REPORT%"
 echo $iocFile='%IOCDIR%\ioc_file_paths.txt' > "%PSRUN%"
 echo $paths=if(Test-Path $iocFile){Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'}} >> "%PSRUN%"
@@ -3665,7 +3665,7 @@ if exist "%TEMP%\dz_iochit_18d.txt" (
 
 echo.>> "%REPORT%"
 echo --- [18e] Scheduled Task IOC Match --->> "%REPORT%"
-echo  Command: powershell -Command "Test-Path $iocFile^) { Get-Content $iocFile">> "%REPORT%"
+echo  Command: powershell -Command "schtasks /query /fo CSV /v | ConvertFrom-Csv"   matched against %IOCDIR%\ioc_scheduled_tasks.txt>> "%REPORT%"
 echo  Matching scheduled task NAMES and ACTIONS against ioc_scheduled_tasks.txt>> "%REPORT%"
 echo $iocFile = '%IOCDIR%\ioc_scheduled_tasks.txt' > "%PSRUN%"
 echo $patterns = if (Test-Path $iocFile) { Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'} } >> "%PSRUN%"
@@ -3762,7 +3762,7 @@ if exist "%TEMP%\dz_iochit_18h.txt" (
 
 echo.>> "%REPORT%"
 echo --- [18i] TTP Coverage Summary --->> "%REPORT%"
-echo  Command: findstr /v /c:"#" "%IOCDIR%\ttp_manifest.txt" ^| findstr /v /r "^^$">> "%REPORT%"
+echo  Command: findstr /v /c:"#" "%IOCDIR%\ttp_manifest.txt" ^| findstr /v /r "^$">> "%REPORT%"
 echo  MITRE ATT^&CK techniques covered by this audit:>> "%REPORT%"
 if exist "%IOCDIR%\ttp_manifest.txt" (
     findstr /v /c:"#" "%IOCDIR%\ttp_manifest.txt" | findstr /v /r "^$">> "%REPORT%" 2>&1
@@ -3864,7 +3864,7 @@ call :dz_ps_scan 18 T1071 "Sliver/Havoc/Brute Ratel named pipe IOC"
 :: --- [CTI] DLL Search Order Hijacking (T1574.001) ---
 echo.>> "%REPORT%"
 echo --- [CTI][T1574.001] DLL Search Order Hijacking - Suspicious DLLs in System Paths --->> "%REPORT%"
-echo  Command: powershell -Command "Test-Path $f^) {">> "%REPORT%"
+echo  Command: powershell -Command "foreach($dll in 'version.dll','winhttp.dll','dbghelp.dll','dbgcore.dll','wer.dll','ualapi.dll','WTSAPI32.dll','msasn1.dll','npmproxy.dll'){ Get-AuthenticodeSignature $env:SystemRoot\System32\$dll }"   [also SysWOW64 and both Program Files trees]>> "%REPORT%"
 echo $suspDlls = @('version.dll','winhttp.dll','dbghelp.dll','dbgcore.dll','wer.dll','ualapi.dll','WTSAPI32.dll','msasn1.dll','npmproxy.dll') > "%PSRUN%"
 echo $sysDirs = @("$env:SystemRoot\System32","$env:SystemRoot\SysWOW64","$env:ProgramFiles","${env:ProgramFiles(x86)}") >> "%PSRUN%"
 echo $hits = @() >> "%PSRUN%"
@@ -3885,7 +3885,7 @@ call :dz_ps_scan 18 T1574.001 "Unsigned or suspicious DLLs in system paths"
 :: --- [CTI] LOLBin Download/Execute Chains (T1105+T1059) ---
 echo.>> "%REPORT%"
 echo --- [CTI][T1105+T1059] LOLBin Download Cradles in Event 4688 (last 24h) --->> "%REPORT%"
-echo  Command: wevtutil qe Security /q:"*[System[^(EventID=4688^)]]" /c:1000 /rd:true /f:text ^| select_lines.ps1 "bitsadmin" "certutil -urlcache" "curl " "wget" "Invoke-WebRequest" "Start-BitsTransfer" "desktopimgdownldr" "esentutl">> "%REPORT%"
+echo  Command: wevtutil qe Security /q:"*[System[(EventID=4688)]]" /c:1000 /rd:true /f:text ^| select_lines.ps1 "bitsadmin" "certutil -urlcache" "curl " "wget" "Invoke-WebRequest" "Start-BitsTransfer" "desktopimgdownldr" "esentutl">> "%REPORT%"
 if "%IS_ADMIN%"=="0" goto :cti_lolbin4688_noadmin
 wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:1000 /rd:true /f:text > "%TEMP%\dz_evt.tmp" 2>nul
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" "bitsadmin" "certutil -urlcache" "curl " "wget" "Invoke-WebRequest" "Start-BitsTransfer" "desktopimgdownldr" "esentutl">> "%REPORT%" 2>&1
@@ -3899,7 +3899,7 @@ set /a DEFERRED_COUNT+=1
 :: --- [CTI] AMSI Bypass Artifacts in PowerShell Logs (T1562.001) ---
 echo.>> "%REPORT%"
 echo --- [CTI][T1562.001] AMSI Bypass Patterns in PowerShell Event 4104 --->> "%REPORT%"
-echo  Command: powershell -Command "Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-PowerShell/Operational'">> "%REPORT%"
+echo  Command: powershell -Command "Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-PowerShell/Operational';Id=4104} -MaxEvents 500 -EA SilentlyContinue">> "%REPORT%"
 echo $evts = Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-PowerShell/Operational';Id=4104} -MaxEvents 500 -EA SilentlyContinue > "%PSRUN%"
 echo $skip = 'AuditPS_\d{8}_\d{6}\.ps1^|doze_sec_noAdmin\.bat^|doze_sec\.bat' >> "%PSRUN%"
 echo if ($evts) { $evts = @($evts ^| Where-Object { $pth = if($_.Properties.Count -ge 5){[string]$_.Properties[4].Value}else{''}; $pth -notmatch $skip }) } >> "%PSRUN%"
@@ -3918,7 +3918,7 @@ call :dz_ps_scan 18 T1562.001 "AMSI bypass patterns in PowerShell Script Block l
 :: --- [CTI] Credential Access via DPAPI (T1555.003 / T1555.004) ---
 echo.>> "%REPORT%"
 echo --- [CTI][T1555.003] Browser Credential Store Access (DPAPI) --->> "%REPORT%"
-echo  Command: powershell -Command "Test-Path $p^) {">> "%REPORT%"
+echo  Command: powershell -Command "($env:LOCALAPPDATA+'\Google\Chrome\User Data\Default\Login Data'),($env:LOCALAPPDATA+'\Microsoft\Edge\User Data\Default\Login Data'),($env:APPDATA+'\Mozilla\Firefox\Profiles') | Get-Item -EA SilentlyContinue | Select-Object FullName,LastWriteTime">> "%REPORT%"
 echo $paths = @( > "%PSRUN%"
 echo   "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Login Data", >> "%PSRUN%"
 echo   "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Login Data", >> "%PSRUN%"
@@ -3939,7 +3939,7 @@ echo if ($recent.Count -gt 0) { '[INFO] Browser credential stores accessed in la
 :: --- [CTI] AiTM Phishing / Token Theft Artifacts (T1557.001) ---
 echo.>> "%REPORT%"
 echo --- [CTI][T1557.001] AiTM Phishing - Suspicious AAD Token Cache --->> "%REPORT%"
-echo  Command: powershell -Command "Test-Path $tp^) {">> "%REPORT%"
+echo  Command: powershell -Command "($env:LOCALAPPDATA+'\Microsoft\TokenBroker\Cache'),($env:LOCALAPPDATA+'\Microsoft\Credentials'),($env:LOCALAPPDATA+'\.IdentityService') | Get-Item -EA SilentlyContinue | Select-Object FullName,LastWriteTime">> "%REPORT%"
 echo $tokenPaths = @( > "%PSRUN%"
 echo   "$env:LOCALAPPDATA\Microsoft\TokenBroker\Cache", >> "%PSRUN%"
 echo   "$env:LOCALAPPDATA\Microsoft\Credentials", >> "%PSRUN%"
@@ -3958,7 +3958,7 @@ echo if ($hits.Count -gt 0) { '[INFO] Recent AAD/token cache activity (correlate
 :: --- [CTI] Ransomware Precursors (T1490) ---
 echo.>> "%REPORT%"
 echo --- [CTI][T1490] Ransomware Precursors - VSS/BCDEdit/Recovery Tampering (last 24h) --->> "%REPORT%"
-echo  Command: wevtutil qe Security /q:"*[System[^(EventID=4688^)]]" /c:1000 /rd:true /f:text ^| select_lines.ps1 "vssadmin delete" "wmic shadowcopy" "bcdedit /set {default} recoveryenabled no" "wbadmin delete" "disableshadowcopy">> "%REPORT%"
+echo  Command: wevtutil qe Security /q:"*[System[(EventID=4688)]]" /c:1000 /rd:true /f:text ^| select_lines.ps1 "vssadmin delete" "wmic shadowcopy" "bcdedit /set {default} recoveryenabled no" "wbadmin delete" "disableshadowcopy">> "%REPORT%"
 if "%IS_ADMIN%"=="0" goto :cti_ransom4688_noadmin
 wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:1000 /rd:true /f:text > "%TEMP%\dz_evt.tmp" 2>nul
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" "vssadmin delete" "wmic shadowcopy" "bcdedit /set {default} recoveryenabled no" "wbadmin delete" "disableshadowcopy">> "%REPORT%" 2>&1
@@ -3972,7 +3972,7 @@ set /a DEFERRED_COUNT+=1
 :: --- [CTI] Ransomware File Extension Survey (T1486) ---
 echo.>> "%REPORT%"
 echo --- [CTI][T1486] Ransomware File Extension Survey --->> "%REPORT%"
-echo  Command: powershell -Command "Test-Path $d^) {">> "%REPORT%"
+echo  Command: powershell -Command "Get-ChildItem $env:USERPROFILE,$env:SystemDrive\Users\Public,$env:TEMP -Recurse -Depth 3 -EA SilentlyContinue -Include '*.encrypted','*.locked','*.crypt','*.locky','*.WNCRY','*.lockbit','*.akira','*.basta'"   [full list: 18 known ransomware extensions]>> "%REPORT%"
 echo $exts = @('.encrypted','.locked','.crypt','.locky','.cerber','.zepto','.thor','.aesir','.zzzzz','.WNCRY','.wcry','.rdmk','.PLAY','.black','.basta','.royal','.akira','.lockbit','.clop') > "%PSRUN%"
 echo $hits = @() >> "%PSRUN%"
 echo foreach ($d in @($env:USERPROFILE,"$env:SystemDrive\Users\Public",$env:TEMP)) { >> "%PSRUN%"
@@ -4009,7 +4009,7 @@ if exist "%TEMP%\dz_driver.txt" (
 :: --- [CTI] Suspicious Service Creation - Event 7045 Anomalies ---
 echo.>> "%REPORT%"
 echo --- [CTI][T1543.003] Suspicious Service Installs (Event 7045 from Temp/Public) --->> "%REPORT%"
-echo  Command: powershell -Command "Get-WinEvent -FilterHashtable @{LogName='System'">> "%REPORT%"
+echo  Command: powershell -Command "Get-WinEvent -FilterHashtable @{LogName='System';Id=7045} -MaxEvents 50 -EA SilentlyContinue">> "%REPORT%"
 echo $evts = Get-WinEvent -FilterHashtable @{LogName='System';Id=7045} -MaxEvents 50 -EA SilentlyContinue > "%PSRUN%"
 echo $hits = @() >> "%PSRUN%"
 echo if ($evts) { >> "%PSRUN%"
@@ -4026,7 +4026,7 @@ call :dz_ps_scan 18 T1543.003 "Suspicious service installation in Event 7045"
 :: --- [CTI] COM Object Hijacking (T1546.015) ---
 echo.>> "%REPORT%"
 echo --- [CTI][T1546.015] COM Object Hijacking - User CLSID Overrides --->> "%REPORT%"
-echo  Command: powershell -Command "Test-Path $clsids^) {">> "%REPORT%"
+echo  Command: powershell -Command "Get-ChildItem 'HKCU:\Software\Classes\CLSID' | ForEach-Object { Get-ItemProperty ($_.PSPath+'\InprocServer32') -EA SilentlyContinue }">> "%REPORT%"
 echo $defProp = [char]40 + 'default' + [char]41 > "%PSRUN%"
 echo $clsids = 'HKCU:\Software\Classes\CLSID' >> "%PSRUN%"
 echo $vendor = @(^) >> "%PSRUN%"
@@ -4064,7 +4064,7 @@ call :dz_ps_scan 18 T1546.015 "Suspicious COM CLSID override"
 :: --- [CTI] Living-off-the-Cloud: Azure/M365 CLI Token Files ---
 echo.>> "%REPORT%"
 echo --- [CTI] Cloud Token Theft - Azure/AWS/GCP CLI Credential Files --->> "%REPORT%"
-echo  Command: powershell -Command "Test-Path $c.Path^) {">> "%REPORT%"
+echo  Command: powershell -Command "($env:USERPROFILE+'\.azure\accessTokens.json'),($env:USERPROFILE+'\.azure\msal_token_cache.json'),($env:USERPROFILE+'\.aws\credentials'),($env:APPDATA+'\gcloud\credentials.db'),($env:APPDATA+'\gcloud\application_default_credentials.json'),($env:USERPROFILE+'\.kube\config') | Get-Item -EA SilentlyContinue | Select-Object FullName,LastWriteTime">> "%REPORT%"
 echo $cloudCreds = @( > "%PSRUN%"
 echo   @{Name='Azure CLI';Path="$env:USERPROFILE\.azure\accessTokens.json"}, >> "%PSRUN%"
 echo   @{Name='Azure CLI MSAL';Path="$env:USERPROFILE\.azure\msal_token_cache.json"}, >> "%PSRUN%"
@@ -4086,7 +4086,7 @@ echo if ($found.Count -gt 0) { '[INFO] Cloud CLI credential files present (verif
 :: --- [CTI] Explicit Credential Logon - Event 4648 (T1078) ---
 echo.>> "%REPORT%"
 echo --- [CTI][T1078] Explicit Credential Logons - Event 4648 --->> "%REPORT%"
-echo  Command: wevtutil qe Security /q:"*[System[^(EventID=4648^)]]" /c:20 /rd:true /f:text ^| findstr /c:"TimeCreated" /c:"Subject:" /c:"Account Name" /c:"Target Server">> "%REPORT%"
+echo  Command: wevtutil qe Security /q:"*[System[(EventID=4648)]]" /c:20 /rd:true /f:text ^| findstr /c:"TimeCreated" /c:"Subject:" /c:"Account Name" /c:"Target Server">> "%REPORT%"
 if "%IS_ADMIN%"=="0" goto :cti_4648_noadmin
 wevtutil qe Security /q:"*[System[(EventID=4648)]]" /c:20 /rd:true /f:text | findstr /c:"TimeCreated" /c:"Subject:" /c:"Account Name" /c:"Target Server">> "%REPORT%" 2>&1
 goto :cti_4648_done
@@ -4163,7 +4163,7 @@ if exist "%TEMP%\dz_verdict_gap.txt" (
 :: POST-AUDIT: FREE SPACE CAPTURE AND LIVE SECURITY SUMMARY
 :: ====================================================================
 echo --- Post-Audit Free Space --->> "%REPORT%"
-echo  Command: powershell -Command "Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='%SystemDrive%'" -EA SilentlyContinue^).FreeSpace">> "%REPORT%"
+echo  Command: powershell -Command "Get-CimInstance Win32_LogicalDisk | Where-Object DeviceID -eq $env:SystemDrive | Select-Object -Expand FreeSpace">> "%REPORT%"
 echo (Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='%SystemDrive%'" -EA SilentlyContinue).FreeSpace > "%PSRUN%"
 for /f "usebackq" %%a in (`%PWSH% -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" 2^>nul`) do (
     if not "%%a"=="" if not "%%a"=="0" set "FREE_AFTER=%%a"

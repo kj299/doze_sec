@@ -1148,6 +1148,26 @@ jobs:
           Write-Host "lint_unraised_findings.ps1 OK"
           exit 0
 
+      - name: lint_report_echo.ps1 (every printed line reaches the report; every printed command runs)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Run on real Windows PowerShell 5.1 too, not just the Linux lint job:
+          # this lint parses the PowerShell commands the report tells a reader to
+          # paste, and 5.1 is the parser that reader will actually use.
+          $out = (.\tools\lint_report_echo.ps1 -Root .) -join "`n"
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw 'lint_report_echo found lines that never reach the report, or printed commands that will not run' }
+          # Guard the guard: a scanner that stopped finding lines would pass vacuously.
+          $m = [regex]::Match($out, '(\d+) report echo line\(s\) scanned, (\d+) of them')
+          if (-not $m.Success) { throw 'lint_report_echo did not report what it scanned -- the parser regressed' }
+          if ([int]$m.Groups[1].Value -lt 400) { throw "lint_report_echo scanned only $($m.Groups[1].Value) echo lines -- a clean result means nothing" }
+          if ([int]$m.Groups[2].Value -lt 100) { throw "lint_report_echo scanned only $($m.Groups[2].Value) Command: lines -- a clean result means nothing" }
+          .\tools\lint_report_echo.ps1 -Root . -SelfTest
+          if ($LASTEXITCODE -ne 0) { throw 'lint_report_echo self-test did not fail on the mutations' }
+          Write-Host "lint_report_echo.ps1 OK"
+          exit 0
+
       - name: lint_docs_drift.ps1 (documented claims match the code)
         shell: powershell
         run: |
