@@ -175,6 +175,41 @@ Checks whose miss would be silent also drop a marker as a backstop (the ASR
 block does, alongside its grade), raised only when the grade came back `OK`, so
 a correct grade never double-counts.
 
+## The report is the product (REQUIRED — enforced by lint)
+
+A line the report *prints* must actually reach the report, and a command it
+tells the reader to run must actually run. One field run exposed three classes
+at once, none of which any findings-oriented gate could see:
+
+- **Odd quote count on an `echo ... >> "%REPORT%"` line.** cmd honours double
+  quotes when it looks for a redirection operator, so an unbalanced `"` puts
+  the `>>` *inside* a quote. Text, operator and report path are all printed to
+  the CONSOLE and the line never reaches the report. Two narrative lines shipped
+  this way; the sentence that survived broke mid-clause.
+- **A caret inside double quotes.** Outside quotes cmd CONSUMES `^`; inside
+  them it leaves it alone. 90 display lines carried `^(`, `^)` or `^|` inside
+  quotes, so the report printed stray carets — and pasting
+  `wevtutil ... /q:"*[System[^(EventID=4720^)]]"` hands those carets to
+  wevtutil, which rejects the XPath.
+- **A truncated `Command:` line.** 22 per bat had lost an opening paren
+  (`"Get-MpPreference).ExclusionPath"`, `"Test-Path $f) {"`) or stopped
+  mid-hashtable (`@{LogName='Security'`). They printed, they looked
+  authoritative, and none would run.
+
+So: inside cmd double quotes, escape nothing — `(`, `)`, `|`, `<`, `>`, `&`
+are already literal there. Every `Command:` line must be something a reader can
+paste and run, and must describe what the check actually does.
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\lint_report_echo.ps1
+```
+
+Fails on an odd quote count, on a caret inside quotes, on unbalanced
+`()`/`[]`/`{}` in a `Command:` line, and on a printed `powershell -Command`
+payload that does not parse under the 5.1-level AST parser. `-SelfTest` proves
+it fails on each class; it reports 210 defects against the code that shipped
+them. CI runs it in `lint.yml`, and `manual_ci.ps1` runs it in step 1.
+
 ## Real-Windows CI (`.github/workflows/windows-smoke.yml`)
 
 The lint above is Linux/pwsh and cannot exercise cmd.exe, Windows

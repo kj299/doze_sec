@@ -1,0 +1,188 @@
+# lint_report_echo.ps1 -- a line the report PRINTS must actually reach the
+# report, and a command it tells you to run must actually run.
+#
+# WHY (all three classes were found in one real field run, 2026-09-05):
+#
+#  1. ODD QUOTES. cmd honours DOUBLE quotes when it looks for a redirection
+#     operator. Two narrative lines carried an odd number of them, so the `>>`
+#     and the report path fell INSIDE an unterminated quote, became literal,
+#     and the whole line -- text, operator and path -- was printed to the
+#     console instead of the report. The report lost two lines and the
+#     surviving sentence broke mid-clause.
+#
+#  2. CARET INSIDE QUOTES. Outside double quotes cmd CONSUMES `^`; inside them
+#     it leaves it alone. 90 display lines carried `^(`, `^)` or `^|` inside
+#     quotes, so the report printed stray carets -- and pasting one of those
+#     `wevtutil ... /q:"*[System[^(EventID=4720^)]]"` lines into cmd hands the
+#     carets straight to wevtutil, which rejects the XPath. The tool's own
+#     "here is how to check this yourself" line did not work.
+#
+#  3. TRUNCATED COMMANDS. 18 `Command:` lines per bat had lost their opening
+#     paren (`"Get-MpPreference).ExclusionPath"`, `"Test-Path $f) {"`) and 4
+#     more stopped mid-hashtable (`@{LogName='Security'`). They printed, they
+#     looked authoritative, and none of them would run.
+#
+# None of this changes what the tool DETECTS, which is exactly why it survived:
+# every other gate in this repo watches findings and verdicts. This one watches
+# the prose, because the report is the product.
+#
+# Windows PowerShell 5.1 and pwsh; no external dependencies.
+
+[CmdletBinding()]
+param(
+    [string]$Root = (Split-Path -Parent (Split-Path -Parent $PSCommandPath)),
+    [switch]$SelfTest
+)
+
+$ErrorActionPreference = 'Stop'
+
+# Characters that need no escaping inside cmd double quotes, so a caret in
+# front of one is always a mistake. `^^` is the same mistake doubled.
+$script:BadAfterCaret = '()|<>&^'
+
+function Split-EchoLine {
+    # Returns @{ Body; Target } for an echo line, or $null when the line is not
+    # an echo with a recognised redirection target.
+    param([string]$Line)
+    $t = $Line.TrimStart()
+    if ($t -notmatch '^echo[ .]') { return $null }
+    $m = [regex]::Match($t, '\s*>>?\s*"%(REPORT|PSRUN|CHANGELOG|UNDO_BAT|LEDGER)%"\s*$')
+    if (-not $m.Success) { return $null }
+    return @{ Body = $t.Substring(0, $m.Index); Target = $m.Groups[1].Value }
+}
+
+function Get-InQuoteCarets {
+    # Offsets of every caret that sits between double quotes AND precedes a
+    # character that does not need escaping there.
+    param([string]$Body)
+    $hits = @(); $inq = $false
+    for ($i = 0; $i -lt $Body.Length; $i++) {
+        $c = $Body[$i]
+        if ($c -eq '"') { $inq = -not $inq }
+        elseif ($c -eq '^' -and $inq -and $i + 1 -lt $Body.Length -and $script:BadAfterCaret.Contains($Body[$i + 1])) {
+            $hits += $i
+        }
+    }
+    return $hits
+}
+
+function Test-Balanced {
+    param([string]$Text, [char]$Open, [char]$Close)
+    $d = 0
+    foreach ($c in $Text.ToCharArray()) {
+        if ($c -eq $Open) { $d++ } elseif ($c -eq $Close) { $d-- }
+        if ($d -lt 0) { return $false }
+    }
+    return $d -eq 0
+}
+
+function Invoke-Lint {
+    param([string]$RepoRoot)
+
+    $bats = @('doze_sec.bat', 'doze_sec_noAdmin.bat') |
+            ForEach-Object { Join-Path $RepoRoot $_ } |
+            Where-Object { Test-Path -LiteralPath $_ }
+    if ($bats.Count -lt 2) {
+        Write-Host "[FAIL] expected both bats under '$RepoRoot'; found $($bats.Count) -- this lint is broken, not the code"
+        return @{ Bad = @('missing bats'); Echoes = 0; Commands = 0 }
+    }
+
+    $bad = @(); $nEcho = 0; $nCmd = 0
+
+    foreach ($bat in $bats) {
+        $name = Split-Path -Leaf $bat
+        $lines = Get-Content -LiteralPath $bat
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $split = Split-EchoLine $lines[$i]
+            if ($null -eq $split -or $split.Target -ne 'REPORT') { continue }
+            $nEcho++
+            $ln = $i + 1
+            $body = [string]$split.Body
+
+            # 1 -- the redirect must not be swallowed by an open quote.
+            if ((($lines[$i].ToCharArray() | Where-Object { $_ -eq '"' }).Count % 2) -ne 0) {
+                $bad += "${name}:${ln}: odd number of double quotes -- the '>>' falls inside a quote, so this line prints to the CONSOLE and never reaches the report"
+            }
+
+            # 2 -- a caret inside quotes prints literally.
+            $carets = @(Get-InQuoteCarets $body)
+            if ($carets.Count) {
+                $bad += "${name}:${ln}: $($carets.Count) caret(s) inside double quotes -- cmd leaves '^' alone there, so the report prints a stray caret and the printed command will not run"
+            }
+
+            # 3 -- a Command: line must be a command someone can actually run.
+            $disp = $body -replace '^echo[ .]', ''
+            if ($disp.TrimStart() -notlike 'Command:*') { continue }
+            $nCmd++
+            foreach ($pair in @(@('(', ')'), @('[', ']'), @('{', '}'))) {
+                if (-not (Test-Balanced $disp $pair[0] $pair[1])) {
+                    $bad += "${name}:${ln}: unbalanced '$($pair[0])$($pair[1])' in a Command: line -- it was truncated, so it cannot be run as printed"
+                }
+            }
+            $pm = [regex]::Match($disp, '^\s*Command:\s*powershell(?:\s+-Command)?\s+"(.*)"(?:\s{2,}\[.*\])?\s*$')
+            if ($pm.Success) {
+                $errs = $null; $toks = $null
+                [void][System.Management.Automation.Language.Parser]::ParseInput($pm.Groups[1].Value, [ref]$toks, [ref]$errs)
+                if ($errs -and $errs.Count) {
+                    $bad += "${name}:${ln}: the PowerShell command this line tells the reader to run does not parse -- $($errs[0].Message)"
+                }
+            }
+        }
+    }
+
+    # Vacuity: a scanner that found nothing is broken, not vindicated.
+    if ($nEcho -lt 400) { $bad += "only $nEcho report echo line(s) scanned -- the scanner is broken, not the code" }
+    if ($nCmd  -lt 100) { $bad += "only $nCmd 'Command:' line(s) scanned -- the scanner is broken, not the code" }
+
+    return @{ Bad = $bad; Echoes = $nEcho; Commands = $nCmd }
+}
+
+if ($SelfTest) {
+    # Every class must FAIL on a mutated copy. A lint that cannot fail is not a lint.
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("dz_lre_" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $mutations = @(
+        @{ Name = 'odd quotes swallow the redirect'
+           Do   = { param($b) $b -replace '(?m)^echo --- Defender Core Status: EVALUATED --->> "%REPORT%"$', 'echo --- Defender "Core Status: EVALUATED --->> "%REPORT%"' } },
+        @{ Name = 'caret inside double quotes'
+           Do   = { param($b) $b -replace '\(Get-MpPreference\)\.ExclusionPath', '(Get-MpPreference^).ExclusionPath' } },
+        @{ Name = 'Command: line truncated (unbalanced paren)'
+           Do   = { param($b) $b -replace '"\(Get-MpPreference\)\.ExclusionProcess"', '"Get-MpPreference).ExclusionProcess"' } },
+        @{ Name = 'printed PowerShell command does not parse'
+           Do   = { param($b) $b -replace "\(Get-ItemProperty 'HKCU:\\Control Panel\\Accessibility\\StickyKeys' -Name Flags\)\.Flags", "(Get-ItemProperty 'HKCU:\Control Panel\Accessibility\StickyKeys -Name Flags).Flags" } }
+    )
+    $failures = 0
+    foreach ($m in $mutations) {
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
+        New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+        foreach ($f in @('doze_sec.bat', 'doze_sec_noAdmin.bat')) {
+            $src = Get-Content -LiteralPath (Join-Path $Root $f) -Raw
+            $mut = & $m.Do $src
+            if ($mut -eq $src) {
+                Write-Host "[FAIL] mutation '$($m.Name)' changed nothing in $f -- the self-test is vacuous"
+                $failures++
+            }
+            Set-Content -LiteralPath (Join-Path $tmp $f) -Value $mut -NoNewline
+        }
+        $r = Invoke-Lint -RepoRoot $tmp
+        if ($r.Bad.Count -gt 0) {
+            Write-Host "[OK]   mutation caught: $($m.Name)"
+            Write-Host "         -> $($r.Bad[0])"
+        } else {
+            Write-Host "[FAIL] mutation NOT caught: $($m.Name)"
+            $failures++
+        }
+    }
+    if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
+    if ($failures) { Write-Host "[FAIL] $failures self-test mutation(s) did not fail as required"; exit 1 }
+    Write-Host "[OK] all $($mutations.Count) mutations fail this lint for the right reason."
+    exit 0
+}
+
+$res = Invoke-Lint -RepoRoot $Root
+if ($res.Bad.Count) {
+    Write-Host ("[FAIL] {0} report-echo defect(s):" -f $res.Bad.Count)
+    $res.Bad | ForEach-Object { Write-Host ("  - " + $_) }
+    exit 1
+}
+Write-Host ("[OK] {0} report echo line(s) scanned, {1} of them 'Command:' lines: every line reaches the report, no caret prints literally, and every printed PowerShell command parses." -f $res.Echoes, $res.Commands)
+exit 0

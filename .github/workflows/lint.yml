@@ -139,3 +139,24 @@ jobs:
       # page. Nothing read the prose, so nothing caught it.
       - name: Run lint_docs_drift.ps1
         run: pwsh -NoProfile -File tools/lint_docs_drift.ps1
+
+  report-echo-lint:
+    name: "Report lint: every printed line reaches the report and every printed command runs"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # One real field run exposed three classes at once. Two narrative lines
+      # had an odd number of double quotes, so cmd never saw the `>>` as a
+      # redirection operator: text, operator and report path all went to the
+      # CONSOLE and the report lost the lines. 90 display lines carried `^(`
+      # `^)` `^|` inside quotes, where cmd leaves the caret alone, so the
+      # report printed stray carets and the `wevtutil ... /q:"...^(EventID=
+      # 4720^)..."` lines it told the reader to paste were rejected by
+      # wevtutil. And 22 `Command:` lines per bat had been truncated -- a lost
+      # opening paren, or a hashtable cut mid-literal -- so they read as
+      # authoritative and could not run. None of it touched detection, which
+      # is why every other gate here stayed green over it.
+      - name: Run tools/lint_report_echo.ps1
+        run: pwsh -NoProfile -File tools/lint_report_echo.ps1
+      - name: The lint must fail on each reintroduced class
+        run: pwsh -NoProfile -File tools/lint_report_echo.ps1 -SelfTest
