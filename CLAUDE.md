@@ -254,6 +254,40 @@ Linux it died for want of `cmd.exe`, on Windows it would have written the key.
 Use `if`/`continue`, and give any executor a guard that refuses a kind it was
 never meant to run.
 
+### "Unavailable" is not an answer (REQUIRED)
+
+A check that cannot determine its own subject must say so *loudly and
+itemised*, and its inability must be visible as a gap rather than absorbed as
+calm. The PSv2 engine check — the AMSI downgrade path, T1059.001 — printed
+`[SKIPPED] PSv2 state unavailable.` on **five real audits across two dates**,
+elevated, and nobody noticed because a single skip reads like housekeeping.
+
+Two failures stacked:
+
+- `try{ Get-WindowsOptionalFeature -Online ... }catch{ ... }` had no
+  `-ErrorAction Stop`. The failure was **non-terminating**, so the catch never
+  ran and the block emitted *nothing at all* — not the data, not the fallback.
+  A `try/catch` around a cmdlet without `-EA Stop` is not error handling.
+- The CIM fallback returned nothing, so the `else` printed `[SKIPPED]`.
+
+`tools/psv2_check.ps1` replaces both: five methods, most authoritative first,
+and the verdict **names the method that answered**. `[SKIPPED]` only when all
+five are inconclusive, and it then lists what was tried.
+
+**Positive and negative evidence are not symmetric.** "v2 launched" proves the
+downgrade path exists and outranks every declarative source. "v2 did not
+launch" proves much less — absent .NET 3.5, a policy, any startup error looks
+identical — so it is consulted **last** and the verdict says it was inferred.
+For the same reason the registry method returns *inconclusive* when there is no
+`HKLM:` drive at all, rather than reading a missing registry as a missing
+engine. **False reassurance is the worse error in a security tool**, so every
+method must be able to say "I don't know" separately from "it's fine".
+
+CI treats a `[SKIPPED]` from this tool on a runner as a **failure** — a
+runner's PSv2 state is knowable — and asserts the verdict and the ledger marker
+agree, since a `[WARNING]` with no marker is a finding that never reaches the
+ledger.
+
 ## Real-Windows CI (`.github/workflows/windows-smoke.yml`)
 
 The lint above is Linux/pwsh and cannot exercise cmd.exe, Windows

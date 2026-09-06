@@ -61,6 +61,20 @@ in `:dz_section_clean`, and a third verdict state between CLEAN and ISSUES
 FOUND. The ledger already carries the raises; the skips would need their own
 counter.
 
+### Per-section PARTIAL in the admin script — measured, and not worth building yet
+
+Recorded with evidence rather than built. Across five real reports from the
+owner's machine (three 09-05, two 08-30), every admin run contained exactly
+**one** section-level `[SKIPPED]`, always the PSv2 check, and two of the five
+did print `CLEAN` for Section 11 despite it. So the gap was real but its whole
+population was one check — and the dashboard already declared it
+(`[ INFO ] PSv2 state unavailable -- see Section 11`).
+
+Fixing the PSv2 check itself (`tools/psv2_check.ps1`) removes that one skip.
+Building a 40-site skip counter plus a lint for a population of zero is
+disproportionate. Revisit if a real run ever shows several section-level skips
+— the noAdmin `DEFERRED_COUNT` / `SEC<N>_PREV_DEF` pattern is the model.
+
 ### A coverage percentage with a denominator
 
 `report_safety.ps1 -Mode Coverage` reports a raw count of skipped checks. There
