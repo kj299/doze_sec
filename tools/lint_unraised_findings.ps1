@@ -202,8 +202,13 @@ foreach ($tf in (Get-ChildItem -LiteralPath (Join-Path $Root 'tools') -Filter '*
     if ($txt -match 'Set-Content[^\r\n]*dz_[^\r\n]*-EA\s+SilentlyContinue') {
         $markerBad += ("{0}: marker Set-Content uses -EA SilentlyContinue -- a failed write silently drops the finding" -f $tf.Name)
     }
-    if ($txt -notmatch 'Test-Path\s+-LiteralPath\s+\$MarkerDir') {
-        $markerBad += ("{0}: Write-Marker does not ensure its marker directory exists before writing" -f $tf.Name)
+    # Two shapes, both legitimate: Write-Marker takes a -MarkerDir and tests it
+    # directly; Write-MarkerFile takes a -MarkerFile and tests the directory it
+    # derives from that path. Requiring only the first reported every
+    # -MarkerFile tool as broken once they were fixed.
+    if ($txt -notmatch 'Test-Path\s+-LiteralPath\s+\$MarkerDir' -and
+        $txt -notmatch 'Test-Path\s+-LiteralPath\s+\$dir') {
+        $markerBad += ("{0}: the marker helper does not ensure its directory exists before writing" -f $tf.Name)
     }
 }
 if ($markerBad.Count) {

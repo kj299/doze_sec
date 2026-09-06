@@ -45,6 +45,23 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
+function Write-MarkerFile {
+    # The marker IS the route to the findings ledger: a failed write turns a
+    # real finding into a CLEAN section. Create the directory rather than
+    # assume it, and let a genuine failure print instead of vanishing -- the
+    # bare `Set-Content -EA SilentlyContinue` this replaces is the exact
+    # pattern that cost a field test its finding across twelve tools, and it
+    # survived here because tests/marker_selftest.ps1 only discovered tools
+    # that define a Write-Marker FUNCTION.
+    param([string]$Path, [string]$Value = 'hit')
+    if (-not $Path) { return }
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force -EA SilentlyContinue | Out-Null
+    }
+    Set-Content -LiteralPath $Path -Value $Value -Encoding ASCII
+}
+
 # Registry key last-write time. PowerShell's registry provider does NOT expose
 # it -- Get-Item on a key returns a RegistryKey with no LastWriteTime -- so it
 # has to come from RegQueryInfoKey. The type is defined once per process and
@@ -245,5 +262,5 @@ if (-not $ifeoOk) {
 if (-not $found) {
     '[OK] No suspicious Run-key autoruns or IFEO Debugger hijacks.'
 } elseif ($MarkerFile) {
-    Set-Content -LiteralPath $MarkerFile -Value 'hit' -EA SilentlyContinue
+    Write-MarkerFile -Path $MarkerFile -Value 'hit'
 }

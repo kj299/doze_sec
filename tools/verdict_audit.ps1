@@ -32,6 +32,23 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
+
+function Write-MarkerFile {
+    # The marker IS the route to the findings ledger: a failed write turns a
+    # real finding into a CLEAN section. Create the directory rather than
+    # assume it, and let a genuine failure print instead of vanishing -- the
+    # bare `Set-Content -EA SilentlyContinue` this replaces is the exact
+    # pattern that cost a field test its finding across twelve tools, and it
+    # survived here because tests/marker_selftest.ps1 only discovered tools
+    # that define a Write-Marker FUNCTION.
+    param([string]$Path, [string]$Value = 'hit')
+    if (-not $Path) { return }
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force -EA SilentlyContinue | Out-Null
+    }
+    Set-Content -LiteralPath $Path -Value $Value -Encoding ASCII
+}
 if ($MarkerFile) { Remove-Item -LiteralPath $MarkerFile -Force -EA SilentlyContinue }
 
 # Reuse the project's curated exemption list rather than inventing a second
@@ -58,7 +75,7 @@ for ($attempt = 0; $attempt -lt 3 -and $null -eq $lines; $attempt++) {
 if ($null -eq $lines) {
     # Same rule as block_sev: a check that could not read its input says so.
     '[WARNING] Verdict audit could not read the report, so printed-but-unraised findings were NOT checked this run.'
-    if ($MarkerFile) { Set-Content -LiteralPath $MarkerFile -Value 'unreadable' -EA SilentlyContinue }
+    Write-MarkerFile -Path $MarkerFile -Value 'unreadable'
     exit 0
 }
 
@@ -102,7 +119,7 @@ if ($bad.Count) {
     ('[WARNING] {0} section(s) printed a finding that never reached the findings ledger. Those findings are NOT counted in FINDINGS COUNTED or the exit code:' -f $bad.Count)
     foreach ($b in $bad) { '          ' + $b }
     '          This is a defect in the audit, not in this machine. Please report it with the section number.'
-    if ($MarkerFile) { Set-Content -LiteralPath $MarkerFile -Value 'hit' -EA SilentlyContinue }
+    Write-MarkerFile -Path $MarkerFile -Value 'hit'
 } else {
     '[OK] Every section that printed a finding also raised it into the findings ledger.'
 }

@@ -30,6 +30,22 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+function Write-MarkerFile {
+    # The marker IS the route to the findings ledger: a failed write turns a
+    # real finding into a CLEAN section. Create the directory rather than
+    # assume it, and NO -EA SilentlyContinue -- a swallowed failure here is
+    # exactly how a field test lost its finding. Kept as a LOCAL function in
+    # each tool, like Write-Marker: a shared file would add a missing-file
+    # mode that breaks every tool at once, and the test is the propagation
+    # mechanism.
+    param([string]$Path, [string]$Value = 'hit')
+    if (-not $Path) { return }
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force -EA SilentlyContinue | Out-Null
+    }
+    Set-Content -LiteralPath $Path -Value $Value -Encoding ASCII
+}
 
 # IN SCOPE: the user-profile locations this check is about. Everything else --
 # Program Files, System32, WindowsApps -- is NOT graded at all.
@@ -149,9 +165,5 @@ if ($v.Bad.Count -eq 0) {
 }
 Write-Output ("[WARNING] {0} of {1} user-profile process path(s) are suspicious -- running from \Temp\, \Downloads\, \Users\Public\ or \`$Recycle, or not validly signed:" -f $v.Bad.Count, $v.Total)
 $v.Bad | ForEach-Object { Write-Output ('  ' + $_) }
-if ($MarkerFile) {
-    $dir = Split-Path -Parent $MarkerFile
-    if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force -EA SilentlyContinue | Out-Null }
-    Set-Content -LiteralPath $MarkerFile -Value 'hit' -Encoding ASCII
-}
+Write-MarkerFile -Path $MarkerFile
 exit 0
