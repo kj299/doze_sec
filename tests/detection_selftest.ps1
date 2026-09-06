@@ -272,7 +272,12 @@ $cases = @(
         Tier   = 'required'  # emulation corpus; userland COM persistence
         Touches= @('registry:HKCU:\Software\Classes\CLSID\{dead1111-0000-0000-0000-00000000c015}')
         Affects= @()
-        Expect = '(?im)\[T1546\.015\][\s\S]{0,800}dz_selftest_evil_com'
+        # Pinned to [WARNING]: this matched [INFO] equally well, so it would
+        # have passed if the whole check were demoted. The plant writes only
+        # the registry value and never creates the DLL, so it is graded
+        # through the missing-file branch -- and must stay WARNING because
+        # C:\Users\Public\ is a staging path.
+        Expect = '(?im)\[WARNING\]\[T1546\.015\][\s\S]{0,800}dz_selftest_evil_com'
         Plant  = { New-Item -Path "$comKey\InprocServer32" -Force | Out-Null
                    Set-ItemProperty -Path "$comKey\InprocServer32" -Name '(default)' -Value $comDll -Force }
         Cleanup= { Remove-Item -Path $comKey -Recurse -Force -EA SilentlyContinue }

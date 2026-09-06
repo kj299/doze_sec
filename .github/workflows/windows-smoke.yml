@@ -913,6 +913,61 @@ jobs:
           Write-Host "cross_api_check.ps1 OK (incl. honest degradation when the scheduler is unavailable)"
           exit 0
 
+      - name: com_clsid_check.ps1 -SelfTest (a dangling vendor registration is not a hijack)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # A runner has no Brave install, so the field case cannot be planted.
+          # These are the grading rules it got wrong, with the signature,
+          # existence and certificate probes injected.
+          $out = (.\tools\com_clsid_check.ps1 -SelfTest) -join "`n"
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw 'com_clsid_check self-test failed' }
+          $n = @($out -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($n -lt 14) { throw "com_clsid_check self-test ran only $n case(s) -- it is not asserting what it claims" }
+          # And the real path must run clean against the runner's own HKCU.
+          $md = Join-Path $env:TEMP ("dz_com_ci_{0}" -f $PID)
+          $real = (.\tools\com_clsid_check.ps1 -MarkerDir $md) -join "`n"
+          Write-Host $real
+          if ($real -match 'null-valued expression|InvalidOperation|CommandNotFoundException') {
+            throw 'com_clsid_check wrote PowerShell errors into its own output'
+          }
+          Remove-Item $md -Recurse -Force -EA SilentlyContinue
+          Write-Host "com_clsid_check OK ($n self-test cases)"
+          exit 0
+
+      - name: hosts_check.ps1 -SelfTest (Docker entries are context; a blackholed AV domain is not)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = (.\tools\hosts_check.ps1 -SelfTest) -join "`n"
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw 'hosts_check self-test failed' }
+          $n = @($out -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($n -lt 14) { throw "hosts_check self-test ran only $n case(s) -- it is not asserting what it claims" }
+          # The runner's own HOSTS file is stock, so this must raise nothing.
+          $md = Join-Path $env:TEMP ("dz_hosts_ci_{0}" -f $PID)
+          $real = (.\tools\hosts_check.ps1 -MarkerDir $md) -join "`n"
+          Write-Host $real
+          if ($real -match 'null-valued expression|InvalidOperation') {
+            throw 'hosts_check wrote PowerShell errors into its own output'
+          }
+          if (Test-Path (Join-Path $md 'dz_hosts.txt')) {
+            throw ("hosts_check raised on a stock runner HOSTS file (false positive): " + (Get-Content (Join-Path $md 'dz_hosts.txt')))
+          }
+          # The false negative it exists to close: blackholing to loopback was
+          # invisible to the old findstr pipeline, which dropped every line
+          # containing 127.0.0.1.
+          $f = Join-Path $env:TEMP ("dz_hosts_bh_{0}.txt" -f $PID)
+          Set-Content -LiteralPath $f -Value '127.0.0.1 windowsupdate.microsoft.com'
+          $md2 = Join-Path $env:TEMP ("dz_hosts_ci2_{0}" -f $PID)
+          $bh = (.\tools\hosts_check.ps1 -Path $f -MarkerDir $md2) -join "`n"
+          if ($bh -notmatch '\[WARNING\]') { throw 'a blackholed Windows Update domain was not raised' }
+          if (-not (Test-Path (Join-Path $md2 'dz_hosts.txt'))) { throw 'blackhole finding wrote no marker -- it never reaches the ledger' }
+          Remove-Item $f, $md, $md2 -Recurse -Force -EA SilentlyContinue
+          Write-Host "hosts_check OK ($n self-test cases)"
+          exit 0
+
       - name: module_inspect.ps1 -SelfTest (virtualized module paths are not injections)
         shell: powershell
         run: |
@@ -995,6 +1050,15 @@ jobs:
           if ($mi -notmatch 'Resolve-VfsPath') { throw 'the Click-to-Run/MSIX virtual-path resolution is gone; Office modules will be reported as injected again' }
           if ($mi -notmatch 'Get-HostVfsRoot') { throw 'package-root discovery from the loading process image is gone; resolution would depend on the Click-to-Run registry key alone' }
           if ($mi -notmatch 'Get-UnbackedVerdict') { throw 'the unbacked-module classifier is gone; every unresolved path asserts T1055 again' }
+
+          # The same "absence is not evidence" rule, in the two checks that
+          # learned it from the same field report.
+          $cc = Get-Content .\tools\com_clsid_check.ps1 -Raw
+          if ($cc -notmatch "Bucket = 'stale'") { throw 'the dangling-registration bucket is gone; a stale updater CLSID is a WARNING again' }
+          if ($cc -notmatch '\$bad\) \{ return @\{ Bucket = .flagged') { throw 'a dangling registration in a staging path is no longer flagged' }
+          $hc = Get-Content .\tools\hosts_check.ps1 -Raw
+          if ($hc -notmatch 'SecurityDomains') { throw 'the blackhole domain list is gone; blackholing Windows Update is invisible again' }
+          if ($hc -notmatch 'LocalOnlyRx') { throw 'the local-only-name rule is gone; Docker Desktop entries are a finding again' }
           # Staged paths must be inspected BEFORE the cap can discard them.
           if ($mi -notmatch '\$ordered = ') { throw 'staged-path-first ordering was removed; the cap can again drop exactly what the check looks for' }
 
