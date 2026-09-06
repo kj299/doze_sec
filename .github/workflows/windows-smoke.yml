@@ -1174,6 +1174,21 @@ jobs:
           $out = (.\tools\proc_path_grade.ps1 -Path $dump -MarkerFile $mk) -join "`n"
           Write-Host $out
           if (-not (Test-Path $mk)) { throw "an unsigned binary under TEMP was NOT reported: $out" }
+          Remove-Item $mk -Force -EA SilentlyContinue
+          # SCOPE. The caller passes the FULL Win32_Process dump, so anything
+          # outside user-profile paths must not be graded at all. #198 shipped
+          # without this and reported seven catalog-signed Microsoft Store
+          # binaries under Program Files\WindowsApps as suspicious on a clean
+          # machine. Feed real out-of-scope binaries and require silence.
+          $lines = @()
+          Get-ChildItem 'C:\Program Files\WindowsApps' -Filter *.exe -Recurse -Depth 2 -EA SilentlyContinue |
+            Select-Object -First 3 | ForEach-Object { $lines += ("app.exe  30" + $lines.Count + "  " + $_.FullName) }
+          $lines += ("svchost.exe  399  " + (Join-Path $env:SystemRoot 'System32\svchost.exe'))
+          Set-Content $dump -Value $lines
+          $out = (.\tools\proc_path_grade.ps1 -Path $dump -MarkerFile $mk) -join "`n"
+          Write-Host $out
+          if (Test-Path $mk) { throw "out-of-scope binaries (Program Files / System32 / WindowsApps) were reported: $out" }
+          if ($out -notmatch 'out of scope') { throw "the out-of-scope case did not say so: $out" }
           Remove-Item $dump, $mk, $evil -Force -EA SilentlyContinue
           Write-Host "proc_path_grade.ps1 OK"
 

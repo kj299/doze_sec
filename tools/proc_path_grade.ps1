@@ -31,7 +31,22 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# Paths where a running binary is suspicious regardless of who signed it.
+# IN SCOPE: the user-profile locations this check is about. Everything else --
+# Program Files, System32, WindowsApps -- is NOT graded at all.
+#
+# This filter is the fix for a regression I shipped in #198. The caller passes
+# the FULL Win32_Process dump (doze_sec.bat:1916); select_lines.ps1 filters it
+# for display, and I pointed this grader at the unfiltered dump. It therefore
+# graded all 110 running processes and reported seven Microsoft Store binaries
+# under C:\Program Files\WindowsApps as suspicious on a clean machine -- they
+# are MSIX/catalog-signed, so Get-AuthenticodeSignature on the inner .exe does
+# not return Valid. Worse than the contradiction it replaced.
+#
+# The tool now decides its own scope rather than trusting the caller to have
+# filtered: one implementation of the whole rule, filter and grade together.
+$script:InScope = '\\Temp\\|\\AppData\\|\\Downloads\\|\\Recycle|\\Users\\Public\\'
+
+# Within scope, paths where a running binary is suspicious regardless of signer.
 $script:HighRisk = '\\Temp\\|\\Downloads\\|\\Users\\Public\\|\$Recycle'
 
 function Get-PathsFromDump {
@@ -50,11 +65,13 @@ function Get-Verdict {
     param([string[]]$Paths, [scriptblock]$SigCheck)
     $bad = @()
     foreach ($p in $Paths) {
+        if ($p -notmatch $script:InScope) { continue }
         if ($p -match $script:HighRisk) { $bad += $p; continue }
         $status = & $SigCheck $p
         if ($status -ne 'Valid') { $bad += $p }
     }
-    return @{ Bad = @($bad); Total = @($Paths).Count }
+    $inScope = @($Paths | Where-Object { $_ -match $script:InScope })
+    return @{ Bad = @($bad); Total = $inScope.Count; Seen = @($Paths).Count }
 }
 
 $script:RealSigCheck = {
@@ -78,7 +95,22 @@ if ($SelfTest) {
         @{ Name = 'Downloads is a finding even when validly signed'
            Paths = @('C:\Users\u\Downloads\signed-thing.exe');                   ExpectBad = 1 },
         @{ Name = 'Users\Public is a finding even when validly signed'
-           Paths = @('C:\Users\Public\signed-thing.exe');                        ExpectBad = 1 }
+           Paths = @('C:\Users\Public\signed-thing.exe');                        ExpectBad = 1 },
+        # The #198 regression, pinned by its real-world instances. These are
+        # NOT user-profile paths, so they must never be graded at all -- and
+        # both are catalog-signed, so a signature check on them returns
+        # NotSigned and would flag them if scope were not enforced first.
+        @{ Name = 'Program Files is out of scope, unsigned or not'
+           Paths = @('C:\Program Files\WiFiman Desktop\wifiman-desktopd.exe');   ExpectBad = 0 },
+        @{ Name = 'WindowsApps (MSIX, catalog-signed) is out of scope'
+           Paths = @('C:\Program Files\WindowsApps\Microsoft.StorePurchaseApp_22607.1401.4.0_x64__8wekyb3d8bbwe\StoreExperienceHost.exe'); ExpectBad = 0 },
+        @{ Name = 'System32 is out of scope'
+           Paths = @('C:\Windows\System32\svchost.exe');                         ExpectBad = 0 },
+        # And scope must not swallow a real finding sitting beside them.
+        @{ Name = 'a mixed dump grades only the user-profile paths'
+           Paths = @('C:\Windows\System32\svchost.exe',
+                     'C:\Program Files\WindowsApps\Whatever\app.exe',
+                     'C:\Users\u\AppData\Local\Temp\dropper.exe');            ExpectBad = 1 }
     )
     foreach ($c in $cases) {
         $r = Get-Verdict -Paths $c.Paths -SigCheck $sig
@@ -106,16 +138,16 @@ if ($SelfTest) {
 if (-not $Path) { Write-Output '[SKIPPED] proc_path_grade: -Path <process dump> is required (or -SelfTest); the suspicious-path check was NOT graded.'; exit 1 }
 if (-not (Test-Path -LiteralPath $Path)) { Write-Output "[SKIPPED] proc_path_grade: dump not found at $Path; the suspicious-path check was NOT graded."; exit 1 }
 $paths = @(Get-PathsFromDump -File $Path)
-if ($paths.Count -eq 0) {
-    Write-Output '[OK] No processes from suspicious locations.'
-    exit 0
-}
 $v = Get-Verdict -Paths $paths -SigCheck $script:RealSigCheck
-if ($v.Bad.Count -eq 0) {
-    Write-Output ("[INFO] {0} process path(s) under \AppData\, all validly signed -- per-user installs (Brave, Chrome, Edge, Slack, Teams, VS Code) live there by design. Context, not a finding." -f $v.Total)
+if ($v.Total -eq 0) {
+    Write-Output ("[OK] No processes running from user-profile locations ({0} process path(s) examined; Program Files, System32 and WindowsApps are out of scope for this check)." -f $v.Seen)
     exit 0
 }
-Write-Output ("[WARNING] {0} of {1} process path(s) are suspicious -- running from \Temp\, \Downloads\, \Users\Public\ or \`$Recycle, or not validly signed:" -f $v.Bad.Count, $v.Total)
+if ($v.Bad.Count -eq 0) {
+    Write-Output ("[INFO] {0} of {1} process path(s) are under user-profile locations, all validly signed -- per-user installs (Brave, Chrome, Edge, Slack, Teams, VS Code) live there by design. Context, not a finding." -f $v.Total, $v.Seen)
+    exit 0
+}
+Write-Output ("[WARNING] {0} of {1} user-profile process path(s) are suspicious -- running from \Temp\, \Downloads\, \Users\Public\ or \`$Recycle, or not validly signed:" -f $v.Bad.Count, $v.Total)
 $v.Bad | ForEach-Object { Write-Output ('  ' + $_) }
 if ($MarkerFile) {
     $dir = Split-Path -Parent $MarkerFile
