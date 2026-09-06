@@ -101,6 +101,12 @@ $script:CertProbe   = { param($c) try { return [bool](Test-Certificate -Cert $c 
 # A service's MSIX package is provisioned for SYSTEM, not for the auditing
 # user, so -AllUsers (which needs admin) is tried first; the per-user query is
 # the fallback so a non-elevated run still answers what it can.
+# Memoised by package full name. Get-AppxPackage -AllUsers enumerates every
+# package for every user and can take seconds; without this it runs once per
+# unsigned WindowsApps service binary. This repo has already paid once for a
+# slow check blowing a timeout, and module_inspect.ps1 caches its signature
+# lookups for the same reason.
+$script:AppxCache = @{}
 $script:AppxProbe = {
     param($full)
     try { $r = Get-AppxPackage -AllUsers -EA Stop | Where-Object { $_.PackageFullName -eq $full }; if ($r) { return $r } } catch {}
@@ -131,7 +137,12 @@ function Get-MsixPackageSignature {
     $m = [regex]::Match($Path, '(?i)^[A-Za-z]:\\Program Files\\WindowsApps\\([^\\]+)')
     if (-not $m.Success) { return $null }
     $full = $m.Groups[1].Value
-    $pkg = & $script:AppxProbe $full
+    if ($script:AppxCache.ContainsKey($full)) {
+        $pkg = $script:AppxCache[$full]
+    } else {
+        $pkg = & $script:AppxProbe $full
+        $script:AppxCache[$full] = $pkg
+    }
     if (-not $pkg) { return @{ Kind = ''; FullName = $full; Resolved = $false } }
     if ($pkg -is [array]) { $pkg = $pkg[0] }
     return @{ Kind = [string]$pkg.SignatureKind; FullName = $full; Resolved = $true }
@@ -268,35 +279,35 @@ if ($SelfTest) {
     function FakePkg { param([string]$Kind, [string]$Full)
         return (New-Object PSObject -Property @{ SignatureKind = $Kind; PackageFullName = $Full })
     }
-    $script:AppxProbe = { param($f) FakePkg -Kind 'Store' -Full $f }
+    $script:AppxCache = @{}; $script:AppxProbe = { param($f) FakePkg -Kind 'Store' -Full $f }
     $v = Get-ServiceVerdict -Binary $intel
     T "the owner's Store-signed MSIX service is inventory, not a finding" `
       ($v.Bucket -eq 'inventory' -and $v.Why -match '^msix: signed by Store \(AppUp\.IntelArcSoftware_') "$($v.Bucket)/$($v.Why)"
 
-    $script:AppxProbe = { param($f) FakePkg -Kind 'System' -Full $f }
+    $script:AppxCache = @{}; $script:AppxProbe = { param($f) FakePkg -Kind 'System' -Full $f }
     $v = Get-ServiceVerdict -Binary $intel
     T 'a System-signed MSIX service is inventory' ($v.Bucket -eq 'inventory') "$($v.Bucket)/$($v.Why)"
 
     # ...and every other SignatureKind stays a finding.
     foreach ($k in @('Developer','Enterprise')) {
-        $script:AppxProbe = { param($f) FakePkg -Kind $k -Full $f }.GetNewClosure()
+        $script:AppxCache = @{}; $script:AppxProbe = { param($f) FakePkg -Kind $k -Full $f }.GetNewClosure()
         $v = Get-ServiceVerdict -Binary $intel
         T "an MSIX package signed '$k' is NOT store-vetted and stays a WARNING" `
           ($v.Bucket -eq 'flagged' -and $v.Why -match 'not store-vetted') "$($v.Bucket)/$($v.Why)"
     }
-    $script:AppxProbe = { param($f) FakePkg -Kind 'None' -Full $f }
+    $script:AppxCache = @{}; $script:AppxProbe = { param($f) FakePkg -Kind 'None' -Full $f }
     $v = Get-ServiceVerdict -Binary $intel
     T "SignatureKind 'None' is a genuinely unsigned package and stays a WARNING" `
       ($v.Bucket -eq 'flagged' -and $v.Why -eq 'unsigned') "$($v.Bucket)/$($v.Why)"
 
     # Fails CLOSED: an unresolvable package must never read as signed.
-    $script:AppxProbe = { param($f) $null }
+    $script:AppxCache = @{}; $script:AppxProbe = { param($f) $null }
     $v = Get-ServiceVerdict -Binary $intel
     T 'an MSIX package that does not resolve fails CLOSED' `
       ($v.Bucket -eq 'flagged' -and $v.Why -match 'did not resolve') "$($v.Bucket)/$($v.Why)"
 
     # THE OTHER ROW: not an MSIX path, so the MSIX logic must not touch it.
-    $script:AppxProbe = { param($f) FakePkg -Kind 'Store' -Full $f }
+    $script:AppxCache = @{}; $script:AppxProbe = { param($f) FakePkg -Kind 'Store' -Full $f }
     $v = Get-ServiceVerdict -Binary 'C:\Program Files\WiFiman Desktop\wifiman-desktopd.exe'
     T "the owner's non-MSIX unsigned service is still a WARNING" `
       ($v.Bucket -eq 'flagged' -and $v.Why -eq 'unsigned') "$($v.Bucket)/$($v.Why)"
@@ -312,7 +323,7 @@ if ($SelfTest) {
     # The second guard, proven separately: a staging segment INSIDE a real
     # package root. The anchored regex accepts this path, so only the bad-path
     # check keeps it flagged -- without that case the guard was untested.
-    $script:AppxProbe = { param($f) FakePkg -Kind 'Store' -Full $f }
+    $script:AppxCache = @{}; $script:AppxProbe = { param($f) FakePkg -Kind 'Store' -Full $f }
     $v = Get-ServiceVerdict -Binary 'C:\Program Files\WindowsApps\Pkg_1.0_x64__abc\VFS\Temp\x.exe'
     T 'a staging segment inside a real package root still wins over the signature' `
       ($v.Bucket -eq 'flagged') "$($v.Bucket)/$($v.Why)"
@@ -322,7 +333,20 @@ if ($SelfTest) {
     $r = Get-MsixPackageSignature -Path $intel
     T 'the package full name is taken from the segment after WindowsApps' `
       ($r.FullName -eq 'AppUp.IntelArcSoftware_26.26.2459.0_x64__8j3eq9eme6ctt') "$($r.FullName)"
-    $script:AppxProbe = { param($f) $null }
+
+    # The lookup is memoised: Get-AppxPackage -AllUsers is expensive and would
+    # otherwise run once per unsigned WindowsApps binary.
+    $script:AppxCache = @{}
+    $script:probeCalls = 0
+    $script:AppxCache = @{}; $script:AppxProbe = { param($f) $script:probeCalls++; FakePkg -Kind 'Store' -Full $f }
+    $null = Get-MsixPackageSignature -Path $intel
+    $null = Get-MsixPackageSignature -Path $intel
+    T 'the Appx lookup is cached (one probe call for two lookups)' `
+      ($script:probeCalls -eq 1) "probe calls=$($script:probeCalls)"
+    $null = Get-MsixPackageSignature -Path 'C:\Program Files\WindowsApps\Other_1.0_x64__zzz\x.exe'
+    T 'the cache does not leak across packages' ($script:probeCalls -eq 2) "probe calls=$($script:probeCalls)"
+    $script:AppxCache = @{}
+    $script:AppxCache = @{}; $script:AppxProbe = { param($f) $null }
 
     $script:SigProbe = { param($p) FakeSig -Status 'HashMismatch' -Subject 'CN=Microsoft Corporation' }
     $v = Get-ServiceVerdict -Binary 'C:\Program Files\App\svc.exe'
