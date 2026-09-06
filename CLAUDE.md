@@ -288,6 +288,34 @@ runner's PSv2 state is knowable — and asserts the verdict and the ledger marke
 agree, since a `[WARNING]` with no marker is a finding that never reaches the
 ledger.
 
+### A section and the dashboard must not contradict each other (REQUIRED)
+
+One field report said both things about the same six `brave.exe` processes:
+Section 4 raised `[WARNING] Suspicious process paths found above. Investigate
+now.` while the summary reported `[INFO] Processes from user-profile paths, all
+validly signed`. A reader cannot act on a tool that disagrees with itself, and
+the alarming half was the wrong one — Brave, Chrome, Edge, Slack, Teams and VS
+Code all install per-user under `\AppData\`, so a path match alone is not a
+signal. Treating it as one is how a tool teaches its reader to ignore it.
+
+`tools/proc_path_grade.ps1` now holds the rule for both: `\Temp\`,
+`\Downloads\`, `\Users\Public\` and `$Recycle` are suspicious whatever the
+signature says; `\AppData\` only when the binary is not validly signed. A
+signature that cannot be verified counts as unsigned — for that decision "I
+could not check" belongs with the risky half.
+
+**Key existence is not evidence either.** Section 18's registry IOC check
+flagged `HKLM\...\PortProxy\v4tov4\tcp [EXISTS]` while Section 3 of the same
+report said `[OK] No netsh portproxy rules.` Windows leaves that key behind,
+empty, once the rules are gone. A key-existence IOC now requires the key to
+hold at least one value or subkey, and the finding says how many.
+
+**Do not report our own test harness as an intrusion.** The plant harness
+installs `dz_selftest_flag_svc`; cleanup removes the service but cannot remove
+the Event 7045 record of installing it, so every later audit on that machine
+reported five "suspicious service installations". Harness names are excluded
+and the exclusion is declared with a count — never silently.
+
 ## Real-Windows CI (`.github/workflows/windows-smoke.yml`)
 
 The lint above is Linux/pwsh and cannot exercise cmd.exe, Windows

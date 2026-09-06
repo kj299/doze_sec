@@ -1554,8 +1554,17 @@ if errorlevel 2 (
 ) else if errorlevel 1 (
     echo [OK] No processes from suspicious locations.>> "%REPORT%"
 ) else (
-    echo [WARNING] Suspicious process paths found above. Investigate now.>> "%REPORT%"
-    call :dz_finding WARNING 4 T1057 "Suspicious process paths found"
+    rem A path match alone is not a verdict. Brave, Chrome, Edge, Slack, Teams
+    rem and VS Code all install per-user under AppData, so grade the matches on
+    rem their signature the same way the summary dashboard already does -- this
+    rem section used to raise WARNING while the dashboard reported INFO about
+    rem the very same processes.
+    del "%TEMP%\dz_proc4_hit.txt" 2>nul
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\proc_path_grade.ps1" -Path "%TEMP%\dz_proc4.tmp" -MarkerFile "%TEMP%\dz_proc4_hit.txt">> "%REPORT%" 2>&1
+    if exist "%TEMP%\dz_proc4_hit.txt" (
+        call :dz_finding WARNING 4 T1057 "Suspicious process paths found"
+        del "%TEMP%\dz_proc4_hit.txt" 2>nul
+    )
 )
 goto :sec4_susp_done
 :sec4_susp_skip
@@ -3743,7 +3752,7 @@ echo   $parts=$line.Split('^|'); $keyPath=$parts[0]; $valName=if($parts.Count -g
 echo   $psPath=$keyPath -replace '^HKLM\\','HKLM:\' -replace '^HKCU\\','HKCU:\' >> "%PSRUN%"
 echo   try{ >> "%PSRUN%"
 echo     if($valName){$v=Get-ItemProperty $psPath -Name $valName -EA Stop; $cur="$($v.$valName)"; if($badVal){if($cur -eq $badVal){$hits+="$keyPath\$valName = $cur"}}else{$hits+="$keyPath\$valName = $cur"}} >> "%PSRUN%"
-echo     else{if(Test-Path $psPath){$hits+="$keyPath [EXISTS]"}} >> "%PSRUN%"
+echo     else{if(Test-Path $psPath){ $k=Get-Item -LiteralPath $psPath -EA SilentlyContinue; $n=0; if($k){$n=$k.ValueCount+$k.SubKeyCount}; if($n -gt 0){$hits+="$keyPath [EXISTS, $n entr(ies)]"} }} >> "%PSRUN%"
 echo   }catch{} >> "%PSRUN%"
 echo } >> "%PSRUN%"
 echo if(-not $lines){'[SKIPPED] ioc_registry.txt missing or empty -- registry IOC check NOT performed.'}elseif($hits.Count -gt 0){'[WARNING] Suspicious registry IOCs found:'; $hits; New-Item "$env:TEMP\dz_iochit_18h.txt" -Force ^| Out-Null}else{'[OK] No suspicious registry IOC matches.'} >> "%PSRUN%"
@@ -4006,15 +4015,17 @@ echo.>> "%REPORT%"
 echo --- [CTI][T1543.003] Suspicious Service Installs (Event 7045 from Temp/Public) --->> "%REPORT%"
 echo  Command: powershell -Command "Get-WinEvent -FilterHashtable @{LogName='System';Id=7045} -MaxEvents 50 -EA SilentlyContinue">> "%REPORT%"
 echo $evts = Get-WinEvent -FilterHashtable @{LogName='System';Id=7045} -MaxEvents 50 -EA SilentlyContinue > "%PSRUN%"
-echo $hits = @() >> "%PSRUN%"
+echo $hits = @(); $ours = 0 >> "%PSRUN%"
 echo if ($evts) { >> "%PSRUN%"
 echo   foreach ($e in $evts) { >> "%PSRUN%"
 echo     $msg = $e.Message >> "%PSRUN%"
+echo     if ($msg -match 'dz_selftest^|dz_evil^|dzsmoke') { $ours++; continue } >> "%PSRUN%"
 echo     if ($msg -match '\\Temp\\^|\\AppData\\^|\\Users\\Public\\^|\\Downloads\\^|cmd\.exe^|powershell^|mshta^|regsvr32') { >> "%PSRUN%"
 echo       $hits += '['+$e.TimeCreated+'] '+($msg -replace '[\r\n]+',' ' ^| Select-Object -First 1) >> "%PSRUN%"
 echo     } >> "%PSRUN%"
 echo   } >> "%PSRUN%"
 echo } >> "%PSRUN%"
+echo if ($ours -gt 0) { '[INFO] '+$ours+' service-install event(s) were doze_sec''s own test harness (dz_selftest/dzsmoke) and were excluded. Cleanup removes the service; it cannot remove the Security log record of installing it.' } >> "%PSRUN%"
 echo if ($hits.Count -gt 0) { '[WARNING][T1543.003] Suspicious service installations found:'; $hits ^| Select-Object -First 10 ^| ForEach-Object { '  '+$_ } } else { '[OK] No suspicious service installations in recent Event 7045 logs.' } >> "%PSRUN%"
 call :dz_ps_scan 18 T1543.003 "Suspicious service installation in Event 7045"
 
