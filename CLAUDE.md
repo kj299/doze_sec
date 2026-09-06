@@ -210,6 +210,50 @@ payload that does not parse under the 5.1-level AST parser. `-SelfTest` proves
 it fails on each class; it reports 210 defects against the code that shipped
 them. CI runs it in `lint.yml`, and `manual_ci.ps1` runs it in step 1.
 
+### Parsing is not running (REQUIRED — enforced by probe)
+
+`lint_report_echo` proves a printed `Command:` line parses. That is a weaker
+claim than the line makes: the report says "here is how to check this
+yourself". This project has already paid for the difference once — two
+remediation commands parsed cleanly and could never execute.
+
+`tools/report_command_probe.ps1 -Report <report>` runs them, against the report
+a `-readonly` audit just produced, so it tests the exact text a reader would
+paste with `%VAR%` already expanded.
+
+- It executes **nothing it cannot prove read-only**, by allowlist — a deny-list
+  misses what it has not seen, and this is the one part that touches a machine.
+  Six printed lines are genuinely not read-only (the RunOnce `reg add`, the
+  `ping`, the self-update `Invoke-WebRequest`); they honestly document the
+  audit's own INIT actions, and are skipped **by name with a reason**.
+- A line it cannot classify at all is a **failure**, not a skip. Adding a check
+  whose `Command:` line uses something new will fail until the allowlist is
+  taught what it is — that friction is the point.
+- It grades **well-formedness, not findings**. Finding nothing is success; a
+  missing path, service, log or optional module is machine state. Do not read a
+  green run as more than "the printed line is well-formed and invocable".
+- `-ClassifyOnly` runs the gate without executing anything; `-SelfTest` proves
+  a malformed command fails, a mutating one is refused, and an unclassifiable
+  one fails.
+- A trailing `   [note]` on a printed line is documentation, and is stripped
+  before execution. It was not, and `reg` received `[also the HKLM twin]` as
+  arguments and answered *ERROR: Invalid syntax*.
+- **A per-command timeout is not enough.** Two runs of the same tree went from
+  3 slow commands to 29, taking the probe from 2.5 to 8.7 minutes; the worst
+  case blows the job's own timeout and reads as a hang. `-BudgetSeconds` caps
+  total wall clock and DECLARES the remainder as un-probed; the `-MinProbed`
+  floor is what keeps that from passing as coverage. A slow command still
+  counts as executed, because argument-binding and syntax errors surface in the
+  first moments — one still working at the timeout has already shown it is
+  well-formed.
+
+**Never use `continue` inside a PowerShell `switch` to skip a loop iteration.**
+It leaves the switch, not the loop. An early version of the probe fell through
+after deciding to *skip* the RunOnce `reg add` and tried to execute it; on
+Linux it died for want of `cmd.exe`, on Windows it would have written the key.
+Use `if`/`continue`, and give any executor a guard that refuses a kind it was
+never meant to run.
+
 ## Real-Windows CI (`.github/workflows/windows-smoke.yml`)
 
 The lint above is Linux/pwsh and cannot exercise cmd.exe, Windows

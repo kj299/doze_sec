@@ -1569,6 +1569,40 @@ jobs:
           if ($ro -and ($ro.PSObject.Properties.Name -contains '*doze_sec_resume')) { throw 'RunOnce resume value exists after a -readonly run' }
           Write-Host 'read-only field test: proven on this runner.'
 
+      # The report prints ~176 " Command: <X>" lines -- "here is how to check
+      # this yourself". lint_report_echo proves each one PARSES. Parsing is not
+      # running: #195 rewrote 22 of them per bat and verified only with
+      # ParseInput, and this project already paid for that distinction once,
+      # when two remediation commands parsed cleanly and could never execute.
+      # This runs them, against the report a -readonly audit just produced --
+      # the exact text with %VAR% already expanded that a reader would paste.
+      #
+      # It executes nothing it cannot prove read-only: the RunOnce `reg add`,
+      # the `ping` and the self-update `Invoke-WebRequest` honestly document
+      # the audit's own INIT actions and are skipped by name. A line it cannot
+      # classify at all fails the job rather than being skipped quietly.
+      - name: report_command_probe.ps1 (the printed commands actually RUN, not just parse)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $rep = Get-ChildItem 'C:\SecurityAudit\SecurityReport_*.txt' -EA SilentlyContinue |
+                 Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $rep) { throw 'no report to probe -- the field test did not produce one' }
+          $out = (.\tools\report_command_probe.ps1 -Report $rep.FullName -MinProbed 120) -join "`n"
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw 'a command the report tells a reader to run does not run' }
+          # Guard the guard: a probe that skipped everything would pass vacuously.
+          $m = [regex]::Match($out, "(\d+) 'Command:' line\(s\): (\d+) executed, (\d+) skipped")
+          if (-not $m.Success) { throw 'report_command_probe did not report what it did -- the extractor regressed' }
+          if ([int]$m.Groups[2].Value -lt 120) { throw "only $($m.Groups[2].Value) command(s) executed -- a clean result means nothing" }
+          if ([int]$m.Groups[3].Value -lt 6)   { throw "only $($m.Groups[3].Value) skipped -- the mutating lines must still be recognised and refused" }
+          foreach ($must in @('the RunOnce resume key', 'the INIT 9 connectivity probe', 'the INIT 10 self-update check')) {
+            if ($out -notmatch [regex]::Escape($must)) { throw ("probe did not declare the expected skip: {0}" -f $must) }
+          }
+          .\tools\report_command_probe.ps1 -SelfTest
+          if ($LASTEXITCODE -ne 0) { throw 'report_command_probe self-test did not fail on its mutations' }
+          Write-Host "report_command_probe.ps1 OK"
+
       - name: Upload the audit artifacts for inspection
         if: always()
         uses: actions/upload-artifact@v4

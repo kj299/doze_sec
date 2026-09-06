@@ -160,3 +160,19 @@ jobs:
         run: pwsh -NoProfile -File tools/lint_report_echo.ps1
       - name: The lint must fail on each reintroduced class
         run: pwsh -NoProfile -File tools/lint_report_echo.ps1 -SelfTest
+
+  report-command-probe-selftest:
+    name: "Probe self-test: a printed command that cannot run must fail the build"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The probe itself needs Windows (it runs reg/wevtutil/Defender queries),
+      # so the real run lives in windows-smoke. Its self-test is platform-free
+      # and belongs on every PR: it proves a malformed command FAILS, a
+      # mutating one is REFUSED rather than executed, an unclassifiable line
+      # FAILS rather than being skipped quietly, and that nothing refused can
+      # reach the executor -- `continue` inside a PowerShell `switch` leaves
+      # the switch and not the loop, and an early version of this file fell
+      # through after deciding to skip the RunOnce `reg add`.
+      - name: Run tools/report_command_probe.ps1 -SelfTest
+        run: pwsh -NoProfile -File tools/report_command_probe.ps1 -SelfTest
