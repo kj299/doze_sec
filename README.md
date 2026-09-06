@@ -147,7 +147,7 @@ Reads structured IOC files from `ThreatLists/` and matches against the live syst
 - AiTM phishing token cache artifacts (T1557.001)
 - Ransomware file extension survey (T1486)
 - BYOVD vulnerable driver detection (T1562.001)
-- COM object hijacking (T1546.015) -- vendor-allowlist with word-boundary anchors, plus Authenticode signature, revocation (Test-Certificate), and expiry checks; labels distinguish trusted-signer vs unexpected-signer when paired with bad-path
+- COM object hijacking (T1546.015) -- vendor-allowlist with word-boundary anchors, plus Authenticode signature, revocation (Test-Certificate), and expiry checks; labels distinguish trusted-signer vs unexpected-signer when paired with bad-path. A registration whose DLL is not on disk cannot load anything, so it is reported as context rather than a finding -- unless the path is a staging directory, where a dangling registration is what pre-staging looks like. Paths are normalised (env vars, quotes, NT \??\, bare module names) before existence is judged
 - Cloud CLI token theft (Azure/AWS/GCP)
 - OpenSSH server lateral movement surface
 - LOLBin download cradles in Event 4688 (admin only)

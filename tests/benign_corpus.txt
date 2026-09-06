@@ -163,6 +163,20 @@ proof     = ci:module_inspect.ps1 -SelfTest; field:a CI runner has no Office ins
 signature = runs from a virtualized package \(Office Click-to-Run / MSIX\)
 note      = Office Click-to-Run executes in a virtual application environment with PRIVATE COPIES of its files under <install>\root\VFS\ProgramFilesCommonX64\, so WINWORD reports a C:\Program Files\Common Files\Microsoft Shared\Office16\ path that does not exist outside the process. Field false positive 2026-09-06: the first audit run with Word open produced FOURTEEN "[WARNING] ... reflective or unbacked load ... (T1055)" lines for ordinary Office and VBA DLLs. Fixed by resolving through the VFS before declaring a module absent. Verify: (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Office\ClickToRun').InstallPath, then dir "<that path>\root\VFS\ProgramFilesCommonX64\Microsoft Shared\Office16\mso.dll".
 
+[com-clsid-stale-updater]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:com_clsid_check.ps1 -SelfTest
+signature = point at a file that is not present -- they cannot load as-is
+note      = Brave's updater (Omaha, as used by Chrome and Edge) registers HKCU CLSIDs pointing into a versioned directory and leaves the registration behind when it rolls to a new version. Field false positive 2026-09-06: three CLSIDs -> ...\BraveSoftware\Update\1.3.361.151\psuser_64.dll raised '[WARNING] Suspicious COM CLSID overrides (3)' on a clean machine. The check already had a vendor tier, but it keys on the Authenticode SIGNER and a missing file has none. A registration whose file is absent cannot load anything; it stays a WARNING only when the path is a staging directory. Verify: Get-ItemProperty 'HKCU:\Software\Classes\CLSID\<guid>\InprocServer32' and Test-Path the value.
+
+[hosts-docker-desktop]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:hosts_check.ps1 -SelfTest
+signature = map a local-only name or point at loopback
+note      = Docker Desktop writes host.docker.internal, gateway.docker.internal and kubernetes.docker.internal into HOSTS on every machine it is installed on; WSL, VirtualBox and Lando do the same. Field false positive 2026-09-06: these raised '[WARNING] Non-standard entries found in HOSTS file. Review for DNS hijacking.' The check now grades an entry by what it DOES, not by the address alone. Verify: type %SystemRoot%\System32\drivers\etc\hosts -- a private or loopback address mapped to a .internal/.local/.test name is dev tooling.
+
 [ev104-smartcard]
 class     = ADVISE
 proof     = ci:Event 104 provider filter
@@ -184,8 +198,8 @@ note      = With Script Block Logging on, the audit's own script blocks contain 
 [svc-unquoted-signed]
 class     = ADVISE
 proof     = harness:Signed service at unquoted spaced path
-signature = ^(?!\s*\[INFO\]).*\bno-file\b
-note      = A signed vendor service registered with an unquoted path containing spaces used to be reported as missing its binary. Verify: (Get-CimInstance Win32_Service -Filter "Name='<name>'").PathName and that the file exists.
+signature = ^(?!\s*\[INFO\])(?!\s*\{).*\bno-file\b
+note      = A signed vendor service registered with an unquoted path containing spaces used to be reported as missing its binary. Verify: (Get-CimInstance Win32_Service -Filter "Name='<name>'").PathName and that the file exists. The signature excludes lines beginning with '{' -- it used to match ANY 'no-file' line and so silently claimed the COM CLSID entries below as its own proof, the same wrong-check mis-attribution fixed for new-account-4720 in #198.
 
 [run-hidden-window]
 class     = ADVISE
@@ -210,3 +224,9 @@ class     = ADVISE
 proof     = field:the residue is an Event 7045 record, which no cleanup can remove; a CI runner is discarded instead
 signature = Suspicious service installations found
 note      = A service installed with a cmd.exe/powershell/rundll32 image path is exactly an attacker's shape, and the check is RIGHT to flag it -- including when the service is named after a real EDR product. Observed on the owner's machine 2026-09-06: six 7045 records for 'SentinelAgent' left by a manual run of the CI EDR verification block on 2026-08-30. Cleanup deletes the service; it cannot delete the log record. The service NAME is deliberately not excluded -- an attacker would then hide a service by calling it SentinelAgent. Since #200 the harness plants carry 'dz_selftest' in the image path, which the check already excludes and reports as a count. Verify the TimeCreated of each record against when you last ran tests\manual_ci.ps1 or a CI paste block; an install you cannot account for is a real finding.
+
+[hosts-blackhole-security-domain]
+class     = ADVISE
+proof     = ci:hosts_check.ps1 -SelfTest
+signature = make a SECURITY or UPDATE domain unreachable
+note      = A HOSTS entry pointing windowsupdate, Defender or an AV vendor at loopback or 0.0.0.0 stops that product updating -- standard defence evasion (T1562.001). This was INVISIBLE before 2026-09-06: the old findstr pipeline dropped every line containing '127.0.0.1', which is exactly how blackholing is written. A privacy/ad-blocking HOSTS list can also carry telemetry domains, so adjudicate: an entry you or a list you installed added is benign; one you cannot account for is not. Verify each named domain resolves normally after commenting the line out.

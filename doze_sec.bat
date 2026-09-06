@@ -1818,15 +1818,20 @@ echo  [INFO] Routing table for network path analysis.>> "%REPORT%"
 route print>> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
-echo --- HOSTS File (SAFE: only 127.0.0.1 and ::1 localhost entries) --->> "%REPORT%"
-echo  Command: type "%WINDIR%\System32\drivers\etc\hosts">> "%REPORT%"
+echo --- HOSTS File (graded by effect: blackholed security domains, redirects, local-only names) --->> "%REPORT%"
+echo  Command: powershell -File tools\hosts_check.ps1>> "%REPORT%"
 type "%WINDIR%\System32\drivers\etc\hosts">> "%REPORT%" 2>&1
-type "%WINDIR%\System32\drivers\etc\hosts" 2>nul | findstr /v /r "^#" | findstr /v /r "^$" | findstr /v /c:"127.0.0.1" /c:"::1" | findstr /r "[0-9]" >nul 2>&1
-if !errorlevel! equ 0 (
-    echo  [WARNING] Non-standard entries found in HOSTS file. Review for DNS hijacking.>> "%REPORT%"
-    call :dz_finding WARNING 3 T1071.004 "Non-standard entries found in HOSTS"
+del "%TEMP%\dz_hosts.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\hosts_check.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\hosts_check.ps1">> "%REPORT%" 2>&1
 ) else (
-    echo  [OK] HOSTS file contains only standard entries.>> "%REPORT%"
+    echo  [INFO] tools\hosts_check.ps1 not found -- HOSTS grading skipped.>> "%REPORT%"
+)
+if exist "%TEMP%\dz_hosts.txt" (
+    set "_HOSTSSEV="
+    set /p _HOSTSSEV=<"%TEMP%\dz_hosts.txt"
+    call :dz_finding !_HOSTSSEV! 3 T1071.004 "Non-standard entries found in HOSTS"
+    del "%TEMP%\dz_hosts.txt" 2>nul
 )
 
 echo.>> "%REPORT%"
@@ -4220,40 +4225,19 @@ call :dz_ps_scan 18 T1543.003 "Suspicious service installation in Event 7045"
 :: --- [CTI] COM Object Hijacking (T1546.015) ---
 echo.>> "%REPORT%"
 echo --- [CTI][T1546.015] COM Object Hijacking - User CLSID Overrides --->> "%REPORT%"
-echo  Command: powershell -Command "Get-ChildItem 'HKCU:\Software\Classes\CLSID' | ForEach-Object { Get-ItemProperty ($_.PSPath+'\InprocServer32') -EA SilentlyContinue }">> "%REPORT%"
-echo $defProp = [char]40 + 'default' + [char]41 > "%PSRUN%"
-echo $clsids = 'HKCU:\Software\Classes\CLSID' >> "%PSRUN%"
-echo $vendor = @() >> "%PSRUN%"
-echo $flagged = @() >> "%PSRUN%"
-echo $trusted = '\bMicrosoft\b^|\bAdobe\b^|\bBrave\b^|\bGoogle\b^|\bMozilla\b^|\bWinSCP\b^|\bCisco\b^|\bCitrix\b^|\bLogitech\b^|\bVMware\b^|\bDropbox\b^|\bZoom\b^|\bApple\b^|\bNVIDIA\b^|\bIntel\b^|\bRealtek\b^|\bLenovo\b^|\bHP Inc\b^|\bDell\b' >> "%PSRUN%"
-echo if (Test-Path $clsids) { >> "%PSRUN%"
-echo   foreach ($k in (Get-ChildItem $clsids -EA SilentlyContinue)) { >> "%PSRUN%"
-echo     $sv = Get-ItemProperty "$($k.PSPath)\InprocServer32" -Name $defProp -EA SilentlyContinue >> "%PSRUN%"
-echo     if ($sv -and $sv.$defProp -and $sv.$defProp -notmatch 'Microsoft^|Windows^|System32') { >> "%PSRUN%"
-echo       $dll = [string]$sv.$defProp >> "%PSRUN%"
-echo       $entry = $k.PSChildName + ' -^> ' + $dll >> "%PSRUN%"
-echo       $bad = ($dll -match '\\Temp\\^|\\Downloads\\^|\\Public\\') >> "%PSRUN%"
-echo       $sig = $null; try { $sig = Get-AuthenticodeSignature -FilePath $dll -EA Stop } catch {} >> "%PSRUN%"
-echo       $certIssue = '' >> "%PSRUN%"
-echo       if ($sig -and $sig.SignerCertificate) { >> "%PSRUN%"
-echo         try { if (-not (Test-Certificate -Cert $sig.SignerCertificate -EA Stop)) { $certIssue = 'cert-invalid' } } catch {} >> "%PSRUN%"
-echo         if ($certIssue -eq '' -and $sig.SignerCertificate.NotAfter -lt (Get-Date) -and -not $sig.TimeStamperCertificate) { $certIssue = 'cert-expired' } >> "%PSRUN%"
-echo       } >> "%PSRUN%"
-echo       if ($sig -and $sig.Status -eq 'Valid' -and $sig.SignerCertificate.Subject -match $trusted -and -not $bad -and $certIssue -eq '') { >> "%PSRUN%"
-echo         $cn = (($sig.SignerCertificate.Subject -split ',')[0]) -replace '^^CN=','' >> "%PSRUN%"
-echo         $vendor += $entry + '   [signed: ' + $cn + ']' >> "%PSRUN%"
-echo       } else { >> "%PSRUN%"
-echo         if ($null -eq $sig) { $why = 'no-file' } elseif ($certIssue) { $why = if ($sig.Status -eq 'Valid' -and $sig.SignerCertificate.Subject -match $trusted) { 'trusted-but-' + $certIssue } else { $certIssue } } elseif ($sig.Status -eq 'Valid') { $why = if ($sig.SignerCertificate.Subject -match $trusted) { 'trusted-signer' } else { 'unexpected-signer' } } elseif ($sig.Status -eq 'NotSigned') { $why = 'unsigned' } else { $why = [string]$sig.Status } >> "%PSRUN%"
-echo         if ($bad) { $why = $why + ' bad-path' } >> "%PSRUN%"
-echo         $flagged += $entry + '   [' + $why + ']' >> "%PSRUN%"
-echo       } >> "%PSRUN%"
-echo     } >> "%PSRUN%"
-echo   } >> "%PSRUN%"
-echo } >> "%PSRUN%"
-echo if ($flagged.Count -gt 0) { '[WARNING][T1546.015] Suspicious COM CLSID overrides ('+$flagged.Count+'):'; $flagged ^| Select-Object -First 15 ^| ForEach-Object { '  '+$_ } } >> "%PSRUN%"
-echo if ($vendor.Count -gt 0) { '[INFO][T1546.015] Vendor-registered user CLSID overrides ('+$vendor.Count+', expected):'; $vendor ^| Select-Object -First 15 ^| ForEach-Object { '  '+$_ } } >> "%PSRUN%"
-echo if ($flagged.Count -eq 0 -and $vendor.Count -eq 0) { '[OK] No user-level COM CLSID overrides.' } >> "%PSRUN%"
-call :dz_ps_scan 18 T1546.015 "Suspicious COM CLSID override"
+echo  Command: powershell -File tools\com_clsid_check.ps1>> "%REPORT%"
+del "%TEMP%\dz_com.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\com_clsid_check.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\com_clsid_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo  [INFO] tools\com_clsid_check.ps1 not found -- COM CLSID check skipped.>> "%REPORT%"
+)
+if exist "%TEMP%\dz_com.txt" (
+    set "_COMSEV="
+    set /p _COMSEV=<"%TEMP%\dz_com.txt"
+    call :dz_finding !_COMSEV! 18 T1546.015 "Suspicious COM CLSID override"
+    del "%TEMP%\dz_com.txt" 2>nul
+)
 
 :: --- [CTI] Living-off-the-Cloud: Azure/M365 CLI Token Files ---
 echo.>> "%REPORT%"
