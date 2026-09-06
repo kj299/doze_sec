@@ -89,6 +89,14 @@ owner's machine:
   `proc_path_grade` no longer looks at them, but the driver audit still does
   the same kind of check on files that can be catalog-signed.
 
+- Modules loaded from an application-virtualization package
+  (Office Click-to-Run, MSIX) that `module_inspect` resolves through the VFS.
+  The signature is now verified at the REAL path, so the resolved case is
+  correct; but a package whose layout the VFS mapping does not cover would
+  fall through to the "not visible on disk" wording rather than to a signature
+  verdict. A catalog-aware check would not fix that on its own — the file has
+  to be located first — but the two land on the same set of files.
+
 **What it needs.** A signature check that consults the catalog store, not only
 the embedded signature — `Get-AuthenticodeSignature` alone cannot answer this.
 The usual route is the WinVerifyTrust API with a catalog lookup, which means

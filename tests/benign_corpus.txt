@@ -156,6 +156,13 @@ note      = One non-top-tier engine flagging an IP is usually a false positive; 
 
 # ---- ADVISE: a finding with a known benign cause; the person adjudicates ----
 
+[office-c2r-virtual-modules]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:module_inspect.ps1 -SelfTest; field:a CI runner has no Office installation, so the real Click-to-Run layout can only be observed on a machine with Word or Excel running
+signature = runs from a virtualized package \(Office Click-to-Run / MSIX\)
+note      = Office Click-to-Run executes in a virtual application environment with PRIVATE COPIES of its files under <install>\root\VFS\ProgramFilesCommonX64\, so WINWORD reports a C:\Program Files\Common Files\Microsoft Shared\Office16\ path that does not exist outside the process. Field false positive 2026-09-06: the first audit run with Word open produced FOURTEEN "[WARNING] ... reflective or unbacked load ... (T1055)" lines for ordinary Office and VBA DLLs. Fixed by resolving through the VFS before declaring a module absent. Verify: (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Office\ClickToRun').InstallPath, then dir "<that path>\root\VFS\ProgramFilesCommonX64\Microsoft Shared\Office16\mso.dll".
+
 [ev104-smartcard]
 class     = ADVISE
 proof     = ci:Event 104 provider filter
@@ -191,3 +198,15 @@ class     = ADVISE
 proof     = field:the benign cause is developer tooling on a real machine; a runner has no agent sandbox accounts to hide
 signature = account\(s\) are HIDDEN from the sign-in screen
 note      = CONFIRMED on the owner's machine 2026-09-05: CodexSandboxOffline and CodexSandboxOnline, created by OpenAI Codex's sandbox, are hidden via SpecialAccounts\UserList and reported by the hidden-account check (T1564.002) in stalkerware_check.ps1. An earlier version of this entry named the Security 4720 new-account check instead, which never fired -- the retrospective recorded the symptom without the source. Verify: Get-LocalUser, then Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList'. An account you do not recognise here is a real finding.
+
+[module-not-visible-system-path]
+class     = ADVISE
+proof     = ci:module_inspect.ps1 -SelfTest
+signature = mapped into the process but not visible on disk at that path
+note      = This is the honest half of the Office Click-to-Run fix: the module claims a Program Files or Windows path, the virtual file system did not resolve it, and the loading process was not identifiable as a virtualized package. Two causes look identical from outside -- app virtualization the tool could not resolve (Click-to-Run key unreadable, an unusual package layout), or a module whose file was deleted after loading. It is deliberately NOT asserted to be an injection. Verify: (Get-Process <name>).Path, then check whether an ancestor of that path has a VFS subdirectory; if it does, this is virtualization.
+
+[edr-name-service-install-residue]
+class     = ADVISE
+proof     = field:the residue is an Event 7045 record, which no cleanup can remove; a CI runner is discarded instead
+signature = Suspicious service installations found
+note      = A service installed with a cmd.exe/powershell/rundll32 image path is exactly an attacker's shape, and the check is RIGHT to flag it -- including when the service is named after a real EDR product. Observed on the owner's machine 2026-09-06: six 7045 records for 'SentinelAgent' left by a manual run of the CI EDR verification block on 2026-08-30. Cleanup deletes the service; it cannot delete the log record. The service NAME is deliberately not excluded -- an attacker would then hide a service by calling it SentinelAgent. Since #200 the harness plants carry 'dz_selftest' in the image path, which the check already excludes and reports as a count. Verify the TimeCreated of each record against when you last ran tests\manual_ci.ps1 or a CI paste block; an install you cannot account for is a real finding.
