@@ -186,8 +186,8 @@ proof     = harness:Benign hidden-window autorun
 signature = Suspicious Run-key autorun
 note      = A legitimate updater running "-WindowStyle Hidden -File <path>" with no download or encode token is not flagged. If this fires, look for iex/DownloadString/-enc in the command line before treating it as a backdoor.
 
-[new-account-4720]
+[hidden-accounts-sandbox]
 class     = ADVISE
-proof     = field:creating a local account on the runner is done by the standard-user smoke test in another job; the benign cause is developer tooling on a real machine
-signature = New local account\(s\) created
-note      = Developer tooling and agent sandboxes (the retrospective names Codex) create local accounts; each 4720 event is then legitimate. Verify the names: Get-WinEvent -FilterHashtable @{LogName='Security';Id=4720} -MaxEvents 5 | Format-List TimeCreated,Message -- and Get-LocalUser for accounts you did not create.
+proof     = field:the benign cause is developer tooling on a real machine; a runner has no agent sandbox accounts to hide
+signature = account\(s\) are HIDDEN from the sign-in screen
+note      = CONFIRMED on the owner's machine 2026-09-05: CodexSandboxOffline and CodexSandboxOnline, created by OpenAI Codex's sandbox, are hidden via SpecialAccounts\UserList and reported by the hidden-account check (T1564.002) in stalkerware_check.ps1. An earlier version of this entry named the Security 4720 new-account check instead, which never fired -- the retrospective recorded the symptom without the source. Verify: Get-LocalUser, then Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList'. An account you do not recognise here is a real finding.

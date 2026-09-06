@@ -1148,6 +1148,35 @@ jobs:
           Write-Host "lint_unraised_findings.ps1 OK"
           exit 0
 
+      - name: proc_path_grade.ps1 (a section and the dashboard must not contradict each other)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # One field report raised WARNING "Investigate now" in Section 4 and
+          # reported "[INFO] ... all validly signed" in the dashboard about the
+          # same six brave.exe processes. \AppData\ alone is not a signal --
+          # Brave, Chrome, Edge, Slack, Teams and VS Code all install per-user.
+          .\tools\proc_path_grade.ps1 -SelfTest
+          if ($LASTEXITCODE -ne 0) { throw 'proc_path_grade self-test failed' }
+          # Against a real dump: a signed per-user browser must not be a finding,
+          # an unsigned binary under \Temp\ must be.
+          $dump = Join-Path $env:TEMP 'dz_ci_proc4.tmp'
+          $mk   = Join-Path $env:TEMP 'dz_ci_proc4_hit.txt'
+          Remove-Item $mk -Force -EA SilentlyContinue
+          $signed = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+          Set-Content $dump -Value ("powershell.exe  111  " + $signed)
+          $out = (.\tools\proc_path_grade.ps1 -Path $dump -MarkerFile $mk) -join "`n"
+          Write-Host $out
+          if (Test-Path $mk) { throw "a validly signed system binary was reported as suspicious: $out" }
+          $evil = Join-Path $env:TEMP 'dz_ci_unsigned.exe'
+          Set-Content $evil -Value 'not a real binary'
+          Set-Content $dump -Value ("evil.exe  222  " + $evil)
+          $out = (.\tools\proc_path_grade.ps1 -Path $dump -MarkerFile $mk) -join "`n"
+          Write-Host $out
+          if (-not (Test-Path $mk)) { throw "an unsigned binary under TEMP was NOT reported: $out" }
+          Remove-Item $dump, $mk, $evil -Force -EA SilentlyContinue
+          Write-Host "proc_path_grade.ps1 OK"
+
       - name: psv2_check.ps1 (the AMSI-downgrade path must get a definite answer)
         shell: powershell
         run: |
