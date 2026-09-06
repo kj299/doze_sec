@@ -20,6 +20,19 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
+function Write-MarkerFile {
+    # The marker IS the route to the findings ledger: a failed write turns a
+    # real finding into a CLEAN section. Create the directory rather than
+    # assume it, and no -EA SilentlyContinue -- a swallowed failure here is how
+    # a field test lost its finding. Local to each tool, like Write-Marker.
+    param([string]$Path, [string]$Value = 'hit')
+    if (-not $Path) { return }
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force -EA SilentlyContinue | Out-Null
+    }
+    Set-Content -LiteralPath $Path -Value $Value -Encoding ASCII
+}
 if (Test-Path -LiteralPath $MarkerFile) { Remove-Item -LiteralPath $MarkerFile -Force -EA SilentlyContinue }
 
 # Domains that MUST resolve to a public IP on a healthy, un-tampered host.
@@ -79,7 +92,7 @@ if ($servers.Count -gt 0) {
 
 if ($flagged.Count -gt 0) {
     Write-Output ('[WARNING] ' + $flagged.Count + ' security/update domain(s) did not resolve to a public IP -- review for DNS/HOSTS blackhole (T1562.001).')
-    'dnsprobe blackhole' | Out-File -LiteralPath $MarkerFile -Encoding ASCII
+    Write-MarkerFile -Path $MarkerFile -Value 'dnsprobe blackhole'
 } else {
     Write-Output '[OK] All probed security/update domains resolve to public IPs -- no DNS/HOSTS blackhole detected.'
 }

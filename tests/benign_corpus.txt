@@ -177,6 +177,20 @@ proof     = ci:hosts_check.ps1 -SelfTest
 signature = map a local-only name or point at loopback
 note      = Docker Desktop writes host.docker.internal, gateway.docker.internal and kubernetes.docker.internal into HOSTS on every machine it is installed on; WSL, VirtualBox and Lando do the same. Field false positive 2026-09-06: these raised '[WARNING] Non-standard entries found in HOSTS file. Review for DNS hijacking.' The check now grades an entry by what it DOES, not by the address alone. Verify: type %SystemRoot%\System32\drivers\etc\hosts -- a private or loopback address mapped to a .internal/.local/.test name is dev tooling.
 
+[svc-stale-versioned-updater]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:service_signature_check.ps1 -SelfTest
+signature = point at a binary that is not on disk, outside any staging path
+note      = Google's Omaha updater registers GoogleUpdaterService<version> pointing into a versioned directory and leaves the service behind when it rolls forward; Brave and Edge use the same design. Field false positive 2026-09-06: GoogleUpdaterService141.0.7340.0 and GoogleUpdaterInternalService141.0.7340.0 -> ...\GoogleUpdater\141.0.7340.0\updater.exe were reported under '9 service(s) failed Authenticode gating'. A service whose binary is gone cannot start. It stays a WARNING only when the path is a staging directory. Verify: (Get-CimInstance Win32_Service -Filter "Name='<name>'").PathName and Test-Path the result.
+
+[svc-signer-not-on-allowlist]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:service_signature_check.ps1 -SelfTest
+signature = validly signed by a vendor outside this tool's short allowlist
+note      = The tool carries a 19-name vendor allowlist, which cannot enumerate the legitimate software industry. Field false positive 2026-09-06: com.docker.service (Docker Inc.) and InstallRoot (DoD-PKE) were reported as 'unexpected-signer' WARNINGs while validly signed and installed under Program Files. A valid signature in a normal location is inventory, not evidence. It is still a WARNING when the path is a staging directory, the certificate is expired or revoked, or the binary is unsigned. Verify: Get-AuthenticodeSignature on the binary and confirm you recognise the signer.
+
 [ev104-smartcard]
 class     = ADVISE
 proof     = ci:Event 104 provider filter
@@ -230,3 +244,9 @@ class     = ADVISE
 proof     = ci:hosts_check.ps1 -SelfTest
 signature = make a SECURITY or UPDATE domain unreachable
 note      = A HOSTS entry pointing windowsupdate, Defender or an AV vendor at loopback or 0.0.0.0 stops that product updating -- standard defence evasion (T1562.001). This was INVISIBLE before 2026-09-06: the old findstr pipeline dropped every line containing '127.0.0.1', which is exactly how blackholing is written. A privacy/ad-blocking HOSTS list can also carry telemetry domains, so adjudicate: an entry you or a list you installed added is benign; one you cannot account for is not. Verify each named domain resolves normally after commenting the line out.
+
+[svc-binary-unreadable]
+class     = ADVISE
+proof     = ci:service_signature_check.ps1 -SelfTest
+signature = could not be read, so they were NOT verified
+note      = C:\Program Files\WindowsApps\ is ACL'd to TrustedInstaller, so Get-AuthenticodeSignature on an MSIX-packaged service binary fails even for an administrator. Until 2026-09-06 that was labelled 'no-file' -- the tool said the binary was missing when it was present and merely unreadable. It is now declared as a coverage GAP rather than as either a clean result or a finding. Observed on the owner's machine: CoworkVMService -> ...\WindowsApps\Claude_1.11737.2.0_x64__...\cowork-svc.exe. Verify by hand in an elevated shell: Get-AuthenticodeSignature -FilePath '<binary>'. An unreadable binary outside WindowsApps deserves a closer look.

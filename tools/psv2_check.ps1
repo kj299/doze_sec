@@ -44,6 +44,22 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+function Write-MarkerFile {
+    # The marker IS the route to the findings ledger: a failed write turns a
+    # real finding into a CLEAN section. Create the directory rather than
+    # assume it, and NO -EA SilentlyContinue -- a swallowed failure here is
+    # exactly how a field test lost its finding. Kept as a LOCAL function in
+    # each tool, like Write-Marker: a shared file would add a missing-file
+    # mode that breaks every tool at once, and the test is the propagation
+    # mechanism.
+    param([string]$Path, [string]$Value = 'hit')
+    if (-not $Path) { return }
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force -EA SilentlyContinue | Out-Null
+    }
+    Set-Content -LiteralPath $Path -Value $Value -Encoding ASCII
+}
 
 function Test-Psv2Launches {
     # POSITIVE-ONLY, deliberately. If v2 launches, the downgrade path exists --
@@ -179,11 +195,7 @@ if ($null -eq $v.Enabled) {
 if ($v.Enabled) {
     Write-Output ("[WARNING] PowerShell v2 ENABLED -- AMSI downgrade possible (determined by: {0}). An attacker running 'powershell -Version 2' executes script Defender's script scanner never sees. Fix: Disable-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2Root" -f $v.By)
     if ($MarkerFile) {
-        $dir = Split-Path -Parent $MarkerFile
-        if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force -EA SilentlyContinue | Out-Null }
-        # No -EA SilentlyContinue: a failed write here turns a real WARNING into
-        # a CLEAN section, which is exactly how a field test lost its finding.
-        Set-Content -LiteralPath $MarkerFile -Value 'hit' -Encoding ASCII
+        Write-MarkerFile -Path $MarkerFile
     }
     exit 0
 }

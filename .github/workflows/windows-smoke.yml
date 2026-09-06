@@ -913,6 +913,28 @@ jobs:
           Write-Host "cross_api_check.ps1 OK (incl. honest degradation when the scheduler is unavailable)"
           exit 0
 
+      - name: service_signature_check.ps1 -SelfTest (absent / unreadable / unlisted-signer are context)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = (.\tools\service_signature_check.ps1 -SelfTest) -join "`n"
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw 'service_signature_check self-test failed' }
+          $n = @($out -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($n -lt 10) { throw "service_signature_check self-test ran only $n case(s) -- it is not asserting what it claims" }
+          # Real services on the runner: it has Google/Docker-style vendors and
+          # WindowsApps packages, so a WARNING here is the false positive.
+          $mf = Join-Path $env:TEMP ("dz_svc_ci_{0}\dz_svc.txt" -f $PID)
+          $real = (.\tools\service_signature_check.ps1 -MarkerFile $mf) -join "`n"
+          Write-Host $real
+          if ($real -match 'null-valued expression|InvalidOperation') {
+            throw 'service_signature_check wrote PowerShell errors into its own output'
+          }
+          if ($real -notmatch '\[OK\]|\[WARNING\]') { throw 'no verdict emitted at all' }
+          Remove-Item (Split-Path -Parent $mf) -Recurse -Force -EA SilentlyContinue
+          Write-Host "service_signature_check OK ($n self-test cases)"
+          exit 0
+
       - name: com_clsid_check.ps1 -SelfTest (a dangling vendor registration is not a hijack)
         shell: powershell
         run: |
