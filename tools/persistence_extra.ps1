@@ -382,17 +382,44 @@ if (-not $bitsOk) {
     '[OK] No BITS transfer jobs queued.'
 } else {
     $flagged = 0
+    $bitsUnread = 0
     foreach ($j in $jobs) {
         $name  = [string]$j.DisplayName
         $owner = [string]$j.OwnerAccount
         # NotifyCmdLine is the actual persistence mechanism: BITS runs it when
         # the job completes, so it survives reboots without any autostart key.
+        #
+        # BUT AN EMPTY VALUE IS THE NORMAL STATE, and it used to raise a
+        # WARNING. Microsoft: "GetNotifyCmdLine sets pProgram and pParameters to
+        # an empty string (L"") if the SetNotifyCmdLine method has not been
+        # called." BitsTransfer surfaces the pair as a TWO-ELEMENT ARRAY, so a
+        # job that never set one yields @('',''), and `-join ' '` turned that
+        # into a single SPACE -- which is truthy. Every ordinary Edge and
+        # Windows Update job therefore produced
+        #   [WARNING] BITS job 'Edge Component Updater' ... has a notify command line:
+        # with nothing after the colon: a finding that announced its evidence
+        # and then showed none. Join only the non-empty parts, and test the
+        # result for whitespace rather than trusting PowerShell truthiness.
         $ncl = ''
+        $nclKnown = $true
         if ($j.PSObject.Properties.Name -contains 'NotifyCmdLine') {
-            $raw = $j.NotifyCmdLine
-            if ($raw -is [array]) { $ncl = ($raw -join ' ') } else { $ncl = [string]$raw }
+            try {
+                $raw = $j.NotifyCmdLine
+                if ($raw -is [array]) {
+                    $ncl = (@($raw | ForEach-Object { [string]$_ } |
+                              Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ' ')
+                } else {
+                    $ncl = [string]$raw
+                }
+            } catch { $nclKnown = $false }
+        } else {
+            # The property is not there at all -- this job was NOT checked for
+            # the notify-command-line technique. Declared below, never folded
+            # into the all-clear.
+            $nclKnown = $false
         }
-        if ($ncl) {
+        if (-not $nclKnown) { $bitsUnread++ }
+        if (-not [string]::IsNullOrWhiteSpace($ncl)) {
             $sev = 'WARNING'
             if ($ncl -match $strongContent -or $ncl -match $badPathRx) { $sev = 'CRITICAL' }
             "[$sev] BITS job '$name' (owner $owner) has a notify command line: $ncl"
@@ -408,6 +435,13 @@ if (-not $bitsOk) {
         }
     }
     if ($flagged -eq 0) { "[OK] $($jobs.Count) BITS job(s) queued, none with a notify command line or older than $BitsAgeDays days." }
+    if ($bitsUnread -gt 0) {
+        # Same contract as the port-monitor / print-processor / time-provider
+        # arms above: an entry that could not be read is a GAP, and an all-clear
+        # must never be read as covering it.
+        "[WARNING] $bitsUnread BITS job(s) did not expose a NotifyCmdLine property and were NOT checked for command-line persistence."
+        $bitsSev = Get-MaxSev $bitsSev 'WARNING'
+    }
 }
 Write-Marker -Name 'bits' -Sev $bitsSev
 

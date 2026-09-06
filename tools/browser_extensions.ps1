@@ -34,7 +34,7 @@
 # verdict the same way the Section 18 IOC sub-checks do.
 # ============================================================================
 [CmdletBinding()]
-param()
+param([switch]$SelfTest)
 
 $ErrorActionPreference = 'SilentlyContinue'
 
@@ -50,8 +50,40 @@ $script:warnCount = 0
 $script:okCount = 0
 $script:skipCount = 0
 
+# PROVENANCE IS PART OF THE GRADE, not just a reason string. A field report
+# (2026-09-06) flagged four extensions on a clean machine: Adobe Acrobat and
+# Keeper Password Manager, in Chrome, Edge and Brave. A password manager needs
+# broad host access and native messaging -- that is how it fills forms and
+# reaches its desktop app. A PDF tool needs native messaging for the same
+# reason. Those permissions are the product, not a signal.
+#
+# The check already computed $nonStoreReason and then did not grade on it: a
+# sideloaded extension and a Web Store extension with identical permissions
+# produced the IDENTICAL [WARNING], differing only by one extra reason token.
+#
+# Worse, provenance itself was wrong. `from_webstore` is a CHROME Web Store
+# field; an Edge Add-ons install carries Microsoft's CRX endpoint instead, so
+# the owner's Edge copy of Keeper was reported "NOT from web store
+# (sideloaded/dev/external)" while being a perfectly ordinary store install.
+# update_url -- the field that actually answers this -- was never read, though
+# it sits in the already-parsed manifest.
+$storeUpdateUrlRx = 'clients2\.google\.com/service/update2/crx|edge\.microsoft\.com/extensionwebstorebase'
+
+# Chromium Manifest::Location integer codes that mean "not from the Web Store"
+# (external pref / external registry / unpacked / command-line). Declared HERE,
+# beside the other constants and above the functions that read it -- it used to
+# sit below them, so Get-ChromiumProvenance saw $null for it when called from
+# anywhere but the main loop, and every external-pref install graded 'unknown'.
+$nonStoreLocations = @(2,3,4,8,10)
+
+# Permissions that stay a WARNING even for a Web Store extension. These are rare
+# in legitimate extensions, and a malicious extension CAN be published to a
+# store -- this is the case the provenance downgrade must not go quiet on.
+$alwaysHighPerms = @('debugger','proxy','desktopCapture','tabCapture','pageCapture')
 # Permissions a credential-stealer / interceptor specifically wants, and which
 # legitimate extensions rarely need -> always worth a human look.
+# nativeMessaging is in this list but NOT in $alwaysHighPerms: it is ubiquitous
+# in legitimate store extensions that pair with a desktop application.
 $highRiskPerms = @('nativeMessaging','debugger','proxy','desktopCapture','tabCapture','pageCapture')
 # Powerful but common in legitimate extensions -> only a [WARNING] when paired
 # with broad host access (the traffic/credential interception pattern).
@@ -91,43 +123,224 @@ function Test-BroadHost {
     return $false
 }
 
+function Get-ChromiumProvenance {
+    # 'component' | 'store' | 'unpacked' | 'non-store' | 'unknown'.
+    # Takes the already-deserialized settings + manifest objects, so a self-test
+    # can drive it from a ConvertFrom-Json fixture with no filesystem at all.
+    param($Ext, $Manifest, [bool]$DeveloperMode = $false)
+    $loc = $null
+    if ($null -ne $Ext -and $null -ne $Ext.location) { $loc = [int]$Ext.location }
+    if ($loc -eq 5) { return 'component' }          # Manifest::COMPONENT
+    if ($loc -eq 4) { return 'unpacked' }           # loaded unpacked (dev mode)
+
+    # update_url is the definitive discriminator, and covers BOTH official
+    # stores -- Google's CRX endpoint and Microsoft's Edge Add-ons endpoint.
+    $uu = ''
+    if ($null -ne $Manifest -and $null -ne $Manifest.update_url) { $uu = [string]$Manifest.update_url }
+    if ($uu -match $storeUpdateUrlRx) { return 'store' }
+
+    if ($null -ne $Ext -and $null -ne $Ext.from_webstore -and [bool]$Ext.from_webstore) { return 'store' }
+    # 1 INTERNAL, 6 EXTERNAL_PREF_DOWNLOAD, 7/9 EXTERNAL_POLICY* are all
+    # store-downloaded installs.
+    if ($loc -eq 1 -or $loc -eq 6 -or $loc -eq 7 -or $loc -eq 9) { return 'store' }
+    if ($null -ne $loc -and ($nonStoreLocations -contains $loc)) { return 'non-store' }
+    if ($DeveloperMode -and $null -eq $uu) { return 'unknown' }
+    # NOT 'store'. The old code defaulted from_webstore to $true when the field
+    # was absent, so unknown provenance read as a store install -- it failed
+    # OPEN. Unknown is graded with the risky half, the same rule as "a signature
+    # that cannot be verified counts as unsigned" in proc_path_grade.ps1.
+    return 'unknown'
+}
+
+function Get-FirefoxProvenance {
+    # Firefox is the better-instrumented half: signedState is a direct AMO
+    # signature oracle (2 = signed by AMO, 0 = missing, -1 = broken) and
+    # sourceURI records where it came from. Neither signedState nor
+    # installTelemetryInfo was read before.
+    param($Addon)
+    if ($null -eq $Addon) { return 'unknown' }
+    $loc = [string]$Addon.location
+    if ($loc -eq 'app-builtin' -or $loc -eq 'app-system-defaults' -or [bool]$Addon.isSystem) { return 'component' }
+    if ($null -ne $Addon.signedState -and [int]$Addon.signedState -ge 2) { return 'store' }
+    $src = [string]$Addon.sourceURI
+    if ($src -match 'mozilla\.org') { return 'store' }
+    $tel = ''
+    if ($Addon.installTelemetryInfo -and $Addon.installTelemetryInfo.source) { $tel = [string]$Addon.installTelemetryInfo.source }
+    if ($tel -eq 'amo' -or $tel -eq 'about:addons') { return 'store' }
+    if ($tel -eq 'sideload' -or [bool]$Addon.foreignInstall) { return 'non-store' }
+    if ($loc -eq 'app-profile' -and [string]::IsNullOrEmpty($src)) { return 'non-store' }
+    return 'unknown'
+}
+
+function Get-ExtensionVerdict {
+    # Pure: returns @{ Tag = 'OK'|'INFO'|'WARNING'; Provenance; Reasons = @() }.
+    # Shaped like Get-ClsidVerdict (com_clsid_check.ps1) and Get-ServiceVerdict
+    # (service_signature_check.ps1) so a self-test can assert on it -- the old
+    # Emit-Extension wrote strings and mutated a counter, so nothing could.
+    param($Id, $Provenance, $Perms, $Hosts)
+    if ($builtinIds -contains $Id -or $Provenance -eq 'component') {
+        return @{ Tag = 'OK'; Provenance = 'component'; Reasons = @('vendor built-in component') }
+    }
+    $high      = @($Perms | Where-Object { $highRiskPerms   -contains $_ })
+    $alwaysHi  = @($Perms | Where-Object { $alwaysHighPerms -contains $_ })
+    $notable   = @($Perms | Where-Object { $notablePerms    -contains $_ })
+    $broad     = Test-BroadHost $Hosts
+
+    $reasons = @()
+    if ($high.Count -gt 0) { $reasons += ('malware-favored perms: ' + ($high -join ',')) }
+    if ($broad -and $notable.Count -gt 0) { $reasons += ('broad host access + ' + ($notable -join ',')) }
+
+    $fromStore = ($Provenance -eq 'store')
+    if (-not $fromStore -and $Provenance -ne 'unknown') {
+        $reasons = @("origin: $Provenance") + $reasons
+    } elseif ($Provenance -eq 'unknown') {
+        $reasons = @('origin: could not be determined') + $reasons
+    }
+
+    if ($reasons.Count -eq 0) { return @{ Tag = 'OK'; Provenance = $Provenance; Reasons = @() } }
+
+    # A store install with only the ordinary power-user permissions is
+    # INVENTORY. The permissions are still named so a reader can adjudicate.
+    if ($fromStore -and $alwaysHi.Count -eq 0) {
+        return @{ Tag = 'INFO'; Provenance = $Provenance; Reasons = $reasons }
+    }
+    # Everything else keeps the WARNING: a store extension holding debugger /
+    # proxy / a capture permission, and anything not provably from a store.
+    if ($alwaysHi.Count -gt 0) { $reasons = @('high-risk perms: ' + ($alwaysHi -join ',')) + $reasons }
+    if ($high.Count -eq 0 -and -not ($broad -and $notable.Count -gt 0)) {
+        # Non-store origin with no risky capability at all -> context, as before.
+        return @{ Tag = 'INFO'; Provenance = $Provenance; Reasons = @($reasons[0] + ' (no risky capability)') }
+    }
+    return @{ Tag = 'WARNING'; Provenance = $Provenance; Reasons = $reasons }
+}
+
 function Emit-Extension {
-    param($tag, $name, $ver, $id, $nonStoreReason, $perms, $hosts)
-    # Trusted vendor built-in (Edge/Chrome component) -> never flag.
-    if ($builtinIds -contains $id) {
-        $script:okCount++
-        Write-Output ("[OK] $tag  $name v$ver ($id)  [vendor built-in component]")
-        return
+    param($tag, $name, $ver, $id, $provenance, $perms, $hosts)
+    $v = Get-ExtensionVerdict -Id $id -Provenance $provenance -Perms $perms -Hosts $hosts
+    switch ($v.Tag) {
+        'WARNING' {
+            $script:warnCount++
+            Write-Output ("[WARNING] $tag  $name v$ver ($id)")
+            Write-Output ('            -> ' + ($v.Reasons -join '; '))
+        }
+        'INFO' {
+            $script:okCount++
+            Write-Output ("[INFO] $tag  $name v$ver ($id)")
+            Write-Output ('            -> ' + ($v.Reasons -join '; ') + ' -- installed from an official store, so these are the extension doing its job. Context, not a finding.')
+        }
+        default {
+            $script:okCount++
+            if ($v.Reasons.Count -gt 0 -and $v.Reasons[0] -eq 'vendor built-in component') {
+                Write-Output ("[OK] $tag  $name v$ver ($id)  [vendor built-in component]")
+            } else {
+                $ctx = @()
+                if (Test-BroadHost $hosts) { $ctx += 'all-URLs' }
+                $n = @($perms | Where-Object { $notablePerms -contains $_ })
+                if ($n.Count -gt 0) { $ctx += ($n -join ',') }
+                if ($ctx.Count -gt 0) { Write-Output ("[OK] $tag  $name v$ver ($id)  [" + ($ctx -join '; ') + ']') }
+                else { Write-Output ("[OK] $tag  $name v$ver ($id)") }
+            }
+        }
     }
-    $high    = @($perms | Where-Object { $highRiskPerms -contains $_ })
-    $notable = @($perms | Where-Object { $notablePerms  -contains $_ })
-    $broad   = Test-BroadHost $hosts
+}
 
-    # A non-store / sideloaded origin alone is noteworthy but NOT alarming --
-    # browsers ship many non-store built-ins, so flagging on that signal alone
-    # floods the report. Escalate to [WARNING] only when the extension also
-    # wields a malware-favored capability, or broad host access paired with an
-    # interception permission. A lone non-store origin is surfaced at [INFO].
-    $warnReasons = @()
-    if ($high.Count -gt 0) { $warnReasons += ('malware-favored perms: ' + ($high -join ',')) }
-    if ($broad -and $notable.Count -gt 0) { $warnReasons += ('broad host access + ' + ($notable -join ',')) }
-
-    if ($warnReasons.Count -gt 0) {
-        if ($nonStoreReason) { $warnReasons = @($nonStoreReason) + $warnReasons }
-        $script:warnCount++
-        Write-Output ("[WARNING] $tag  $name v$ver ($id)")
-        Write-Output ('            -> ' + ($warnReasons -join '; '))
-    } elseif ($nonStoreReason) {
-        $script:okCount++
-        Write-Output ("[INFO] $tag  $name v$ver ($id)  -> $nonStoreReason (no risky capability)")
-    } else {
-        $script:okCount++
-        $ctx = @()
-        if ($broad) { $ctx += 'all-URLs' }
-        if ($notable.Count -gt 0) { $ctx += ($notable -join ',') }
-        if ($ctx.Count -gt 0) { Write-Output ("[OK] $tag  $name v$ver ($id)  [" + ($ctx -join '; ') + ']') }
-        else { Write-Output ("[OK] $tag  $name v$ver ($id)") }
+if ($SelfTest) {
+    $fails = 0
+    function T { param([string]$Name, [bool]$Ok, [string]$Got)
+        if ($Ok) { Write-Output "[OK]   $Name" } else { Write-Output "[FAIL] $Name$(if($Got){": $Got"})"; $script:fails++ }
     }
+    function J { param([string]$Text) return ($Text | ConvertFrom-Json) }
+    $storeUrl = 'https://clients2.google.com/service/update2/crx'
+    $edgeUrl  = 'https://edge.microsoft.com/extensionwebstorebase/v1/crx'
+
+    # ---- provenance, from real Preferences shapes -------------------------
+    $e = J '{"location":1,"from_webstore":true}'
+    $m = J ('{"update_url":"' + $storeUrl + '"}')
+    T 'a Chrome Web Store install is store provenance' `
+      ((Get-ChromiumProvenance -Ext $e -Manifest $m) -eq 'store') (Get-ChromiumProvenance -Ext $e -Manifest $m)
+
+    # THE OWNER'S EDGE KEEPER: Edge Add-ons install, from_webstore false because
+    # that field means the CHROME store. Was reported "sideloaded/dev/external".
+    $e = J '{"location":1,"from_webstore":false}'
+    $m = J ('{"update_url":"' + $edgeUrl + '"}')
+    T 'an Edge Add-ons install is store provenance, not sideloaded' `
+      ((Get-ChromiumProvenance -Ext $e -Manifest $m) -eq 'store') (Get-ChromiumProvenance -Ext $e -Manifest $m)
+
+    # Pin the update_url read itself: no location, no from_webstore, nothing to
+    # fall back on. Without reading update_url this is 'unknown' and the
+    # extension is graded with the risky half.
+    T 'a store update_url alone establishes store provenance (Google)' `
+      ((Get-ChromiumProvenance -Ext (J '{}') -Manifest (J ('{"update_url":"' + $storeUrl + '"}'))) -eq 'store') `
+      (Get-ChromiumProvenance -Ext (J '{}') -Manifest (J ('{"update_url":"' + $storeUrl + '"}')))
+    T 'a store update_url alone establishes store provenance (Edge Add-ons)' `
+      ((Get-ChromiumProvenance -Ext (J '{}') -Manifest (J ('{"update_url":"' + $edgeUrl + '"}'))) -eq 'store') `
+      (Get-ChromiumProvenance -Ext (J '{}') -Manifest (J ('{"update_url":"' + $edgeUrl + '"}')))
+    # ...and a NON-official update_url must not.
+    T 'a third-party update_url does NOT establish store provenance' `
+      ((Get-ChromiumProvenance -Ext (J '{}') -Manifest (J '{"update_url":"https://evil.example/crx"}')) -eq 'unknown') `
+      (Get-ChromiumProvenance -Ext (J '{}') -Manifest (J '{"update_url":"https://evil.example/crx"}'))
+
+    $e = J '{"location":4}'
+    T 'location 4 is an unpacked (dev-mode) load' `
+      ((Get-ChromiumProvenance -Ext $e -Manifest (J '{}')) -eq 'unpacked') (Get-ChromiumProvenance -Ext $e -Manifest (J '{}'))
+    $e = J '{"location":5}'
+    T 'location 5 is a vendor component, without needing the hardcoded ID list' `
+      ((Get-ChromiumProvenance -Ext $e -Manifest (J '{}')) -eq 'component') (Get-ChromiumProvenance -Ext $e -Manifest (J '{}'))
+    $e = J '{"location":2}'
+    T 'an external-pref install is non-store' `
+      ((Get-ChromiumProvenance -Ext $e -Manifest (J '{}')) -eq 'non-store') (Get-ChromiumProvenance -Ext $e -Manifest (J '{}'))
+    # The old code defaulted this to store -- it failed OPEN.
+    T 'absent provenance fields are UNKNOWN, not store' `
+      ((Get-ChromiumProvenance -Ext (J '{}') -Manifest (J '{}')) -eq 'unknown') (Get-ChromiumProvenance -Ext (J '{}') -Manifest (J '{}'))
+
+    # ---- the owner's four flagged extensions ------------------------------
+    $acrobat = @('nativeMessaging','webRequest','cookies','declarativeNetRequest')
+    $keeper  = @('declarativeNetRequestWithHostAccess','webRequest','privacy')
+    $all     = @('<all_urls>')
+
+    $v = Get-ExtensionVerdict -Id 'efaidnbmnnnibpcajpcglclefindmkaj' -Provenance 'store' -Perms $acrobat -Hosts $all
+    T 'Adobe Acrobat from the store is context, not a finding' `
+      ($v.Tag -eq 'INFO') "$($v.Tag): $($v.Reasons -join '; ')"
+    $v = Get-ExtensionVerdict -Id 'bfogiafebfohielmmehodmfbbebbbpei' -Provenance 'store' -Perms $keeper -Hosts $all
+    T 'Keeper from the store is context, not a finding' `
+      ($v.Tag -eq 'INFO') "$($v.Tag): $($v.Reasons -join '; ')"
+
+    # ---- ...and none of that may swallow a real one -----------------------
+    $v = Get-ExtensionVerdict -Id 'zz' -Provenance 'non-store' -Perms $acrobat -Hosts $all
+    T 'the SAME permissions sideloaded are still a WARNING' `
+      ($v.Tag -eq 'WARNING') "$($v.Tag): $($v.Reasons -join '; ')"
+    $v = Get-ExtensionVerdict -Id 'zz' -Provenance 'unpacked' -Perms $keeper -Hosts $all
+    T 'an unpacked dev-mode load with those permissions is a WARNING' `
+      ($v.Tag -eq 'WARNING') "$($v.Tag): $($v.Reasons -join '; ')"
+    $v = Get-ExtensionVerdict -Id 'zz' -Provenance 'unknown' -Perms $keeper -Hosts $all
+    T 'UNKNOWN provenance is graded with the risky half' `
+      ($v.Tag -eq 'WARNING') "$($v.Tag): $($v.Reasons -join '; ')"
+
+    # A store extension CAN be malicious, so the sharpest permissions keep
+    # their WARNING even from a store.
+    foreach ($p in @('debugger','proxy','desktopCapture','tabCapture','pageCapture')) {
+        $v = Get-ExtensionVerdict -Id 'zz' -Provenance 'store' -Perms @($p) -Hosts @()
+        T "a store extension holding '$p' is still a WARNING" ($v.Tag -eq 'WARNING') "$($v.Tag)"
+    }
+
+    $v = Get-ExtensionVerdict -Id 'zz' -Provenance 'store' -Perms @('storage') -Hosts @()
+    T 'an ordinary store extension with no risky permission is OK' ($v.Tag -eq 'OK') "$($v.Tag)"
+    $v = Get-ExtensionVerdict -Id 'zz' -Provenance 'non-store' -Perms @('storage') -Hosts @()
+    T 'a sideloaded extension with no risky permission stays INFO' ($v.Tag -eq 'INFO') "$($v.Tag)"
+    $v = Get-ExtensionVerdict -Id 'mhjfbmdgcfjbbpaeojofohoefgiehjai' -Provenance 'unknown' -Perms $acrobat -Hosts $all
+    T 'a known vendor built-in ID is OK whatever it holds' ($v.Tag -eq 'OK') "$($v.Tag)"
+
+    # ---- Firefox ----------------------------------------------------------
+    T 'an AMO-signed add-on is store provenance' `
+      ((Get-FirefoxProvenance -Addon (J '{"location":"app-profile","signedState":2}')) -eq 'store') ''
+    T 'a profile add-on with no source is non-store' `
+      ((Get-FirefoxProvenance -Addon (J '{"location":"app-profile","sourceURI":null}')) -eq 'non-store') ''
+    T 'a Firefox system add-on is a component' `
+      ((Get-FirefoxProvenance -Addon (J '{"location":"app-system-defaults"}')) -eq 'component') ''
+
+    if ($fails) { Write-Output "[FAIL] $fails browser_extensions self-test expectation(s) unmet"; exit 1 }
+    Write-Output '[OK] browser_extensions self-test: store installs are graded on provenance, sideloaded and unknown are not downgraded, and debugger/proxy/capture stay findings anywhere.'
+    exit 0
 }
 
 # -------------------------------------------------------------------------
@@ -139,11 +352,6 @@ $chromiumBrowsers = @(
     @{ Name = 'Brave';   Base = (Join-Path $env:LOCALAPPDATA 'BraveSoftware\Brave-Browser\User Data') },
     @{ Name = 'Vivaldi'; Base = (Join-Path $env:LOCALAPPDATA 'Vivaldi\User Data') }
 )
-
-# Chromium Manifest::Location integer codes that mean "not from the Web Store"
-# (external pref / external registry / unpacked / command-line). from_webstore
-# is the primary signal; this is a backstop for tampered/older profiles.
-$nonStoreLocations = @(2,3,4,8,10)
 
 foreach ($b in $chromiumBrowsers) {
     if (-not (Test-Path -LiteralPath $b.Base)) { continue }
@@ -167,6 +375,12 @@ foreach ($b in $chromiumBrowsers) {
         $settings = $null
         if ($json.extensions -and $json.extensions.settings) { $settings = $json.extensions.settings }
         if (-not $settings) { Write-Output "[INFO] $tag -- no extensions registered."; continue }
+        # Profile-wide developer mode: an unpacked load is far likelier here.
+        # Sits in the same already-parsed document and was never read.
+        $devMode = $false
+        if ($json.extensions -and $json.extensions.ui -and $null -ne $json.extensions.ui.developer_mode) {
+            $devMode = [bool]$json.extensions.ui.developer_mode
+        }
         foreach ($prop in $settings.PSObject.Properties) {
             $id = $prop.Name
             $ext = $prop.Value
@@ -184,16 +398,8 @@ foreach ($b in $chromiumBrowsers) {
             $permHosts = @($perms | Where-Object { $_ -is [string] -and ($_ -match '://' -or $_ -eq '<all_urls>') })
             $allHosts = @($hostPerms + $permHosts)
 
-            $fromStore = $true
-            if ($null -ne $ext.from_webstore) { $fromStore = [bool]$ext.from_webstore }
-            $loc = $ext.location
-            $isNonStoreLoc = ($null -ne $loc) -and ($nonStoreLocations -contains [int]$loc)
-
-            $nonStoreReason = $null
-            if (-not $fromStore)     { $nonStoreReason = 'NOT from web store (sideloaded/dev/external)' }
-            elseif ($isNonStoreLoc)  { $nonStoreReason = "install location code $loc (non-store)" }
-
-            Emit-Extension $tag $name $ver $id $nonStoreReason $permWords $allHosts
+            $prov = Get-ChromiumProvenance -Ext $ext -Manifest $man -DeveloperMode $devMode
+            Emit-Extension $tag $name $ver $id $prov $permWords $allHosts
         }
     }
 }
@@ -227,13 +433,8 @@ if (Test-Path -LiteralPath $ffRoot) {
             $origins = @()
             if ($a.userPermissions -and $a.userPermissions.origins) { $origins += @($a.userPermissions.origins) }
 
-            # A user-profile add-on with no addons.mozilla.org source URI was not
-            # installed from the official gallery -> sideloaded / manually dropped.
-            $sideloaded = ($loc -eq 'app-profile') -and ([string]::IsNullOrEmpty($src) -or ($src -notmatch 'mozilla\.org'))
-            $nonStoreReason = $null
-            if ($sideloaded) { $nonStoreReason = 'no AMO source (sideloaded/manual)' }
-
-            Emit-Extension $tag $name $ver $id $nonStoreReason $perms $origins
+            $prov = Get-FirefoxProvenance -Addon $a
+            Emit-Extension $tag $name $ver $id $prov $perms $origins
         }
     }
 }
