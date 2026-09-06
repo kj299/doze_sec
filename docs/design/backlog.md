@@ -75,6 +75,29 @@ Building a 40-site skip counter plus a lint for a population of zero is
 disproportionate. Revisit if a real run ever shows several section-level skips
 — the noAdmin `DEFERRED_COUNT` / `SEC<N>_PREV_DEF` pattern is the model.
 
+### Catalog-signed binaries read as unsigned (two confirmed instances)
+
+`Get-AuthenticodeSignature` returns `NotSigned` for files whose signature lives
+in a security catalog rather than embedded in the file. Two confirmed on the
+owner's machine:
+
+- `C:\WINDOWS\system32\drivers\bthmodem.sys` — a Microsoft inbox driver,
+  reported by the Section 18 driver audit as "unsigned or invalid Authenticode
+  signature (NotSigned) on a kernel driver".
+- MSIX/Store packages under `C:\Program Files\WindowsApps\...` — surfaced
+  when `proc_path_grade` briefly graded out-of-scope paths (#198, fixed).
+  `proc_path_grade` no longer looks at them, but the driver audit still does
+  the same kind of check on files that can be catalog-signed.
+
+**What it needs.** A signature check that consults the catalog store, not only
+the embedded signature — `Get-AuthenticodeSignature` alone cannot answer this.
+The usual route is the WinVerifyTrust API with a catalog lookup, which means
+P/Invoke from PowerShell 5.1, or shelling to `signtool verify /pa /kp` where
+available. Neither is free, and getting it wrong in the *other* direction
+(treating a genuinely unsigned driver as fine) is far worse than the current
+false positive, so this needs a test that proves both directions before it
+ships.
+
 ### A coverage percentage with a denominator
 
 `report_safety.ps1 -Mode Coverage` reports a raw count of skipped checks. There
