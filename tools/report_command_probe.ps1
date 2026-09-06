@@ -292,8 +292,16 @@ function Invoke-ProbeRun {
     # probe from 2.5 to 8.7 minutes, and the worst case would blow the job's
     # own timeout and look like a hang. On exhaustion the remaining commands
     # are DECLARED un-probed and counted, never silently dropped.
+    #
+    # Log lines are COLLECTED and returned, never Write-Output here. PowerShell
+    # puts a function's Write-Output and its return value on the same stream,
+    # so `$res = Invoke-ProbeRun ...` captured both: $res became an array of
+    # [log strings..., hashtable], every [SKIP ] declaration vanished from the
+    # console, and `$res.Total` only worked by accidental array member
+    # enumeration. A CI assertion on those declarations could never pass.
     param([string]$ReportPath, [int]$Timeout, [int]$Floor, [int]$Budget = 0, [switch]$Classify)
     $clock = [System.Diagnostics.Stopwatch]::StartNew()
+    $log = New-Object System.Collections.ArrayList
 
     $cmds = @(Get-ReportCommands -Path $ReportPath)
     $bad = @(); $nExec = 0; $nSkip = 0; $nSlow = 0; $nUnprobed = 0
@@ -303,32 +311,32 @@ function Invoke-ProbeRun {
         if ($cls.Action -eq 'skip') { $nSkip++; continue }
         if ($cls.Action -eq 'fail') {
             $bad += "report line $($c.Line): $($cls.Reason) -- from: $($c.Text)"
-            Write-Output ("[FAIL ] line {0}: {1}" -f $c.Line, $cls.Reason)
+            [void]$log.Add(("[FAIL ] line {0}: {1}" -f $c.Line, $cls.Reason))
             continue
         }
         if ($Classify) { $nExec++; continue }
         if ($Budget -gt 0 -and $clock.Elapsed.TotalSeconds -gt $Budget) { $nUnprobed++; continue }
         $r = Invoke-Probe -Kind $cls.Action -Payload $cls.Payload -Timeout $Timeout
         if ($r.Status -eq 'ok')   { $nExec++ }
-        if ($r.Status -eq 'slow') { $nSlow++; $nExec++; Write-Output ("[SLOW ] line {0}: {1}" -f $c.Line, $r.Detail) }
+        if ($r.Status -eq 'slow') { $nSlow++; $nExec++; [void]$log.Add(("[SLOW ] line {0}: {1}" -f $c.Line, $r.Detail)) }
         if ($r.Status -eq 'fail') {
             $bad += "report line $($c.Line): $($r.Detail) -- from: $($c.Text)"
-            Write-Output ("[FAIL ] line {0}: {1}" -f $c.Line, $r.Detail)
-            Write-Output ("         printed as: {0}" -f $c.Text)
+            [void]$log.Add(("[FAIL ] line {0}: {1}" -f $c.Line, $r.Detail))
+            [void]$log.Add(("         printed as: {0}" -f $c.Text))
         }
     }
 
     foreach ($k in ($script:KnownMutating + $script:KnownDescriptive)) {
         if (-not $k.Hit) { $bad += "stale exemption '$($k.Match)' matched nothing -- remove it or fix the line it was written for" }
-        else { Write-Output ("[SKIP ] {0} -- {1}" -f $k.Match, $k.Why) }
+        else { [void]$log.Add(("[SKIP ] {0} -- {1}" -f $k.Match, $k.Why)) }
     }
     if ($cmds.Count -eq 0) { $bad += "no 'Command:' lines found in $ReportPath -- the extractor is broken, not the report" }
     if ($nUnprobed -gt 0) {
-        Write-Output ("[BUDGET] {0} command(s) NOT probed -- the {1}s wall-clock budget ran out. This is missing coverage, not a pass." -f $nUnprobed, $Budget)
+        [void]$log.Add(("[BUDGET] {0} command(s) NOT probed -- the {1}s wall-clock budget ran out. This is missing coverage, not a pass." -f $nUnprobed, $Budget))
     }
     if ($nExec -lt $Floor) { $bad += "only $nExec command(s) actually executed (floor $Floor) -- a clean result means nothing" }
 
-    return @{ Bad = $bad; Total = $cmds.Count; Exec = $nExec; Skip = $nSkip; Slow = $nSlow; Unprobed = $nUnprobed }
+    return @{ Bad = $bad; Total = $cmds.Count; Exec = $nExec; Skip = $nSkip; Slow = $nSlow; Unprobed = $nUnprobed; Log = @($log) }
 }
 
 if ($SelfTest) {
@@ -353,6 +361,7 @@ if ($SelfTest) {
     Set-Content -LiteralPath $tmp -Value $fixture
     foreach ($k in ($script:KnownMutating + $script:KnownDescriptive)) { $k.Remove('Hit') | Out-Null }
     $r = Invoke-ProbeRun -ReportPath $tmp -Timeout 20 -Floor 1
+    $r.Log | ForEach-Object { Write-Output $_ }
     Remove-Item -LiteralPath $tmp -Force -EA SilentlyContinue
 
     $expect = @(
@@ -397,6 +406,7 @@ if (-not $Report) { Write-Output '[FAIL] -Report <path> is required (or -SelfTes
 if (-not (Test-Path -LiteralPath $Report)) { Write-Output "[FAIL] report not found: $Report"; exit 1 }
 
 $res = Invoke-ProbeRun -ReportPath $Report -Timeout $TimeoutSeconds -Floor $MinProbed -Budget $BudgetSeconds -Classify:$ClassifyOnly
+$res.Log | ForEach-Object { Write-Output $_ }
 $verb = if ($ClassifyOnly) { 'classified as runnable' } else { 'executed' }
 Write-Output ("-- {0} 'Command:' line(s): {1} {2}, {3} skipped, {4} slow, {5} not probed" -f $res.Total, $res.Exec, $verb, $res.Skip, $res.Slow, $res.Unprobed)
 if (-not $ClassifyOnly -and $res.Slow -gt 0) {
