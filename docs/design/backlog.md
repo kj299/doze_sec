@@ -84,10 +84,14 @@ owner's machine:
 - `C:\WINDOWS\system32\drivers\bthmodem.sys` — a Microsoft inbox driver,
   reported by the Section 18 driver audit as "unsigned or invalid Authenticode
   signature (NotSigned) on a kernel driver".
-- MSIX/Store packages under `C:\Program Files\WindowsApps\...` — surfaced
-  when `proc_path_grade` briefly graded out-of-scope paths (#198, fixed).
-  `proc_path_grade` no longer looks at them, but the driver audit still does
-  the same kind of check on files that can be catalog-signed.
+- **DONE for services (2026-09-06).** MSIX/Store packages under
+  `C:\Program Files\WindowsApps\...` are resolved through `Get-AppxPackage`
+  `SignatureKind` in `tools/service_signature_check.ps1`. Microsoft guarantees
+  any kind other than `None` means a trusted certificate, so `None` and an
+  unresolvable package both stay findings, and `Developer`/`Enterprise` stay
+  findings because they are signed but not store-vetted. Confirmed instance:
+  `IntelGraphicsSoftwareService`. Still open for the driver audit, module
+  inspection and startup evaluation.
 
 - Modules loaded from an application-virtualization package
   (Office Click-to-Run, MSIX) that `module_inspect` resolves through the VFS.

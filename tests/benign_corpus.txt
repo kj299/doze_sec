@@ -205,6 +205,13 @@ proof     = ci:persistence_extra.ps1 BITS notify command line (both directions)
 signature = BITS job\(s\) queued, none with a notify command line
 note      = Get-BitsTransfer returns NotifyCmdLine as a two-element array (program, parameters), and Microsoft documents both as empty strings when SetNotifyCmdLine was never called. Joining them produced a single space, which is truthy, so every ordinary Edge and Windows Update job raised '[WARNING] BITS job ... has a notify command line:' with nothing after the colon. Field false positive 2026-09-06 on 'Edge Component Updater'. A real notify command line still raises. Verify: Get-BitsTransfer -AllUsers | Select-Object DisplayName,NotifyCmdLine
 
+[svc-msix-catalog-signed]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:service_signature_check.ps1 -SelfTest
+signature = msix: signed by (Store|System)
+note      = MSIX/AppX packages are signed as a PACKAGE, not per inner file, so Get-AuthenticodeSignature on the inner .exe correctly returns NotSigned. Field false positive 2026-09-06: IntelGraphicsSoftwareService (Running, Auto) under C:\Program Files\WindowsApps\AppUp.IntelArcSoftware_...\VFS\ProgramFilesX64\ was reported unsigned. Get-AppxPackage SignatureKind is consulted instead; Microsoft documents that any value other than None means the package carries a trusted certificate. Developer/Enterprise, None, and an unresolvable package all remain findings, and a staging path still wins. Verify: Get-AppxPackage -AllUsers | Where-Object PackageFullName -eq '<name>' | Select-Object SignatureKind,Status
+
 [ev104-smartcard]
 class     = ADVISE
 proof     = ci:Event 104 provider filter
