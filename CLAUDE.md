@@ -296,6 +296,19 @@ So, in every `.ps1`:
   — which rendered as mojibake to exactly the reader it was written for.)
 - **No `` `u{...} `` and no `` `e ``** inside a double-quoted string.
 
+- **No `.GetNewClosure()`.** It builds a new *dynamic module* and copies the
+  caller's **variables** into it — not its functions — and module code runs in
+  its own scope hierarchy with its own root, so a script-scope function is not
+  on the lookup chain. pwsh 7 resolves such a call anyway; 5.1 raises
+  `CommandNotFoundException`. Pass the value in a script-scoped variable and use
+  a plain scriptblock, which is bound to the script session state and sees both.
+
+  This cost `service_signature_check`'s two `Developer`/`Enterprise` MSIX cases,
+  which then failed for the **wrong reason**: the probe threw, the package "did
+  not resolve", and the fail-closed path returned the very `flagged` bucket the
+  cases were asserting on. They only failed because the assertion checks the
+  **reason**, not just the verdict. Assert on `Why`, not only `Bucket`.
+
 ```
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\lint_ps51_portability.ps1
 ```

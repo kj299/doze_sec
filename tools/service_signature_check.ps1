@@ -289,8 +289,21 @@ if ($SelfTest) {
     T 'a System-signed MSIX service is inventory' ($v.Bucket -eq 'inventory') "$($v.Bucket)/$($v.Why)"
 
     # ...and every other SignatureKind stays a finding.
+    #
+    # The kind travels in a SCRIPT-SCOPED variable, not a closure. This loop
+    # was written `{ ... $k ... }.GetNewClosure()` and it failed on real 5.1
+    # with CommandNotFoundException: FakePkg. GetNewClosure builds a new
+    # DYNAMIC MODULE and copies the caller VARIABLES into it -- not its
+    # functions -- and module code runs in its own scope hierarchy with its
+    # own root, so a script-scope function is not on the lookup chain.
+    # pwsh 7 resolves it anyway; 5.1 does not. Both cases then failed for the
+    # WRONG REASON -- the probe threw, the package "did not resolve", and the
+    # fail-closed path returned flagged/unsigned. They still read as flagged,
+    # so only the assertion on Why (not just Bucket) caught it.
+    # A plain scriptblock is bound to the script session state and sees both.
     foreach ($k in @('Developer','Enterprise')) {
-        $script:AppxCache = @{}; $script:AppxProbe = { param($f) FakePkg -Kind $k -Full $f }.GetNewClosure()
+        $script:fakeKind = $k
+        $script:AppxCache = @{}; $script:AppxProbe = { param($f) FakePkg -Kind $script:fakeKind -Full $f }
         $v = Get-ServiceVerdict -Binary $intel
         T "an MSIX package signed '$k' is NOT store-vetted and stays a WARNING" `
           ($v.Bucket -eq 'flagged' -and $v.Why -match 'not store-vetted') "$($v.Bucket)/$($v.Why)"

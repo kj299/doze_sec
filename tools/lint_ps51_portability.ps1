@@ -152,6 +152,36 @@ function Get-PortabilityDefects {
         }
     }
 
+    # --- Rule 3: GetNewClosure() --------------------------------------------
+    # It builds a new DYNAMIC MODULE and copies the caller VARIABLES into it --
+    # not its functions -- and module code runs in its own scope hierarchy with
+    # its own root, so a script-scope function is not on the lookup chain.
+    # pwsh 7 resolves such a call anyway; Windows PowerShell 5.1 raises
+    # CommandNotFoundException. Same shape as the rules above: both engines
+    # accept the source and mean something different by it.
+    #
+    # It cost this repo two self-test cases that then failed for the WRONG
+    # REASON -- the probe threw, the package "did not resolve", and the
+    # fail-closed path returned the flagged bucket the cases were asserting on.
+    # Only an assertion on the REASON, not just the verdict, caught it.
+    #
+    # Matched on the AST, so the sequence can be named freely in prose. Pass the
+    # value in a script-scoped variable instead: a plain scriptblock is bound to
+    # the script session state and sees both the variable and the function.
+    foreach ($m in @($ast.FindAll({
+        param($n)
+        ($n -is [System.Management.Automation.Language.InvokeMemberExpressionAst]) -and
+        ($n.Member -is [System.Management.Automation.Language.StringConstantExpressionAst]) -and
+        ($n.Member.Value -eq 'GetNewClosure')
+    }, $true))) {
+        $out += New-Object PSObject -Property @{
+            File   = $Path
+            Line   = $m.Extent.StartLineNumber
+            Rule   = 'getnewclosure'
+            Detail = 'GetNewClosure() runs the block in a new dynamic module whose scope chain does not include this script, so a script-scope FUNCTION is not visible to it on 5.1 (pwsh 7 resolves it). Pass the value in a script-scoped variable and use a plain scriptblock.'
+        }
+    }
+
     # Emitted straight to the pipeline. `return $out` on an empty array yields
     # $null, and the caller's @($null) is a ONE-element array holding null.
     $out
@@ -234,6 +264,25 @@ if ($SelfTest) {
     $k = W 'here.ps1' ('$s = @' + $Q + $NL + $BQE + '[31m' + $NL + $Q + '@' + $NL)
     T 'a double-quoted HERE-string is checked too' ((N $k) -eq 1) ('count=' + (N $k))
 
+    # --- rule 3 ---
+    $m = W 'closure.ps1' ('function FakePkg { param($Kind) $Kind }' + $NL +
+                          '$k = ' + $Q + 'Developer' + $Q + $NL +
+                          '$p = { FakePkg -Kind $k }.GetNewClosure()' + $NL)
+    $d = @(Get-PortabilityDefects -Path $m)
+    T 'GetNewClosure() is a defect' `
+      ($d.Count -eq 1 -and $d[0].Rule -eq 'getnewclosure' -and $d[0].Line -eq 3) `
+      ("count=$($d.Count) rule=$(if($d.Count){$d[0].Rule}) line=$(if($d.Count){$d[0].Line})")
+
+    $n = W 'closureprose.ps1' ('# GetNewClosure() copies variables, not functions.' + $NL +
+                               '$s = ' + $Q + 'do not call GetNewClosure() here' + $Q + $NL)
+    T 'GetNewClosure named in prose or a string is NOT a defect (AST-matched)' `
+      ((N $n) -eq 0) ('count=' + (N $n))
+
+    $o = W 'closurefix.ps1' ('function FakePkg { param($Kind) $Kind }' + $NL +
+                             '$script:k = ' + $Q + 'Developer' + $Q + $NL +
+                             '$p = { FakePkg -Kind $script:k }' + $NL)
+    T 'the script-scoped-variable replacement is clean' ((N $o) -eq 0) ('count=' + (N $o))
+
     # --- a file that will not parse is declared, never silently skipped ---
     $l = W 'broken.ps1' ('function f { if ($x) {' + $NL)
     $d = @(Get-PortabilityDefects -Path $l)
@@ -271,5 +320,5 @@ if ($defects.Count -gt 0) {
     exit 1
 }
 
-'[OK] lint_ps51_portability: {0} .ps1 file(s) are pure ASCII and use no PowerShell 6+ escape in a double-quoted string.' -f $files.Count
+'[OK] lint_ps51_portability: {0} .ps1 file(s) are pure ASCII, use no PowerShell 6+ escape in a double-quoted string, and no GetNewClosure().' -f $files.Count
 exit 0
