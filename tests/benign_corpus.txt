@@ -143,7 +143,7 @@ note      = DNS-over-HTTPS clients and local filtering proxies point the resolve
 [browser-ext-nonstore-norisk]
 class     = QUIET
 maxsev    = INFO
-proof     = field:a sideloaded extension with no malware-favored permission needs a real browser profile; not planted in CI
+proof     = ci:browser_extensions.ps1 -SelfTest
 signature = \(no risky capability\)
 note      = A sideloaded or non-store extension that holds no risky permission is inventoried as INFO. Verify its origin in the browser's extension page.
 
@@ -190,6 +190,20 @@ maxsev    = INFO
 proof     = ci:service_signature_check.ps1 -SelfTest
 signature = validly signed by a vendor outside this tool's short allowlist
 note      = The tool carries a 19-name vendor allowlist, which cannot enumerate the legitimate software industry. Field false positive 2026-09-06: com.docker.service (Docker Inc.) and InstallRoot (DoD-PKE) were reported as 'unexpected-signer' WARNINGs while validly signed and installed under Program Files. A valid signature in a normal location is inventory, not evidence. It is still a WARNING when the path is a staging directory, the certificate is expired or revoked, or the binary is unsigned. Verify: Get-AuthenticodeSignature on the binary and confirm you recognise the signer.
+
+[browser-ext-store-broad-perms]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:browser_extensions.ps1 -SelfTest
+signature = installed from an official store, so these are the extension doing its job
+note      = A password manager needs broad host access and nativeMessaging to fill forms and reach its desktop app; a PDF tool needs nativeMessaging for the same reason. Field false positive 2026-09-06: Adobe Acrobat and Keeper Password Manager were raised as WARNINGs in Chrome, Edge and Brave. Provenance was computed and then not graded on, so a Web Store install and a sideloaded one with identical permissions produced the identical WARNING. debugger, proxy, desktopCapture, tabCapture and pageCapture still raise a WARNING even from a store, because a malicious extension can be published to one. Verify an extension's origin on the browser's Extensions page.
+
+[bits-no-notify-command-line]
+class     = QUIET
+maxsev    = OK
+proof     = ci:persistence_extra.ps1 BITS notify command line (both directions)
+signature = BITS job\(s\) queued, none with a notify command line
+note      = Get-BitsTransfer returns NotifyCmdLine as a two-element array (program, parameters), and Microsoft documents both as empty strings when SetNotifyCmdLine was never called. Joining them produced a single space, which is truthy, so every ordinary Edge and Windows Update job raised '[WARNING] BITS job ... has a notify command line:' with nothing after the colon. Field false positive 2026-09-06 on 'Edge Component Updater'. A real notify command line still raises. Verify: Get-BitsTransfer -AllUsers | Select-Object DisplayName,NotifyCmdLine
 
 [ev104-smartcard]
 class     = ADVISE
@@ -250,3 +264,9 @@ class     = ADVISE
 proof     = ci:service_signature_check.ps1 -SelfTest
 signature = could not be read, so they were NOT verified
 note      = C:\Program Files\WindowsApps\ is ACL'd to TrustedInstaller, so Get-AuthenticodeSignature on an MSIX-packaged service binary fails even for an administrator. Until 2026-09-06 that was labelled 'no-file' -- the tool said the binary was missing when it was present and merely unreadable. It is now declared as a coverage GAP rather than as either a clean result or a finding. Observed on the owner's machine: CoworkVMService -> ...\WindowsApps\Claude_1.11737.2.0_x64__...\cowork-svc.exe. Verify by hand in an elevated shell: Get-AuthenticodeSignature -FilePath '<binary>'. An unreadable binary outside WindowsApps deserves a closer look.
+
+[browser-ext-edge-addons-provenance]
+class     = ADVISE
+proof     = ci:browser_extensions.ps1 -SelfTest
+signature = origin: (non-store|could not be determined)
+note      = from_webstore is a CHROME Web Store field; an Edge Add-ons install carries Microsoft's CRX endpoint (edge.microsoft.com/extensionwebstorebase) instead, so before 2026-09-06 a legitimate Edge store install was reported 'NOT from web store (sideloaded/dev/external)'. update_url is now read and both official endpoints are recognised. An extension whose origin still cannot be determined is graded with the risky half deliberately -- the old code defaulted unknown provenance to 'store' and so failed open. Verify on the browser's Extensions page whether you installed it from the store.

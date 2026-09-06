@@ -89,12 +89,26 @@ jobs:
           Write-Host "scheduled_tasks_full OK (all three modes)"
           exit 0
 
-      - name: browser_extensions.ps1 (real profile enumeration)
+      - name: browser_extensions.ps1 -SelfTest (a store install is graded on provenance)
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          .\tools\browser_extensions.ps1 | Out-Null
-          Write-Host "browser_extensions OK"
+          # A runner has no browser profiles, so the enumeration half proves
+          # only that the script does not throw -- the previous step piped its
+          # output to Out-Null and asserted NOTHING about the grading, which is
+          # how a permission rule that ignored provenance survived.
+          $out = (.\tools\browser_extensions.ps1 -SelfTest) -join "`n"
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw 'browser_extensions self-test failed' }
+          $n = @($out -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($n -lt 22) { throw "browser_extensions self-test ran only $n case(s) -- it is not asserting what it claims" }
+          # And the real enumeration must still run clean on a profile-less host.
+          $real = (.\tools\browser_extensions.ps1) -join "`n"
+          Write-Host $real
+          if ($real -match 'null-valued expression|InvalidOperation') {
+            throw 'browser_extensions wrote PowerShell errors into its own output'
+          }
+          Write-Host "browser_extensions OK ($n self-test cases)"
           exit 0
 
       - name: select_lines.ps1 incl. a 20,000-char line (findstr would hang)
@@ -347,6 +361,55 @@ jobs:
             Remove-Item $md -Recurse -Force -EA SilentlyContinue
           }
           Write-Host "persistence_extra.ps1 OK (incl. bracketed-key-name evasion)"
+          exit 0
+
+      - name: persistence_extra.ps1 BITS notify command line (both directions)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # The BITS arm has NEVER had its true-positive direction tested: no
+          # harness case plants a BITS job, and the only live contract is
+          # "dz_bits.txt must not exist on a clean runner". Meanwhile the
+          # false-positive direction fired on every ordinary Edge/Windows Update
+          # job, because Get-BitsTransfer returns NotifyCmdLine as a two-element
+          # array and @('','') -join ' ' is a single SPACE -- truthy.
+          # Microsoft: GetNotifyCmdLine "sets pProgram and pParameters to an
+          # empty string if SetNotifyCmdLine has not been called."
+          $job = 'dz_selftest_bits_probe'
+          & bitsadmin /cancel $job 2>&1 | Out-Null
+          try {
+            & bitsadmin /create $job 2>&1 | Out-Null
+            & bitsadmin /addfile $job 'http://localhost/dz_ci_nonexistent' "$env:TEMP\dz_ci_bits_probe.bin" 2>&1 | Out-Null
+
+            # (a) NO notify command line -- must NOT be a finding. This is the
+            # shape every real Edge/Windows Update job has.
+            $mdA = Join-Path $env:TEMP ("dz_pe_bits_a_{0}" -f $PID)
+            $outA = (.\tools\persistence_extra.ps1 -MarkerDir $mdA) -join "`n"
+            $bitsLines = @($outA -split "`n" | Where-Object { $_ -match 'BITS job' })
+            Write-Host ($bitsLines -join "`n")
+            foreach ($l in $bitsLines) {
+              if ($l -match "^\[(WARNING|CRITICAL)\].*$job.*notify command line:\s*$") {
+                throw "a BITS job with NO notify command line was raised, with empty evidence: $l"
+              }
+            }
+
+            # (b) a REAL notify command line -- must still fire.
+            & bitsadmin /SetNotifyCmdLine $job 'C:\Windows\System32\cmd.exe' 'cmd.exe /c rem dz_selftest' 2>&1 | Out-Null
+            $mdB = Join-Path $env:TEMP ("dz_pe_bits_b_{0}" -f $PID)
+            $outB = (.\tools\persistence_extra.ps1 -MarkerDir $mdB) -join "`n"
+            Write-Host (($outB -split "`n" | Where-Object { $_ -match 'BITS job' }) -join "`n")
+            if ($outB -notmatch "BITS job '$job'.*has a notify command line: \S") {
+              throw 'a BITS job WITH a real notify command line was not reported (or was reported with empty evidence)'
+            }
+            if (-not (Test-Path (Join-Path $mdB 'dz_bits.txt'))) {
+              throw 'the BITS finding wrote no marker -- it never reaches the ledger'
+            }
+            Remove-Item $mdA, $mdB -Recurse -Force -EA SilentlyContinue
+          } finally {
+            & bitsadmin /cancel $job 2>&1 | Out-Null
+            Remove-Item "$env:TEMP\dz_ci_bits_probe.bin" -Force -EA SilentlyContinue
+          }
+          Write-Host "BITS notify command line OK (empty is not a finding; a real one still is)"
           exit 0
 
       - name: audit_policy_check.ps1 (auditing visibility; locale-independent cmdline signal)
