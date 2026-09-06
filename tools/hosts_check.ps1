@@ -133,8 +133,24 @@ function Get-HostsEntries {
     foreach ($raw in $Lines) {
         if ($null -eq $raw) { continue }
         # Strip a UTF-8 BOM on the first line, and any trailing comment.
+        #
+        # BOTH forms, and BOTH patterns written in pure ASCII. Get-Content
+        # usually consumes a leading BOM itself, but not always: 5.1 reading a
+        # file whose BOM was not detected yields the MOJIBAKE form (the three
+        # UTF-8 bytes decoded as Windows-1252, U+00EF U+00BB U+00BF), while a
+        # UTF-8-aware read yields the single character U+FEFF.
+        #
+        # The second pattern used to be the raw BOM bytes typed into this
+        # (BOM-less) file. Windows PowerShell 5.1 decodes a BOM-less .ps1 as
+        # ANSI, so those three bytes became U+00EF U+00BB U+00BF and the line
+        # compiled to a DUPLICATE of the one above it -- leaving a real U+FEFF
+        # unstripped on the one engine this tool must run on. The first HOSTS
+        # entry would then fail the address test and be dropped silently: a
+        # blackholed windowsupdate.microsoft.com on line 1 would be INVISIBLE.
+        # \uFEFF is a .NET regex escape and \ is not a PowerShell string
+        # escape, so this source stays ASCII and means the same on 5.1 and 7.
         $l = $raw -replace "^\xEF\xBB\xBF", ''
-        $l = $l -replace "^﻿", ''
+        $l = $l -replace "^\uFEFF", ''
         $hash = $l.IndexOf('#')
         if ($hash -ge 0) { $l = $l.Substring(0, $hash) }
         $l = $l.Trim()
@@ -244,8 +260,24 @@ if ($SelfTest) {
       ("count=" + @(Get-HostsEntries -Lines @('# only a comment')).Count)
     $e = @(Get-HostsEntries -Lines @('203.0.113.5  a.example b.example  # two names'))
     T 'one line with several names yields one entry each' ($e.Count -eq 2) ("count=$($e.Count)")
-    $e = @(Get-HostsEntries -Lines @("`u{FEFF}127.0.0.1 localhost"))
-    T 'a UTF-8 BOM on the first line does not eat the entry' ($e.Count -eq 1) ("count=$($e.Count)")
+    # BOTH BOM forms, built from character codes so this source stays ASCII.
+    # This case used to be written with `u{FEFF}, which is PowerShell 6+ only:
+    # 5.1 has no such escape and drops the backtick, so the case tested the
+    # literal string "u{FEFF}127.0.0.1" and could not fail for its own reason.
+    # CI on real 5.1 is what caught it.
+    $bom = [string][char]0xFEFF
+    $e = @(Get-HostsEntries -Lines @($bom + "127.0.0.1 localhost"))
+    T 'a UTF-8 BOM (U+FEFF) on the first line does not eat the entry' ($e.Count -eq 1) ("count=$($e.Count)")
+    # The mojibake form: the BOM bytes decoded as Windows-1252, which is what a
+    # 5.1 read of a UTF-8 file whose BOM was not detected actually yields.
+    $moji = -join @([char]0x00EF, [char]0x00BB, [char]0x00BF)
+    $e = @(Get-HostsEntries -Lines @($moji + "127.0.0.1 localhost"))
+    T 'a mis-decoded UTF-8 BOM on the first line does not eat the entry' ($e.Count -eq 1) ("count=$($e.Count)")
+    # Neither strip may run away with a real entry.
+    $e = @(Get-HostsEntries -Lines @($bom + "127.0.0.1 windowsupdate.microsoft.com"))
+    T 'a BOM does not hide a blackholed update domain' `
+      ($e.Count -eq 1 -and $e[0].Name -eq 'windowsupdate.microsoft.com') `
+      ("count=$($e.Count) name=$(if($e.Count){$e[0].Name})")
     $r = V @('::1 localhost', 'fe80::1 host.docker.internal')
     T 'IPv6 loopback and link-local are handled' `
       ($r.Blackhole.Count -eq 0 -and $r.Redirect.Count -eq 0) ("redirect=$($r.Redirect.Count)")

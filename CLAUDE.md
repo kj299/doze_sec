@@ -254,6 +254,59 @@ Linux it died for want of `cmd.exe`, on Windows it would have written the key.
 Use `if`/`continue`, and give any executor a guard that refuses a kind it was
 never meant to run.
 
+### Parsing on 5.1 is not meaning the same thing on 5.1 (REQUIRED — enforced by lint)
+
+The 5.1 parser check above catches syntax pwsh accepts and 5.1 REJECTS. The
+worse class is the opposite: source both engines accept and **read
+differently**. There is no parse error to find, so every existing gate is blind
+to it, and it stays invisible until a case that depends on it runs on real 5.1.
+
+`tools/hosts_check.ps1` shipped two instances at once. Its UTF-8 BOM strip was:
+
+```
+$l = $raw -replace "^\xEF\xBB\xBF", ''      # the mojibake form -- ASCII source, fine
+$l = $l   -replace "^<raw BOM bytes>", ''   # meant to be U+FEFF
+```
+
+The second held the three raw UTF-8 BOM bytes typed into a **BOM-less** `.ps1`.
+Windows PowerShell 5.1 decodes a BOM-less script as ANSI, so those bytes became
+`U+00EF U+00BB U+00BF` and the line compiled to an exact **duplicate** of the one
+above it. On the only engine this tool ships to, a real `U+FEFF` was never
+stripped, the first HOSTS entry then failed the address test, and it was dropped
+with no error. `Trim()` does not save it either — .NET does not classify
+`U+FEFF` as whitespace. A blackholed `windowsupdate.microsoft.com` on line 1 of
+a UTF-8 HOSTS file would have been **invisible**: a false negative, in the check
+written specifically to close a false negative.
+
+The test that should have caught it was written `` `u{FEFF} ``, which is
+PowerShell 6+ only. 5.1 has no such escape — it drops the backtick and hands you
+the literal text — so the case asserted against the string `"u{FEFF}127.0.0.1"`
+and **could not fail for its own reason**. It passed on pwsh 7 across four
+merges. Real-Windows CI is what finally caught it.
+
+So, in every `.ps1`:
+
+- **Pure ASCII source, everywhere, including comments.** Build the character
+  from its code point (`[char]0xFEFF`), or in a regex use the .NET escape
+  `﻿` — `\` is not a PowerShell string escape, so that stays ASCII in the
+  source and means the same on both engines. Comments are covered too: not
+  because mojibake in a comment breaks anything, but because a lint that has to
+  tell a comment from a regex is a lint with an exception list to rot. (The
+  repo's one other instance was a comment quoting a Japanese `auditpol` header
+  — which rendered as mojibake to exactly the reader it was written for.)
+- **No `` `u{...} `` and no `` `e ``** inside a double-quoted string.
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\lint_ps51_portability.ps1
+```
+
+Rule 2 is scoped **by AST**, to double-quoted and here-strings only. A backtick
+escapes nothing in a comment, and this repo's comments quote identifiers
+markdown-style (`` `else` ``, `` `echo` ``, `` `event ID` ``) — a naive file-wide
+regex reported six defects across four files on its first run. A lint people
+learn to work around is worse than no lint. `-SelfTest` proves it fails on each
+class **and stays quiet on the prose**. CI runs it in `lint.yml`.
+
 ### "Unavailable" is not an answer (REQUIRED)
 
 A check that cannot determine its own subject must say so *loudly and
