@@ -2430,19 +2430,14 @@ echo $PSVersionTable ^| Format-Table -AutoSize > "%PSRUN%"
 
 echo.>> "%REPORT%"
 echo --- PSv2 Engine Status (MUST be Disabled) --->> "%REPORT%"
-echo  Command: powershell -Command "Get-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2Root">> "%REPORT%"
-if "%IS_ADMIN%"=="0" goto :sec11_psv2_noadmin
-echo try{Get-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2Root ^| Select-Object FeatureName,State ^| Format-List}catch{'Unable to query PSv2 state.'} > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
-goto :sec11_psv2_done
-:sec11_psv2_noadmin
-echo  [DEFERRED - ADMIN REQUIRED] Get-WindowsOptionalFeature requires admin.>> "%REPORT%"
-set /a DEFERRED_COUNT+=1
-:sec11_psv2_done
-
+echo  Command: tools\psv2_check.ps1   [tries: powershell -Version 2, DISM, CIM, registry engine key]>> "%REPORT%"
 del "%TEMP%\dz_psv2_hit.txt" 2>nul
-echo $psv2=Get-CimInstance Win32_OptionalFeature -Filter 'Name=''MicrosoftWindowsPowerShellV2Root''' -EA SilentlyContinue;if($psv2 -and $psv2.InstallState -eq 1){'[WARNING] PowerShell v2 ENABLED (AMSI downgrade possible)';Set-Content -LiteralPath "$env:TEMP\dz_psv2_hit.txt" -Value hit}elseif($psv2){'[OK] PowerShell v2 disabled.'}else{'[SKIPPED] PSv2 state unavailable.'} > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+del "%TEMP%\dz_psv2_state.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\psv2_check.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\psv2_check.ps1" -MarkerFile "%TEMP%\dz_psv2_hit.txt" -StateFile "%TEMP%\dz_psv2_state.txt">> "%REPORT%" 2>&1
+) else (
+    echo [SKIPPED] tools\psv2_check.ps1 missing -- PSv2 engine state NOT determined.>> "%REPORT%"
+)
 if exist "%TEMP%\dz_psv2_hit.txt" (
     call :dz_finding WARNING 11 T1059.001 "PowerShell v2 enabled - AMSI downgrade path"
     del "%TEMP%\dz_psv2_hit.txt" 2>nul
@@ -4280,7 +4275,7 @@ echo ck 'INFO' 'Firewall status check deferred (requires admin)' >> "%PSRUN%"
 echo ck 'INFO' 'SMBv1 status check deferred (requires admin)' >> "%PSRUN%"
 echo } >> "%PSRUN%"
 echo if($isAdmin -eq '1'){ >> "%PSRUN%"
-echo $psv2=Get-CimInstance Win32_OptionalFeature -Filter 'Name=''MicrosoftWindowsPowerShellV2Root''' -EA SilentlyContinue;if($psv2 -and $psv2.InstallState -eq 1){ck 'WARN' 'PowerShell v2 ENABLED (AMSI downgrade possible)' 'Run: Disable-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2Root'}elseif($psv2){ck 'PASS' 'PowerShell v2 disabled'}else{ck 'INFO' 'PSv2 state unavailable -- see Section 11'} >> "%PSRUN%"
+echo $p2=''; if(Test-Path "$env:TEMP\dz_psv2_state.txt"){$p2=[string](Get-Content "$env:TEMP\dz_psv2_state.txt" -EA SilentlyContinue ^| Select-Object -First 1)}; if($p2 -eq 'ENABLED'){ck 'WARN' 'PowerShell v2 ENABLED (AMSI downgrade possible)' 'Run: Disable-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2Root'}elseif($p2 -eq 'DISABLED'){ck 'PASS' 'PowerShell v2 disabled'}else{ck 'INFO' 'PSv2 state unavailable -- see Section 11'} >> "%PSRUN%"
 echo }else{ >> "%PSRUN%"
 echo ck 'INFO' 'PSv2 status check deferred (requires admin)' >> "%PSRUN%"
 echo } >> "%PSRUN%"

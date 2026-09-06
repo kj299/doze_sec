@@ -2731,12 +2731,14 @@ echo $PSVersionTable ^| Format-Table -AutoSize > "%PSRUN%"
 
 echo.>> "%REPORT%"
 echo --- PSv2 Engine Status (MUST be Disabled) --->> "%REPORT%"
-echo  Command: powershell -Command "Get-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2Root">> "%REPORT%"
-echo try{Get-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2Root ^| Select-Object FeatureName,State ^| Format-List}catch{'Unable to query PSv2 state.'} > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+echo  Command: tools\psv2_check.ps1   [tries: powershell -Version 2, DISM, CIM, registry engine key]>> "%REPORT%"
 del "%TEMP%\dz_psv2_hit.txt" 2>nul
-echo $psv2=Get-CimInstance Win32_OptionalFeature -Filter 'Name=''MicrosoftWindowsPowerShellV2Root''' -EA SilentlyContinue;if($psv2 -and $psv2.InstallState -eq 1){'[WARNING] PowerShell v2 ENABLED (AMSI downgrade possible)';Set-Content -LiteralPath "$env:TEMP\dz_psv2_hit.txt" -Value hit}elseif($psv2){'[OK] PowerShell v2 disabled.'}else{'[SKIPPED] PSv2 state unavailable.'} > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+del "%TEMP%\dz_psv2_state.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\psv2_check.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\psv2_check.ps1" -MarkerFile "%TEMP%\dz_psv2_hit.txt" -StateFile "%TEMP%\dz_psv2_state.txt">> "%REPORT%" 2>&1
+) else (
+    echo [SKIPPED] tools\psv2_check.ps1 missing -- PSv2 engine state NOT determined.>> "%REPORT%"
+)
 if exist "%TEMP%\dz_psv2_hit.txt" (
     call :dz_finding WARNING 11 T1059.001 "PowerShell v2 enabled - AMSI downgrade path"
     del "%TEMP%\dz_psv2_hit.txt" 2>nul
@@ -4435,7 +4437,7 @@ echo. >> "%PSRUN%"
 echo sec 'ATTACK SURFACE  (Sections 8, 10, 11)' >> "%PSRUN%"
 echo $fwp=@(Get-NetFirewallProfile -EA SilentlyContinue);$fwOff=@($fwp^|Where-Object{"$($_.Enabled)" -ne 'True'});if($fwp.Count -eq 0){ck 'INFO' 'Firewall state unavailable via Get-NetFirewallProfile -- see Section 8'}elseif($fwOff.Count -eq 0){ck 'PASS' 'All firewall profiles enabled - Domain, Private, Public'}else{ck 'CRIT' "Firewall DISABLED on $($fwOff.Count) profile(s): $($fwOff.Name -join ', ')" 'Fix: Set-NetFirewallProfile -All -Enabled True'} >> "%PSRUN%"
 echo $s1=(Get-SmbServerConfiguration -EA SilentlyContinue).EnableSMB1Protocol;if($s1 -eq $false){ck 'PASS' 'SMBv1 disabled (EternalBlue not exploitable)'}elseif($s1 -eq $true){ck 'CRIT' 'SMBv1 ENABLED (EternalBlue CVE-2017-0144)' 'Run: Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart'}else{ck 'INFO' 'SMBv1 state unavailable -- see Section 10'} >> "%PSRUN%"
-echo $psv2=Get-CimInstance Win32_OptionalFeature -Filter 'Name=''MicrosoftWindowsPowerShellV2Root''' -EA SilentlyContinue;if($psv2 -and $psv2.InstallState -eq 1){ck 'WARN' 'PowerShell v2 ENABLED (AMSI downgrade possible)' 'Run: Disable-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2Root'}elseif($psv2){ck 'PASS' 'PowerShell v2 disabled'}else{ck 'INFO' 'PSv2 state unavailable -- see Section 11'} >> "%PSRUN%"
+echo $p2=''; if(Test-Path "$env:TEMP\dz_psv2_state.txt"){$p2=[string](Get-Content "$env:TEMP\dz_psv2_state.txt" -EA SilentlyContinue ^| Select-Object -First 1)}; if($p2 -eq 'ENABLED'){ck 'WARN' 'PowerShell v2 ENABLED (AMSI downgrade possible)' 'Run: Disable-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2Root'}elseif($p2 -eq 'DISABLED'){ck 'PASS' 'PowerShell v2 disabled'}else{ck 'INFO' 'PSv2 state unavailable -- see Section 11'} >> "%PSRUN%"
 echo $rdp=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -EA SilentlyContinue).fDenyTSConnections;if($rdp -eq 1){ck 'PASS' 'RDP is disabled'}else{$nla=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -EA SilentlyContinue).UserAuthentication;if($nla -eq 1){ck 'PASS' 'RDP enabled with NLA (Network Level Authentication)'}else{ck 'WARN' 'RDP enabled WITHOUT NLA' 'Set UserAuthentication=1 in HKLM\...\RDP-Tcp or via Group Policy'}} >> "%PSRUN%"
 echo $wmr=Get-Service WinRM -EA SilentlyContinue;if($wmr -and $wmr.Status -eq 'Running'){ck 'WARN' 'WinRM RUNNING (remote PowerShell enabled)' 'Disable: Stop-Service WinRM; Set-Service WinRM -StartupType Disabled'}else{ck 'PASS' 'WinRM not running'} >> "%PSRUN%"
 echo. >> "%PSRUN%"

@@ -1148,6 +1148,34 @@ jobs:
           Write-Host "lint_unraised_findings.ps1 OK"
           exit 0
 
+      - name: psv2_check.ps1 (the AMSI-downgrade path must get a definite answer)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # The two inline blocks this replaced never once produced a verdict on
+          # a real Windows 11 machine -- five audits, two dates, elevated, all
+          # "[SKIPPED] PSv2 state unavailable." PSv2 predates AMSI, so "is it
+          # available" is a real security question and [SKIPPED] is not an
+          # answer. A runner's PSv2 state IS knowable, so a skip here is a
+          # FAILURE, not a tolerated unknown.
+          $mk = Join-Path $env:TEMP 'dz_ci_psv2_hit.txt'
+          $sf = Join-Path $env:TEMP 'dz_ci_psv2_state.txt'
+          Remove-Item $mk, $sf -Force -EA SilentlyContinue
+          $out = (.\tools\psv2_check.ps1 -MarkerFile $mk -StateFile $sf) -join "`n"
+          Write-Host $out
+          if ($out -match '\[SKIPPED\]') { throw 'psv2_check could not determine PSv2 state on a real runner -- all four methods were inconclusive' }
+          if ($out -notmatch 'determined by:') { throw 'psv2_check did not name the method that answered' }
+          $state = (Get-Content $sf -EA SilentlyContinue | Select-Object -First 1)
+          if ($state -notin @('ENABLED','DISABLED')) { throw "state file says '$state' -- expected a definite ENABLED or DISABLED" }
+          # The marker and the verdict must agree: a WARNING with no marker is a
+          # finding that never reaches the ledger, which is this repo's oldest bug.
+          $hit = Test-Path $mk
+          if (($out -match '\[WARNING\]') -ne $hit) { throw "verdict and marker disagree: WARNING=$($out -match '\[WARNING\]') marker=$hit" }
+          Remove-Item $mk, $sf -Force -EA SilentlyContinue
+          .\tools\psv2_check.ps1 -SelfTest
+          if ($LASTEXITCODE -ne 0) { throw 'psv2_check self-test failed' }
+          Write-Host "psv2_check.ps1 OK (state=$state)"
+
       - name: lint_report_echo.ps1 (every printed line reaches the report; every printed command runs)
         shell: powershell
         run: |
