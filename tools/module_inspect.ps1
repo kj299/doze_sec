@@ -177,7 +177,10 @@ function Get-VfsCandidates {
     foreach ($m in $Map) {
         if (-not $Path.StartsWith(($m.Prefix + '\'), [System.StringComparison]::OrdinalIgnoreCase)) { continue }
         $rest = $Path.Substring($m.Prefix.Length).TrimStart('\')
-        foreach ($r in $Roots) { $out += ($r.TrimEnd('\') + '\' + $m.Folder + '\' + $rest) }
+        foreach ($r in $Roots) {
+            if (-not $r) { continue }
+            $out += ($r.TrimEnd('\') + '\' + $m.Folder + '\' + $rest)
+        }
         break
     }
     return $out
@@ -215,7 +218,13 @@ function Get-VfsRoots {
         }
     }
     $script:VfsRoots = @($roots.ToArray())
-    return $script:VfsRoots
+    # `return @()` from a PowerShell function yields $NULL, not an empty array
+    # -- the pipeline unrolls it. The caller then does @($null), which is a
+    # ONE-element array containing null, and the loop body runs on a null. On
+    # every machine WITHOUT Office (most of them, and every CI runner) that
+    # threw twice per process into the audit report. The comma operator
+    # suppresses the unroll.
+    return ,$script:VfsRoots
 }
 
 function Get-HostVfsRoot {
@@ -259,6 +268,7 @@ function Test-VirtualizedHost {
     if (-not $ImagePath) { return $false }
     if ($ImagePath -match '\\WindowsApps\\') { return $true }
     foreach ($r in @($Roots)) {
+        if (-not $r) { continue }
         # The VFS root is <package>\VFS; the package's own binaries sit under
         # <package>, its parent.
         $pkg = ($r.TrimEnd('\'))
@@ -448,6 +458,31 @@ if ($SelfTest) {
     $g2 = Get-SigVerdict $mso
     T 'a module that resolves nowhere is still reported as not on disk' `
       ((-not $g2.Valid) -and $g2.Why -match 'not found on disk') "$($g2.Valid): $($g2.Why)"
+
+    # THE COMMON CASE: no Office at all. This must be silent and false, not a
+    # method call on a null. It was not -- Get-VfsRoots returned $null for an
+    # empty result and every caller threw. Every earlier case here passed a
+    # NON-empty roots array, so the machine state that 99% of users have was
+    # the one shape never exercised.
+    $errBefore = $Error.Count
+    $noOffice = $false
+    try {
+        $noOffice = (Test-VirtualizedHost -ImagePath 'C:\Windows\System32\svchost.exe' -Roots $null)
+        $null = @(Get-VfsCandidates -Path $mso -Map $map -Roots $null)
+        $null = @(Get-VfsCandidates -Path $mso -Map $map -Roots @($null))
+        $null = (Test-VirtualizedHost -ImagePath 'C:\Windows\System32\svchost.exe' -Roots @($null))
+    } catch { }
+    T 'a machine with no Office resolves nothing and raises no error' `
+      ((-not $noOffice) -and $Error.Count -eq $errBefore) ("errors raised: " + ($Error.Count - $errBefore))
+
+    # ...and Get-VfsRoots must hand back an ARRAY when it found nothing, never
+    # $null: that is the difference between the two behaviours above.
+    $script:VfsRoots = $null
+    $saveEnv = $env:SystemRoot
+    $emptyRoots = Get-VfsRoots
+    T 'Get-VfsRoots returns an empty ARRAY, not $null, when nothing is installed' `
+      ($null -ne $emptyRoots -and @($emptyRoots).Count -eq 0) ("null=" + ($null -eq $emptyRoots) + " count=" + @($emptyRoots).Count)
+    $script:VfsRoots = $null
 
     if ($fails) { Write-Output "[FAIL] $fails module_inspect self-test expectation(s) unmet"; exit 1 }
     Write-Output '[OK] module_inspect self-test: Click-to-Run/MSIX virtual paths resolve or are stated as uncertain; a genuinely unbacked module still raises T1055.'
