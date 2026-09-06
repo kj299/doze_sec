@@ -926,7 +926,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'module_inspect self-test failed' }
           # Non-vacuity: a self-test that asserted nothing would exit 0 too.
           $n = @($out -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($n -lt 18) { throw "module_inspect self-test ran only $n case(s) -- it is not asserting what it claims" }
+          if ($n -lt 20) { throw "module_inspect self-test ran only $n case(s) -- it is not asserting what it claims" }
           Write-Host "module_inspect -SelfTest OK ($n cases)"
           exit 0
 
@@ -946,6 +946,13 @@ jobs:
             $out = (.\tools\module_inspect.ps1 -MarkerDir $md) -join "`n"
             Write-Host ($out -split "`n" | Select-Object -First 15)
             if ($out -match '\[CRITICAL\]') { throw "module_inspect reported CRITICAL on a clean runner (false positive)" }
+            # A runner has no Office, which is the COMMON machine shape and was
+            # the one the virtualization work never exercised: Get-VfsRoots
+            # returned $null for an empty result and every caller threw a
+            # null-method error into the report, twice per process.
+            if ($out -match 'null-valued expression|InvalidOperation|CommandNotFoundException') {
+              throw "module_inspect wrote PowerShell errors into its own output on a machine with no Office"
+            }
             # Load a REAL signed Microsoft DLL from a staging path into THIS
             # process, then inspect. Severity must come from the staging path,
             # not the signature -- that is the injection shape being modelled.
