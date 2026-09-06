@@ -679,7 +679,19 @@ jobs:
             # THE ONE BRANCH THAT PRODUCES A FINDING must be proven, not
             # assumed: plant a STOPPED service using an EDR name the tool
             # knows, and require a WARNING plus a marker.
-            & sc.exe create SentinelAgent binPath= 'C:\Windows\System32\cmd.exe /c rem dz_ci_probe' start= demand | Out-Null
+            #
+            # The SERVICE NAME must stay a real product name -- edr_presence
+            # matches by service name, so a test-scoped name would exercise
+            # nothing. What is test-scoped is the BINARY PATH: it carries
+            # 'dz_selftest', which is what Section 18's Event 7045 check
+            # excludes. Six 7045 records for 'SentinelAgent' with a cmd.exe
+            # image path outlived a manual run of this block on a real machine
+            # and were reported as suspicious service installs on every later
+            # audit -- correctly, since that is exactly an attacker's shape.
+            # Excluding the NAME would let an attacker hide a service by
+            # calling it SentinelAgent; excluding the harness marker in the
+            # image path costs no coverage.
+            & sc.exe create SentinelAgent binPath= 'C:\Windows\System32\cmd.exe /c rem dz_selftest_ci_probe' start= demand | Out-Null
             $md2 = Join-Path $env:TEMP ("dz_edr_ci2_{0}" -f $PID)
             try {
               $out2 = (.\tools\edr_presence.ps1 -MarkerDir $md2) -join "`n"
@@ -704,7 +716,7 @@ jobs:
             $senseExists = $true
             try { Get-Service -Name Sense -EA Stop | Out-Null } catch { $senseExists = $false }
             if (-not $senseExists) {
-              & sc.exe create Sense binPath= 'C:\Windows\System32\cmd.exe /c rem dz_ci_probe' start= demand | Out-Null
+              & sc.exe create Sense binPath= 'C:\Windows\System32\cmd.exe /c rem dz_selftest_ci_probe' start= demand | Out-Null
               $md3 = Join-Path $env:TEMP ("dz_edr_ci3_{0}" -f $PID)
               try {
                 $out3 = (.\tools\edr_presence.ps1 -MarkerDir $md3) -join "`n"
@@ -809,15 +821,15 @@ jobs:
             # command line, so the malicious argument never even appeared. That
             # is LOLBin persistence rendered as a Windows-update notice in the
             # check that exists to catch implants matching no signature.
-            & sc.exe create dz_ci_lolbin binPath= 'C:\Windows\System32\rundll32.exe C:\ProgramData\dz_ci_stage\x.dll,Run' start= demand | Out-Null
+            & sc.exe create dz_selftest_ci_lolbin binPath= 'C:\Windows\System32\rundll32.exe C:\ProgramData\dz_selftest_ci_stage\x.dll,Run' start= demand | Out-Null
             $diff2 = (.\tools\baseline_diff.ps1 -Mode Diff -Path $snap -MarkerDir $md) -join "`n"
-            Write-Host ($diff2 -split "`n" | Where-Object { $_ -match 'dz_ci_lolbin' })
-            if ($diff2 -notmatch 'dz_ci_lolbin') { throw 'new LOLBin-hosted service missing from the diff entirely' }
-            $line = (($diff2 -split "`n") | Where-Object { $_ -match 'dz_ci_lolbin' } | Select-Object -First 1)
+            Write-Host ($diff2 -split "`n" | Where-Object { $_ -match 'dz_selftest_ci_lolbin' })
+            if ($diff2 -notmatch 'dz_selftest_ci_lolbin') { throw 'new LOLBin-hosted service missing from the diff entirely' }
+            $line = (($diff2 -split "`n") | Where-Object { $_ -match 'dz_selftest_ci_lolbin' } | Select-Object -First 1)
             if ($line -notmatch '^\[WARNING\]') { throw ("LOLBin-hosted service was not raised as WARNING: $line") }
             if ($line -notmatch 'rundll32') { throw ("the command line was omitted from the finding: $line") }
           } finally {
-            & sc.exe delete dz_ci_lolbin 2>&1 | Out-Null
+            & sc.exe delete dz_selftest_ci_lolbin 2>&1 | Out-Null
             Remove-ItemProperty -Path $runKey -Name 'dz_ci_baseline_probe' -EA SilentlyContinue
             Remove-Item $md -Recurse -Force -EA SilentlyContinue
           }
@@ -901,6 +913,23 @@ jobs:
           Write-Host "cross_api_check.ps1 OK (incl. honest degradation when the scheduler is unavailable)"
           exit 0
 
+      - name: module_inspect.ps1 -SelfTest (virtualized module paths are not injections)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # A runner has no Office, so the real Click-to-Run case cannot be
+          # planted here. These are the mapping and classification rules the
+          # fourteen WINWORD warnings got wrong, with the filesystem probe
+          # injected -- the only part CI can prove.
+          $out = (.\tools\module_inspect.ps1 -SelfTest) -join "`n"
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw 'module_inspect self-test failed' }
+          # Non-vacuity: a self-test that asserted nothing would exit 0 too.
+          $n = @($out -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($n -lt 18) { throw "module_inspect self-test ran only $n case(s) -- it is not asserting what it claims" }
+          Write-Host "module_inspect -SelfTest OK ($n cases)"
+          exit 0
+
       - name: module_inspect.ps1 (injection detection; staged DLL must be caught)
         shell: powershell
         run: |
@@ -952,6 +981,13 @@ jobs:
           $mi = Get-Content .\tools\module_inspect.ps1 -Raw
           if ($mi -notmatch "elseif \(\`$v\.Why -match 'not found on disk'\)") { throw 'unbacked modules are no longer separated from the benign unsigned tally' }
           if ($mi -notmatch 'reflective or unbacked load') { throw 'the unbacked-load finding text is gone' }
+          # ...but "not on disk" must be resolved through application
+          # virtualization BEFORE it is called an injection. Without this, the
+          # first audit run with Word open reports fourteen Office DLLs as
+          # in-memory injection on a clean machine.
+          if ($mi -notmatch 'Resolve-VfsPath') { throw 'the Click-to-Run/MSIX virtual-path resolution is gone; Office modules will be reported as injected again' }
+          if ($mi -notmatch 'Get-HostVfsRoot') { throw 'package-root discovery from the loading process image is gone; resolution would depend on the Click-to-Run registry key alone' }
+          if ($mi -notmatch 'Get-UnbackedVerdict') { throw 'the unbacked-module classifier is gone; every unresolved path asserts T1055 again' }
           # Staged paths must be inspected BEFORE the cap can discard them.
           if ($mi -notmatch '\$ordered = ') { throw 'staged-path-first ordering was removed; the cap can again drop exactly what the check looks for' }
 

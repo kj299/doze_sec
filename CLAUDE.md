@@ -310,6 +310,34 @@ report said `[OK] No netsh portproxy rules.` Windows leaves that key behind,
 empty, once the rules are gone. A key-existence IOC now requires the key to
 hold at least one value or subkey, and the finding says how many.
 
+**"Not on disk" is not "unbacked".** The first field run with Word open
+produced fourteen `[WARNING] ... reflective or unbacked load ... (T1055)` lines
+for ordinary Office and VBA DLLs — the tool telling its owner that Microsoft
+Word was running fourteen in-memory-injected modules on a clean machine. Office
+Click-to-Run runs in a virtual application environment with private copies of
+its files under `<install>\root\VFS\ProgramFilesCommonX64\`, so WINWORD reports
+a `C:\Program Files\Common Files\...` path that exists only inside the process;
+a bare `Test-Path` from outside says "not on disk". `module_inspect` now
+resolves through the VFS before declaring a module absent — discovering the
+package root from the loading process's own image path (the first ancestor with
+a `VFS` subdirectory), not from a hard-coded product path, so a machine whose
+Click-to-Run key is missing does not get its Office DLLs reported as injected.
+When it still does not resolve, the wording states the two indistinguishable
+causes instead of asserting injection. The downgrade is asymmetric: a staging
+path keeps CRITICAL and a non-system path keeps the full T1055 finding — only
+"plausible system path, not visible from outside" is downgraded, and to STATED
+UNCERTAINTY, never to silence.
+
+**Excluding our own plants means excluding the MARKER, never the NAME.** The
+harness's EDR verification plants a service under a REAL product name
+(`SentinelAgent`) because `edr_presence` matches by service name and a
+test-scoped name would exercise nothing. Six Event 7045 records for it outlived
+a manual run on a real machine and were reported as suspicious service installs
+on every later audit — correctly, since a service with a `cmd.exe` image path is
+exactly an attacker's shape. Excluding the *name* would let an attacker hide a
+service by calling it `SentinelAgent`; the plants therefore carry `dz_selftest`
+in the IMAGE PATH, which the check already excludes and declares as a count.
+
 **Do not report our own test harness as an intrusion.** The plant harness
 installs `dz_selftest_flag_svc`; cleanup removes the service but cannot remove
 the Event 7045 record of installing it, so every later audit on that machine
