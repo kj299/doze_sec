@@ -175,6 +175,51 @@ Checks whose miss would be silent also drop a marker as a backstop (the ASR
 block does, alongside its grade), raised only when the grade came back `OK`, so
 a correct grade never double-counts.
 
+### A for /f backtick starting with a quote runs nothing (REQUIRED)
+
+`:dz_ps_scan` read the grade back like this:
+
+```
+for /f "usebackq delims=" %%s in (`"%PWSH%" ... -Path "%DZ_BLK%" 2^>nul`) do set "DZ_BLKSEV=%%s"
+```
+
+cmd runs a `for /f` backtick command through `cmd /c`, and **`cmd /c` strips the
+leading and trailing quote when the command line begins with one**. This one
+began with `"%PWSH%"`, so the invocation was mangled, produced no output, the
+loop body never ran, and `DZ_BLKSEV` kept its `OK` default.
+
+**So no `:dz_ps_scan` block had ever raised a finding** — all eighteen call
+sites, both bats, every machine. Office macro policy, Secure Boot, AMSI-bypass
+traces, RDP shadowing and the nation-state TTP blocks all printed findings that
+reached neither the ledger, `FINDINGS COUNTED`, the section verdict nor the exit
+code. The ~25-check silent-finding failure above, living inside the mechanism
+built to prevent it.
+
+**The backstop is what hid it.** Only marker-carrying checks survived, and the
+ASR block raises its message *from the marker precisely when the grade came back
+`OK`* — so its ledger row looked like proof the grader worked. That row was used
+to argue `:dz_ps_scan` was fine. It never supported that: it is equally
+consistent with the grader raising nothing. **A backstop that fires on the
+failure makes the failure invisible; treat "the backstop's row exists" as
+evidence the primary path FAILED, never that it worked.**
+
+So: **read a helper's output through a file and `set /p`**, the marker idiom
+already used everywhere else. No backticks, no `cmd /c`, no quote stripping.
+
+**And never default a grade to `OK`.** `DZ_BLKSEV` now starts at `DZ_NOGRADE`;
+if no grade is read the sentinel survives and is declared an `AUDITGAP`. An `OK`
+default made a broken grader indistinguishable from a clean block — the same
+mistake `block_sev` once made by returning `OK` on an unreadable file.
+
+Measured, not argued: on a runner, against the same file, the bare-relative
+invocation graded `WARNING` and the quoted-absolute one graded `OK`.
+
+`tests/assert_printed_findings_raised.ps1` is the gate. It asserts what
+`verdict_audit` deliberately cannot — that a printed finding reaches the ledger
+under its own **section AND technique**, not merely its section's. Curated
+contracts, one per case confirmed by hand, so aggregate blocks (`:dz_ps_scan`
+raises once for several printed lines) produce no false positives.
+
 ### One severity vocabulary: `[CRITICAL]` and `[WARNING]`, never `[WARN]` (REQUIRED — enforced by lint)
 
 All three gates above read the tag to decide whether a line is a finding, and
