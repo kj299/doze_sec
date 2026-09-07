@@ -79,13 +79,19 @@ function Get-EmittedCommands {
         $t = $t.Substring(5)
         $t = [regex]::Replace($t, '\s*>>\s*"%PSRUN%"\s*$', '')
         $t = Expand-CmdEscapes $t
-        # Strip the trigger so every rule is exercised. Two shapes exist:
-        # the prose form `if($joined -match '...'){` and the ledger form
-        # `if(led '...' '...' '...' '...'){`. The closing-brace strip below is
-        # unconditional, so a trigger shape this does NOT match would leave an
-        # unbalanced brace and the child runner would fail to parse -- which
-        # surfaces as the misleading "produced NO commands".
-        $t = [regex]::Replace($t, '^if\((?:\$\w+ -match|led )[^{]*?\)\{', '')
+        # Strip the trigger so every rule is exercised. Three shapes exist:
+        # the prose form `if($joined -match '...'){`, the ledger form
+        # `if(led '...' '...' '...' '...'){`, and the compound
+        # `if(($joined -match '...') -or (led ...)){` used where a fix must not
+        # be lost while its ledger raise is still broken. The optional leading
+        # `(` is what admits the third; the lazy `[^{]*?\)` then stops at the
+        # last `)` before the brace, so all three strip cleanly.
+        # The closing-brace strip below is unconditional, so a trigger shape
+        # this does NOT match would leave an unbalanced brace and the child
+        # runner would fail to parse -- which surfaces as the misleading
+        # "produced NO commands". That is exactly what happened when the
+        # compound shape was first introduced, and why this lint caught it.
+        $t = [regex]::Replace($t, '^if\(\(?(?:\$\w+ -match|led )[^{]*?\)\{', '')
         if ($t -match '^\s*if\(') { $bad += ("unrecognised trigger shape (the strip below will unbalance it): {0}" -f $t.Substring(0, [Math]::Min(90, $t.Length))) }
         $t = [regex]::Replace($t, '\}\s*$', '')
         $rules += $t.Trim()

@@ -1254,6 +1254,36 @@ jobs:
           Write-Host "attack_matrix.ps1 OK (incl. empty-scan guard)"
           exit 0
 
+      - name: assert_printed_findings_raised.ps1 -SelfTest (a printed finding must reach the ledger under its own technique)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = (.\tests\assert_printed_findings_raised.ps1 -SelfTest) -join "`n"
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw 'assert_printed_findings_raised self-test failed' }
+          $n = @($out -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($n -lt 8) { throw "assert_printed_findings_raised self-test ran only $n case(s) -- it is not asserting what it claims" }
+          # It must FAIL on a report that prints the finding with no matching
+          # ledger row -- that is the bug it exists for, and a guard that cannot
+          # fail is not a guard.
+          $rep = Join-Path $env:TEMP ("dz_pfr_rep_{0}.txt" -f $PID)
+          $led = [System.IO.Path]::ChangeExtension($rep, '.ledger')
+          '[WARNING] Sticky Keys shortcut ENABLED (Shift x5 activates at login screen)' | Set-Content -LiteralPath $rep -Encoding ASCII
+          'WARNING|13|T1486|System drive not encrypted with BitLocker' | Set-Content -LiteralPath $led -Encoding ASCII
+          .\tests\assert_printed_findings_raised.ps1 -Report $rep | Write-Host
+          if ($LASTEXITCODE -eq 0) { throw 'a printed finding with no matching ledger row did NOT fail the assertion' }
+          # ...and pass once the row is there.
+          @('WARNING|13|T1486|x','WARNING|13|T1546.008|Sticky Keys shortcut enabled') | Set-Content -LiteralPath $led -Encoding ASCII
+          .\tests\assert_printed_findings_raised.ps1 -Report $rep | Write-Host
+          if ($LASTEXITCODE -ne 0) { throw 'a correctly raised finding was reported as unraised' }
+          # A missing ledger is a failure, not a silent pass.
+          Remove-Item $led -Force
+          .\tests\assert_printed_findings_raised.ps1 -Report $rep | Write-Host
+          if ($LASTEXITCODE -eq 0) { throw 'a missing ledger passed -- nothing could be checked, which is not the same as nothing being wrong' }
+          Remove-Item $rep -Force -EA SilentlyContinue
+          Write-Host "assert_printed_findings_raised.ps1 OK ($n self-test cases + 3 real-file cases)"
+          exit 0
+
       - name: block_sev.ps1 (severity read-back that :dz_ps_scan depends on)
         shell: powershell
         run: |
@@ -1805,6 +1835,16 @@ jobs:
           rem same ledger, and nothing else asserts that, so it would drift back
           rem silently. Compared on the real report a real cmd.exe just produced.
           powershell -NoProfile -ExecutionPolicy Bypass -File tests\assert_header_matches_ledger.ps1 -Report "%REP%" || exit /b 1
+          rem A PRINTED FINDING MUST REACH THE LEDGER UNDER ITS OWN TECHNIQUE.
+          rem verdict_audit asks only whether the SECTION raised anything, which is
+          rem the right question for it: :dz_ps_scan deliberately raises once for a
+          rem block printing several lines, so it cannot compare counts. That gap is
+          rem how Sticky Keys printed a WARNING in Section 13, was covered by the
+          rem BitLocker row, and reached neither FINDINGS COUNTED, the exit code nor
+          rem the remediation script. This asserts the curated cases by section AND
+          rem technique. The runner has the Sticky Keys shortcut enabled, so this
+          rem exercises the real path rather than a fixture.
+          powershell -NoProfile -ExecutionPolicy Bypass -File tests\assert_printed_findings_raised.ps1 -Report "%REP%" || exit /b 1
           echo Completed end-to-end through Section 18 and the exit handler.
           exit /b 0
 
