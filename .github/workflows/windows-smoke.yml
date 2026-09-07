@@ -1284,50 +1284,6 @@ jobs:
           Write-Host "assert_printed_findings_raised.ps1 OK ($n self-test cases + 3 real-file cases)"
           exit 0
 
-      - name: "DIAGNOSTIC: reproduce the Sticky Keys block through the whole :dz_ps_scan pipeline"
-        shell: cmd
-        run: |
-          rem The owner's 2026-09-06 21:59 report printed
-          rem   [WARNING] Sticky Keys shortcut ENABLED (Shift x5 activates at login screen)
-          rem in Section 13 and the ledger got no 13/T1546.008 row, so the finding
-          rem reached neither FINDINGS COUNTED, the exit code nor the remediation
-          rem script. block_sev grades those two lines WARNING when its algorithm is
-          rem simulated, and :dz_ps_scan raised elsewhere in that same run, so the
-          rem cause is not visible by inspection.
-          rem
-          rem This rebuilds the EXACT block the bat stages and runs it through the
-          rem same three steps :dz_ps_scan performs -- write %PSRUN%, run it into a
-          rem file, grade that file -- printing what each step produced. It is a
-          rem diagnostic, not a permanent gate: it comes out once the cause is known.
-          setlocal EnableDelayedExpansion
-          set "PSRUN=%TEMP%\dz_diag_psrun.ps1"
-          set "DZ_BLK=%TEMP%\dz_diag_blk.txt"
-          echo $stickyFlags = (Get-ItemProperty 'HKCU:\Control Panel\Accessibility\StickyKeys' -Name Flags -EA SilentlyContinue).Flags > "%PSRUN%"
-          echo $utilFlags   = (Get-ItemProperty 'HKCU:\Control Panel\Accessibility\UtilityManager' -Name Flags -EA SilentlyContinue).Flags >> "%PSRUN%"
-          echo if ($null -ne $stickyFlags) { >> "%PSRUN%"
-          echo   if (($stickyFlags -band 0x04) -gt 0) { >> "%PSRUN%"
-          echo     Write-Output '[WARNING] Sticky Keys shortcut ENABLED (Shift x5 activates at login screen)' >> "%PSRUN%"
-          echo     Write-Output '       Disable: Settings ^> Accessibility ^> Keyboard ^> Sticky Keys shortcut OFF' >> "%PSRUN%"
-          echo   } else { Write-Output '[OK] Sticky Keys shortcut disabled (sethc.exe not triggerable at login)' } >> "%PSRUN%"
-          echo } else { Write-Output '[INFO] Sticky Keys flags not set in registry (default: shortcut enabled on fresh installs)' } >> "%PSRUN%"
-          echo ---- the staged %%PSRUN%% ----
-          type "%PSRUN%"
-          powershell -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" > "%DZ_BLK%" 2>&1
-          echo ---- the block output that block_sev reads ----
-          type "%DZ_BLK%"
-          echo ---- byte size of that file ----
-          for %%A in ("%DZ_BLK%") do echo size=%%~zA
-          set "SEV=OK"
-          for /f "usebackq delims=" %%s in (`powershell -NoProfile -ExecutionPolicy Bypass -File tools\block_sev.ps1 -Path "%DZ_BLK%" 2^>nul`) do set "SEV=%%s"
-          echo ---- grade returned by block_sev ----
-          echo SEV=[!SEV!]
-          rem The registry state, so a runner where the shortcut is OFF is not
-          rem mistaken for a grading failure.
-          powershell -NoProfile -Command "'StickyKeys Flags = ' + [string](Get-ItemProperty 'HKCU:\Control Panel\Accessibility\StickyKeys' -Name Flags -EA SilentlyContinue).Flags"
-          del "%PSRUN%" "%DZ_BLK%" 2>nul
-          endlocal
-          exit /b 0
-
       - name: block_sev.ps1 (severity read-back that :dz_ps_scan depends on)
         shell: powershell
         run: |
@@ -2168,3 +2124,56 @@ jobs:
           name: noadmin-smoke-output
           path: noadmin-smoke-output\*
           if-no-files-found: ignore
+
+  stickykeys-diagnostic:
+    name: "DIAGNOSTIC (temporary): why the Sticky Keys block does not raise"
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the Sticky Keys block through the whole :dz_ps_scan pipeline
+        shell: cmd
+        run: |
+          rem TEMPORARY. The owner's 2026-09-06 21:59 report printed
+          rem   [WARNING] Sticky Keys shortcut ENABLED (Shift x5 activates at login screen)
+          rem in Section 13 and no 13/T1546.008 row reached the ledger, so the
+          rem finding is in neither FINDINGS COUNTED, the exit code, nor the
+          rem remediation script. block_sev grades those two lines WARNING when
+          rem its algorithm is simulated, and :dz_ps_scan raised elsewhere in the
+          rem same run, so the cause is not visible by inspection.
+          rem
+          rem This is its own job so its log is short enough to read in full --
+          rem inside helpers-ps51 it sat behind several hundred driver_audit
+          rem certificate warnings. It is deleted once the cause is known.
+          setlocal EnableDelayedExpansion
+          set "PSRUN=%TEMP%\dz_diag_psrun.ps1"
+          set "DZ_BLK=%TEMP%\dz_diag_blk.txt"
+          echo $stickyFlags = (Get-ItemProperty 'HKCU:\Control Panel\Accessibility\StickyKeys' -Name Flags -EA SilentlyContinue).Flags > "%PSRUN%"
+          echo $utilFlags   = (Get-ItemProperty 'HKCU:\Control Panel\Accessibility\UtilityManager' -Name Flags -EA SilentlyContinue).Flags >> "%PSRUN%"
+          echo if ($null -ne $stickyFlags) { >> "%PSRUN%"
+          echo   if (($stickyFlags -band 0x04) -gt 0) { >> "%PSRUN%"
+          echo     Write-Output '[WARNING] Sticky Keys shortcut ENABLED (Shift x5 activates at login screen)' >> "%PSRUN%"
+          echo     Write-Output '       Disable: Settings ^> Accessibility ^> Keyboard ^> Sticky Keys shortcut OFF' >> "%PSRUN%"
+          echo   } else { Write-Output '[OK] Sticky Keys shortcut disabled (sethc.exe not triggerable at login)' } >> "%PSRUN%"
+          echo } else { Write-Output '[INFO] Sticky Keys flags not set in registry (default: shortcut enabled on fresh installs)' } >> "%PSRUN%"
+          echo ==== 1. the staged PSRUN ====
+          type "%PSRUN%"
+          powershell -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" > "%DZ_BLK%" 2>&1
+          echo ==== 2. the block output block_sev reads ====
+          type "%DZ_BLK%"
+          for %%A in ("%DZ_BLK%") do echo ==== 3. that file is %%~zA bytes ====
+          set "SEV=OK"
+          for /f "usebackq delims=" %%s in (`powershell -NoProfile -ExecutionPolicy Bypass -File tools\block_sev.ps1 -Path "%DZ_BLK%" 2^>nul`) do set "SEV=%%s"
+          echo ==== 4. grade returned by block_sev: [!SEV!] ====
+          echo ==== 5. this machine's StickyKeys Flags ====
+          powershell -NoProfile -Command "'Flags = ' + [string](Get-ItemProperty 'HKCU:\Control Panel\Accessibility\StickyKeys' -Name Flags -EA SilentlyContinue).Flags"
+          del "%PSRUN%" "%DZ_BLK%" 2>nul
+          if /i not "!SEV!"=="WARNING" (
+            echo VERDICT: block_sev graded it [!SEV!], not WARNING -- the grader IS the cause.
+            endlocal
+            exit /b 1
+          )
+          echo VERDICT: block_sev graded it WARNING here, so the grader is NOT the cause -- look between block_sev and :dz_finding.
+          endlocal
+          exit /b 1
