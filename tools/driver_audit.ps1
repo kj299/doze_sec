@@ -203,13 +203,30 @@ if ($SelfTest) {
     $v = Get-DriverVerdict -Path $normal -Hash 'aa' -Sig (FakeSig 'NotSigned')
     T 'an unsigned driver in the drivers directory is a WARNING' `
       ($v.Sev -eq 'WARNING') "$($v.Sev)"
-    $msg = ($v.Why -join '; ')
-    # tests/benign_corpus.txt [driver-catalog-signed-inbox] keys on this exact
-    # wording. Reword the message and the corpus entry silently stops matching
-    # -- the corpus note says so in as many words. This asserts the contract.
-    $corpusRx = 'unsigned or invalid Authenticode signature \(NotSigned\) on a kernel driver'
-    T 'the emitted message still matches the benign_corpus signature regex' `
-      ($msg -match $corpusRx) $msg
+    # A benign_corpus entry keys on a regex matched against report lines, so
+    # rewording what this tool emits silently decouples the entry -- the corpus
+    # header says as much. The FIRST version of this case hard-coded the regex,
+    # which made it stale the moment the entry it named was removed: it went on
+    # passing while its stated reason had become false. So read the regex OUT of
+    # the corpus at test time. Now renaming, rewording or removing the entry
+    # fails here loudly instead of leaving a test guarding nothing.
+    $corpusFile = Join-Path (Split-Path -Parent (Split-Path -Parent $PSCommandPath)) 'tests/benign_corpus.txt'
+    $corpusRx = ''
+    if (Test-Path -LiteralPath $corpusFile) {
+        $inEntry = $false
+        foreach ($ln in (Get-Content -LiteralPath $corpusFile)) {
+            if ($ln -match '^\s*\[([^\]]+)\]') { $inEntry = ($Matches[1] -eq 'driver-signed-byovd-name'); continue }
+            if ($inEntry -and $ln -match '^\s*signature\s*=\s*(.+?)\s*$') { $corpusRx = $Matches[1]; break }
+        }
+    }
+    # Missing file or missing entry is a FAILURE, never a skip: a contract test
+    # that quietly passes when it cannot find its contract is worse than absent.
+    T 'the [driver-signed-byovd-name] corpus entry and its signature regex exist' `
+      ([bool]$corpusRx) "corpusFile=$corpusFile"
+    $vb = Get-DriverVerdict -Path 'C:\Windows\System32\drivers\vboxdrv.sys' -Hash 'aa' -Sig (FakeSig 'Valid')
+    $bmsg = ($vb.Why -join '; ')
+    T 'the emitted message still matches that corpus signature regex' `
+      ($corpusRx -and ($bmsg -match $corpusRx)) "rx=[$corpusRx] msg=[$bmsg]"
 
     $v = Get-DriverVerdict -Path $normal -Hash 'aa' -Sig $null
     T 'an unreadable signature is a WARNING and says unreadable' `
