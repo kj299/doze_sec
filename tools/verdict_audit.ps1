@@ -106,7 +106,10 @@ foreach ($ln in $lines) {
         $curSec = 0; $secFindings = 0; $firstLine = ''
         continue
     }
-    if ($ln -match '^\s*\[(CRITICAL|WARNING)\]') {
+    # Short spellings count: a real report printed '[WARN] Sticky Keys shortcut
+    # ENABLED' in Section 13 and this audit read the section as having printed
+    # nothing, so the very gap it exists to declare went undeclared.
+    if ($ln -match '^\s*\[(CRITICAL|CRIT|WARNING|WARN)\]') {
         $skip = $false
         foreach ($e in $exempt) { if ($ln.IndexOf($e, [StringComparison]::OrdinalIgnoreCase) -ge 0) { $skip = $true; break } }
         if ($skip) { continue }

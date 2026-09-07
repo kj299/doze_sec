@@ -2786,7 +2786,7 @@ echo     } else { >> "%PSRUN%"
 echo       $bad += $b >> "%PSRUN%"
 echo       Write-Output ('[CRITICAL] '+$b+' - Signature: '+$sig.Status+' / '+$sig.SignerCertificate.Subject) >> "%PSRUN%"
 echo     } >> "%PSRUN%"
-echo   } else { Write-Output ('[WARN] '+$b+' - not found in System32') } >> "%PSRUN%"
+echo   } else { Write-Output ('[WARNING] '+$b+' - not found in System32') } >> "%PSRUN%"
 echo } >> "%PSRUN%"
 echo if ($bad.Count -gt 0) { Write-Output '[^^!^^!] Replace tampered binaries: sfc /scannow or restore from WinRE.' } >> "%PSRUN%"
 call :dz_ps_scan 13 T1546.008 "Accessibility binary is not validly Microsoft-signed - possible WinRE file swap"
@@ -2798,11 +2798,11 @@ echo $stickyFlags = (Get-ItemProperty 'HKCU:\Control Panel\Accessibility\StickyK
 echo $utilFlags   = (Get-ItemProperty 'HKCU:\Control Panel\Accessibility\UtilityManager' -Name Flags -EA SilentlyContinue).Flags >> "%PSRUN%"
 echo if ($null -ne $stickyFlags) { >> "%PSRUN%"
 echo   if (($stickyFlags -band 0x04) -gt 0) { >> "%PSRUN%"
-echo     Write-Output '[WARN] Sticky Keys shortcut ENABLED (Shift x5 activates at login screen)' >> "%PSRUN%"
+echo     Write-Output '[WARNING] Sticky Keys shortcut ENABLED (Shift x5 activates at login screen)' >> "%PSRUN%"
 echo     Write-Output '       Disable: Settings ^> Accessibility ^> Keyboard ^> Sticky Keys shortcut OFF' >> "%PSRUN%"
 echo   } else { Write-Output '[OK] Sticky Keys shortcut disabled (sethc.exe not triggerable at login)' } >> "%PSRUN%"
 echo } else { Write-Output '[INFO] Sticky Keys flags not set in registry (default: shortcut enabled on fresh installs)' } >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+call :dz_ps_scan 13 T1546.008 "Sticky Keys shortcut enabled - Shift x5 triggers sethc.exe at the logon screen"
 echo.>> "%REPORT%"
 
 echo --- Office Macro Policy (T1204.002 - malicious macro documents) --->> "%REPORT%"
@@ -4339,7 +4339,22 @@ echo. >> "%PSRUN%"
 
 :: ===== COMPOSE AND OUTPUT SUMMARY ====================================
 echo $bar = '#' * 70 >> "%PSRUN%"
-echo $status = if($cr -gt 0){'ACTION REQUIRED  --  '+$cr+' CRITICAL  /  '+$wa+' WARNING  /  '+$pa+' PASSED'}elseif($wa -gt 0){'REVIEW RECOMMENDED  --  0 CRITICAL  /  '+$wa+' WARNING  /  '+$pa+' PASSED'}else{'NO ISSUES FOUND IN '+$pa+' CHECKS  --  not a statement that the system is clean'} >> "%PSRUN%"
+rem THE HEADER DERIVES FROM THE LEDGER, not from the tile counters.
+rem A field report headed "0 CRITICAL / 3 WARNING / 30 PASSED" and ended
+rem "FINDINGS COUNTED: 7". The tiles below are a curated highlights view, so
+rem the counters ck increments describe the DASHBOARD, not the audit -- and
+rem the divergence ran both ways: one tile WARNING (Sticky Keys) was not a
+rem counted finding at all, and five counted findings had no tile. A reader
+rem cannot act on a tool whose first line disagrees with its last one, so the
+rem CRITICAL and WARNING halves now come from the same ledger that feeds
+rem FINDINGS COUNTED and the exit code. The third number stays a tile count
+rem and now says so.
+rem The ledger load is hoisted here from the trigger block below, which still
+rem needs it; it is loaded once and both uses read the same array.
+echo $ldg=@(); if($lgp -and (Test-Path -LiteralPath $lgp^)){ $ldg=@(Get-Content -LiteralPath $lgp -EA SilentlyContinue^) } >> "%PSRUN%"
+echo $lc=@($ldg ^| Where-Object { $_ -like 'CRITICAL^|*' }^).Count >> "%PSRUN%"
+echo $lw=@($ldg ^| Where-Object { $_ -like 'WARNING^|*' }^).Count >> "%PSRUN%"
+echo $status = if($lc -gt 0){'ACTION REQUIRED  --  '+$lc+' CRITICAL  /  '+$lw+' WARNING  --  '+$pa+' DASHBOARD CHECKS PASSED'}elseif($lw -gt 0){'REVIEW RECOMMENDED  --  0 CRITICAL  /  '+$lw+' WARNING  --  '+$pa+' DASHBOARD CHECKS PASSED'}else{'NO FINDINGS COUNTED  --  '+$pa+' DASHBOARD CHECKS PASSED  --  not a statement that the system is clean'} >> "%PSRUN%"
 echo if($isAdmin -eq '0'){$status+='  /  '+$inf+' DEFERRED (admin required)'} >> "%PSRUN%"
 echo '' >> "%PSRUN%"
 echo $bar >> "%PSRUN%"
@@ -4396,7 +4411,6 @@ echo function addenforce($tag,$cmd,$undo){ remwrite $enf $tag $cmd $undo } >> "%
 rem Ledger-driven triggers. SECTION+CODE is NOT unique (9/T1562.001 is used
 rem twice), so a trigger also matches a substring of the MESSAGE -- which is a
 rem fixed literal at the call site, not rendered prose full of live values.
-echo $ldg=@(); if($lgp -and (Test-Path -LiteralPath $lgp^)){ $ldg=@(Get-Content -LiteralPath $lgp -EA SilentlyContinue^) } >> "%PSRUN%"
 echo function led($sev,$sec,$code,$msg){ [bool](@($ldg ^| Where-Object { $_ -like ($sev+'^|'+$sec+'^|'+$code+'^|*'^) -and $_ -like ('*'+$msg+'*'^) }^).Count^) } >> "%PSRUN%"
 echo $joined = ($r -join "`n") >> "%PSRUN%"
 rem LSASS PPL is deliberately NOT auto-queued: RunAsPPL=1 writes a UEFI variable that
@@ -4414,7 +4428,7 @@ echo if($joined -match 'UAC auto-elevates'){ addfix 'Restore UAC prompt on secur
 echo if($joined -match 'testsigning=Yes^|testsigning\s*=\s*Yes'){ addfix 'Disable test-signing (re-enforce driver signatures)' "bcdedit /set testsigning off" 'bcdedit /set testsigning on' } >> "%PSRUN%"
 echo if($joined -match 'PS Script Block Logging NOT'){ addfix 'Enable PowerShell Script Block Logging' "New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' -Force | Out-Null; Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' -Name EnableScriptBlockLogging -Value 1 -Type DWord -Force" 'Remove-ItemProperty -Path ''HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging'' -Name EnableScriptBlockLogging -EA SilentlyContinue' } >> "%PSRUN%"
 echo if($joined -match 'AppInit_DLLs set'){ addfix 'Clear AppInit_DLLs (remove DLL injection vector)' "Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows' -Name AppInit_DLLs -Value '' -Force; Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows' -Name LoadAppInit_DLLs -Value 0 -Type DWord -Force" '' } >> "%PSRUN%"
-echo if($joined -match 'Sticky Keys shortcut enabled'){ addfix 'Disable the Shift-x5 Sticky Keys shortcut (this user AND the logon screen)' 'foreach ($h in @(''HKCU:\Control Panel\Accessibility\StickyKeys'',''Registry::HKEY_USERS\.DEFAULT\Control Panel\Accessibility\StickyKeys'')) { $cur = (Get-ItemProperty -LiteralPath $h -Name Flags -EA SilentlyContinue).Flags; if ($null -ne $cur) { Set-ItemProperty -LiteralPath $h -Name Flags -Value ([string]([int]$cur -band -bnot 0x04)) -Force } }; Write-Host ''Sticky Keys itself is unchanged; only the Shift-x5 shortcut is off. Re-enable: Settings ^> Accessibility ^> Keyboard.''' 'foreach ($h in @(''HKCU:\Control Panel\Accessibility\StickyKeys'',''Registry::HKEY_USERS\.DEFAULT\Control Panel\Accessibility\StickyKeys'')) { $cur = (Get-ItemProperty -LiteralPath $h -Name Flags -EA SilentlyContinue).Flags; if ($null -ne $cur) { Set-ItemProperty -LiteralPath $h -Name Flags -Value ([string]([int]$cur -bor 0x04)) -Force } }' } >> "%PSRUN%"
+echo if(led 'WARNING' '13' 'T1546.008' 'Sticky Keys shortcut enabled'){ addfix 'Disable the Shift-x5 Sticky Keys shortcut (this user AND the logon screen)' 'foreach ($h in @(''HKCU:\Control Panel\Accessibility\StickyKeys'',''Registry::HKEY_USERS\.DEFAULT\Control Panel\Accessibility\StickyKeys'')) { $cur = (Get-ItemProperty -LiteralPath $h -Name Flags -EA SilentlyContinue).Flags; if ($null -ne $cur) { Set-ItemProperty -LiteralPath $h -Name Flags -Value ([string]([int]$cur -band -bnot 0x04)) -Force } }; Write-Host ''Sticky Keys itself is unchanged; only the Shift-x5 shortcut is off. Re-enable: Settings ^> Accessibility ^> Keyboard.''' 'foreach ($h in @(''HKCU:\Control Panel\Accessibility\StickyKeys'',''Registry::HKEY_USERS\.DEFAULT\Control Panel\Accessibility\StickyKeys'')) { $cur = (Get-ItemProperty -LiteralPath $h -Name Flags -EA SilentlyContinue).Flags; if ($null -ne $cur) { Set-ItemProperty -LiteralPath $h -Name Flags -Value ([string]([int]$cur -bor 0x04)) -Force } }' } >> "%PSRUN%"
 echo if($joined -match 'portproxy tunnel rules are ACTIVE'){ addfix 'Review netsh portproxy rules (LISTS ONLY -- reset would delete WSL/dev forwards too)' 'netsh interface portproxy show all; Write-Host ''Delete ONLY the rule you do not recognise: netsh interface portproxy delete v4tov4 listenport=^<port^> listenaddress=^<addr^>. WSL2 and Hyper-V port forwarding look identical to this IOC.''' '' } >> "%PSRUN%"
 echo if($joined -match 'WMI EventFilter subscriptions present'){ addfix 'Review non-default WMI EventFilter subscriptions (LISTS ONLY -- deletion is manual on purpose)' 'Get-CimInstance -Namespace root/subscription -ClassName __EventFilter -EA SilentlyContinue ^| Where-Object { $_.Name -notin @(''SCM Event Log Filter'',''BVTFilter'') } ^| Format-List Name,Query; Write-Host ''Review each filter above. A permanent WMI subscription is normal for management agents (ConfigMgr, Dell/HP/Lenovo, EDR). Delete one only after you know what registered it: Get-CimInstance -Namespace root/subscription -ClassName __EventFilter ^| Where-Object Name -eq ^<name^> ^| Remove-CimInstance''' '' } >> "%PSRUN%"
 echo if($joined -match 'Accessibility binary signature INVALID'){ addfix 'Restore corrupted system binaries' "sfc /scannow; DISM /Online /Cleanup-Image /RestoreHealth" '' } >> "%PSRUN%"

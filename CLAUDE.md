@@ -175,6 +175,61 @@ Checks whose miss would be silent also drop a marker as a backstop (the ASR
 block does, alongside its grade), raised only when the grade came back `OK`, so
 a correct grade never double-counts.
 
+### One severity vocabulary: `[CRITICAL]` and `[WARNING]`, never `[WARN]` (REQUIRED — enforced by lint)
+
+All three gates above read the tag to decide whether a line is a finding, and
+all three matched only the long spellings. So a check could print any severity
+it liked and stay invisible to every one of them, just by spelling the tag
+differently.
+
+A field run did exactly that. Section 13 printed
+`[WARN] Sticky Keys shortcut ENABLED (Shift x5 activates at login screen)`, from
+a staged block redirected straight into `%REPORT%` with no `:dz_ps_scan` and no
+marker — precisely what `lint_unraised_findings` exists to catch. The tag
+spelling is what hid the missing raise. The finding:
+
+- **printed** into the report;
+- **drove the dashboard tile** (a separate `ck 'WARN' ...` re-check);
+- **reached the remediation script the owner runs ELEVATED**, via an `addfix`
+  triggered off the dashboard prose rather than the ledger;
+
+and reached the **ledger, `FINDINGS COUNTED`, the section verdict and the exit
+code in none of them.** Section 13 read ISSUES FOUND only because BitLocker
+(T1486) happened to raise. This is the ASR-block story repeating in a new check.
+
+So: **`[CRITICAL]` and `[WARNING]` are the report's entire severity vocabulary.**
+`tools/lint_report_echo.ps1` fails on `[WARN]`/`[CRIT]`/`[ERROR]`/`[FAIL]`/
+`[DANGER]`/`[ALERT]` written into `%REPORT%` **or `%PSRUN%`** — a staged block's
+output is report text. Console-only `echo [WARN] ...` status lines are untouched
+(≈10 of them in the INIT and CTI paths); the rule is scoped by redirection
+target, and a self-test case proves it stays quiet on them, because a lint people
+learn to work around is worse than no lint.
+
+`block_sev`, `lint_unraised_findings` and `verdict_audit` now also *grade* the
+short forms. That is the backstop, not the rule: banning them at the source is
+what stops a new spelling going ungraded again.
+
+**`verdict_audit` could not have caught this, and should not be changed to.**
+Its rule is per-SECTION: Section 13 raised *something*, so the section counted as
+covered. Comparing printed-vs-raised counts instead would be wrong —
+`:dz_ps_scan` deliberately raises **once** for a block that prints several
+severity lines, and per-item lines whose aggregate raise is elsewhere are already
+a documented allowlist category. The static gates are the right catchers here.
+
+**A fix triggers off the LEDGER, not the dashboard prose.** The Sticky Keys
+`addfix` matched `$joined -match 'Sticky Keys shortcut enabled'`, so it queued an
+elevated command for a finding the tool did not count. Use
+`if(led 'WARNING' '<section>' '<technique>' '<message substring>')`.
+
+**The summary header derives from the ledger too.** It read
+`0 CRITICAL / 3 WARNING / 30 PASSED` while the same report ended
+`FINDINGS COUNTED: 7` — the counters `ck` increments describe the DASHBOARD, and
+the divergence ran both ways (one tile WARNING was not a counted finding; five
+counted findings had no tile). The CRITICAL and WARNING halves now come from the
+same ledger that feeds `FINDINGS COUNTED` and the exit code; the third number
+stays a tile count and says so. A reader cannot act on a tool whose first line
+disagrees with its last.
+
 ## The report is the product (REQUIRED — enforced by lint)
 
 A line the report *prints* must actually reach the report, and a command it
