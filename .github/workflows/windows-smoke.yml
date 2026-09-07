@@ -1799,6 +1799,12 @@ jobs:
           rem in the selftest quarantine; the harness jobs assert the inverse.
           findstr /c:"TEST RUN -- every finding below was planted" "%REP%" >nul && ( echo REAL RUN CARRIES THE TEST BANNER & exit /b 1 )
           echo %REP% | findstr /i /c:"\selftest\" >nul && ( echo REAL RUN LANDED IN THE SELFTEST QUARANTINE & exit /b 1 )
+          rem THE HEADER MUST AGREE WITH FINDINGS COUNTED. A field report headed
+          rem "0 CRITICAL / 3 WARNING / 30 PASSED" and ended "FINDINGS COUNTED: 7",
+          rem because the header counted dashboard TILES. It now derives from the
+          rem same ledger, and nothing else asserts that, so it would drift back
+          rem silently. Compared on the real report a real cmd.exe just produced.
+          powershell -NoProfile -ExecutionPolicy Bypass -File tests\assert_header_matches_ledger.ps1 -Report "%REP%" || exit /b 1
           echo Completed end-to-end through Section 18 and the exit handler.
           exit /b 0
 
