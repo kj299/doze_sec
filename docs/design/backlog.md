@@ -129,11 +129,36 @@ had no injection point at all, so the rule most likely to be wrong was the only
 one no test could exercise. It is now a pure `Get-DriverVerdict` behind
 injectable probes with an eight-case `-SelfTest` covering both directions.
 
-**Still open:** *why* that one file has no catalog. Corruption, a third-party
-or OEM package, an odd servicing outcome and tampering all produce the same
-"no catalog" answer, and separating them needs evidence from the machine
-(hash, version resource, DriverStore comparison, `sfc /VERIFYFILE`) rather than
-another theory.
+**ANSWERED 2026-09-07, same day: the file was CORRUPT, and Windows agrees.**
+
+`sfc /VERIFYFILE` on that machine returned *Windows Resource Protection found
+integrity violations*, and `CBS.log` names it in Microsoft's own words:
+
+```
+15:24:17  DEPLOY [Pnp] Corrupt file:  C:\WINDOWS\system32\drivers\bthmodem.sys
+   ... six such entries across roughly an hour ...
+16:17:40  DEPLOY [Pnp] Corrupt file:  C:\WINDOWS\System32\drivers\bthmodem.sys
+16:17:40  DEPLOY [Pnp] Repaired file: C:\WINDOWS\System32\drivers\bthmodem.sys
+```
+
+After the repair the same file reports `Status=Valid`, `SignatureType=Catalog`,
+`IsOSBinary=True`.
+
+**The size never changed: 114,688 bytes before and after, with a different
+SHA256** (`896899d1819e08ed...` corrupt, `B4DD5BDF4119C92A...` repaired). Equal
+length with different content is the shape of IN-PLACE corruption -- a damaged
+extent -- rather than a file substituted for another. Consistent with the rest
+of the evidence, and with the machine carrying an Intel RAID 0 volume, which
+has no parity to reconstruct a bad block from.
+
+**Exposure throughout was nil, and the audit could have said so.** That machine
+runs HVCI / Memory Integrity with Secure Boot in user mode and
+`nointegritychecks` unset, so an unsigned kernel driver cannot load at all; the
+BTHMODEM service was `STOPPED` with exit code 1077 (never started).
+
+**So the driver audit was correct on every count**, and the three documents
+that called it a false positive were wrong. It detected genuine corruption of a
+system binary hours before anything else on the machine acted on it.
 
 **The lesson worth keeping:** this entry asserted a mechanism, three documents
 repeated it, and a fix was designed against it -- and one measurement on a real

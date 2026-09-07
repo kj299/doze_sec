@@ -6,6 +6,28 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Confirmed: the driver audit caught real corruption of a system binary
+The `bthmodem.sys` warning that three documents called a false positive was
+true, and Windows says so in its own words. `sfc /VERIFYFILE` returned
+*Windows Resource Protection found integrity violations*, and `CBS.log` logged
+`DEPLOY [Pnp] Corrupt file: C:\WINDOWS\system32\drivers\bthmodem.sys` six
+times across roughly an hour before `DEPLOY [Pnp] Repaired file` for the same
+path. After the repair the file reports `Status=Valid`,
+`SignatureType=Catalog`, `IsOSBinary=True`.
+
+The size was 114,688 bytes before and after, with a different SHA256 —
+equal length, different content, which is in-place corruption of an extent
+rather than one file substituted for another. The machine carries an Intel
+RAID 0 volume, which has no parity to rebuild a bad block from.
+
+Exposure was nil throughout: HVCI / Memory Integrity was running with Secure
+Boot in user mode, so an unsigned kernel driver could not load, and the
+BTHMODEM service was `STOPPED` with exit code 1077 — never started.
+
+**The audit detected genuine corruption of a kernel binary hours before
+anything else on the machine acted on it**, and the fix that had been designed
+for this "false positive" would have silenced exactly that warning.
+
 ### Confirmed on a real machine: the Sticky Keys ledger raise works, debt retired
 The Sticky Keys finding now reaches the findings ledger on the owner's own
 Windows 11 machine, not merely on a CI runner:
