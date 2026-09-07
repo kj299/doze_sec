@@ -6,11 +6,18 @@
 # hypothesis. See the header of tests/driver_catalog_probe.ps1 for the
 # question and the competing explanations.
 #
-# workflow_dispatch only, one job: this must not bill the six-job smoke suite,
-# and a diagnostic that runs on every push is a diagnostic nobody reads.
+# One job only: this must not bill the six-job smoke suite. It triggers on
+# push to the working branch because a workflow_dispatch-only file cannot be
+# dispatched until it exists on the DEFAULT branch, and this one is never
+# going to main -- it is deleted as soon as it has answered.
 name: driver-catalog-probe (TEMPORARY)
 
 on:
+  push:
+    branches: [claude/code-review-3qcjyn]
+    paths:
+      - '.github/workflows/driver-catalog-probe.yml'
+      - 'tests/driver_catalog_probe.ps1'
   workflow_dispatch:
 
 jobs:
