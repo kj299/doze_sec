@@ -100,10 +100,39 @@ function Invoke-Lint {
         $lines = Get-Content -LiteralPath $bat
         for ($i = 0; $i -lt $lines.Count; $i++) {
             $split = Split-EchoLine $lines[$i]
-            if ($null -eq $split -or $split.Target -ne 'REPORT') { continue }
-            $nEcho++
+            if ($null -eq $split) { continue }
             $ln = $i + 1
             $body = [string]$split.Body
+
+            # 0 -- the severity tag must be spelled the way the graders read it.
+            #
+            # This one covers %PSRUN% as well as %REPORT%, because a staged
+            # block's output IS report text. A real audit printed
+            #   Write-Output '[WARN] Sticky Keys shortcut ENABLED ...'
+            # into Section 13. block_sev.ps1, lint_unraised_findings.ps1 and
+            # verdict_audit.ps1 all matched only the long spelling, so all
+            # three went blind at once: the block graded OK, the finding never
+            # reached the ledger, FINDINGS COUNTED or the exit code -- while
+            # the dashboard showed it as a WARNING and the remediation script
+            # the owner runs ELEVATED carried a fix for it. The tag spelling
+            # is what hid the missing raise.
+            #
+            # The graders now accept the short forms too, but accepting them
+            # is the backstop; the rule is that they must not be written. One
+            # spelling means a new tag can never quietly go ungraded again.
+            # Console-only 'echo [WARN] ...' status lines are untouched -- they
+            # have no redirection target, so Split-EchoLine already ignores
+            # them, and there are around ten of them in the INIT and CTI paths.
+            if ($split.Target -eq 'REPORT' -or $split.Target -eq 'PSRUN') {
+                $tm = [regex]::Match($body, '\[(WARN|CRIT|ERROR|FAIL|DANGER|ALERT)\]')
+                if ($tm.Success) {
+                    $canon = if ($tm.Groups[1].Value -eq 'CRIT') { 'CRITICAL' } else { 'WARNING' }
+                    $bad += "${name}:${ln}: writes '[$($tm.Groups[1].Value)]' into %$($split.Target)% -- use '[$canon]'. Only the long spellings are the report's severity vocabulary; a short one is graded by nothing and reaches neither the ledger nor the exit code."
+                }
+            }
+
+            if ($split.Target -ne 'REPORT') { continue }
+            $nEcho++
 
             # 1 -- the redirect must not be swallowed by an open quote.
             if ((($lines[$i].ToCharArray() | Where-Object { $_ -eq '"' }).Count % 2) -ne 0) {
@@ -168,7 +197,16 @@ if ($SelfTest) {
            To   = '"Get-MpPreference).ExclusionProcess"' },
         @{ Name = 'printed PowerShell command does not parse'
            From = "(Get-ItemProperty 'HKCU:\Control Panel\Accessibility\StickyKeys' -Name Flags).Flags"
-           To   = "(Get-ItemProperty 'HKCU:\Control Panel\Accessibility\StickyKeys -Name Flags).Flags" }
+           To   = "(Get-ItemProperty 'HKCU:\Control Panel\Accessibility\StickyKeys -Name Flags).Flags" },
+        @{ Name = 'short severity tag [WARN] on the %PSRUN% path'
+           From = "Write-Output '[WARNING] Sticky Keys shortcut ENABLED"
+           To   = "Write-Output '[WARN] Sticky Keys shortcut ENABLED" },
+        @{ Name = 'short severity tag [CRIT] on the %PSRUN% path'
+           From = "('[WARNING] '+`$b+' - not found in System32')"
+           To   = "('[CRIT] '+`$b+' - not found in System32')" },
+        @{ Name = 'short severity tag [ERROR] on the %REPORT% path'
+           From = 'echo [WARNING] C2 domain IOC matches found in DNS cache above.'
+           To   = 'echo [ERROR] C2 domain IOC matches found in DNS cache above.' }
     )
     $failures = 0
     foreach ($eol in @('LF', 'CRLF')) {
@@ -196,9 +234,34 @@ if ($SelfTest) {
             }
         }
     }
+
+    # NEGATIVE CASE. The severity-tag rule must fire on the report path and
+    # stay SILENT on a console-only status line. There are about ten of those
+    # in the INIT and CTI paths ('echo  [WARN] No CTI skill file was found'),
+    # they are not report text, and a lint that flagged them would be worked
+    # around rather than obeyed.
+    if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
+    New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+    foreach ($f in @('doze_sec.bat', 'doze_sec_noAdmin.bat')) {
+        $src = Get-Content -LiteralPath (Join-Path $Root $f) -Raw
+        $ins = "echo  [WARN] console-only status line, no redirection target`r`n"
+        $anchor = 'echo.>> "%REPORT%"'
+        $at = $src.IndexOf($anchor)
+        if ($at -lt 0) { Write-Output "[FAIL] negative case: anchor not found in $f"; $failures++ }
+        else { $src = $src.Substring(0, $at) + $ins + $src.Substring($at) }
+        [System.IO.File]::WriteAllText((Join-Path $tmp $f), $src)
+    }
+    $neg = Invoke-Lint -RepoRoot $tmp
+    if ($neg.Bad.Count -gt 0) {
+        Write-Output "[FAIL] a console-only [WARN] status line was flagged: $($neg.Bad[0])"
+        $failures++
+    } else {
+        Write-Output '[OK]   console-only [WARN] status line is NOT flagged (the rule is scoped to %REPORT% and %PSRUN%)'
+    }
+
     if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
     if ($failures) { Write-Output "[FAIL] $failures self-test mutation(s) did not fail as required"; exit 1 }
-    Write-Output "[OK] all $($mutations.Count) mutations fail this lint for the right reason, on both LF and CRLF checkouts."
+    Write-Output "[OK] all $($mutations.Count) mutations fail this lint for the right reason on both LF and CRLF checkouts, and a console-only [WARN] does not."
     exit 0
 }
 

@@ -79,12 +79,21 @@ function Test-Allowed {
 #
 # Staged PowerShell is a one-liner soup -- the tag can sit anywhere inside an
 # if/else, a hashtable value or a string concat -- so any occurrence counts.
+# SHORT SPELLINGS COUNT. A staged block printed '[WARN] Sticky Keys shortcut
+# ENABLED' into Section 13 of a real report, redirected straight into
+# %REPORT% with no :dz_ps_scan and no marker -- exactly what this lint exists
+# to catch -- and this lint could not see it, because it matched only the long
+# spelling. The finding drove the dashboard tile and the remediation script the
+# owner runs elevated, and reached the ledger, FINDINGS COUNTED and the exit
+# code in none of them. tools/lint_report_echo.ps1 now bans the short forms on
+# the report path outright; matching them here too means a reintroduced one is
+# caught by the raise check as well, not just by the spelling check.
 function Test-StagedEmitsSeverity {
     param([string]$Line)
     $t = $Line.Trim()
     if ($t.StartsWith('::')) { return $false }
     if ($t -match '^rem(\s|$)') { return $false }
-    return ($t -match '\[CRITICAL\]|\[WARNING\]')
+    return ($t -match '\[(CRITICAL|CRIT)\]|\[(WARNING|WARN)\]')
 }
 #
 # A direct write is a whole line of report text, so the rule is the one
@@ -97,13 +106,13 @@ function Test-DirectEmitsSeverity {
     $t = $Line.Trim()
     if ($t.StartsWith('::')) { return $false }
     if ($t -match '^rem(\s|$)') { return $false }
-    if ($t -notmatch '\[CRITICAL\]|\[WARNING\]') { return $false }
+    if ($t -notmatch '\[(CRITICAL|CRIT)\]|\[(WARNING|WARN)\]') { return $false }
     if ($t -match 'dz_finding') { return $false }
     $p = $t
     $p = $p -replace '^\s*if\s+[^(]*\(\s*', ''          # if defined X (echo ...
     $p = $p -replace '^\s*if\s+\S+\s+\S+\s+\S+\s+', ''  # if "%X%"=="2" echo ...
     $p = $p -replace '^\s*echo\s*', ''
-    return ($p -match '^\[(CRITICAL|WARNING)\]')
+    return ($p -match '^\[(CRITICAL|CRIT|WARNING|WARN)\]')
 }
 
 $failures = @()

@@ -66,14 +66,24 @@ if ($true) {
             if (-not $t) { continue }
             # A line that opens with a non-severity tag is descriptive, not a
             # finding, no matter what it mentions later.
-            if ($t -match '^\[(OK|INFO|SKIPPED)\]') { continue }
-            if ($t -match '^\[CRITICAL\]') { $sev = 'CRITICAL'; break }
-            if ($t -match '^\[WARNING\]')  { $sev = 'WARNING'; continue }
+            if ($t -match '^\[(OK|INFO|SKIP|SKIPPED)\]') { continue }
+            # SHORT SPELLINGS COUNT TOO. A field report printed
+            # '[WARN] Sticky Keys shortcut ENABLED' into Section 13; this
+            # grader matched only [WARNING], so the block read OK, the finding
+            # never reached the ledger, FINDINGS COUNTED or the exit code --
+            # while the dashboard showed it as a WARNING and the remediation
+            # script the owner runs ELEVATED carried a fix for it. The tag
+            # spelling is what hid the missing raise from all three gates.
+            # tools/lint_report_echo.ps1 now bans the short forms on the
+            # report path; this alternation is the belt to that braces, so a
+            # reintroduced [WARN] grades correctly instead of silently.
+            if ($t -match '^\[(CRITICAL|CRIT)\]') { $sev = 'CRITICAL'; break }
+            if ($t -match '^\[(WARNING|WARN)\]')  { $sev = 'WARNING'; continue }
             # Mid-line form: 'Word 2016: [WARNING] ...'. Only trusted on a line
             # that did not open with a tag of its own.
             if ($t -notmatch '^\[') {
-                if ($t -match '\[CRITICAL\]') { $sev = 'CRITICAL'; break }
-                if ($t -match '\[WARNING\]')  { $sev = 'WARNING' }
+                if ($t -match '\[(CRITICAL|CRIT)\]') { $sev = 'CRITICAL'; break }
+                if ($t -match '\[(WARNING|WARN)\]')  { $sev = 'WARNING' }
             }
         }
     } catch { $sev = 'UNREADABLE' }

@@ -1276,6 +1276,21 @@ jobs:
           if ((Sev @('[OK] No AMSI bypass patterns in recent PowerShell logs')) -ne 'OK') { throw '[OK] line inflated severity' }
           if ((Sev @('[INFO] Review [WARNING] and [CRITICAL] entries above')) -ne 'OK') { throw '[INFO] prose inflated severity' }
           if ((Sev @('[SKIPPED] WMI subscription query failed -- check NOT performed.')) -ne 'OK') { throw '[SKIPPED] inflated severity' }
+          # SHORT SPELLINGS. A field report printed '[WARN] Sticky Keys shortcut
+          # ENABLED' into Section 13; this grader matched only the long form, so
+          # the block read OK and the finding reached neither the ledger,
+          # FINDINGS COUNTED nor the exit code -- while the dashboard showed it
+          # as a WARNING and the elevated remediation script carried a fix for
+          # it. lint_report_echo now bans the short forms on the report path;
+          # grading them is the backstop, so a reintroduced one is never silent.
+          if ((Sev @('[OK] fine', '[WARN] Sticky Keys shortcut ENABLED')) -ne 'WARNING') { throw '[WARN] short form must grade as WARNING, not OK' }
+          if ((Sev @('[CRIT] staging binary present')) -ne 'CRITICAL') { throw '[CRIT] short form must grade as CRITICAL' }
+          if ((Sev @('[WARN] a', '[CRITICAL] b')) -ne 'CRITICAL') { throw 'CRITICAL must still win over a short WARNING' }
+          if ((Sev @('Word 16.0: [WARN] macro policy weak')) -ne 'WARNING') { throw 'mid-line short form missed' }
+          # ...and the short spellings must not inflate a non-finding line either.
+          if ((Sev @('[OK] No [WARN] patterns in recent logs')) -ne 'OK') { throw '[OK] line inflated on a short tag' }
+          if ((Sev @('[INFO] Review [WARN] entries above')) -ne 'OK') { throw '[INFO] prose inflated on a short tag' }
+          if ((Sev @('[SKIP] not run')) -ne 'OK') { throw '[SKIP] inflated severity' }
           # An unreadable input must not invent a finding -- but it must not
           # claim CLEANLINESS either. Reporting OK there shipped: three ASR
           # warnings reached a user's report while Section 9 read CLEAN and the
@@ -1286,7 +1301,7 @@ jobs:
           '' | Set-Content -LiteralPath $f -Encoding UTF8
           if (((.\tools\block_sev.ps1 -Path $f).Trim()) -ne 'OK') { throw 'an empty block must read OK' }
           Remove-Item $f -Force -EA SilentlyContinue
-          Write-Host "block_sev.ps1 OK (11 parsing cases)"
+          Write-Host "block_sev.ps1 OK (18 parsing cases)"
           exit 0
 
       - name: verdict_audit.ps1 (a printed finding must have been raised)
