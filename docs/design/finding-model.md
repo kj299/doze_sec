@@ -135,6 +135,9 @@ Each step ships green; the detection harness is the safety net.
 
 ## 8. Status — migration complete (2026-07-25)
 
+> **Superseded in part — see §9.** Two of the invariants this section declares
+> achieved were not, and stayed unachieved until 2026-09-07.
+
 Implemented across PRs #148–#160 and the exit-code flip PR:
 
 - `tools/ledger.ps1` + `:dz_finding` landed; every raise site (sections, INIT,
@@ -156,3 +159,54 @@ Implemented across PRs #148–#160 and the exit-code flip PR:
   runs it as a real standard user (`tests/noadmin_smoke.ps1`) asserting the
   deferral contract -- Admin : 0, PARTIAL verdicts, HKLM-read detection
   without admin, exit-code 6/8 semantics, and the ledger consistency net.
+
+## 9. Correction — I1/I2 were not achieved by the 2026-07-25 migration
+
+§8 above declares the migration complete. It was not, and the gap ran for the
+whole life of the mechanism. Recorded here rather than edited away, because the
+interesting part is *why nothing noticed*.
+
+**`:dz_ps_scan` never reached the ledger.** It read its severity back with
+
+```
+for /f "usebackq delims=" %%s in (`"%PWSH%" ... -Path "%DZ_BLK%" 2^>nul`) do set "DZ_BLKSEV=%%s"
+```
+
+cmd runs a `for /f` backtick command through `cmd /c`, and `cmd /c` strips the
+leading and trailing quote when the line begins with one. This one began with
+`"%PWSH%"`, so the invocation was mangled, produced no output, the loop body
+never ran, and `DZ_BLKSEV` kept its `OK` default. Every one of the eighteen
+`:dz_ps_scan` call sites — Office macro policy, Secure Boot, AMSI-bypass traces,
+RDP shadowing, the nation-state TTP blocks — printed findings that reached
+neither the ledger, `FINDINGS COUNTED`, the section verdict nor the exit code.
+So **I1 held only for the raise sites that used `:dz_finding` or a marker**, and
+`:dz_ps_scan` was neither.
+
+**The backstop is what hid it.** §8 records the marker retrofits approvingly.
+But the ASR block raises its message *from the marker precisely when the grade
+came back `OK`* — so on every affected run its ledger row existed and looked
+like proof the grader worked. That row was used, twice, to argue `:dz_ps_scan`
+was fine. It never supported the claim: it is equally consistent with the grader
+raising nothing. **Treat a backstop's row as evidence the primary path FAILED,
+never that it worked.**
+
+**I2 was violated again in the presentation layer.** §8 calls the dashboard's
+`ck` tally "a presentation layer … not a source of truth", which is right — but
+the summary *header* was built from it, so a report read
+`0 CRITICAL / 3 WARNING / 30 PASSED` while ending `FINDINGS COUNTED: 7`. Fixing
+that changed the header's shape, which silently broke `report_html`'s verdict
+regex, and the HTML dashboard rendered **0/0/0 on a machine with real CRITICAL
+findings** — a divergence that reads as reassurance.
+
+### What enforces the invariants now
+
+| Invariant | Enforced by |
+|---|---|
+| A printed finding reaches the ledger under its own section AND technique | `tests/assert_printed_findings_raised.ps1` (in `full-run`) |
+| The summary header equals `FINDINGS COUNTED` | `tests/assert_header_matches_ledger.ps1` (in `full-run`) |
+| The HTML dashboard equals the text report's verdict line | the `report_html` step in `helpers-ps51`, asserting all three counts |
+| A grade that is never read is declared, not assumed clean | `DZ_BLKSEV` starts at `DZ_NOGRADE`, raised as `AUDITGAP` |
+
+The lesson §8 should have carried: **an invariant with no test is a wish.** Each
+of the three above was stated in prose — in this memo, in `CLAUDE.md`, in
+`report_html`'s own header comment — and none was asserted anywhere.

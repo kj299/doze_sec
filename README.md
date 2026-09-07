@@ -83,7 +83,13 @@ Every run produces (timestamped, so multiple runs don't clobber each other):
 | `C:\SecurityAudit\AuditConsole_<TS>.log` | yes (unless `-noConsoleLog`) | Full stdout+stderr console capture — primary debug source if the script crashes mid-run |
 | `C:\SecurityAudit\ChangeLog_<TS>.txt` | yes | Auto-applied configuration changes |
 | `C:\SecurityAudit\Undo_<TS>.bat` | yes | Rollback commands for the ChangeLog |
-| `C:\SecurityAudit\Remediation_<TS>.ps1` | when findings exist | Suggested remediation script (user must review + flip the gate) |
+| `C:\SecurityAudit\Remediation_<TS>.ps1` | when findings exist | Stage 1 - the safe, reversible fixes (user must review + flip the gate) |
+| `C:\SecurityAudit\Remediation_<TS>_enforce.ps1` | when stage-2 fixes exist | Stage 2 - changes worth observing in audit mode first (e.g. ASR Block). Run stage 1, leave it a few days, review what audit mode logged, then this |
+| `C:\SecurityAudit\Remediation_<TS>_undo.ps1` | when findings exist | The reversals. Every fix in the two scripts above states its undo, and this collects them |
+| `C:\SecurityAudit\SecurityReport_<TS>.ledger` | when findings exist | **The findings ledger** - `SEVERITY\|SECTION\|CODE\|MESSAGE`, one line per raised finding. Every verdict the tool produces derives from it: the per-section `CLEAN`/`ISSUES FOUND` lines, `FINDINGS COUNTED`, the summary header, the exit code, and which remediation commands are queued. If the report and the summary ever disagree, this file is the arbiter |
+| `C:\SecurityAudit\SecurityReport_<TS>.txt.sha256` | yes | Tamper-evidence digest of the text and HTML reports. Record it somewhere off this device; verify later with `Get-FileHash <file> -Algorithm SHA256` |
+| `C:\SecurityAudit\baseline.snapshot` | with `-baseline` | Saved system state for the next run's `-diff` comparison |
+| `C:\SecurityAudit\selftest\` | detection harness only | Quarantine for harness runs. A report of planted findings must never be mistaken for a real audit, so it never lands beside one |
 | `C:\SecurityAudit\SmartData\` | yes | SMART disk-health snapshots |
 | `C:\SecurityAudit\EventExports\` | yes | Windows event log exports |
 | `C:\SecurityAudit\ThreatLists\` | yes | Local IOC lists + CTI manifest |
@@ -235,7 +241,7 @@ Full tactic-by-tactic and threat-class coverage matrices — including explicit 
 | 7 | Pre-flight VT integrity check FAILED (script-critical binary flagged) | Both |
 | 8 | Audit complete - CRITICAL findings present (2 = warnings only) | Both |
 
-Code 8 fires when the live-summary verdict is ACTION REQUIRED (at least one CRITICAL check). It outranks 2, 4, and 6 — critical findings are the most actionable signal — but never the fatal/abort codes 1, 3, 5, 7. Automation can treat 0 as clean, 2/6 as review, 8 as incident-response trigger.
+Code 8 fires when a CRITICAL finding reaches the findings ledger (`SecurityReport_<TS>.ledger`), which is also what makes the summary verdict read ACTION REQUIRED - both derive from the same record, so they cannot disagree. It outranks 2, 4, and 6 — critical findings are the most actionable signal — but never the fatal/abort codes 1, 3, 5, 7. Automation can treat 0 as clean, 2/6 as review, 8 as incident-response trigger.
 
 **Code 1** is a *pre-flight abort* — the audit never started, so there is no report to read (it prints `Exit code: 1 -- audit did not run` to the console). It fires when the environment can't support a run: the `tools\` helper folder is missing (you copied only the `.bat`, or the download is incomplete), Windows PowerShell cannot be located, or the admin script (`doze_sec.bat`) was launched without elevation. Fix the named cause and re-run from the release folder — code 1 is never a security finding, only "could not run here." (Contrast code 5, which specifically means the script was launched from a TEMP directory.)
 

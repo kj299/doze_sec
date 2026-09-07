@@ -162,7 +162,7 @@ jobs:
             '[CRITICAL] Known malware staging files found: C:\x\evil.exe'
             '######################################################################'
             '##  SECURITY AUDIT SUMMARY  --  CITEST'
-            '##  ACTION REQUIRED  --  1 CRITICAL  /  2 WARNING  /  5 PASSED'
+            '##  ACTION REQUIRED  --  1 CRITICAL  /  2 WARNING  --  5 DASHBOARD CHECKS PASSED'
             '######################################################################'
             '  --- CTI IOC SWEEP  (Section 18 - SENTINEL-X) -----------------------'
             '  [!! CRITICAL !!]  CTI IOC sweep: 1 category matches found'
@@ -180,6 +180,35 @@ jobs:
           if ($html -notmatch 'CTI IOC sweep: 1 category matches found') { Write-Host 'critical finding not surfaced'; exit 1 }
           if ($html -notmatch 'href="#sec18"') { Write-Host 'critical not linked to its section'; exit 1 }
           if ($html -notmatch '<div class="card card-crit"><h3>1</h3>') { Write-Host 'dashboard crit count not taken from verdict line'; exit 1 }
+          # EVERY dashboard card must carry the report's own numbers, not just
+          # the CRITICAL one. report_html builds them by matching the verdict
+          # line, and when that regex stops matching the cards do not go stale
+          # -- they render 0/0/0. A machine with real CRITICAL findings showed a
+          # dashboard of zero after the header gained ledger-derived counts and
+          # its separator changed from '/' to ' -- '. Nothing caught it because
+          # THIS FIXTURE STILL USED THE OLD FORMAT: a test whose input has
+          # drifted from what the tool emits proves nothing. The fixture above
+          # is now the current shape, and all three counts are asserted.
+          if ($html -notmatch '<div class="card card-warn"><h3>2</h3>') { Write-Host 'dashboard WARNING count not taken from verdict line'; exit 1 }
+          if ($html -notmatch '<div class="card card-ok"><h3>5</h3>')   { Write-Host 'dashboard PASSED count not taken from verdict line'; exit 1 }
+          # The clean-machine header carries no CRITICAL/WARNING numbers at all.
+          # Leaving it unmatched put a 0 in the PASSED card on exactly the runs
+          # where that count is the reassuring part.
+          $rc = Join-Path $env:TEMP 'dz_ci_html_clean.txt'
+          $hc = Join-Path $env:TEMP 'dz_ci_html_clean.html'
+          @(
+            '######################################################################'
+            '##  SECURITY AUDIT SUMMARY  --  CITEST'
+            '##  NO FINDINGS COUNTED  --  42 DASHBOARD CHECKS PASSED  --  not a statement that the system is clean'
+            '######################################################################'
+            '  --- SYSTEM HARDENING  (Section 13) ---------------------------------'
+            '  [    OK      ]  UAC on with prompt'
+            '  NEXT STEPS -- nothing to do'
+          ) | Set-Content -LiteralPath $rc -Encoding UTF8
+          .\tools\report_html.ps1 -Report $rc -HtmlPath $hc
+          $htmlc = Get-Content -LiteralPath $hc -Raw
+          if ($htmlc -notmatch '<div class="card card-ok"><h3>42</h3>') { Write-Host 'clean-machine PASSED count not taken from verdict line'; exit 1 }
+          Remove-Item $rc, $hc -Force -EA SilentlyContinue
 
           # The HTML page is what doze_sec.bat opens in the browser. It used to
           # drop every line before the first section banner -- the report
@@ -1254,6 +1283,36 @@ jobs:
           Write-Host "attack_matrix.ps1 OK (incl. empty-scan guard)"
           exit 0
 
+      - name: assert_printed_findings_raised.ps1 -SelfTest (a printed finding must reach the ledger under its own technique)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = (.\tests\assert_printed_findings_raised.ps1 -SelfTest) -join "`n"
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw 'assert_printed_findings_raised self-test failed' }
+          $n = @($out -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($n -lt 8) { throw "assert_printed_findings_raised self-test ran only $n case(s) -- it is not asserting what it claims" }
+          # It must FAIL on a report that prints the finding with no matching
+          # ledger row -- that is the bug it exists for, and a guard that cannot
+          # fail is not a guard.
+          $rep = Join-Path $env:TEMP ("dz_pfr_rep_{0}.txt" -f $PID)
+          $led = [System.IO.Path]::ChangeExtension($rep, '.ledger')
+          '[WARNING] Sticky Keys shortcut ENABLED (Shift x5 activates at login screen)' | Set-Content -LiteralPath $rep -Encoding ASCII
+          'WARNING|13|T1486|System drive not encrypted with BitLocker' | Set-Content -LiteralPath $led -Encoding ASCII
+          .\tests\assert_printed_findings_raised.ps1 -Report $rep | Write-Host
+          if ($LASTEXITCODE -eq 0) { throw 'a printed finding with no matching ledger row did NOT fail the assertion' }
+          # ...and pass once the row is there.
+          @('WARNING|13|T1486|x','WARNING|13|T1546.008|Sticky Keys shortcut enabled') | Set-Content -LiteralPath $led -Encoding ASCII
+          .\tests\assert_printed_findings_raised.ps1 -Report $rep | Write-Host
+          if ($LASTEXITCODE -ne 0) { throw 'a correctly raised finding was reported as unraised' }
+          # A missing ledger is a failure, not a silent pass.
+          Remove-Item $led -Force
+          .\tests\assert_printed_findings_raised.ps1 -Report $rep | Write-Host
+          if ($LASTEXITCODE -eq 0) { throw 'a missing ledger passed -- nothing could be checked, which is not the same as nothing being wrong' }
+          Remove-Item $rep -Force -EA SilentlyContinue
+          Write-Host "assert_printed_findings_raised.ps1 OK ($n self-test cases + 3 real-file cases)"
+          exit 0
+
       - name: block_sev.ps1 (severity read-back that :dz_ps_scan depends on)
         shell: powershell
         run: |
@@ -1805,6 +1864,16 @@ jobs:
           rem same ledger, and nothing else asserts that, so it would drift back
           rem silently. Compared on the real report a real cmd.exe just produced.
           powershell -NoProfile -ExecutionPolicy Bypass -File tests\assert_header_matches_ledger.ps1 -Report "%REP%" || exit /b 1
+          rem A PRINTED FINDING MUST REACH THE LEDGER UNDER ITS OWN TECHNIQUE.
+          rem verdict_audit asks only whether the SECTION raised anything, which is
+          rem the right question for it: :dz_ps_scan deliberately raises once for a
+          rem block printing several lines, so it cannot compare counts. That gap is
+          rem how Sticky Keys printed a WARNING in Section 13, was covered by the
+          rem BitLocker row, and reached neither FINDINGS COUNTED, the exit code nor
+          rem the remediation script. This asserts the curated cases by section AND
+          rem technique. The runner has the Sticky Keys shortcut enabled, so this
+          rem exercises the real path rather than a fixture.
+          powershell -NoProfile -ExecutionPolicy Bypass -File tests\assert_printed_findings_raised.ps1 -Report "%REP%" || exit /b 1
           echo Completed end-to-end through Section 18 and the exit handler.
           exit /b 0
 

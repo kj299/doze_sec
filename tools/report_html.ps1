@@ -12,7 +12,7 @@
 #   - The computed live-summary block is rendered as a color-coded panel
 #     instead of being buried as plain text inside Section 18.
 #   - Dashboard counts come from the report's own verdict line
-#     ("N CRITICAL / M WARNING / P PASSED") so they always match the text
+#     (every shape the summary emits) so they always match the text
 #     report. The old naive substring counting over-counted incidental
 #     "[CRITICAL]" mentions in descriptive text (e.g. 30 WARNING vs a real 4).
 #
@@ -85,9 +85,34 @@ foreach ($line in $lines) {
     }
 
     if ($inSummary) {
-        # Verdict line: "N CRITICAL / M WARNING / P PASSED"
-        if ($t -match '(\d+)\s+CRITICAL\s*/\s*(\d+)\s+WARNING\s*/\s*(\d+)\s+PASSED') {
+        # THE VERDICT LINE, IN EVERY SHAPE THE SUMMARY EMITS.
+        #
+        # This regex is the only thing feeding the dashboard cards, and when it
+        # stops matching the cards do not go stale -- they render 0/0/0. A
+        # machine with 2 CRITICAL findings showed a dashboard of zero.
+        #
+        # That is what happened when the header gained ledger-derived counts:
+        # the separator before the third number went from '/' to ' -- ' and the
+        # label from 'PASSED' to 'DASHBOARD CHECKS PASSED', and this pattern
+        # required both of the old forms. False reassurance is the worst
+        # failure this tool has, so the shapes are matched explicitly and the
+        # helpers-ps51 job now asserts the rendered cards carry the report's
+        # own numbers.
+        #
+        # Older shapes stay matched so an archived report still renders.
+        if ($t -match '(\d+)\s+CRITICAL\s*/\s*(\d+)\s+WARNING\s*(?:/|-{2,})\s*(\d+)\s+(?:DASHBOARD\s+CHECKS\s+)?PASSED') {
             $vCrit = [int]$Matches[1]; $vWarn = [int]$Matches[2]; $vPass = [int]$Matches[3]
+            continue
+        }
+        # The clean-machine shapes carry no CRITICAL/WARNING numbers at all.
+        # Leaving them unmatched put a 0 in the PASSED card on exactly the runs
+        # where the count is the reassuring part.
+        if ($t -match 'NO FINDINGS COUNTED\s*-{2,}\s*(\d+)\s+DASHBOARD\s+CHECKS\s+PASSED') {
+            $vCrit = 0; $vWarn = 0; $vPass = [int]$Matches[1]
+            continue
+        }
+        if ($t -match 'NO ISSUES FOUND IN\s+(\d+)\s+CHECKS') {
+            $vCrit = 0; $vWarn = 0; $vPass = [int]$Matches[1]
             continue
         }
         # Category subheader: --- TITLE (Section N) ---

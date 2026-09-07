@@ -4,6 +4,67 @@ All notable changes to doze_sec are recorded here. This is the project release
 history; the per-run `ChangeLog_<timestamp>.txt` files under `C:\SecurityAudit`
 are a separate, machine-specific record of changes each audit made.
 
+## Unreleased
+
+### Fixed: no `:dz_ps_scan` block had ever raised a finding
+`:dz_ps_scan` read its severity back through a `for /f` backtick whose command
+began with a quoted absolute path. cmd runs such a command through `cmd /c`,
+which strips the leading and trailing quote when the line begins with one, so
+the invocation was mangled, produced no output, and `DZ_BLKSEV` kept its `OK`
+default. All eighteen call sites in both bats were affected — Office macro
+policy, Secure Boot, AMSI-bypass traces in PowerShell logs, RDP shadowing and
+the nation-state TTP blocks all printed findings into the report that reached
+neither the findings ledger, `FINDINGS COUNTED`, the section verdict nor the
+exit code.
+
+Only checks carrying a marker backstop survived, and the backstop masked the
+failure rather than exposing it: the ASR block raises its message from the
+marker precisely *when the grade came back `OK`*, so its ledger row looked like
+proof the grader worked.
+
+The grade is now read through a file and `set /p`. `DZ_BLKSEV` starts at
+`DZ_NOGRADE` rather than `OK`, so a grade that is never read is declared an
+`AUDITGAP` instead of passing as clean.
+
+**Reports will show more findings than before.** Nothing new is being detected;
+these are checks that were already printing into the report while the verdict
+ignored them.
+
+### Fixed: the HTML dashboard rendered 0/0/0 on machines with real findings
+`report_html` builds its dashboard by matching the text report's verdict line.
+When that header gained ledger-derived counts its separator changed from `/` to
+` -- `, the regex stopped matching, and the cards rendered zero while the text
+report showed the true numbers. The CI fixture still used the old format, so a
+test existed and proved nothing. All shapes are now matched, the fixture is the
+current one, and all three counts are asserted.
+
+### Fixed: the summary header contradicted `FINDINGS COUNTED`
+The header counted dashboard tiles, so a report could read
+`0 CRITICAL / 3 WARNING / 30 PASSED` and end `FINDINGS COUNTED: 7`. The
+CRITICAL and WARNING halves now derive from the same ledger; the third number
+stays a tile count and says so.
+
+### Fixed: Sticky Keys printed a finding that was never counted
+Section 13 printed `[WARN] Sticky Keys shortcut ENABLED` — a spelling none of
+the three gates recognised. `[CRITICAL]` and `[WARNING]` are now the report's
+entire severity vocabulary, enforced on the `%REPORT%` and `%PSRUN%` paths.
+
+### Fixed: MSIX package binaries reported as unsigned
+MSIX signs the package, not each inner file, so `Get-AuthenticodeSignature` on
+the inner `.exe` correctly returns `NotSigned`. `SignatureKind` is now the
+oracle: `Store`/`System` are inventory, `Developer`/`Enterprise` and `None`
+stay findings, and an unresolvable package fails closed.
+
+### Fixed: false positives on HOSTS, COM CLSIDs, BITS and browser extensions
+A machine's own hostname mapped to its own private address is no longer a DNS
+hijack; a dangling vendor COM registration is context; an empty BITS notify
+command line is not a finding; and a store-installed extension is graded on
+provenance rather than permissions alone.
+
+### New gates
+`tests/assert_printed_findings_raised.ps1`, `tests/assert_header_matches_ledger.ps1`,
+`tools/lint_ps51_portability.ps1`, and artifact parity in `tools/lint_docs_drift.ps1`.
+
 ## 7.3
 
 ### New: `-dnsprobe` active DNS integrity probe (opt-in)

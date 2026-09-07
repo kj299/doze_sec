@@ -4561,7 +4561,18 @@ echo if($joined -match 'UAC auto-elevates'){ addfix 'Restore UAC prompt on secur
 echo if($joined -match 'testsigning=Yes^|testsigning\s*=\s*Yes'){ addfix 'Disable test-signing (re-enforce driver signatures)' "bcdedit /set testsigning off" 'bcdedit /set testsigning on' } >> "%PSRUN%"
 echo if($joined -match 'PS Script Block Logging NOT'){ addfix 'Enable PowerShell Script Block Logging' "New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' -Force | Out-Null; Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' -Name EnableScriptBlockLogging -Value 1 -Type DWord -Force" 'Remove-ItemProperty -Path ''HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging'' -Name EnableScriptBlockLogging -EA SilentlyContinue' } >> "%PSRUN%"
 echo if($joined -match 'AppInit_DLLs set'){ addfix 'Clear AppInit_DLLs (remove DLL injection vector)' "Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows' -Name AppInit_DLLs -Value '' -Force; Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows' -Name LoadAppInit_DLLs -Value 0 -Type DWord -Force" '' } >> "%PSRUN%"
-echo if(led 'WARNING' '13' 'T1546.008' 'Sticky Keys shortcut enabled'){ addfix 'Disable the Shift-x5 Sticky Keys shortcut (this user AND the logon screen)' 'foreach ($h in @(''HKCU:\Control Panel\Accessibility\StickyKeys'',''Registry::HKEY_USERS\.DEFAULT\Control Panel\Accessibility\StickyKeys'')) { $cur = (Get-ItemProperty -LiteralPath $h -Name Flags -EA SilentlyContinue).Flags; if ($null -ne $cur) { Set-ItemProperty -LiteralPath $h -Name Flags -Value ([string]([int]$cur -band -bnot 0x04)) -Force } }; Write-Host ''Sticky Keys itself is unchanged; only the Shift-x5 shortcut is off. Re-enable: Settings ^> Accessibility ^> Keyboard.''' 'foreach ($h in @(''HKCU:\Control Panel\Accessibility\StickyKeys'',''Registry::HKEY_USERS\.DEFAULT\Control Panel\Accessibility\StickyKeys'')) { $cur = (Get-ItemProperty -LiteralPath $h -Name Flags -EA SilentlyContinue).Flags; if ($null -ne $cur) { Set-ItemProperty -LiteralPath $h -Name Flags -Value ([string]([int]$cur -bor 0x04)) -Force } }' } >> "%PSRUN%"
+rem TEMPORARY WIDENING, and it must come out. CLAUDE.md says a fix triggers
+rem off the LEDGER, and prose matching is the weaker pattern that rule exists
+rem to retire. But the ledger row is currently NOT being written: the owner's
+rem 2026-09-06 21:59 run printed the Sticky Keys WARNING, the section had a
+rem row only for BitLocker, and moving this trigger to led alone dropped the
+rem fix from the remediation script entirely -- 3 commands became 2. Losing a
+rem fix the owner had is worse than triggering off prose, so it fires on
+rem EITHER source until the raise works. addfix is called once inside one if,
+rem so the -or cannot queue it twice.
+rem tests\assert_printed_findings_raised.ps1 fails the build while the ledger
+rem row is missing, so this cannot be quietly forgotten.
+echo if(($joined -match 'Sticky Keys shortcut enabled'^) -or (led 'WARNING' '13' 'T1546.008' 'Sticky Keys'^)){ addfix 'Disable the Shift-x5 Sticky Keys shortcut (this user AND the logon screen)' 'foreach ($h in @(''HKCU:\Control Panel\Accessibility\StickyKeys'',''Registry::HKEY_USERS\.DEFAULT\Control Panel\Accessibility\StickyKeys'')) { $cur = (Get-ItemProperty -LiteralPath $h -Name Flags -EA SilentlyContinue).Flags; if ($null -ne $cur) { Set-ItemProperty -LiteralPath $h -Name Flags -Value ([string]([int]$cur -band -bnot 0x04)) -Force } }; Write-Host ''Sticky Keys itself is unchanged; only the Shift-x5 shortcut is off. Re-enable: Settings ^> Accessibility ^> Keyboard.''' 'foreach ($h in @(''HKCU:\Control Panel\Accessibility\StickyKeys'',''Registry::HKEY_USERS\.DEFAULT\Control Panel\Accessibility\StickyKeys'')) { $cur = (Get-ItemProperty -LiteralPath $h -Name Flags -EA SilentlyContinue).Flags; if ($null -ne $cur) { Set-ItemProperty -LiteralPath $h -Name Flags -Value ([string]([int]$cur -bor 0x04)) -Force } }' } >> "%PSRUN%"
 echo if($joined -match 'portproxy tunnel rules are ACTIVE'){ addfix 'Review netsh portproxy rules (LISTS ONLY -- reset would delete WSL/dev forwards too)' 'netsh interface portproxy show all; Write-Host ''Delete ONLY the rule you do not recognise: netsh interface portproxy delete v4tov4 listenport=^<port^> listenaddress=^<addr^>. WSL2 and Hyper-V port forwarding look identical to this IOC.''' '' } >> "%PSRUN%"
 echo if($joined -match 'WMI EventFilter subscriptions present'){ addfix 'Review non-default WMI EventFilter subscriptions (LISTS ONLY -- deletion is manual on purpose)' 'Get-CimInstance -Namespace root/subscription -ClassName __EventFilter -EA SilentlyContinue ^| Where-Object { $_.Name -notin @(''SCM Event Log Filter'',''BVTFilter'') } ^| Format-List Name,Query; Write-Host ''Review each filter above. A permanent WMI subscription is normal for management agents (ConfigMgr, Dell/HP/Lenovo, EDR). Delete one only after you know what registered it: Get-CimInstance -Namespace root/subscription -ClassName __EventFilter ^| Where-Object Name -eq ^<name^> ^| Remove-CimInstance''' '' } >> "%PSRUN%"
 echo if($joined -match 'Accessibility binary signature INVALID'){ addfix 'Restore corrupted system binaries' "sfc /scannow; DISM /Online /Cleanup-Image /RestoreHealth" '' } >> "%PSRUN%"
@@ -5004,10 +5015,39 @@ goto :eof
 set "DZ_BLK=%TEMP%\dz_blk_%DOZE_LOG_TS%.txt"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" > "%DZ_BLK%" 2>&1
 type "%DZ_BLK%">> "%REPORT%"
-set "DZ_BLKSEV=OK"
 if not exist "%SCRIPT_DIR%tools\block_sev.ps1" goto :dz_ps_scan_nohelper
-for /f "usebackq delims=" %%s in (`"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\block_sev.ps1" -Path "%DZ_BLK%" 2^>nul`) do set "DZ_BLKSEV=%%s"
+rem READ THE GRADE THROUGH A FILE, NOT A for /f BACKTICK.
+rem
+rem It used to be:
+rem   for /f "usebackq delims=" %%s in (`"%PWSH%" ... -Path "%DZ_BLK%" 2^>nul`) do set "DZ_BLKSEV=%%s"
+rem
+rem cmd runs a for /f backtick command through cmd /c, and cmd /c strips the
+rem leading and trailing quote when the command line begins with one. This one
+rem began with "%PWSH%", so the invocation was mangled and produced NO output.
+rem The loop body never ran, DZ_BLKSEV kept its "OK" default, and the block
+rem raised nothing -- on every machine, for every one of the eighteen
+rem :dz_ps_scan call sites. Office macro policy, Secure Boot, AMSI-bypass
+rem traces, RDP shadowing and the nation-state TTP blocks all printed findings
+rem that reached neither the ledger, FINDINGS COUNTED nor the exit code. Only
+rem checks carrying a marker backstop survived, and that is what masked it: the
+rem ASR block raises the same message from its marker precisely WHEN the grade
+rem came back OK, so its ledger row looked like proof the grader worked.
+rem
+rem Measured, not argued. On a runner, against the same file: the bare-relative
+rem invocation graded WARNING and this quoted-absolute one graded OK.
+rem
+rem A file plus set /p is the idiom this repo already uses for markers. No
+rem backticks, no cmd /c, no quote stripping.
+set "DZ_SEVF=%TEMP%\dz_sev_%DOZE_LOG_TS%.txt"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\block_sev.ps1" -Path "%DZ_BLK%" > "%DZ_SEVF%" 2>nul
+rem The sentinel is what stops this failing SILENTLY again. If no grade is ever
+rem read the value stays DZ_NOGRADE and is DECLARED an AUDITGAP, rather than
+rem defaulting to OK -- which is indistinguishable from a genuinely clean block.
+set "DZ_BLKSEV=DZ_NOGRADE"
+if exist "%DZ_SEVF%" set /p DZ_BLKSEV=<"%DZ_SEVF%"
+del "%DZ_SEVF%" 2>nul
 del "%DZ_BLK%" 2>nul
+if /i "!DZ_BLKSEV!"=="DZ_NOGRADE" goto :dz_ps_scan_ungraded
 rem UNREADABLE means block_sev could not read the block output at all.
 rem Treating that as OK is how three ASR warnings reached a user report
 rem while the section read CLEAN: a degradation must be declared, never
