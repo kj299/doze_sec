@@ -1,0 +1,30 @@
+# TEMPORARY diagnostic workflow -- DELETE, together with
+# tests/driver_catalog_probe.ps1, once it has answered.
+#
+# It exists to measure, on a real Windows runner, which IN-BOX mechanism can
+# see a driver's catalog signature -- before any code is built on the
+# hypothesis. See the header of tests/driver_catalog_probe.ps1 for the
+# question and the competing explanations.
+#
+# workflow_dispatch only, one job: this must not bill the six-job smoke suite,
+# and a diagnostic that runs on every push is a diagnostic nobody reads.
+name: driver-catalog-probe (TEMPORARY)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    name: "Which in-box mechanism sees a driver catalog signature?"
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # Windows PowerShell 5.1 deliberately -- 5.1 is the only engine this
+      # tool ships to, and the whole point is what 5.1 can see.
+      - name: Probe catalog mechanisms against real inbox drivers
+        shell: powershell
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File tests\driver_catalog_probe.ps1
+          exit 0
