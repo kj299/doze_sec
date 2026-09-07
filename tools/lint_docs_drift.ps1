@@ -26,6 +26,8 @@
 #      README Switches table, and every documented flag is really handled.
 #   2. ThreatLists entry counts -- each row of the README's ThreatLists table
 #      matches `grep -cv '^#'` on the file it names.
+#   4. Artifact parity -- every file written into the output folder is in the
+#      README Output Files table, and every documented path is really written.
 #   3. Technique counts -- the "N MITRE ATT&CK techniques" claims in README and
 #      THREAT_MODEL match the number the audit actually references, and the
 #      manifest row count matches the file.
@@ -153,8 +155,81 @@ if ($referenced.Count -eq 0) {
 # ---- report ----------------------------------------------------------------
 "Checked $checks documented claim(s) against the code: $($implemented.Count) implemented switch(es), $($referenced.Count) referenced technique(s)."
 
+# ---------------------------------------------------------------------------
+# 4. ARTIFACT PARITY -- every file the audit writes into the output folder is
+#    in the README Output Files table, and every documented path is really
+#    written.
+#
+# The table listed nine paths and the bats wrote fifteen. Undocumented were:
+# the two extra remediation stages (_enforce, _undo -- the file collecting
+# every reversal), the .sha256 tamper-evidence digest the report tells you to
+# record off-device, baseline.snapshot, the selftest quarantine, and
+# SecurityReport_<TS>.ledger -- the record EVERY verdict derives from, and the
+# arbiter when the report and the summary disagree. A reader could not
+# discover any of them.
+#
+# Same failure this lint was built for: three implemented switches existed only
+# in -help and an undiscoverable defence protects nobody. Switch parity was
+# gated and the artifact table was not, so it drifted instead.
+$artProblems = @()
+$readmeArt = @()
+foreach ($ln in (Get-Content -LiteralPath $readmePath)) {
+    $m = [regex]::Match($ln, '^\|\s*`C:\\SecurityAudit\\([^`]+)`')
+    if ($m.Success) { $readmeArt += $m.Groups[1].Value.TrimEnd('\') }
+}
+if ($readmeArt.Count -lt 5) {
+    $artProblems += 'the README Output Files table parsed to fewer than 5 rows -- this check is broken, not the docs'
+}
+$batArt = @()
+$AdminBatPath = Join-Path $Root 'doze_sec.bat'
+foreach ($bat in @($AdminBatPath, (Join-Path $Root 'doze_sec_noAdmin.bat'))) {
+    if (-not (Test-Path -LiteralPath $bat)) { continue }
+    foreach ($m in [regex]::Matches((Get-Content -LiteralPath $bat -Raw), '%OUTDIR%\\([A-Za-z0-9_!.]+)')) {
+        $batArt += $m.Groups[1].Value
+    }
+}
+if ($batArt.Count -lt 5) {
+    $artProblems += 'found fewer than 5 %OUTDIR% artifacts in the bats -- this check is broken, not the docs'
+}
+# Normalise the run stamp so the two sides are comparable.
+function Norm-Art { param([string]$n) ($n -replace '!TIMESTAMP!', '<TS>') -replace '<TS>', '<TS>' }
+$batNorm    = @($batArt    | ForEach-Object { Norm-Art $_ } | Sort-Object -Unique)
+$readmeNorm = @($readmeArt | ForEach-Object { Norm-Art $_ } | Sort-Object -Unique)
+foreach ($a in $batNorm) {
+    if ($readmeNorm -notcontains $a) {
+        $artProblems += ("the audit writes C:\SecurityAudit\{0} but the README Output Files table does not list it" -f $a)
+    }
+}
+# Two documented artifacts are real but are NOT written through %OUTDIR%\, so
+# the scan above cannot see them. They are exempted BY NAME WITH A REASON, and
+# each exemption is only honoured while the code that produces it still exists
+# -- a blanket allowlist would let the file quietly stop being written while
+# the README kept promising it.
+$derived = @(
+    @{ Name = 'AuditConsole_<TS>.log'
+       Why  = 'written by the console-capture wrapper before the output directory is chosen'
+       File = $AdminBatPath; Pattern = 'AuditConsole_' },
+    @{ Name = 'SecurityReport_<TS>.txt.sha256'
+       Why  = 'written by tools\report_seal.ps1 as "$Report.sha256", derived from the report path'
+       File = (Join-Path $toolDir 'report_seal.ps1'); Pattern = '\$Report\.sha256' }
+)
+$derivedNames = @()
+foreach ($d in $derived) {
+    if ((Test-Path -LiteralPath $d.File) -and ((Get-Content -LiteralPath $d.File -Raw) -match $d.Pattern)) {
+        $derivedNames += $d.Name
+    } else {
+        $artProblems += ("the README lists C:\SecurityAudit\{0} and this lint exempts it because it is {1} -- but that code is gone, so either the file is no longer written or the exemption is stale" -f $d.Name, $d.Why)
+    }
+}
+foreach ($a in $readmeNorm) {
+    if ($batNorm -notcontains $a -and $derivedNames -notcontains $a) {
+        $artProblems += ("the README Output Files table lists C:\SecurityAudit\{0} but no bat writes it" -f $a)
+    }
+}
+$problems += $artProblems
+
 if ($problems.Count -eq 0) {
-    '[OK] Documentation matches the code -- switches, list counts and technique counts all agree.'
+    '[OK] Documentation matches the code -- switches, list counts, technique counts and output artifacts all agree.'
     exit 0
 }
 ''
