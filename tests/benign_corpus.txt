@@ -174,8 +174,15 @@ note      = Brave's updater (Omaha, as used by Chrome and Edge) registers HKCU C
 class     = QUIET
 maxsev    = INFO
 proof     = ci:hosts_check.ps1 -SelfTest
-signature = map a local-only name or point at loopback
+signature = map a local-only name
 note      = Docker Desktop writes host.docker.internal, gateway.docker.internal and kubernetes.docker.internal into HOSTS on every machine it is installed on; WSL, VirtualBox and Lando do the same. Field false positive 2026-09-06: these raised '[WARNING] Non-standard entries found in HOSTS file. Review for DNS hijacking.' The check now grades an entry by what it DOES, not by the address alone. Verify: type %SystemRoot%\System32\drivers\etc\hosts -- a private or loopback address mapped to a .internal/.local/.test name is dev tooling.
+
+[hosts-own-hostname]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:hosts_check.ps1 -SelfTest
+signature = this machine's own name
+note      = Every cloud VM and most domain-joined laptops map their own hostname to their own private address in HOSTS -- an Azure runner ships '10.1.0.100 <host>.<vnet>.bx.internal.cloudapp.net <host>'. CI false positive 2026-09-07: the short name graded as local-only context, but the FQDN ends .cloudapp.net rather than one of the .internal/.local suffixes, so it fell through to '[WARNING] ... redirect a real domain to another address. Review for DNS hijacking' -- the tool reporting the machine for describing itself. The machine's own name is not a domain anyone is trying to reach. Resolved from OFFLINE sources only (COMPUTERNAME plus the machine's own DNS suffixes from CIM and Tcpip\Parameters), because -readonly forbids network calls. Exemption applies to private/link-local addresses only; a public address, a different DNS suffix, a mere prefix of the hostname, and any security/update domain all stay findings. Verify: type %SystemRoot%\System32\drivers\etc\hosts and compare the name against hostname.
 
 [svc-stale-versioned-updater]
 class     = QUIET

@@ -1029,7 +1029,7 @@ jobs:
           Write-Host $out
           if ($LASTEXITCODE -ne 0) { throw 'hosts_check self-test failed' }
           $n = @($out -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($n -lt 18) { throw "hosts_check self-test ran only $n case(s) -- it is not asserting what it claims" }
+          if ($n -lt 28) { throw "hosts_check self-test ran only $n case(s) -- it is not asserting what it claims" }
           # The runner's own HOSTS file is stock, so this must raise nothing.
           $md = Join-Path $env:TEMP ("dz_hosts_ci_{0}" -f $PID)
           $real = (.\tools\hosts_check.ps1 -MarkerDir $md) -join "`n"
