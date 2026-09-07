@@ -133,8 +133,24 @@ function Get-HostsEntries {
     foreach ($raw in $Lines) {
         if ($null -eq $raw) { continue }
         # Strip a UTF-8 BOM on the first line, and any trailing comment.
+        #
+        # BOTH forms, and BOTH patterns written in pure ASCII. Get-Content
+        # usually consumes a leading BOM itself, but not always: 5.1 reading a
+        # file whose BOM was not detected yields the MOJIBAKE form (the three
+        # UTF-8 bytes decoded as Windows-1252, U+00EF U+00BB U+00BF), while a
+        # UTF-8-aware read yields the single character U+FEFF.
+        #
+        # The second pattern used to be the raw BOM bytes typed into this
+        # (BOM-less) file. Windows PowerShell 5.1 decodes a BOM-less .ps1 as
+        # ANSI, so those three bytes became U+00EF U+00BB U+00BF and the line
+        # compiled to a DUPLICATE of the one above it -- leaving a real U+FEFF
+        # unstripped on the one engine this tool must run on. The first HOSTS
+        # entry would then fail the address test and be dropped silently: a
+        # blackholed windowsupdate.microsoft.com on line 1 would be INVISIBLE.
+        # \uFEFF is a .NET regex escape and \ is not a PowerShell string
+        # escape, so this source stays ASCII and means the same on 5.1 and 7.
         $l = $raw -replace "^\xEF\xBB\xBF", ''
-        $l = $l -replace "^﻿", ''
+        $l = $l -replace "^\uFEFF", ''
         $hash = $l.IndexOf('#')
         if ($hash -ge 0) { $l = $l.Substring(0, $hash) }
         $l = $l.Trim()
@@ -149,6 +165,111 @@ function Get-HostsEntries {
             New-Object PSObject -Property @{ Ip = $ip; Name = $n }
         }
     }
+}
+
+# ---------------------------------------------------------------------------
+# The machine's own name.
+#
+# A real Azure runner's stock HOSTS file carries the line every cloud VM and
+# most domain-joined laptops carry:
+#
+#   10.1.0.100  runnervmeef0v.<vnet>.bx.internal.cloudapp.net  runnervmeef0v
+#
+# The short name has no dot, so it graded as local-only context. The FQDN ends
+# in .cloudapp.net, not one of the LocalOnlyRx suffixes, so it fell through to
+# 'redirect' and the tool told its owner that a real domain had been pointed
+# somewhere -- "Review for DNS hijacking" -- about the machine describing
+# itself. CI on a real runner is what surfaced it; no synthetic fixture would
+# have.
+#
+# The machine's own name is not a domain anyone is trying to reach, so pointing
+# it at the machine's own private address redirects nothing.
+#
+# OFFLINE SOURCES ONLY. -readonly forbids network connections and
+# tests\field_test.ps1 proves that claim before/after, so resolving the FQDN
+# via DNS is not available here -- and would be the wrong thing anyway, since
+# the question is what this machine calls itself, not what a resolver says.
+#
+# Two tiers, and the verdict says which one answered:
+#   exact    the name equals <computername>.<one of the machine's own DNS
+#            suffixes>. An attacker cannot pick the victim's DNS suffix.
+#   inferred no suffix could be discovered at all, so only the FIRST LABEL is
+#            compared. Weaker: a machine literally named 'login' would exempt
+#            login.<anything>. Accepted only as a fallback, never preferred,
+#            and the entry is still PRINTED and adjudicable -- INFO naming it,
+#            never folded into the [OK].
+#
+# Scope: private and link-local addresses only. A machine's own name pointed at
+# a PUBLIC address stays a finding -- that is rare on an endpoint and false
+# reassurance is the worse error here.
+$script:OwnNameProbe = {
+    $cn = ''
+    if ($env:COMPUTERNAME) { $cn = $env:COMPUTERNAME }
+    $suffixes = New-Object System.Collections.ArrayList
+    $addSuffix = {
+        param($s)
+        if ($s -and ($s -is [string]) -and $s.Trim() -and $s -notmatch '^(?i)workgroup$' -and $s -match '\.') {
+            $null = $suffixes.Add($s.Trim().Trim('.').ToLowerInvariant())
+        }
+    }
+    try {
+        $cs = Get-CimInstance -ClassName Win32_ComputerSystem -EA Stop
+        if ($cs) {
+            if (-not $cn -and $cs.Name) { $cn = [string]$cs.Name }
+            & $addSuffix ([string]$cs.Domain)
+            if ($cs.DNSHostName -and $cs.Domain) { & $addSuffix ([string]$cs.Domain) }
+        }
+    } catch {}
+    try {
+        foreach ($a in @(Get-CimInstance -ClassName Win32_NetworkAdapterConfiguration -EA Stop |
+                         Where-Object { $_.IPEnabled })) {
+            & $addSuffix ([string]$a.DNSDomain)
+        }
+    } catch {}
+    # The DHCP-assigned suffix, which is where a cloud VM's really lives.
+    foreach ($v in @('Domain', 'NV Domain', 'DhcpDomain')) {
+        try {
+            $p = Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters' -Name $v -EA Stop
+            & $addSuffix ([string]$p.$v)
+        } catch {}
+    }
+    return @{
+        ComputerName = ([string]$cn).ToLowerInvariant()
+        Suffixes     = @($suffixes | Select-Object -Unique)
+    }
+}
+
+function Get-OwnNameInfo {
+    if ($null -ne $script:OwnNameCache) { return $script:OwnNameCache }
+    $r = $null
+    try { $r = & $script:OwnNameProbe } catch {}
+    if (-not $r) { $r = @{ ComputerName = ''; Suffixes = @() } }
+    $cn = [string]$r.ComputerName
+    $names = @()
+    foreach ($s in @($r.Suffixes)) { if ($cn -and $s) { $names += ('{0}.{1}' -f $cn, $s) } }
+    $script:OwnNameCache = @{
+        ComputerName = $cn
+        Names        = @($names)
+        SuffixKnown  = ([bool](@($names).Count -gt 0))
+    }
+    return $script:OwnNameCache
+}
+
+function Test-OwnName {
+    # '' (not ours), 'exact', or 'inferred'.
+    param([string]$Name)
+    if (-not $Name) { return '' }
+    $info = Get-OwnNameInfo
+    if (-not $info.ComputerName) { return '' }
+    $n = $Name.ToLowerInvariant().TrimEnd('.')
+    if ($n -eq $info.ComputerName) { return 'exact' }
+    foreach ($o in @($info.Names)) { if ($n -eq $o) { return 'exact' } }
+    # Fallback ONLY when no suffix was discoverable. Compare the first label,
+    # never a prefix: 'runnervmeef0v-evil.attacker.com' must stay a finding.
+    if (-not $info.SuffixKnown) {
+        if ($n.Split('.')[0] -eq $info.ComputerName) { return 'inferred' }
+    }
+    return ''
 }
 
 function Get-HostsVerdict {
@@ -169,9 +290,14 @@ function Get-HostsVerdict {
             continue
         }
         if ($cls -eq 'private') {
-            if ($sec) { $blackhole += $line }
-            elseif ($localOnly) { $context += $line }
-            else { $redirect += $line }
+            if ($sec) { $blackhole += $line; continue }
+            if ($localOnly) { $context += $line; continue }
+            $own = Test-OwnName -Name $e.Name
+            if ($own) {
+                $context += ($line + $(if ($own -eq 'exact') { '  [this machine''s own name]' } else { '  [matches this machine''s name; no DNS suffix was discoverable, so inferred from the first label]' }))
+                continue
+            }
+            $redirect += $line
             continue
         }
         # Public address: a redirect to somewhere reachable. Always a finding,
@@ -244,8 +370,94 @@ if ($SelfTest) {
       ("count=" + @(Get-HostsEntries -Lines @('# only a comment')).Count)
     $e = @(Get-HostsEntries -Lines @('203.0.113.5  a.example b.example  # two names'))
     T 'one line with several names yields one entry each' ($e.Count -eq 2) ("count=$($e.Count)")
-    $e = @(Get-HostsEntries -Lines @("`u{FEFF}127.0.0.1 localhost"))
-    T 'a UTF-8 BOM on the first line does not eat the entry' ($e.Count -eq 1) ("count=$($e.Count)")
+    # BOTH BOM forms, built from character codes so this source stays ASCII.
+    # This case used to be written with `u{FEFF}, which is PowerShell 6+ only:
+    # 5.1 has no such escape and drops the backtick, so the case tested the
+    # literal string "u{FEFF}127.0.0.1" and could not fail for its own reason.
+    # CI on real 5.1 is what caught it.
+    $bom = [string][char]0xFEFF
+    $e = @(Get-HostsEntries -Lines @($bom + "127.0.0.1 localhost"))
+    T 'a UTF-8 BOM (U+FEFF) on the first line does not eat the entry' ($e.Count -eq 1) ("count=$($e.Count)")
+    # The mojibake form: the BOM bytes decoded as Windows-1252, which is what a
+    # 5.1 read of a UTF-8 file whose BOM was not detected actually yields.
+    $moji = -join @([char]0x00EF, [char]0x00BB, [char]0x00BF)
+    $e = @(Get-HostsEntries -Lines @($moji + "127.0.0.1 localhost"))
+    T 'a mis-decoded UTF-8 BOM on the first line does not eat the entry' ($e.Count -eq 1) ("count=$($e.Count)")
+    # Neither strip may run away with a real entry.
+    $e = @(Get-HostsEntries -Lines @($bom + "127.0.0.1 windowsupdate.microsoft.com"))
+    T 'a BOM does not hide a blackholed update domain' `
+      ($e.Count -eq 1 -and $e[0].Name -eq 'windowsupdate.microsoft.com') `
+      ("count=$($e.Count) name=$(if($e.Count){$e[0].Name})")
+    # --- the machine's own name -----------------------------------------
+    # A real Azure runner failed on its own stock HOSTS line; no synthetic
+    # fixture would have produced it. A domain-joined laptop has the same shape.
+    $script:OwnNameCache = $null
+    $script:OwnNameProbe = { @{ ComputerName = 'runnervmeef0v'; Suffixes = @('igb3cs02yymuxlog0fzrenhqpd.bx.internal.cloudapp.net') } }
+    $r = V @('10.1.0.100 runnervmeef0v.igb3cs02yymuxlog0fzrenhqpd.bx.internal.cloudapp.net runnervmeef0v')
+    T "the machine's own FQDN at its own private address is context" `
+      ($r.Redirect.Count -eq 0 -and $r.Blackhole.Count -eq 0 -and $r.Context.Count -eq 2) `
+      ("redirect=$($r.Redirect.Count) context=$($r.Context.Count)")
+    T 'and the verdict declares that the FQDN matched exactly' `
+      ((@($r.Context) -join '; ') -match "own name\]") ((@($r.Context) -join '; '))
+
+    # When the suffix IS known, only that suffix answers. An attacker who
+    # registers <victim-hostname>.evil.com must not inherit the exemption --
+    # this is the case that keeps the first-label fallback strictly a
+    # fallback rather than a second, weaker rule running all the time.
+    $script:OwnNameCache = $null
+    $r = V @('10.1.0.100 runnervmeef0v.attacker.com')
+    T 'the own name under a DIFFERENT suffix is still a finding' `
+      ($r.Redirect.Count -eq 1) ("redirect=$($r.Redirect.Count)")
+
+    # A PREFIX of the computer name must NOT be exempt.
+    $script:OwnNameCache = $null
+    $r = V @('10.1.0.100 runnervmeef0v-evil.attacker.com')
+    T 'a name merely STARTING with the computer name is still a finding' `
+      ($r.Redirect.Count -eq 1) ("redirect=$($r.Redirect.Count)")
+
+    # The LAN-MitM shape this rule must not weaken.
+    $script:OwnNameCache = $null
+    $r = V @('192.168.1.66 login.microsoftonline.com')
+    T 'a private IP pointed at someone elses domain is still a finding' `
+      ($r.Redirect.Count -eq 1) ("redirect=$($r.Redirect.Count)")
+
+    # The own name at a PUBLIC address stays a finding: out of scope on purpose.
+    $script:OwnNameCache = $null
+    $r = V @('203.0.113.5 runnervmeef0v.igb3cs02yymuxlog0fzrenhqpd.bx.internal.cloudapp.net')
+    T "the machine's own name at a PUBLIC address is still a finding" `
+      ($r.Redirect.Count -eq 1) ("redirect=$($r.Redirect.Count)")
+
+    # A security domain outranks the own-name exemption.
+    $script:OwnNameCache = $null
+    $script:OwnNameProbe = { @{ ComputerName = 'windowsupdate'; Suffixes = @('microsoft.com') } }
+    $r = V @('10.1.0.100 windowsupdate.microsoft.com')
+    T 'a security domain is blackholing even when it matches the own name' `
+      ($r.Blackhole.Count -eq 1 -and $r.Redirect.Count -eq 0 -and $r.Context.Count -eq 0) `
+      ("blackhole=$($r.Blackhole.Count) context=$($r.Context.Count)")
+
+    # No suffix discoverable: first-label fallback, declared as inferred.
+    $script:OwnNameCache = $null
+    $script:OwnNameProbe = { @{ ComputerName = 'z4nee52'; Suffixes = @() } }
+    $r = V @('10.1.0.100 z4nee52.corp.example.com')
+    T 'with no discoverable suffix the first label answers, and says so' `
+      ($r.Redirect.Count -eq 0 -and ((@($r.Context) -join '; ') -match 'inferred from the first label')) `
+      ("redirect=$($r.Redirect.Count) ctx=" + (@($r.Context) -join '; '))
+
+    # ...but the fallback is still a whole-label match, not a prefix.
+    $script:OwnNameCache = $null
+    $r = V @('10.1.0.100 z4nee52x.corp.example.com')
+    T 'the inferred fallback still refuses a prefix match' `
+      ($r.Redirect.Count -eq 1) ("redirect=$($r.Redirect.Count)")
+
+    # An unusable probe must not exempt anything.
+    $script:OwnNameCache = $null
+    $script:OwnNameProbe = { throw 'no CIM here' }
+    $r = V @('10.1.0.100 anything.example.com')
+    T 'a probe that throws exempts nothing (fails closed)' `
+      ($r.Redirect.Count -eq 1) ("redirect=$($r.Redirect.Count)")
+    $script:OwnNameCache = $null
+    $script:OwnNameProbe = { @{ ComputerName = 'runnervmeef0v'; Suffixes = @('igb3cs02yymuxlog0fzrenhqpd.bx.internal.cloudapp.net') } }
+
     $r = V @('::1 localhost', 'fe80::1 host.docker.internal')
     T 'IPv6 loopback and link-local are handled' `
       ($r.Blackhole.Count -eq 0 -and $r.Redirect.Count -eq 0) ("redirect=$($r.Redirect.Count)")
@@ -305,7 +517,7 @@ if ($v.Redirect.Count -gt 0) {
     if ($v.Redirect.Count -gt $MaxReport) { "    ...and $($v.Redirect.Count - $MaxReport) more not listed (report cap $MaxReport)." }
 }
 if ($v.Context.Count -gt 0) {
-    "[INFO] $($v.Context.Count) HOSTS entry(ies) map a local-only name or point at loopback -- Docker Desktop, WSL, VirtualBox and ad-blocking lists all write these by design. Context, not a finding:"
+    "[INFO] $($v.Context.Count) HOSTS entry(ies) map a local-only name, this machine's own name, or point at loopback -- Docker Desktop, WSL, VirtualBox, cloud and domain-joined hosts, and ad-blocking lists all write these by design. Context, not a finding:"
     $v.Context | Select-Object -First $MaxReport | ForEach-Object { '    ' + $_ }
     if ($v.Context.Count -gt $MaxReport) { "    ...and $($v.Context.Count - $MaxReport) more not listed (report cap $MaxReport)." }
 }

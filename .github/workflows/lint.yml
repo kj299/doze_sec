@@ -127,6 +127,27 @@ jobs:
       - name: Run tools/lint_orphan_else.ps1
         run: pwsh -NoProfile -File tools/lint_orphan_else.ps1
 
+  ps51-portability-lint:
+    name: "5.1 portability: no source that parses on 5.1 and means something else"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The class no parse check can see. Windows PowerShell 5.1 decodes a
+      # BOM-less .ps1 as ANSI (pwsh reads UTF-8) and has no `u{...} / `e escape
+      # -- it drops the backtick and keeps the literal text. Both ACCEPT the
+      # source and mean something else by it.
+      #
+      # hosts_check.ps1 shipped both at once: its U+FEFF strip compiled to a
+      # duplicate of the line above it on 5.1, so a BOM left the first HOSTS
+      # entry unparsed -- a blackholed windowsupdate.microsoft.com on line 1
+      # would have been invisible -- and the test that should have caught it
+      # was written `u{FEFF} and so asserted against literal text for four
+      # merges. Real-Windows CI caught it; this lint is why it cannot return.
+      - name: Run tools/lint_ps51_portability.ps1
+        run: pwsh -NoProfile -File tools/lint_ps51_portability.ps1
+      - name: The lint must fail on each reintroduced class, and not on prose
+        run: pwsh -NoProfile -File tools/lint_ps51_portability.ps1 -SelfTest
+
   docs-drift-lint:
     name: "Docs lint: the README matches the code"
     runs-on: ubuntu-latest

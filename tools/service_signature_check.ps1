@@ -98,8 +98,55 @@ function Get-ServiceBinaryPath {
 $script:ExistsProbe = { param($p) Test-Path -LiteralPath $p -PathType Leaf }
 $script:SigProbe    = { param($p) $sig = $null; try { $sig = Get-AuthenticodeSignature -FilePath $p -EA Stop } catch {}; return $sig }
 $script:CertProbe   = { param($c) try { return [bool](Test-Certificate -Cert $c -EA Stop) } catch { return $true } }
+# A service's MSIX package is provisioned for SYSTEM, not for the auditing
+# user, so -AllUsers (which needs admin) is tried first; the per-user query is
+# the fallback so a non-elevated run still answers what it can.
+# Memoised by package full name. Get-AppxPackage -AllUsers enumerates every
+# package for every user and can take seconds; without this it runs once per
+# unsigned WindowsApps service binary. This repo has already paid once for a
+# slow check blowing a timeout, and module_inspect.ps1 caches its signature
+# lookups for the same reason.
+$script:AppxCache = @{}
+$script:AppxProbe = {
+    param($full)
+    try { $r = Get-AppxPackage -AllUsers -EA Stop | Where-Object { $_.PackageFullName -eq $full }; if ($r) { return $r } } catch {}
+    try { return (Get-AppxPackage -EA Stop | Where-Object { $_.PackageFullName -eq $full }) } catch {}
+    return $null
+}
 
 $script:BadPathRx = '\\Temp\\|\\AppData\\|\\Downloads\\|\\Public\\'
+
+function Get-MsixPackageSignature {
+    # MSIX/AppX packages are CATALOG-signed: the package carries the signature,
+    # not each inner file, so Get-AuthenticodeSignature on the inner .exe
+    # correctly returns NotSigned. Field false positive 2026-09-06:
+    #   IntelGraphicsSoftwareService (Running, Auto) ->
+    #   C:\Program Files\WindowsApps\AppUp.IntelArcSoftware_26.26.2459.0_x64__8j3eq9eme6ctt
+    #     \VFS\ProgramFilesX64\Intel\...\IntelGraphicsSoftware.Service.exe
+    #
+    # The package full name is the path segment straight after WindowsApps\.
+    # Returns $null when the path is not in a package at all -- the caller then
+    # grades exactly as before.
+    param([string]$Path)
+    if (-not $Path) { return $null }
+    # ANCHORED to the real package root. Matching any directory merely NAMED
+    # WindowsApps let a path like C:\Users\Public\WindowsApps\<real package
+    # full name>\evil.exe resolve against a genuinely installed package and be
+    # graded as Store-signed. Installed MSIX packages only ever live under
+    # %ProgramFiles%\WindowsApps.
+    $m = [regex]::Match($Path, '(?i)^[A-Za-z]:\\Program Files\\WindowsApps\\([^\\]+)')
+    if (-not $m.Success) { return $null }
+    $full = $m.Groups[1].Value
+    if ($script:AppxCache.ContainsKey($full)) {
+        $pkg = $script:AppxCache[$full]
+    } else {
+        $pkg = & $script:AppxProbe $full
+        $script:AppxCache[$full] = $pkg
+    }
+    if (-not $pkg) { return @{ Kind = ''; FullName = $full; Resolved = $false } }
+    if ($pkg -is [array]) { $pkg = $pkg[0] }
+    return @{ Kind = [string]$pkg.SignatureKind; FullName = $full; Resolved = $true }
+}
 
 function Get-ServiceVerdict {
     # Returns @{ Bucket = 'clean'|'inventory'|'stale'|'unreadable'|'flagged'; Why = <label> }.
@@ -145,7 +192,33 @@ function Get-ServiceVerdict {
     $why = ''
     if ($certIssue)   { $why = if ($isTrusted) { 'trusted-but-' + $certIssue } else { $certIssue } }
     elseif ($valid)   { $why = if ($isTrusted) { 'trusted-signer' } else { 'unexpected-signer' } }
-    elseif ($sig.Status -eq 'NotSigned') { $why = 'unsigned' }
+    elseif ($sig.Status -eq 'NotSigned') {
+        # BEFORE calling it unsigned, ask whether it lives inside an MSIX
+        # package. Microsoft documents the guarantee that makes SignatureKind
+        # usable here: "Any value other than None indicates that the package is
+        # signed with a trusted certificate, since it is not possible to
+        # install a package that is signed with an untrusted or otherwise
+        # invalid certificate."
+        #
+        # None is the Visual-Studio-F5 / dev-layout case and keeps its WARNING,
+        # so this cannot go wrong in the direction that matters. Developer and
+        # Enterprise are signed but NOT store-vetted -- an attacker-signed MSIX
+        # lands there -- so they stay findings with an accurate label. An
+        # unresolvable package fails CLOSED.
+        # $bad wins outright: the staging-path rule is not something a
+        # package signature may override. Two independent guards, because
+        # either alone would leave the bypass open.
+        $msix = $null
+        if (-not $bad) { $msix = Get-MsixPackageSignature -Path $Binary }
+        if ($null -ne $msix) {
+            if (-not $msix.Resolved) { $why = 'unsigned; msix package did not resolve' }
+            elseif ($msix.Kind -eq 'Store' -or $msix.Kind -eq 'System') {
+                return @{ Bucket = 'inventory'; Why = ('msix: signed by ' + $msix.Kind + ' (' + $msix.FullName + ')') }
+            }
+            elseif ($msix.Kind -and $msix.Kind -ne 'None') { $why = 'msix: ' + $msix.Kind + '-signed, not store-vetted' }
+            else { $why = 'unsigned' }
+        } else { $why = 'unsigned' }
+    }
     else { $why = [string]$sig.Status }
     if ($bad) { $why = $why + ' bad-path' }
     return @{ Bucket = 'flagged'; Why = $why }
@@ -198,6 +271,95 @@ if ($SelfTest) {
     $v = Get-ServiceVerdict -Binary 'C:\Program Files\App\svc.exe'
     T 'an unsigned service binary is still a WARNING' `
       ($v.Bucket -eq 'flagged' -and $v.Why -eq 'unsigned') "$($v.Bucket)/$($v.Why)"
+
+    # --- MSIX catalog signing: the owner's two remaining rows --------------
+    # An MSIX package is signed as a PACKAGE, so the inner .exe is correctly
+    # NotSigned. SignatureKind is the oracle; None still means unsigned.
+    $intel = 'C:\Program Files\WindowsApps\AppUp.IntelArcSoftware_26.26.2459.0_x64__8j3eq9eme6ctt\VFS\ProgramFilesX64\Intel\Intel Graphics Software\IntelGraphicsSoftware.Service.exe'
+    function FakePkg { param([string]$Kind, [string]$Full)
+        return (New-Object PSObject -Property @{ SignatureKind = $Kind; PackageFullName = $Full })
+    }
+    $script:AppxCache = @{}; $script:AppxProbe = { param($f) FakePkg -Kind 'Store' -Full $f }
+    $v = Get-ServiceVerdict -Binary $intel
+    T "the owner's Store-signed MSIX service is inventory, not a finding" `
+      ($v.Bucket -eq 'inventory' -and $v.Why -match '^msix: signed by Store \(AppUp\.IntelArcSoftware_') "$($v.Bucket)/$($v.Why)"
+
+    $script:AppxCache = @{}; $script:AppxProbe = { param($f) FakePkg -Kind 'System' -Full $f }
+    $v = Get-ServiceVerdict -Binary $intel
+    T 'a System-signed MSIX service is inventory' ($v.Bucket -eq 'inventory') "$($v.Bucket)/$($v.Why)"
+
+    # ...and every other SignatureKind stays a finding.
+    #
+    # The kind travels in a SCRIPT-SCOPED variable, not a closure. This loop
+    # was written `{ ... $k ... }.GetNewClosure()` and it failed on real 5.1
+    # with CommandNotFoundException: FakePkg. GetNewClosure builds a new
+    # DYNAMIC MODULE and copies the caller VARIABLES into it -- not its
+    # functions -- and module code runs in its own scope hierarchy with its
+    # own root, so a script-scope function is not on the lookup chain.
+    # pwsh 7 resolves it anyway; 5.1 does not. Both cases then failed for the
+    # WRONG REASON -- the probe threw, the package "did not resolve", and the
+    # fail-closed path returned flagged/unsigned. They still read as flagged,
+    # so only the assertion on Why (not just Bucket) caught it.
+    # A plain scriptblock is bound to the script session state and sees both.
+    foreach ($k in @('Developer','Enterprise')) {
+        $script:fakeKind = $k
+        $script:AppxCache = @{}; $script:AppxProbe = { param($f) FakePkg -Kind $script:fakeKind -Full $f }
+        $v = Get-ServiceVerdict -Binary $intel
+        T "an MSIX package signed '$k' is NOT store-vetted and stays a WARNING" `
+          ($v.Bucket -eq 'flagged' -and $v.Why -match 'not store-vetted') "$($v.Bucket)/$($v.Why)"
+    }
+    $script:AppxCache = @{}; $script:AppxProbe = { param($f) FakePkg -Kind 'None' -Full $f }
+    $v = Get-ServiceVerdict -Binary $intel
+    T "SignatureKind 'None' is a genuinely unsigned package and stays a WARNING" `
+      ($v.Bucket -eq 'flagged' -and $v.Why -eq 'unsigned') "$($v.Bucket)/$($v.Why)"
+
+    # Fails CLOSED: an unresolvable package must never read as signed.
+    $script:AppxCache = @{}; $script:AppxProbe = { param($f) $null }
+    $v = Get-ServiceVerdict -Binary $intel
+    T 'an MSIX package that does not resolve fails CLOSED' `
+      ($v.Bucket -eq 'flagged' -and $v.Why -match 'did not resolve') "$($v.Bucket)/$($v.Why)"
+
+    # THE OTHER ROW: not an MSIX path, so the MSIX logic must not touch it.
+    $script:AppxCache = @{}; $script:AppxProbe = { param($f) FakePkg -Kind 'Store' -Full $f }
+    $v = Get-ServiceVerdict -Binary 'C:\Program Files\WiFiman Desktop\wifiman-desktopd.exe'
+    T "the owner's non-MSIX unsigned service is still a WARNING" `
+      ($v.Bucket -eq 'flagged' -and $v.Why -eq 'unsigned') "$($v.Bucket)/$($v.Why)"
+
+    # An MSIX binary in a staging path keeps bad-path precedence.
+    $v = Get-ServiceVerdict -Binary 'C:\Users\Public\WindowsApps\Pkg_1.0_x64__abc\x.exe'
+    T 'an MSIX-looking path under \Users\Public\ is still flagged' ($v.Bucket -eq 'flagged') "$($v.Bucket)/$($v.Why)"
+    # ...and the resolver itself refuses it, so neither guard is load-bearing alone.
+    T 'a directory merely NAMED WindowsApps is not a package root' `
+      ($null -eq (Get-MsixPackageSignature -Path 'C:\Users\Public\WindowsApps\Pkg_1.0_x64__abc\x.exe')) ''
+    T 'only %ProgramFiles%\WindowsApps counts as a package root' `
+      ($null -ne (Get-MsixPackageSignature -Path 'C:\Program Files\WindowsApps\Pkg_1.0_x64__abc\x.exe')) ''
+    # The second guard, proven separately: a staging segment INSIDE a real
+    # package root. The anchored regex accepts this path, so only the bad-path
+    # check keeps it flagged -- without that case the guard was untested.
+    $script:AppxCache = @{}; $script:AppxProbe = { param($f) FakePkg -Kind 'Store' -Full $f }
+    $v = Get-ServiceVerdict -Binary 'C:\Program Files\WindowsApps\Pkg_1.0_x64__abc\VFS\Temp\x.exe'
+    T 'a staging segment inside a real package root still wins over the signature' `
+      ($v.Bucket -eq 'flagged') "$($v.Bucket)/$($v.Why)"
+
+    T 'a non-WindowsApps path yields no MSIX lookup at all' `
+      ($null -eq (Get-MsixPackageSignature -Path 'C:\Program Files\App\svc.exe')) ''
+    $r = Get-MsixPackageSignature -Path $intel
+    T 'the package full name is taken from the segment after WindowsApps' `
+      ($r.FullName -eq 'AppUp.IntelArcSoftware_26.26.2459.0_x64__8j3eq9eme6ctt') "$($r.FullName)"
+
+    # The lookup is memoised: Get-AppxPackage -AllUsers is expensive and would
+    # otherwise run once per unsigned WindowsApps binary.
+    $script:AppxCache = @{}
+    $script:probeCalls = 0
+    $script:AppxCache = @{}; $script:AppxProbe = { param($f) $script:probeCalls++; FakePkg -Kind 'Store' -Full $f }
+    $null = Get-MsixPackageSignature -Path $intel
+    $null = Get-MsixPackageSignature -Path $intel
+    T 'the Appx lookup is cached (one probe call for two lookups)' `
+      ($script:probeCalls -eq 1) "probe calls=$($script:probeCalls)"
+    $null = Get-MsixPackageSignature -Path 'C:\Program Files\WindowsApps\Other_1.0_x64__zzz\x.exe'
+    T 'the cache does not leak across packages' ($script:probeCalls -eq 2) "probe calls=$($script:probeCalls)"
+    $script:AppxCache = @{}
+    $script:AppxCache = @{}; $script:AppxProbe = { param($f) $null }
 
     $script:SigProbe = { param($p) FakeSig -Status 'HashMismatch' -Subject 'CN=Microsoft Corporation' }
     $v = Get-ServiceVerdict -Binary 'C:\Program Files\App\svc.exe'

@@ -83,8 +83,9 @@ try {
     if ($LASTEXITCODE -ne 0 -or -not $csv) { $apOk = $false }
     else {
         # Locate each row by its GUID POSITIONALLY, not by English column name.
-        # auditpol localizes its /r header row (the Japanese header reads
-        # "カテゴリ/サブカテゴリ GUID"), so `$line.'Subcategory GUID'` returns $null on
+        # auditpol localizes its /r header row -- on Japanese Windows the
+        # "Subcategory GUID" column is titled in katakana, on German in
+        # German -- so `$line.'Subcategory GUID'` returns $null on
         # any non-English Windows -- $rows stayed empty and all four
         # subcategories were then reported OFF, with '(not set)' giving the
         # reader no hint that this was a parse failure rather than a real

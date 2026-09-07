@@ -984,7 +984,7 @@ jobs:
           Write-Host $out
           if ($LASTEXITCODE -ne 0) { throw 'service_signature_check self-test failed' }
           $n = @($out -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($n -lt 10) { throw "service_signature_check self-test ran only $n case(s) -- it is not asserting what it claims" }
+          if ($n -lt 24) { throw "service_signature_check self-test ran only $n case(s) -- it is not asserting what it claims" }
           # Real services on the runner: it has Google/Docker-style vendors and
           # WindowsApps packages, so a WARNING here is the false positive.
           $mf = Join-Path $env:TEMP ("dz_svc_ci_{0}\dz_svc.txt" -f $PID)
@@ -1029,7 +1029,7 @@ jobs:
           Write-Host $out
           if ($LASTEXITCODE -ne 0) { throw 'hosts_check self-test failed' }
           $n = @($out -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($n -lt 14) { throw "hosts_check self-test ran only $n case(s) -- it is not asserting what it claims" }
+          if ($n -lt 28) { throw "hosts_check self-test ran only $n case(s) -- it is not asserting what it claims" }
           # The runner's own HOSTS file is stock, so this must raise nothing.
           $md = Join-Path $env:TEMP ("dz_hosts_ci_{0}" -f $PID)
           $real = (.\tools\hosts_check.ps1 -MarkerDir $md) -join "`n"

@@ -174,8 +174,15 @@ note      = Brave's updater (Omaha, as used by Chrome and Edge) registers HKCU C
 class     = QUIET
 maxsev    = INFO
 proof     = ci:hosts_check.ps1 -SelfTest
-signature = map a local-only name or point at loopback
+signature = map a local-only name
 note      = Docker Desktop writes host.docker.internal, gateway.docker.internal and kubernetes.docker.internal into HOSTS on every machine it is installed on; WSL, VirtualBox and Lando do the same. Field false positive 2026-09-06: these raised '[WARNING] Non-standard entries found in HOSTS file. Review for DNS hijacking.' The check now grades an entry by what it DOES, not by the address alone. Verify: type %SystemRoot%\System32\drivers\etc\hosts -- a private or loopback address mapped to a .internal/.local/.test name is dev tooling.
+
+[hosts-own-hostname]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:hosts_check.ps1 -SelfTest
+signature = this machine's own name
+note      = Every cloud VM and most domain-joined laptops map their own hostname to their own private address in HOSTS -- an Azure runner ships '10.1.0.100 <host>.<vnet>.bx.internal.cloudapp.net <host>'. CI false positive 2026-09-07: the short name graded as local-only context, but the FQDN ends .cloudapp.net rather than one of the .internal/.local suffixes, so it fell through to '[WARNING] ... redirect a real domain to another address. Review for DNS hijacking' -- the tool reporting the machine for describing itself. The machine's own name is not a domain anyone is trying to reach. Resolved from OFFLINE sources only (COMPUTERNAME plus the machine's own DNS suffixes from CIM and Tcpip\Parameters), because -readonly forbids network calls. Exemption applies to private/link-local addresses only; a public address, a different DNS suffix, a mere prefix of the hostname, and any security/update domain all stay findings. Verify: type %SystemRoot%\System32\drivers\etc\hosts and compare the name against hostname.
 
 [svc-stale-versioned-updater]
 class     = QUIET
@@ -204,6 +211,13 @@ maxsev    = OK
 proof     = ci:persistence_extra.ps1 BITS notify command line (both directions)
 signature = BITS job\(s\) queued, none with a notify command line
 note      = Get-BitsTransfer returns NotifyCmdLine as a two-element array (program, parameters), and Microsoft documents both as empty strings when SetNotifyCmdLine was never called. Joining them produced a single space, which is truthy, so every ordinary Edge and Windows Update job raised '[WARNING] BITS job ... has a notify command line:' with nothing after the colon. Field false positive 2026-09-06 on 'Edge Component Updater'. A real notify command line still raises. Verify: Get-BitsTransfer -AllUsers | Select-Object DisplayName,NotifyCmdLine
+
+[svc-msix-catalog-signed]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:service_signature_check.ps1 -SelfTest
+signature = msix: signed by (Store|System)
+note      = MSIX/AppX packages are signed as a PACKAGE, not per inner file, so Get-AuthenticodeSignature on the inner .exe correctly returns NotSigned. Field false positive 2026-09-06: IntelGraphicsSoftwareService (Running, Auto) under C:\Program Files\WindowsApps\AppUp.IntelArcSoftware_...\VFS\ProgramFilesX64\ was reported unsigned. Get-AppxPackage SignatureKind is consulted instead; Microsoft documents that any value other than None means the package carries a trusted certificate. Developer/Enterprise, None, and an unresolvable package all remain findings, and a staging path still wins. Verify: Get-AppxPackage -AllUsers | Where-Object PackageFullName -eq '<name>' | Select-Object SignatureKind,Status
 
 [ev104-smartcard]
 class     = ADVISE

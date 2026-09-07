@@ -106,7 +106,7 @@ Temp path check, admin detection, OS version, OS compatibility, Safe Mode, log d
 | 4 | Running processes | No | LOLBins, RMM tools, suspicious paths, loaded-module inspection (DLLs inside running processes: staging-path, unsigned, non-Microsoft in core security processes — T1055/T1574) |
 | 5 | Startup and persistence | No | Run keys, Startup folders, Winlogon, IFEO debuggers, AppInit/AppCert DLLs, logon/unlock vectors (Notify, Credential Providers, Network Provider DLLs), netsh helpers, print processors and port monitors, BITS jobs, PowerShell profiles, time providers |
 | 6 | Scheduled tasks | No | Malicious tasks, action-path detection (PS CSV, Task-To-Run column only) |
-| 7 | Windows services | Partial | Authenticode signature gating per service binary (vendor allowlist + revocation + expiry + bad-path). A binary that is absent, or present but unreadable (WindowsApps is ACL'd to TrustedInstaller), or validly signed by a vendor outside the short allowlist, is reported as context rather than a finding -- it stays a WARNING when the path is a staging directory, the cert is expired or revoked, or the binary is unsigned; unusual accounts |
+| 7 | Windows services | Partial | Authenticode signature gating per service binary (vendor allowlist + revocation + expiry + bad-path). A binary that is absent, or present but unreadable (WindowsApps is ACL'd to TrustedInstaller), or validly signed by a vendor outside the short allowlist, is reported as context rather than a finding -- it stays a WARNING when the path is a staging directory, the cert is expired or revoked, or the binary is unsigned; unusual accounts | MSIX/AppX packages under `C:\Program Files\WindowsApps\` are catalog-signed, so the inner binary reads as unsigned; the package's own `SignatureKind` is consulted instead (see "Catalog signing: what is covered" below)
 | 8 | Firewall configuration | Yes | Disabled profiles, risky rules |
 | 9 | Defender and AV status | Yes | Disabled Defender, exclusions, tamper; ASR rules audit (per-rule mode + key-rule warnings); endpoint telemetry inventory (third-party EDR agents and Sysmon — an agent **installed but not running** is flagged, absence is reported as context) |
 | 10 | SMB, RDP, remote access | Partial | SMBv1, NLA bypass, open RDP, covert-monitoring check (accounts hidden from the sign-in screen, silent RDP shadowing, camera/mic/location consent inventory, consumer monitoring/spouseware products) |
@@ -118,6 +118,39 @@ Temp path check, admin detection, OS version, OS compatibility, Safe Mode, log d
 | 16 | Event log anomalies | Partial | Log clearing (1102), brute force (4625), lateral (4624); audit-policy visibility check (flags when process-creation/logon/account auditing or command-line logging is OFF, so clean event results are not misread as safe); event-log gap check (records missing from the middle of a log's numbering, a disabled or undersized log — the deletions that leave no 1102 behind) |
 | 17 | Nation-state threat indicators | No | MDDR 2023-2025 TTPs, portproxy, WMI persistence (CommandLine + ActiveScript consumers; SCM defaults allowlisted by Name+Query); baseline differential analysis (NEW/CHANGED/REMOVED drivers, services, tasks, autoruns, ports, admins, root CAs vs a saved snapshot); cross-API consistency check (processes/services/tasks read via independent APIs — rootkit indicator T1014 — plus Tarrask hidden-task detection) |
 | 18 | CTI-driven IOC sweep | No | SENTINEL-X file-based + inline CTI checks; kernel-driver audit (BYOVD by SHA256 + expanded name set + Authenticode catch-all over loaded and dropped drivers, so a renamed/relocated vulnerable driver cannot evade) |
+
+
+### Catalog signing: what is covered, and what is not
+
+Windows signs some binaries through a **catalog** rather than embedding an
+Authenticode signature in the file. `Get-AuthenticodeSignature` does not consult
+catalogs, so those files report `NotSigned` even though they are properly signed.
+
+**Covered** — MSIX/AppX packages under `C:\Program Files\WindowsApps\`, in the
+service Authenticode check. The package full name is read from the path and its
+`SignatureKind` is queried with `Get-AppxPackage`:
+
+| `SignatureKind` | treated as |
+|---|---|
+| `Store`, `System` | context, naming the package |
+| `Developer`, `Enterprise` | **still a finding** — signed, but not store-vetted, which is where an attacker-signed package would land |
+| `None` | **still a finding** — a genuinely unsigned package (a dev/F5 layout) |
+| package cannot be resolved | **still a finding** — this fails closed |
+
+A staging path (`\Temp\`, `\AppData\`, `\Downloads\`, `\Public\`) always
+wins over a package signature, and only `%ProgramFiles%\WindowsApps` counts as a
+package root — a directory merely *named* `WindowsApps` does not.
+
+**NOT covered:**
+
+- **Driver catalogs.** A Microsoft inbox driver such as `bthmodem.sys` is
+  catalog-signed via the driver store and still reports `NotSigned` in the driver
+  audit. Reading those needs `WinVerifyTrust` with a catalog-member lookup.
+- **Binaries dropped inside an already-signed package's directory.** The package
+  signature does not cover them, which is why the result is reported as context
+  naming the package rather than as a clean pass.
+- **Other checks.** Module inspection, startup evaluation and the driver audit
+  still report catalog-signed files as unsigned.
 
 ## Section 18: CTI IOC Sweep
 
