@@ -149,14 +149,22 @@ package root — a directory merely *named* `WindowsApps` does not.
 
 **NOT covered:**
 
-- **Driver catalogs.** A Microsoft inbox driver such as `bthmodem.sys` is
-  catalog-signed via the driver store and still reports `NotSigned` in the driver
-  audit. Reading those needs `WinVerifyTrust` with a catalog-member lookup.
+- ~~**Driver catalogs.**~~ **This gap does not exist. Measured 2026-09-07:**
+  `Get-AuthenticodeSignature` on Windows PowerShell 5.1 already resolves
+  driver-store catalog signatures, returning `Status=Valid` with
+  `SignatureType=Catalog`. On a clean runner all 457 drivers resolved; on the
+  owner's machine 464 of 467 did. No `WinVerifyTrust` catalog-member lookup is
+  needed, and `bthmodem.sys` reporting `NotSigned` there is **not** a false
+  positive -- direct queries of that machine's catalog database (5,493 catalogs,
+  both databases, SHA256 and SHA1) found no catalog covering the file at all.
 - **Binaries dropped inside an already-signed package's directory.** The package
   signature does not cover them, which is why the result is reported as context
   naming the package rather than as a clean pass.
-- **Other checks.** Module inspection, startup evaluation and the driver audit
-  still report catalog-signed files as unsigned.
+- **Other checks.** Module inspection and startup evaluation have not been
+  measured the way the driver audit now has. Given the result above the same
+  is likely true of them -- 5.1 reads catalogs -- but *likely* is not
+  *measured*, and this file should not claim a second time that something is
+  broken without checking.
 
 ## Section 18: CTI IOC Sweep
 

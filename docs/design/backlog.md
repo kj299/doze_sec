@@ -90,8 +90,8 @@ owner's machine:
   any kind other than `None` means a trusted certificate, so `None` and an
   unresolvable package both stay findings, and `Developer`/`Enterprise` stay
   findings because they are signed but not store-vetted. Confirmed instance:
-  `IntelGraphicsSoftwareService`. Still open for the driver audit, module
-  inspection and startup evaluation.
+  `IntelGraphicsSoftwareService`. The driver audit needed no equivalent -- see
+  the resolution below. Module inspection and startup evaluation are unmeasured.
 
 - Modules loaded from an application-virtualization package
   (Office Click-to-Run, MSIX) that `module_inspect` resolves through the VFS.
@@ -101,14 +101,44 @@ owner's machine:
   verdict. A catalog-aware check would not fix that on its own — the file has
   to be located first — but the two land on the same set of files.
 
-**What it needs.** A signature check that consults the catalog store, not only
-the embedded signature — `Get-AuthenticodeSignature` alone cannot answer this.
-The usual route is the WinVerifyTrust API with a catalog lookup, which means
-P/Invoke from PowerShell 5.1, or shelling to `signtool verify /pa /kp` where
-available. Neither is free, and getting it wrong in the *other* direction
-(treating a genuinely unsigned driver as fine) is far worse than the current
-false positive, so this needs a test that proves both directions before it
-ships.
+**RESOLVED 2026-09-07, and not the way this entry assumed.**
+
+The premise above — that `Get-AuthenticodeSignature` cannot consult the catalog
+store — is **false**, and it was never measured before being written down.
+
+Measured on a clean runner (Windows Server 2025 26100, PowerShell 5.1.26100):
+all 457 drivers in `System32\drivers` returned `Status=Valid`, and every one
+sampled returned `SignatureType=Catalog`. Measured again on the owner's machine
+(Windows 11 26200): 464 of 467 `Valid/Catalog`, 2 `Valid/Authenticode`, and
+exactly one `NotSigned`. **5.1 reads driver catalogs.** The planned
+`WinVerifyTrust` / `CryptCATAdmin` P/Invoke would have solved a problem that
+does not exist.
+
+Worse, it would have solved it in the dangerous direction. The one file is
+`bthmodem.sys`, and it is **not** a false positive: on a machine with 5,493
+catalogs where the catalog subsystem demonstrably works, direct queries of both
+catalog databases with SHA256 and SHA1 all report *no catalog covers this file*.
+Catalogs are keyed by file hash and they accumulate, so a
+legitimately-shipped-but-superseded Microsoft driver would very likely still
+match one of the 5,493. Matching none means those bytes are not a version
+Microsoft shipped to that machine. Shipping the "fix" would have suppressed a
+true finding.
+
+**What actually needed doing**, and is done: the driver audit's signature grade
+had no injection point at all, so the rule most likely to be wrong was the only
+one no test could exercise. It is now a pure `Get-DriverVerdict` behind
+injectable probes with an eight-case `-SelfTest` covering both directions.
+
+**Still open:** *why* that one file has no catalog. Corruption, a third-party
+or OEM package, an odd servicing outcome and tampering all produce the same
+"no catalog" answer, and separating them needs evidence from the machine
+(hash, version resource, DriverStore comparison, `sfc /VERIFYFILE`) rather than
+another theory.
+
+**The lesson worth keeping:** this entry asserted a mechanism, three documents
+repeated it, and a fix was designed against it -- and one measurement on a real
+runner refuted it in under two minutes. Measure the mechanism before designing
+against it.
 
 ### A coverage percentage with a denominator
 

@@ -44,6 +44,43 @@ Windows it returned the entire path and every known-bad *name* rule stopped
 matching; and `Join-Path` resolves the drive and throws when it does not
 exist, which a pure grading function must not depend on.
 
+### Corrected: the driver-catalog gap does not exist, and bthmodem is a TRUE finding
+Three documents — `README.md`, `docs/design/backlog.md` and
+`tests/benign_corpus.txt` — asserted that `Get-AuthenticodeSignature` cannot
+read driver-store catalog signatures, and that `bthmodem.sys` reporting
+`NotSigned` on the owner's machine was therefore a false positive needing a
+`WinVerifyTrust` catalog-member lookup. All three were wrong, and none of the
+claim had ever been measured.
+
+Measured on the owner's own machine (Windows 11 26200, elevated, CryptSvc
+running, 5,493 catalogs present and readable):
+
+```
+Total .sys: 467
+   Valid/Catalog      = 464
+   Valid/Authenticode = 2
+   NotSigned/None     = 1     <- bthmodem.sys, alone
+```
+
+and direct queries of BOTH catalog databases, by SHA256 and by SHA1, all
+returned *no catalog covers this file*, with `SignatureType=None` and no
+signer. Catalogs are keyed by file hash and they accumulate, so a
+legitimately-shipped-but-superseded Microsoft driver would very likely still
+match one of the 5,493. Matching none means those bytes are not a version
+Microsoft shipped to that machine.
+
+**The tool's warning is correct.** The planned fix would have suppressed it.
+
+The `[driver-catalog-signed-inbox]` corpus entry is removed rather than
+reworded — it claimed a benign cause that does not exist, for a finding that
+appears to be true, and an entry like that teaches a reader to dismiss a real
+one. A tombstone comment records the measurement so it is not re-added on the
+dead theory. README and the backlog are corrected in place.
+
+*Why* that one file has no catalog — corruption, a third-party or OEM package,
+an odd servicing outcome, or tampering, which all produce the same answer — is
+open and tracked in the backlog.
+
 ### Measured: PowerShell 5.1 already reads driver catalog signatures
 The backlog, the README and `tests/benign_corpus.txt` all held that
 `Get-AuthenticodeSignature` cannot read driver-store catalog signatures, and

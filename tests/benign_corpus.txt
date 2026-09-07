@@ -126,11 +126,35 @@ proof     = field:legitimate third-party software loads unsigned DLLs into its o
 signature = unsigned module\(s\) loaded outside the core security processes
 note      = Unsigned DLLs in ordinary third-party processes are common and are counted, not itemised; only lsass/winlogon/services are held to the signed-only bar.
 
-[driver-catalog-signed-inbox]
-class     = ADVISE
-proof     = field:a runner cannot be made to report a catalog-signed inbox driver as NotSigned on demand -- the condition is which drivers a given Windows build ships, not anything a test can plant
-signature = unsigned or invalid Authenticode signature \(NotSigned\) on a kernel driver
-note      = Windows ships some inbox drivers whose signature lives in a security CATALOG in the driver store rather than embedded in the file, so Get-AuthenticodeSignature on the file itself correctly returns NotSigned. CONFIRMED on the owner's machine 2026-09-06: C:\WINDOWS\system32\drivers\bthmodem.sys, a Microsoft inbox Bluetooth modem driver, reported as '[WARNING] ... unsigned or invalid Authenticode signature (NotSigned) on a kernel driver'. It is a false positive and it was in docs/design/backlog.md but NOT here, so this corpus check reported 'no known benign look-alike above its allowed severity' while one sat in the report as a WARNING. The severity stays WARNING deliberately: an unsigned kernel driver is exactly a BYOVD shape, and downgrading the whole class to silence it would hide a real one. The real fix -- WinVerifyTrust with a catalog-member lookup -- stays in the backlog because getting it wrong means calling a genuinely unsigned kernel driver fine, so it needs a both-directions test first. Verify: Get-AuthenticodeSignature 'C:\WINDOWS\system32\drivers\bthmodem.sys' returns NotSigned, while signtool verify /kp /v that path resolves through the catalog; a driver Microsoft did not ship, or one outside the drivers directory, is a real finding.
+# REMOVED 2026-09-07: [driver-catalog-signed-inbox]
+#
+# It catalogued "unsigned or invalid Authenticode signature (NotSigned) on a
+# kernel driver" for bthmodem.sys as ADVISE -- a finding with a KNOWN BENIGN
+# CAUSE, that cause being "the signature lives in a driver-store catalog and
+# Get-AuthenticodeSignature cannot read catalogs".
+#
+# THAT CAUSE DOES NOT EXIST. Measured on a clean runner (Windows Server 2025
+# 26100, PowerShell 5.1.26100): all 457 drivers returned Status=Valid, and
+# every one sampled returned SignatureType=Catalog. Measured on the owner's
+# machine (Windows 11 26200): 464 of 467 Valid/Catalog, 2 Valid/Authenticode,
+# and exactly ONE NotSigned. Windows PowerShell 5.1 reads driver catalogs.
+#
+# And bthmodem.sys is not a benign twin. On that machine -- CryptSvc running,
+# elevated, 5,493 catalogs present and readable -- direct queries of BOTH
+# catalog databases, by SHA256 and by SHA1, all returned "no catalog covers
+# this file", with SignatureType=None and no signer at all. Catalogs are keyed
+# by file hash and they accumulate, so a legitimately-shipped-but-superseded
+# Microsoft driver would very likely still match one of the 5,493. Matching
+# none means those bytes are not a version Microsoft shipped there.
+#
+# So the entry asserted a benign cause for a finding that appears to be TRUE.
+# This file exists to stop the tool crying wolf; an entry like that does the
+# opposite and far worse -- it teaches a reader to dismiss a real one. Removed
+# rather than reworded, because there is no evidenced benign cause to put in
+# its place. Why that one file has no catalog is still open and is tracked in
+# docs/design/backlog.md.
+#
+# DO NOT re-add it on the catalog theory. That theory is measured and dead.
 
 [driver-signed-byovd-name]
 class     = QUIET
