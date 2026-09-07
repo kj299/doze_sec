@@ -2163,8 +2163,27 @@ jobs:
           echo ==== 2. the block output block_sev reads ====
           type "%DZ_BLK%"
           for %%A in ("%DZ_BLK%") do echo ==== 3. that file is %%~zA bytes ====
+          rem 4a. THE WAY MY EARLIER DIAGNOSTIC DID IT: bare relative path.
           set "SEV=OK"
           for /f "usebackq delims=" %%s in (`powershell -NoProfile -ExecutionPolicy Bypass -File tools\block_sev.ps1 -Path "%DZ_BLK%" 2^>nul`) do set "SEV=%%s"
+          echo ==== 4a. bare relative path -^> [!SEV!] ====
+          rem 4b. THE WAY :dz_ps_scan ACTUALLY DOES IT: the command inside the
+          rem backticks begins with a QUOTED absolute path. cmd runs a for /f
+          rem backtick command through cmd /c, and cmd /c strips the leading and
+          rem trailing quote when the line starts with one -- which can mangle
+          rem the invocation so it produces no output at all. The for loop then
+          rem never assigns, DZ_BLKSEV keeps its "OK" default, and the block
+          rem raises nothing. That would be GLOBAL: every :dz_ps_scan block, on
+          rem every machine, with only marker-backstopped checks surviving.
+          set "PWSH=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+          set "SCRIPT_DIR=%CD%\"
+          set "SEV2=OK"
+          for /f "usebackq delims=" %%s in (`"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\block_sev.ps1" -Path "%DZ_BLK%" 2^>nul`) do set "SEV2=%%s"
+          echo ==== 4b. quoted absolute path, as :dz_ps_scan does -^> [!SEV2!] ====
+          if /i not "!SEV2!"=="WARNING" (
+            echo ==== ROOT CAUSE: the quoted-absolute-path for /f produced [!SEV2!] while the bare form produced [!SEV!]. ====
+            echo ==== Every :dz_ps_scan block grades OK and raises NOTHING. Only marker-backstopped checks survive. ====
+          )
           echo ==== 4. grade returned by block_sev: [!SEV!] ====
           echo ==== 5. this machine's StickyKeys Flags ====
           powershell -NoProfile -Command "'Flags = ' + [string](Get-ItemProperty 'HKCU:\Control Panel\Accessibility\StickyKeys' -Name Flags -EA SilentlyContinue).Flags"
