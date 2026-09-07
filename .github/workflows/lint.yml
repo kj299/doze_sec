@@ -116,6 +116,25 @@ jobs:
       - name: The lint must fail on a reintroduced expansion bug
         run: pwsh -NoProfile -File tools/lint_remediation.ps1 -SelfTest
 
+  driver-audit-grade:
+    name: "Driver audit: the signature grade, exercised in both directions"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # tools/driver_audit.ps1 decides whether a kernel driver is unsigned.
+      # Being wrong one way cries wolf about a Microsoft inbox driver; being
+      # wrong the other calls a genuinely unsigned driver -- the BYOVD /
+      # EDR-kill shape -- fine. Until now the signature read was INLINE in the
+      # scan loop, so the rule most likely to be wrong was also the only one
+      # that could not be exercised by a test at all.
+      #
+      # It is now a pure Get-DriverVerdict behind injectable probes. One case
+      # asserts the emitted message still matches the regex
+      # tests/benign_corpus.txt keys on: reword it and the corpus entry
+      # silently stops matching, which that file warns about in as many words.
+      - name: Grade both directions (signed, unsigned, staged, known-bad, unreadable)
+        run: pwsh -NoProfile -File tools/driver_audit.ps1 -SelfTest
+
   orphan-else-lint:
     name: "Orphaned else: no clause detached from its if (parses, then dies at runtime)"
     runs-on: ubuntu-latest
