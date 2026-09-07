@@ -126,8 +126,13 @@ function Get-DriverVerdict {
     # Pure: every input is a parameter or a $script: variable the self-test can
     # set, so the entire grade is exercisable with no machine state at all.
     param([string]$Path, [string]$Hash, $Sig)
-    $why  = @()
-    $sev  = 'OK'
+    $why = @()
+    # NOT named $sev: the script-level $sev is the running maximum across all
+    # drivers, and a same-named local here would shadow it. It happens to be
+    # safe (the local is assigned before any read) but that is too subtle a
+    # thing to leave load-bearing in the function that decides whether a
+    # kernel driver is trustworthy.
+    $itemSev = 'OK'
     # Split on both separators rather than [IO.Path]::GetFileName: that method
     # is platform-dependent -- off Windows it does not treat '\' as a
     # separator, so it returns the ENTIRE path and every known-bad NAME rule
@@ -141,7 +146,7 @@ function Get-DriverVerdict {
 
     if ($Hash -and $script:BadHashes.ContainsKey($Hash)) {
         $why += "SHA256 matches a known-bad driver hash"
-        $sev = 'CRITICAL'
+        $itemSev = 'CRITICAL'
     }
     if ($script:BadNames -contains $name) {
         # These names ARE genuinely BYOVD-abusable -- but several of them ship
@@ -156,18 +161,18 @@ function Get-DriverVerdict {
         # reported differently, as they already are for ADFS / Azure AD Connect.
         if ($sigValid -and -not $staged) {
             $why += "known BYOVD-abusable driver, but validly signed and in the normal drivers directory -- most likely installed by legitimate software. A local attacker can still abuse it to load unsigned kernel code; remove it if you do not need the software that installed it"
-            $sev = Get-MaxSev $sev 'WARNING'
+            $itemSev = Get-MaxSev $itemSev 'WARNING'
         } else {
             $why += "filename is a known vulnerable/abused driver, and it is unsigned, invalidly signed, or staged outside the drivers directory -- the BYOVD staging pattern"
-            $sev = 'CRITICAL'
+            $itemSev = 'CRITICAL'
         }
     }
-    if ($sev -ne 'CRITICAL' -and -not $sigValid) {
+    if ($itemSev -ne 'CRITICAL' -and -not $sigValid) {
         $st = if ($Sig) { [string]$Sig.Status } else { 'unreadable' }
         $why += "unsigned or invalid Authenticode signature ($st) on a kernel driver"
-        $sev = Get-MaxSev $sev 'WARNING'
+        $itemSev = Get-MaxSev $itemSev 'WARNING'
     }
-    return @{ Sev = $sev; Why = $why }
+    return @{ Sev = $itemSev; Why = $why }
 }
 
 if ($SelfTest) {

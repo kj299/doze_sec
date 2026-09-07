@@ -6,6 +6,62 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Confirmed on a real machine: the Sticky Keys ledger raise works, debt retired
+The Sticky Keys finding now reaches the findings ledger on the owner's own
+Windows 11 machine, not merely on a CI runner:
+`WARNING|13|T1546.008|Sticky Keys shortcut enabled - Shift x5 triggers
+sethc.exe at the logon screen`. Its remediation and the matching undo are both
+present in the generated scripts.
+
+Its `addfix` had been triggered by `($joined -match 'Sticky Keys shortcut
+enabled') -or (led 'WARNING' '13' 'T1546.008' 'Sticky Keys')`. The first half
+was deliberate temporary debt: matching the DASHBOARD PROSE is exactly what
+queued an elevated command for a finding the tool did not count, and it was
+kept only until the ledger half could be shown to fire on real hardware. It
+has, so the prose half is gone and the trigger is the ledger alone.
+
+The same report confirms the rest of the chain end to end: the header reads
+`0 CRITICAL / 9 WARNING -- 30 DASHBOARD CHECKS PASSED`, `FINDINGS COUNTED: 9`,
+and the ledger holds exactly 9 rows. Header, count and ledger agree, with no
+`AUDITGAP` anywhere in the report.
+
+### Fixed: the driver signature grade could not be tested at all
+`tools/driver_audit.ps1` decided whether a kernel driver is unsigned with a
+bare `Get-AuthenticodeSignature` inline in its scan loop, with no injection
+point — unlike `service_signature_check.ps1`, `module_inspect.ps1` and
+`proc_path_grade.ps1`, which all grade behind an injectable probe. The rule
+most likely to be wrong was the only one no test could exercise.
+
+It is now a pure `Get-DriverVerdict` behind `$script:SigProbe` /
+`$script:HashProbe`, with a `-SelfTest` covering eight cases in both
+directions. No behaviour change. One case asserts the emitted message still
+matches the regex `tests/benign_corpus.txt` keys on, so rewording it can no
+longer silently decouple that entry.
+
+Two latent platform dependencies surfaced and were removed:
+`[IO.Path]::GetFileName` treats `\` as a separator only on Windows, so off
+Windows it returned the entire path and every known-bad *name* rule stopped
+matching; and `Join-Path` resolves the drive and throws when it does not
+exist, which a pure grading function must not depend on.
+
+### Measured: PowerShell 5.1 already reads driver catalog signatures
+The backlog, the README and `tests/benign_corpus.txt` all held that
+`Get-AuthenticodeSignature` cannot read driver-store catalog signatures, and
+that `bthmodem.sys` reporting `NotSigned` was therefore a false positive
+needing `WinVerifyTrust` with a catalog-member lookup.
+
+Measured on a real runner (Windows Server 2025 26100, PowerShell 5.1.26100):
+all 457 drivers in `System32\drivers` reported `Status=Valid`, and every one
+sampled reported `SignatureType=Catalog`. **5.1 already resolves driver
+catalogs.** The planned P/Invoke would have solved a problem that does not
+exist, and would have suppressed a warning that may be correct.
+
+The false positive does not reproduce on a clean machine at all. On the
+owner's machine `bthmodem.sys` is the *only* driver reporting `NotSigned` —
+one file, not many — which rules out a broken catalog subsystem and points at
+that single driver being genuinely uncovered. Diagnosis continues against the
+machine where it actually happens; no fix is shipped on a theory again.
+
 ### Fixed: no `:dz_ps_scan` block had ever raised a finding
 `:dz_ps_scan` read its severity back through a `for /f` backtick whose command
 began with a quoted absolute path. cmd runs such a command through `cmd /c`,
