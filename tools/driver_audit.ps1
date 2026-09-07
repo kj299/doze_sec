@@ -43,7 +43,8 @@
 [CmdletBinding()]
 param(
     [string]$MarkerDir = $env:TEMP,
-    [string]$HashList  = ''
+    [string]$HashList  = '',
+    [switch]$SelfTest
 )
 
 $ErrorActionPreference = 'Continue'
@@ -67,9 +68,19 @@ function Get-MaxSev {
     return 'OK'
 }
 
-'--- [T1562.001/T1068] Kernel driver audit (BYOVD by hash, unsigned by signature) ---'
+if (-not $SelfTest) {
+    '--- [T1562.001/T1068] Kernel driver audit (BYOVD by hash, unsigned by signature) ---'
+}
 $sev = 'OK'
-$sys32 = Join-Path $env:SystemRoot 'System32'
+# Defaulted rather than read straight from the environment so -SelfTest runs on
+# a box with no %SystemRoot% at all; the self-test overrides both anyway.
+$script:WinDir   = if ($env:SystemRoot) { $env:SystemRoot } else { 'C:\Windows' }
+$sys32           = $script:WinDir.TrimEnd('\') + '\System32'
+$script:Sys32Drv = $sys32 + '\drivers'
+# A driver is "staged" when it sits somewhere a legitimate kernel driver never
+# lives. Presence there turns an abusable-but-signed driver into the actual
+# BYOVD pattern.
+$script:StagedRx = '\\Temp\\|\\Tmp\\|\\Downloads\\|\\Users\\Public\\|\\ProgramData\\|\\AppData\\'
 
 # Expanded known-vulnerable-driver filename set (superset of the old 12). Names
 # are a fallback signal; the hash and signature checks are the primary ones.
@@ -84,6 +95,137 @@ $badNames = @(
     'msio64.sys','physmem.sys','rtkiow8x64.sys','rtkiow10x64.sys','speedfan.sys',
     'segwindrvx64.sys','vboxdrv.sys','wcpu.sys','ucorew64.sys','amifldrv64.sys'
 ) | ForEach-Object { $_.ToLower() }
+$script:BadNames = $badNames
+# Populated from the hash list below; declared here so Get-DriverVerdict can be
+# defined (and self-tested) before the list is read.
+$script:BadHashes = @{}
+
+# Injectable so the self-test needs no drivers, no files and no certificates.
+# There was NO injection point here before -- the signature read was inline in
+# the scan loop -- so the one rule most likely to be wrong was also the one
+# rule that could not be exercised by a test. The catalog false positive lived
+# in exactly that blind spot.
+$script:SigProbe  = {
+    param($p)
+    # -LiteralPath everywhere: -FilePath wildcard-expands, so a driver at
+    # C:\Users\Public\vgk[1].sys (the duplicate-download form browsers produce,
+    # and one an attacker can choose deliberately) matched no file and was
+    # misreported as unsigned.
+    $sig = $null
+    try { $sig = Get-AuthenticodeSignature -LiteralPath $p -EA Stop } catch {}
+    return $sig
+}
+$script:HashProbe = {
+    param($p)
+    try { return (Get-FileHash -LiteralPath $p -Algorithm SHA256 -EA Stop).Hash.ToLower() } catch { return $null }
+}
+
+function Get-DriverVerdict {
+    # Returns @{ Sev = 'OK'|'WARNING'|'CRITICAL'; Why = @(...) }.
+    #
+    # Pure: every input is a parameter or a $script: variable the self-test can
+    # set, so the entire grade is exercisable with no machine state at all.
+    param([string]$Path, [string]$Hash, $Sig)
+    $why  = @()
+    $sev  = 'OK'
+    # Split on both separators rather than [IO.Path]::GetFileName: that method
+    # is platform-dependent -- off Windows it does not treat '\' as a
+    # separator, so it returns the ENTIRE path and every known-bad NAME rule
+    # silently stops matching. The self-test caught exactly that.
+    $name = (($Path -split '[\\/]')[-1]).ToLower()
+    $sigValid = ($Sig -and $Sig.Status -eq 'Valid')
+    # Concatenate rather than Join-Path: Join-Path resolves the drive and
+    # throws when it does not exist, which is machine state this pure grading
+    # function must not depend on.
+    $staged   = ($Path -match $script:StagedRx) -or -not ($Path -like ($script:Sys32Drv.TrimEnd('\') + '\*'))
+
+    if ($Hash -and $script:BadHashes.ContainsKey($Hash)) {
+        $why += "SHA256 matches a known-bad driver hash"
+        $sev = 'CRITICAL'
+    }
+    if ($script:BadNames -contains $name) {
+        # These names ARE genuinely BYOVD-abusable -- but several of them ship
+        # with software people deliberately install (vboxdrv.sys with
+        # VirtualBox, procexp152.sys with Process Explorer, cpuz141.sys,
+        # gdrv.sys, asio64.sys). The old rule set CRITICAL on the name alone
+        # and then SKIPPED the signature check entirely, so a validly
+        # vendor-signed driver in its normal location produced "CRITICAL
+        # findings present -- review NOW" and exit code 8 on a healthy
+        # developer machine. A tool that cries wolf there is not believed the
+        # day it is right. So: attack surface and evidence of compromise are
+        # reported differently, as they already are for ADFS / Azure AD Connect.
+        if ($sigValid -and -not $staged) {
+            $why += "known BYOVD-abusable driver, but validly signed and in the normal drivers directory -- most likely installed by legitimate software. A local attacker can still abuse it to load unsigned kernel code; remove it if you do not need the software that installed it"
+            $sev = Get-MaxSev $sev 'WARNING'
+        } else {
+            $why += "filename is a known vulnerable/abused driver, and it is unsigned, invalidly signed, or staged outside the drivers directory -- the BYOVD staging pattern"
+            $sev = 'CRITICAL'
+        }
+    }
+    if ($sev -ne 'CRITICAL' -and -not $sigValid) {
+        $st = if ($Sig) { [string]$Sig.Status } else { 'unreadable' }
+        $why += "unsigned or invalid Authenticode signature ($st) on a kernel driver"
+        $sev = Get-MaxSev $sev 'WARNING'
+    }
+    return @{ Sev = $sev; Why = $why }
+}
+
+if ($SelfTest) {
+    $fails = 0
+    function T { param([string]$Name, [bool]$Ok, [string]$Got)
+        if ($Ok) { Write-Output "[OK]   $Name" } else { Write-Output "[FAIL] $Name$(if($Got){": $Got"})"; $script:fails++ }
+    }
+    function FakeSig { param([string]$Status)
+        return (New-Object PSObject -Property @{ Status = $Status })
+    }
+    # Fixed roots so the grade does not depend on the host running the test.
+    $script:Sys32Drv  = 'C:\Windows\System32\drivers'
+    $script:BadHashes = @{ 'dead00000000000000000000000000000000000000000000000000000000beef' = $true }
+    $normal = 'C:\Windows\System32\drivers\bthmodem.sys'
+    $public = 'C:\Users\Public\dz_selftest_evil.sys'
+
+    $v = Get-DriverVerdict -Path $normal -Hash 'aa' -Sig (FakeSig 'Valid')
+    T 'a validly signed driver in the drivers directory is not a finding' `
+      ($v.Sev -eq 'OK') "$($v.Sev)"
+
+    # The shipped negative direction: an unsigned .sys must stay a finding.
+    # Whatever is done about the catalog case, THIS must never stop firing --
+    # being wrong here means calling a genuinely unsigned kernel driver fine.
+    $v = Get-DriverVerdict -Path $public -Hash 'aa' -Sig (FakeSig 'NotSigned')
+    T 'an unsigned driver in a drop location is still a WARNING' `
+      ($v.Sev -eq 'WARNING') "$($v.Sev)"
+
+    $v = Get-DriverVerdict -Path $normal -Hash 'aa' -Sig (FakeSig 'NotSigned')
+    T 'an unsigned driver in the drivers directory is a WARNING' `
+      ($v.Sev -eq 'WARNING') "$($v.Sev)"
+    $msg = ($v.Why -join '; ')
+    # tests/benign_corpus.txt [driver-catalog-signed-inbox] keys on this exact
+    # wording. Reword the message and the corpus entry silently stops matching
+    # -- the corpus note says so in as many words. This asserts the contract.
+    $corpusRx = 'unsigned or invalid Authenticode signature \(NotSigned\) on a kernel driver'
+    T 'the emitted message still matches the benign_corpus signature regex' `
+      ($msg -match $corpusRx) $msg
+
+    $v = Get-DriverVerdict -Path $normal -Hash 'aa' -Sig $null
+    T 'an unreadable signature is a WARNING and says unreadable' `
+      ($v.Sev -eq 'WARNING' -and ($v.Why -join '; ') -match '\(unreadable\)') "$($v.Sev): $($v.Why -join '; ')"
+
+    $v = Get-DriverVerdict -Path $normal -Hash 'dead00000000000000000000000000000000000000000000000000000000beef' -Sig (FakeSig 'Valid')
+    T 'a known-bad hash is CRITICAL even with a valid signature' `
+      ($v.Sev -eq 'CRITICAL') "$($v.Sev)"
+
+    $v = Get-DriverVerdict -Path 'C:\Windows\System32\drivers\vboxdrv.sys' -Hash 'aa' -Sig (FakeSig 'Valid')
+    T 'a signed BYOVD-abusable name in the normal directory is WARNING, not CRITICAL' `
+      ($v.Sev -eq 'WARNING') "$($v.Sev)"
+
+    $v = Get-DriverVerdict -Path 'C:\Users\Public\vboxdrv.sys' -Hash 'aa' -Sig (FakeSig 'Valid')
+    T 'the same name staged in a drop location is CRITICAL' `
+      ($v.Sev -eq 'CRITICAL') "$($v.Sev)"
+
+    if ($fails -gt 0) { Write-Output "FAILED: $fails"; exit 1 }
+    Write-Output 'driver_audit self-test: all cases passed'
+    exit 0
+}
 
 # Known-bad SHA256 set from the maintained hash list (default location resolved
 # relative to this script so it works from any CWD).
@@ -107,6 +249,7 @@ if (Test-Path -LiteralPath $HashList) {
         elseif ($h -match '^[0-9a-fA-F]{8,}$') { $malformedHashes += $h }
     }
 }
+$script:BadHashes = $badHashes
 if ($malformedHashes.Count -gt 0) {
     "[WARNING] $($malformedHashes.Count) entr(y/ies) in the known-bad hash list are not valid SHA256 values and were NOT loaded -- those drivers are not covered by hash matching. Fix the list: $((@($malformedHashes | ForEach-Object { $_.Substring(0, [Math]::Min(12, $_.Length)) + '...' })) -join ', ')"
     $sev = Get-MaxSev $sev 'WARNING'
@@ -157,12 +300,6 @@ foreach ($dir in $dropDirs) {
     } catch {}
 }
 
-# A driver is "staged" when it sits somewhere a legitimate kernel driver never
-# lives. Presence there turns an abusable-but-signed driver into the actual
-# BYOVD pattern.
-$stagedRx = '\\Temp\\|\\Tmp\\|\\Downloads\\|\\Users\\Public\\|\\ProgramData\\|\\AppData\\'
-$sys32drv = Join-Path (Join-Path $env:SystemRoot 'System32') 'drivers'
-
 $checked = 0
 $missing = 0
 foreach ($p in $paths) {
@@ -180,54 +317,14 @@ foreach ($p in $paths) {
         continue
     }
     $checked++
-    $name = [System.IO.Path]::GetFileName($p).ToLower()
-    $why = @()
-    $itemSev = 'OK'
+    $sig  = & $script:SigProbe  $p
+    $hash = & $script:HashProbe $p
+    $v = Get-DriverVerdict -Path $p -Hash $hash -Sig $sig
 
-    # -LiteralPath everywhere: -FilePath wildcard-expands, so a driver at
-    # C:\Users\Public\vgk[1].sys (the duplicate-download form browsers produce,
-    # and one an attacker can choose deliberately) matched no file and was
-    # misreported as unsigned.
-    $sig = $null
-    try { $sig = Get-AuthenticodeSignature -LiteralPath $p -EA Stop } catch {}
-    $sigValid = ($sig -and $sig.Status -eq 'Valid')
-    $staged = ($p -match $stagedRx) -or -not ($p -like (Join-Path $sys32drv '*'))
-
-    $hash = $null
-    try { $hash = (Get-FileHash -LiteralPath $p -Algorithm SHA256 -EA Stop).Hash.ToLower() } catch {}
-    if ($hash -and $badHashes.ContainsKey($hash)) {
-        $why += "SHA256 matches a known-bad driver hash"
-        $itemSev = 'CRITICAL'
-    }
-    if ($badNames -contains $name) {
-        # These names ARE genuinely BYOVD-abusable -- but several of them ship
-        # with software people deliberately install (vboxdrv.sys with
-        # VirtualBox, procexp152.sys with Process Explorer, cpuz141.sys,
-        # gdrv.sys, asio64.sys). The old rule set CRITICAL on the name alone
-        # and then SKIPPED the signature check entirely, so a validly
-        # vendor-signed driver in its normal location produced "CRITICAL
-        # findings present -- review NOW" and exit code 8 on a healthy
-        # developer machine. A tool that cries wolf there is not believed the
-        # day it is right. So: attack surface and evidence of compromise are
-        # reported differently, as they already are for ADFS / Azure AD Connect.
-        if ($sigValid -and -not $staged) {
-            $why += "known BYOVD-abusable driver, but validly signed and in the normal drivers directory -- most likely installed by legitimate software. A local attacker can still abuse it to load unsigned kernel code; remove it if you do not need the software that installed it"
-            $itemSev = Get-MaxSev $itemSev 'WARNING'
-        } else {
-            $why += "filename is a known vulnerable/abused driver, and it is unsigned, invalidly signed, or staged outside the drivers directory -- the BYOVD staging pattern"
-            $itemSev = 'CRITICAL'
-        }
-    }
-    if ($itemSev -ne 'CRITICAL' -and -not $sigValid) {
-        $st = if ($sig) { [string]$sig.Status } else { 'unreadable' }
-        $why += "unsigned or invalid Authenticode signature ($st) on a kernel driver"
-        $itemSev = Get-MaxSev $itemSev 'WARNING'
-    }
-
-    if ($itemSev -ne 'OK') {
+    if ($v.Sev -ne 'OK') {
         $hs = if ($hash) { $hash.Substring(0,16) + '...' } else { '(unhashable)' }
-        "[$itemSev] Driver $p [$hs] -- $($why -join '; ')"
-        $sev = Get-MaxSev $sev $itemSev
+        "[$($v.Sev)] Driver $p [$hs] -- $($v.Why -join '; ')"
+        $sev = Get-MaxSev $sev $v.Sev
     }
 }
 
