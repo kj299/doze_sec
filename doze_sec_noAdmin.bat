@@ -4895,10 +4895,39 @@ goto :eof
 set "DZ_BLK=%TEMP%\dz_blk_%DOZE_LOG_TS%.txt"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" > "%DZ_BLK%" 2>&1
 type "%DZ_BLK%">> "%REPORT%"
-set "DZ_BLKSEV=OK"
 if not exist "%SCRIPT_DIR%tools\block_sev.ps1" goto :dz_ps_scan_nohelper
-for /f "usebackq delims=" %%s in (`"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\block_sev.ps1" -Path "%DZ_BLK%" 2^>nul`) do set "DZ_BLKSEV=%%s"
+rem READ THE GRADE THROUGH A FILE, NOT A for /f BACKTICK.
+rem
+rem It used to be:
+rem   for /f "usebackq delims=" %%s in (`"%PWSH%" ... -Path "%DZ_BLK%" 2^>nul`) do set "DZ_BLKSEV=%%s"
+rem
+rem cmd runs a for /f backtick command through cmd /c, and cmd /c strips the
+rem leading and trailing quote when the command line begins with one. This one
+rem began with "%PWSH%", so the invocation was mangled and produced NO output.
+rem The loop body never ran, DZ_BLKSEV kept its "OK" default, and the block
+rem raised nothing -- on every machine, for every one of the eighteen
+rem :dz_ps_scan call sites. Office macro policy, Secure Boot, AMSI-bypass
+rem traces, RDP shadowing and the nation-state TTP blocks all printed findings
+rem that reached neither the ledger, FINDINGS COUNTED nor the exit code. Only
+rem checks carrying a marker backstop survived, and that is what masked it: the
+rem ASR block raises the same message from its marker precisely WHEN the grade
+rem came back OK, so its ledger row looked like proof the grader worked.
+rem
+rem Measured, not argued. On a runner, against the same file: the bare-relative
+rem invocation graded WARNING and this quoted-absolute one graded OK.
+rem
+rem A file plus set /p is the idiom this repo already uses for markers. No
+rem backticks, no cmd /c, no quote stripping.
+set "DZ_SEVF=%TEMP%\dz_sev_%DOZE_LOG_TS%.txt"
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\block_sev.ps1" -Path "%DZ_BLK%" > "%DZ_SEVF%" 2>nul
+rem The sentinel is what stops this failing SILENTLY again. If no grade is ever
+rem read the value stays DZ_NOGRADE and is DECLARED an AUDITGAP, rather than
+rem defaulting to OK -- which is indistinguishable from a genuinely clean block.
+set "DZ_BLKSEV=DZ_NOGRADE"
+if exist "%DZ_SEVF%" set /p DZ_BLKSEV=<"%DZ_SEVF%"
+del "%DZ_SEVF%" 2>nul
 del "%DZ_BLK%" 2>nul
+if /i "!DZ_BLKSEV!"=="DZ_NOGRADE" goto :dz_ps_scan_ungraded
 rem UNREADABLE means block_sev could not read the block output at all.
 rem Treating that as OK is how three ASR warnings reached a user report
 rem while the section read CLEAN: a degradation must be declared, never
