@@ -1,29 +1,92 @@
-# TEMPORARY diagnostic -- DELETE with .github/workflows/driver-catalog-probe.yml
-# once it has answered.
+# driver_catalog_probe.ps1 -- why does ONE machine call a Microsoft inbox
+# driver unsigned when a clean Windows install does not?
 #
-# Question: WHY does Get-AuthenticodeSignature report a Microsoft inbox driver
-# (bthmodem.sys on the owner's machine) as NotSigned, and which IN-BOX
-# mechanism reports it correctly? Nothing may be installed on the target
-# machine, so every candidate here ships with Windows.
+# READ-ONLY. Opens files for reading, queries services and the catalog
+# database, and prints. It writes nothing, changes nothing, installs nothing
+# and makes no network connection. Safe to run on a live machine, elevated or
+# not. It needs no admin, but it REPORTS whether it had it, because that is
+# one of the candidate explanations.
 #
-# Microsoft's Get-AuthenticodeSignature docs say catalog signatures ARE used.
-# The SignTool docs say there are TWO catalog databases -- /ad (default) and
-# /as (system component / driver), the latter keyed by DRIVER_ACTION_VERIFY
-# {F750E6C3-38EE-11D1-85E5-00C04FC295EE}. Hypothesis: the cmdlet consults only
-# the default database, so driver catalogs are missed.
+# BACKGROUND
+#   tools/driver_audit.ps1 grades a kernel driver with Get-AuthenticodeSignature
+#   and raises "[WARNING] Driver ... unsigned or invalid Authenticode signature
+#   (NotSigned) on a kernel driver" when the status is not Valid. On the
+#   owner's machine that fired for C:\WINDOWS\system32\drivers\bthmodem.sys,
+#   a Microsoft inbox Bluetooth driver, and it was catalogued in
+#   tests/benign_corpus.txt as a known false positive on the theory that the
+#   cmdlet cannot read driver-store CATALOG signatures.
 #
-# That is a HYPOTHESIS. This measures it on a real runner before any code is
-# built on it -- the same A/B technique that broke the :dz_ps_scan deadlock.
+#   MEASURED 2026-09-07 on windows-latest (Windows Server 2025 26100,
+#   PowerShell 5.1.26100): that theory is WRONG. All 457 drivers reported
+#   Status=Valid, and SignatureType came back Catalog for every one sampled.
+#   Get-AuthenticodeSignature on 5.1 already resolves driver catalogs. The
+#   false positive did not reproduce on a clean machine at all.
+#
+#   So the interesting question is no longer "how do we read catalogs" -- the
+#   cmdlet does. It is "what is different about the machine where the lookup
+#   FAILED", and whether that difference is itself worth reporting. A catalog
+#   lookup that stops working is not automatically benign: the catalog store
+#   and the service that reads it are exactly what tampering would target.
+#
+# WHAT THIS SEPARATES
+#   1. Not elevated                 -> catalog access denied for some files.
+#   2. CryptSvc not running/healthy -> every catalog lookup fails.
+#   3. Catalog store unreadable     -> same, and worth a finding of its own.
+#   4. This ONE driver is genuinely uncovered (its package was removed and
+#      the .sys was left behind) -> the warning is arguably CORRECT.
+#   5. Something else -- in which case the per-file dump below says what.
+[CmdletBinding()]
+param(
+    # Focus on one file. Default: audit the whole drivers directory the way
+    # driver_audit.ps1 does, so we learn whether this is one driver or many.
+    [string]$Path = '',
+    # The full scan calls Get-AuthenticodeSignature ~450 times; that measured
+    # 55 s on a runner. Skip it if you only care about -Path.
+    [switch]$SkipFullScan
+)
+
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
 
-'=== ENV ==='
-"PSVersion     : $($PSVersionTable.PSVersion)"
-"LanguageMode  : $($ExecutionContext.SessionState.LanguageMode)"
-"OS            : $([Environment]::OSVersion.Version)"
+function Line { param([string]$s) Write-Output $s }
 
-'=== M0: does Add-Type compile at all? (the lock-down question) ==='
-$swAdd = [Diagnostics.Stopwatch]::StartNew()
+Line '=== ENVIRONMENT ==='
+Line "PSVersion    : $($PSVersionTable.PSVersion)"
+Line "LanguageMode : $($ExecutionContext.SessionState.LanguageMode)"
+Line "OS build     : $([Environment]::OSVersion.Version)"
+try {
+    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $pr = New-Object Security.Principal.WindowsPrincipal($id)
+    $elev = $pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+} catch { $elev = 'unknown' }
+Line "Elevated     : $elev"
+
+Line ''
+Line '=== CANDIDATE 2/3: the catalog subsystem itself ==='
+# Get-AuthenticodeSignature's catalog lookup goes through Cryptographic
+# Services. If CryptSvc is stopped or unhealthy EVERY catalog-signed file
+# reports NotSigned -- which would make this a whole-machine condition, not a
+# per-driver one, and a security-relevant finding in its own right.
+foreach ($svc in @('CryptSvc', 'CryptoSvc')) {
+    try {
+        $s = Get-Service -Name $svc -EA Stop
+        Line "Service $svc : Status=$($s.Status) StartType=$($s.StartType)"
+    } catch { }
+}
+$catRoot = Join-Path (Join-Path $env:SystemRoot 'System32') 'CatRoot'
+$drvCatDir = Join-Path $catRoot '{F750E6C3-38EE-11D1-85E5-00C04FC295EE}'
+foreach ($d in @($catRoot, $drvCatDir)) {
+    if (Test-Path -LiteralPath $d) {
+        $n = -1
+        try { $n = @(Get-ChildItem -LiteralPath $d -Filter *.cat -File -EA Stop).Count } catch { $n = "UNREADABLE ($($_.Exception.Message))" }
+        Line "CatRoot $d : $n .cat file(s)"
+    } else {
+        Line "CatRoot $d : MISSING"
+    }
+}
+
+Line ''
+Line '=== P/Invoke availability (the lock-down question) ==='
 $catOk = $false
 try {
     Add-Type -ErrorAction Stop -Namespace DozeSec -Name CatSig -MemberDefinition @'
@@ -56,17 +119,15 @@ public static extern bool CryptCATAdminReleaseContext(IntPtr hCatAdmin, uint dwF
 '@
     $catOk = $true
 } catch {
-    "Add-Type FAILED: $($_.Exception.Message)"
+    Line "Add-Type FAILED: $($_.Exception.Message)"
+    Line '  (Constrained Language Mode, WDAC or an AppLocker rule over %TEMP% blocks this.)'
 }
-$swAdd.Stop()
-"Add-Type compiled : $catOk  ($($swAdd.ElapsedMilliseconds) ms)"
+Line "Add-Type compiled : $catOk"
 
-# Find the catalog holding a file, in a NAMED database.
-#   Which = 'driver'  -> DRIVER_ACTION_VERIFY subsystem GUID
-#   Which = 'default' -> NULL subsystem (the default catalog database)
 function Find-Catalog {
-    param([string]$Path, [string]$Which, [string]$Alg)
+    param([string]$File, [string]$Which, [string]$Alg)
     $res = @{ Found = $false; Catalog = ''; Err = '' }
+    if (-not $catOk) { $res.Err = 'no P/Invoke'; return $res }
     $hCat = [IntPtr]::Zero
     $drvGuid = [Guid]'F750E6C3-38EE-11D1-85E5-00C04FC295EE'
     try {
@@ -82,7 +143,7 @@ function Find-Catalog {
             $res.Err = "AcquireContext failed (LastError $([Runtime.InteropServices.Marshal]::GetLastWin32Error()))"
             return $res
         }
-        $fs = [IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite')
+        $fs = [IO.File]::Open($File, 'Open', 'Read', 'ReadWrite')
         try {
             $h = $fs.SafeFileHandle.DangerousGetHandle()
             $sz = 0
@@ -104,86 +165,71 @@ function Find-Catalog {
                     $res.Catalog = $ci.wszCatalogFile
                 } else { $res.Err = 'CatalogInfoFromContext failed' }
                 [void][DozeSec.CatSig]::CryptCATAdminReleaseCatalogContext($hCat, $ctx, 0)
-            } else { $res.Err = 'no catalog for hash' }
+            } else { $res.Err = 'no catalog covers this file' }
         } finally { $fs.Close() }
     } catch { $res.Err = $_.Exception.Message }
     finally { if ($hCat -ne [IntPtr]::Zero) { [void][DozeSec.CatSig]::CryptCATAdminReleaseContext($hCat, 0) } }
     return $res
 }
 
-'=== M5: Win32_PnPSignedDriver coverage ==='
-try {
-    $pnp = @(Get-CimInstance Win32_PnPSignedDriver -EA Stop)
-    "Win32_PnPSignedDriver rows: $($pnp.Count)"
-    "  signed rows: $(@($pnp | Where-Object { $_.IsSigned }).Count)"
-} catch { "Win32_PnPSignedDriver FAILED: $($_.Exception.Message)" }
-
-'=== M6: driverquery /si ==='
-try { & driverquery.exe /si /fo csv 2>&1 | Select-Object -First 4 | ForEach-Object { "  $_" } }
-catch { "driverquery FAILED: $($_.Exception.Message)" }
-
-'=== SCAN: drivers\*.sys that Get-AuthenticodeSignature does NOT call Valid ==='
-$drv = Join-Path (Join-Path $env:SystemRoot 'System32') 'drivers'
-$all = @(Get-ChildItem -LiteralPath $drv -Filter *.sys -File -EA SilentlyContinue)
-"Total .sys in drivers dir: $($all.Count)"
-$swSig = [Diagnostics.Stopwatch]::StartNew()
-$notValid = @()
-foreach ($f in $all) {
+function Dump-File {
+    param([string]$File)
+    Line "--- $File"
+    if (-not (Test-Path -LiteralPath $File -PathType Leaf)) { Line '    NOT ON DISK'; return }
+    $fi = Get-Item -LiteralPath $File -EA SilentlyContinue
+    if ($fi) { Line "    size=$($fi.Length)  modified=$($fi.LastWriteTimeUtc.ToString('u'))" }
     $s = $null
-    try { $s = Get-AuthenticodeSignature -LiteralPath $f.FullName -EA Stop } catch {}
-    if (-not ($s -and $s.Status -eq 'Valid')) { $notValid += [pscustomobject]@{ File = $f; Sig = $s } }
-}
-$swSig.Stop()
-"Get-AuthenticodeSignature over all: $($swSig.ElapsedMilliseconds) ms"
-"NOT Valid (today's false-positive set): $($notValid.Count)"
-
-'=== M2: does the 5.1 Signature object expose SignatureType / IsOSBinary? ==='
-$probeSig = Get-AuthenticodeSignature -LiteralPath $all[0].FullName
-$props = @($probeSig | Get-Member -MemberType Properties | Select-Object -ExpandProperty Name)
-"Signature properties: $($props -join ', ')"
-"Has SignatureType : $($props -contains 'SignatureType')"
-"Has IsOSBinary    : $($props -contains 'IsOSBinary')"
-if ($props -contains 'SignatureType') {
-    $spread = @($all | Select-Object -First 40 | ForEach-Object {
-        [string](Get-AuthenticodeSignature -LiteralPath $_.FullName).SignatureType
-    }) | Group-Object | ForEach-Object { "$($_.Name)=$($_.Count)" }
-    "SignatureType spread over first 40: $($spread -join ' ')"
-}
-
-'=== PER-FILE: every mechanism, on the files that fail today ==='
-if ($notValid.Count -eq 0) {
-    '!! No NotSigned drivers on this runner -- the false positive does not reproduce here.'
-}
-$swCat = [Diagnostics.Stopwatch]::StartNew()
-$tally = @{ drvSha256 = 0; drvSha1 = 0; defSha256 = 0; catValid = 0 }
-foreach ($e in ($notValid | Select-Object -First 25)) {
-    $p = $e.File.FullName
-    $st = if ($e.Sig) { [string]$e.Sig.Status } else { 'unreadable' }
-    "--- $($e.File.Name)  [M1 Status=$st]"
-    if ($props -contains 'SignatureType') {
-        "    M2 SignatureType=$($e.Sig.SignatureType) IsOSBinary=$($e.Sig.IsOSBinary)"
+    try { $s = Get-AuthenticodeSignature -LiteralPath $File -EA Stop } catch { Line "    Get-AuthenticodeSignature THREW: $($_.Exception.Message)" }
+    if ($s) {
+        Line "    Status        : $($s.Status)"
+        Line "    StatusMessage : $($s.StatusMessage)"
+        Line "    SignatureType : $($s.SignatureType)"
+        Line "    IsOSBinary    : $($s.IsOSBinary)"
+        Line "    Signer        : $($s.SignerCertificate.Subject)"
     }
-    if (-not $catOk) { continue }
-    $r3 = Find-Catalog -Path $p -Which 'driver'  -Alg 'SHA256'
-    $r4 = Find-Catalog -Path $p -Which 'default' -Alg 'SHA256'
-    $r5 = Find-Catalog -Path $p -Which 'driver'  -Alg 'SHA1'
-    "    M3 driver/SHA256 : found=$($r3.Found) $(if($r3.Found){[IO.Path]::GetFileName($r3.Catalog)}else{$r3.Err})"
-    "    M4 default/SHA256: found=$($r4.Found) $(if($r4.Found){[IO.Path]::GetFileName($r4.Catalog)}else{$r4.Err})"
-    "    M3 driver/SHA1   : found=$($r5.Found) $(if($r5.Found){[IO.Path]::GetFileName($r5.Catalog)}else{$r5.Err})"
-    if ($r3.Found) {
-        $tally.drvSha256++
-        $cs = Get-AuthenticodeSignature -LiteralPath $r3.Catalog
-        "    -> catalog signature: Status=$($cs.Status) Signer=$($cs.SignerCertificate.Subject)"
-        if ($cs.Status -eq 'Valid') { $tally.catValid++ }
+    foreach ($combo in @(@('driver', 'SHA256'), @('default', 'SHA256'), @('driver', 'SHA1'))) {
+        $r = Find-Catalog -File $File -Which $combo[0] -Alg $combo[1]
+        $tail = if ($r.Found) { [IO.Path]::GetFileName($r.Catalog) } else { $r.Err }
+        Line "    catalog[$($combo[0])/$($combo[1])] : found=$($r.Found) $tail"
+        if ($r.Found) {
+            $cs = $null
+            try { $cs = Get-AuthenticodeSignature -LiteralPath $r.Catalog -EA Stop } catch {}
+            if ($cs) { Line "      -> catalog signature Status=$($cs.Status) Signer=$($cs.SignerCertificate.Subject)" }
+        }
     }
-    if ($r5.Found) { $tally.drvSha1++ }
-    if ($r4.Found) { $tally.defSha256++ }
 }
-$swCat.Stop()
 
-'=== TALLY (over the probed subset) ==='
-"driver DB / SHA256 resolved  : $($tally.drvSha256)"
-"  of those, catalog is Valid : $($tally.catValid)"
-"driver DB / SHA1   resolved  : $($tally.drvSha1)"
-"default DB / SHA256 resolved : $($tally.defSha256)"
-"catalog lookup wall clock    : $($swCat.ElapsedMilliseconds) ms"
+if ($Path) {
+    Line ''
+    Line '=== FOCUSED FILE ==='
+    Dump-File -File $Path
+}
+
+if (-not $SkipFullScan) {
+    Line ''
+    Line '=== FULL SCAN of System32\drivers (this takes about a minute) ==='
+    $drv = Join-Path (Join-Path $env:SystemRoot 'System32') 'drivers'
+    $all = @(Get-ChildItem -LiteralPath $drv -Filter *.sys -File -EA SilentlyContinue)
+    Line "Total .sys: $($all.Count)"
+    $byStatus = @{}
+    $notValid = @()
+    foreach ($f in $all) {
+        $s = $null
+        try { $s = Get-AuthenticodeSignature -LiteralPath $f.FullName -EA Stop } catch {}
+        $st = if ($s) { "$($s.Status)/$($s.SignatureType)" } else { 'threw/-' }
+        if (-not $byStatus.ContainsKey($st)) { $byStatus[$st] = 0 }
+        $byStatus[$st]++
+        if (-not ($s -and $s.Status -eq 'Valid')) { $notValid += $f.FullName }
+    }
+    Line 'Status/SignatureType spread:'
+    foreach ($k in ($byStatus.Keys | Sort-Object)) { Line "   $k = $($byStatus[$k])" }
+    Line ''
+    Line "NOT Valid -- the drivers driver_audit.ps1 warns about: $($notValid.Count)"
+    # THIS is the number that decides between the candidates. One file means a
+    # single uncovered driver; many means the catalog subsystem is the problem.
+    foreach ($p in ($notValid | Select-Object -First 20)) { Dump-File -File $p }
+    if ($notValid.Count -gt 20) { Line "... and $($notValid.Count - 20) more not shown" }
+}
+
+Line ''
+Line '=== DONE -- send this whole output back ==='
