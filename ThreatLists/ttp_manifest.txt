@@ -138,5 +138,6 @@ T1574.001|Persistence|DLL Search Order Hijacking|-|Sec 4 module_inspect
 #
 # === PRE-OS BOOT (boot-chain configuration audit) ===
 T1542|Defense Evasion|Pre-OS Boot|BlackLotus,CosmicStrand|Sec 13 boot_chain_check
+T1554|Persistence|Compromise Host Software Binary|-|Sec 13 cbs_integrity_check
 T1542.001|Defense Evasion|System Firmware (Secure Boot state/setup mode)|-|Sec 13 boot_chain_check
 T1542.003|Defense Evasion|Bootkit (boot-loader integrity flags)|BlackLotus|Sec 13 boot_chain_check

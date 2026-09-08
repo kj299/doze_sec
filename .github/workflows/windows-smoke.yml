@@ -688,6 +688,53 @@ jobs:
           Write-Host "log_gap_check.ps1 OK"
           exit 0
 
+      - name: cbs_integrity_check.ps1 (Windows' own record of corrupt system binaries)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # THE VERDICT, PROVEN. Corrupting a protected system binary to make
+          # Windows log it is destructive, so the decision lives in pure
+          # functions and -SelfTest drives them over fixed inputs -- including
+          # the REAL CBS lines from the 2026-09-07 bthmodem.sys field case and
+          # Microsoft's own documented benign example from KB 954402. Without
+          # this the live run below would only prove the script executes.
+          $st = (.\tools\cbs_integrity_check.ps1 -SelfTest) -join "`n"
+          Write-Host $st
+          if ($LASTEXITCODE -ne 0) { throw 'cbs_integrity_check -SelfTest failed: the corrupt-file verdict is wrong' }
+          if ($st -notmatch 'corrupt-then-repaired raises NOTHING') { throw 'self-test no longer covers the repaired case -- a file Windows already fixed could be reported as live corruption' }
+          if ($st -notmatch 'KB 954402') { throw 'self-test no longer covers the KB 954402 benign class -- wallpaper hash mismatches can be reported as compromise again' }
+          if ($st -notmatch 'verifying NOW is resolved context') { throw 'self-test no longer proves the log is treated as history and the present is verified' }
+          if ($st -notmatch 'unrepaired AND still unverifiable is a WARNING') { throw 'self-test no longer proves the check can fire at all' }
+          $cases = ([regex]::Matches($st, '(?m)^\[OK\]')).Count
+          if ($cases -lt 10) { throw "self-test ran only $cases case(s) -- it is not exercising the verdict" }
+
+          # LIVE RUN against the runner's real CBS logs. A clean CI image has no
+          # unrepaired corruption, so a finding here would be a false positive
+          # of exactly the kind this check was designed to avoid.
+          $md = Join-Path $env:TEMP ("dz_cbs_ci_{0}" -f $PID)
+          New-Item -ItemType Directory -Path $md -Force | Out-Null
+          try {
+            $out = (.\tools\cbs_integrity_check.ps1 -MarkerDir $md) -join "`n"
+            Write-Host $out
+            if ($out -notmatch '\[(OK|INFO|WARNING|SKIPPED|BUDGET)\]') { throw 'the live run emitted no graded line at all' }
+            $m = Join-Path $md 'dz_cbs.txt'
+            if (Test-Path $m) {
+              $sev = (Get-Content $m).Trim()
+              # A WARNING is acceptable: the runner may deny the log or run out
+              # of budget, and both are DECLARED rather than passed off as
+              # clean. A CRITICAL is not a severity this check ever emits.
+              if ($sev -eq 'CRITICAL') { throw "cbs_integrity_check reported CRITICAL on a clean runner (false positive): $out" }
+              Write-Host "  (marker $sev on the runner)"
+            }
+            # An unreadable log must never be graded OK, and budget exhaustion
+            # must never read as a pass. Both framings are load-bearing.
+            $src = Get-Content .\tools\cbs_integrity_check.ps1 -Raw
+            if ($src -notmatch 'missing coverage, not a pass') { throw 'the budget-exhaustion framing was removed' }
+            if ($src -notmatch 'a LEAD, not a') { throw 'the "log is history, verify the present" framing was removed' }
+          } finally { Remove-Item $md -Recurse -Force -EA SilentlyContinue }
+          Write-Host "cbs_integrity_check.ps1 OK"
+          exit 0
+
       - name: section_coverage.ps1 (a CLEAN verdict must not cover checks that never ran)
         shell: powershell
         run: |

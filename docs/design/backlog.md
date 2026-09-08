@@ -160,6 +160,14 @@ BTHMODEM service was `STOPPED` with exit code 1077 (never started).
 that called it a false positive were wrong. It detected genuine corruption of a
 system binary hours before anything else on the machine acted on it.
 
+**FOLLOW-UP SHIPPED:** the answer took five rounds of hand-written diagnostics
+against the owner's machine, and it was in a log file the whole time.
+`tools/cbs_integrity_check.ps1` (Section 13, T1554) now reads
+`%WINDIR%\Logs\CBS\CBS.log` directly, so the next machine gets this answer in
+the report instead of a debugging session. The remaining follow-up from that
+day -- surfacing HVCI state alongside an unsigned-driver finding, since a
+driver that cannot load reads very differently -- is still open.
+
 **The lesson worth keeping:** this entry asserted a mechanism, three documents
 repeated it, and a fix was designed against it -- and one measurement on a real
 runner refuted it in under two minutes. Measure the mechanism before designing
