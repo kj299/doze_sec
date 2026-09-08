@@ -2731,6 +2731,32 @@ set /a DEFERRED_COUNT+=1
 :sec13_bootchain_done
 
 echo.>> "%REPORT%"
+echo --- System-File Integrity per Windows' own servicing log ^(CBS^) --->> "%REPORT%"
+echo  Command: powershell -File tools\cbs_integrity_check.ps1>> "%REPORT%"
+echo  Windows records every protected system binary whose bytes do not match the>> "%REPORT%"
+echo  component store in %%WINDIR%%\Logs\CBS\CBS.log. This reads that first-party>> "%REPORT%"
+echo  record ^(T1554^). A logged entry is HISTORY, so a file is only reported when>> "%REPORT%"
+echo  it was never repaired AND still fails verification now.>> "%REPORT%"
+if "%IS_ADMIN%"=="0" goto :sec13_cbs_noadmin
+del "%TEMP%\dz_cbs.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\cbs_integrity_check.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\cbs_integrity_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo  [INFO] tools\cbs_integrity_check.ps1 not found -- system-file integrity check skipped.>> "%REPORT%"
+)
+if exist "%TEMP%\dz_cbs.txt" (
+    set "_CBSSEV="
+    set /p _CBSSEV=<"%TEMP%\dz_cbs.txt"
+    call :dz_finding !_CBSSEV! 13 T1554 "Windows servicing recorded a corrupt system binary that was never repaired"
+    del "%TEMP%\dz_cbs.txt" 2>nul
+)
+goto :sec13_cbs_done
+:sec13_cbs_noadmin
+echo  [DEFERRED - ADMIN REQUIRED] CBS system-file integrity needs admin ^(reading %%WINDIR%%\Logs\CBS^).>> "%REPORT%"
+set /a DEFERRED_COUNT+=1
+:sec13_cbs_done
+
+echo.>> "%REPORT%"
 echo --- AutoRun/AutoPlay: SAFE=NoDriveTypeAutoRun=0xFF --->> "%REPORT%"
 echo  Command: reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v NoDriveTypeAutoRun ^&^& set "_AR_HIT=1">> "%REPORT%"
 set "_AR_HIT="

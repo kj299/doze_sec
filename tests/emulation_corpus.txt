@@ -52,6 +52,7 @@ CI|T1547.012|print processor (persistence_extra isolated plant)
 
 # ---- UNTESTABLE by design ----
 UNTESTABLE|T1486|encrypting files on the runner is destructive
+UNTESTABLE|T1554|deliberately corrupting a protected system binary to make Windows log it is destructive and could leave the machine unbootable; the parser and verdict are proven instead by cbs_integrity_check.ps1 -SelfTest over the real CBS lines from the 2026-09-07 field case
 UNTESTABLE|T1490|deleting volume shadow copies is destructive and unrecoverable
 UNTESTABLE|T1070.001|clearing the Security log destroys evidence; verified read-only against the live 1102 state instead
 UNTESTABLE|T1548|disabling UAC lowers the machine's protection; verified read-only against live EnableLUA instead

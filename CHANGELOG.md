@@ -6,6 +6,47 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Added: the audit reads Windows' own record of corrupted system binaries
+The Windows servicing stack writes to `%WINDIR%\Logs\CBS\CBS.log` every time
+it finds a protected system binary whose bytes do not match the component
+store. That is a first-party integrity oracle, and the tool did not read it.
+
+The cost of not reading it, measured: on 2026-09-07 the driver audit flagged
+`bthmodem.sys` as unsigned and establishing *why* took five rounds of
+hand-written diagnostics against the owner's machine. The answer was already in
+CBS.log — `DEPLOY [Pnp] Corrupt file:` six times, then `Repaired file:`.
+
+`tools/cbs_integrity_check.ps1` (Section 13, **T1554** Compromise Host Software
+Binary) reads it. Two design constraints shaped it:
+
+- **The log is history, so the present is verified.** CBS entries persist
+  indefinitely. An unrepaired entry is a *lead*, not a verdict: the file's
+  signature is checked now, and only a file that was logged corrupt *and* still
+  fails verification becomes a finding. Reporting long-repaired corruption as
+  current would be the same defect as reporting an empty `PortProxy` key as an
+  IOC.
+- **Microsoft KB 954402's benign class is excluded by design.**
+  `[SR] Cannot repair member file ... hash mismatch` appears routinely and
+  benignly for static files Windows Resource Protection does not protect —
+  Microsoft's own example is a wallpaper `.jpg`. A naive grep reports wallpaper
+  as compromise. Executable payloads are the discriminator.
+
+Everything else is reported as counted context rather than silence: files
+repaired by Windows, paths no longer on disk, and the KB 954402 class. An
+unreadable log is `[SKIPPED]`, never `[OK]`, and budget exhaustion is declared
+as missing coverage rather than passed off as clean.
+
+Eleven self-test cases run over fixed inputs — including the real `bthmodem.sys`
+lines verbatim and KB 954402's own example — and are proven to fail on three
+mutations: dropping the repair pairing, dropping the KB 954402 discriminator,
+and dropping the live verification. Deliberately corrupting a protected binary
+to test end-to-end would risk an unbootable machine, so it is declared
+`UNTESTABLE` in `tests/emulation_corpus.txt` with that reason rather than left
+as a silent gap.
+
+Non-admin runs defer it and say so (`[DEFERRED - ADMIN REQUIRED]`), since
+reading the CBS directory needs elevation on most builds.
+
 ### Confirmed: the driver audit caught real corruption of a system binary
 The `bthmodem.sys` warning that three documents called a false positive was
 true, and Windows says so in its own words. `sfc /VERIFYFILE` returned
