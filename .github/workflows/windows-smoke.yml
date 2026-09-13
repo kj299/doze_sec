@@ -433,12 +433,48 @@ jobs:
             if (-not (Test-Path (Join-Path $mdB 'dz_bits.txt'))) {
               throw 'the BITS finding wrote no marker -- it never reaches the ledger'
             }
-            Remove-Item $mdA, $mdB -Recurse -Force -EA SilentlyContinue
+            # (c) THE AGE ARM, both directions. It used to raise a WARNING on
+            # age alone, which fired for Microsoft Edge's own updater on the
+            # owner's machine purely because the job crossed 30 days between two
+            # runs -- a birthday, not a behaviour, and the same benign job the
+            # notify arm had already been fixed for. Age now only raises when
+            # the DESTINATION says something. -BitsAgeDays 0 makes the fresh
+            # probe job count as old so both directions are reachable here.
+            #
+            # This probe's remote is http://localhost/... -- plain HTTP, which
+            # IS one of the destination signals, so it must raise.
+            & bitsadmin /SetNotifyCmdLine $job 'NULL' 'NULL' 2>&1 | Out-Null
+            $mdC = Join-Path $env:TEMP ("dz_pe_bits_c_{0}" -f $PID)
+            $outC = (.\tools\persistence_extra.ps1 -MarkerDir $mdC -BitsAgeDays 0) -join "`n"
+            Write-Host (($outC -split "`n" | Where-Object { $_ -match 'BITS job' }) -join "`n")
+            if ($outC -notmatch "\[WARNING\] BITS job '$job'[^\r\n]*plain HTTP") {
+              throw 'an old BITS job fetching over plain HTTP was not raised -- the destination signal is dead'
+            }
+
+            # (d) an ORDINARY https destination, same age. Must be context, not
+            # a finding: this is the Edge-updater shape and the false positive
+            # being fixed.
+            $job2 = 'dz_selftest_bits_https'
+            & bitsadmin /cancel $job2 2>&1 | Out-Null
+            & bitsadmin /create $job2 2>&1 | Out-Null
+            & bitsadmin /addfile $job2 'https://example.invalid/dz_ci_nonexistent' "$env:TEMP\dz_ci_bits_https.bin" 2>&1 | Out-Null
+            $mdD = Join-Path $env:TEMP ("dz_pe_bits_d_{0}" -f $PID)
+            $outD = (.\tools\persistence_extra.ps1 -MarkerDir $mdD -BitsAgeDays 0) -join "`n"
+            Write-Host (($outD -split "`n" | Where-Object { $_ -match 'BITS job' }) -join "`n")
+            if ($outD -match "\[(WARNING|CRITICAL)\] BITS job '$job2'") {
+              throw "an old BITS job with an ordinary https destination and no notify command was RAISED -- the Edge-updater false positive is back"
+            }
+            if ($outD -notmatch "\[INFO\] BITS job '$job2'[^\r\n]*age alone is not a finding") {
+              throw 'the long-lived job was neither raised nor reported as context -- it vanished from the report entirely'
+            }
+            Remove-Item $mdA, $mdB, $mdC, $mdD -Recurse -Force -EA SilentlyContinue
           } finally {
             & bitsadmin /cancel $job 2>&1 | Out-Null
+            & bitsadmin /cancel 'dz_selftest_bits_https' 2>&1 | Out-Null
             Remove-Item "$env:TEMP\dz_ci_bits_probe.bin" -Force -EA SilentlyContinue
+            Remove-Item "$env:TEMP\dz_ci_bits_https.bin" -Force -EA SilentlyContinue
           }
-          Write-Host "BITS notify command line OK (empty is not a finding; a real one still is)"
+          Write-Host "BITS OK (empty notify is not a finding; a real one is; age alone is context; a bad destination raises)"
           exit 0
 
       - name: audit_policy_check.ps1 (auditing visibility; locale-independent cmdline signal)
@@ -717,6 +753,41 @@ jobs:
             $out = (.\tools\cbs_integrity_check.ps1 -MarkerDir $md) -join "`n"
             Write-Host $out
             if ($out -notmatch '\[(OK|INFO|WARNING|SKIPPED|BUDGET)\]') { throw 'the live run emitted no graded line at all' }
+            # A [SKIPPED] here is a FAILURE, not an acceptable outcome. This job
+            # runs elevated on a Windows runner, so %WINDIR%\Logs\CBS IS
+            # readable and the tool's state is knowable -- the same reason
+            # psv2_check's [SKIPPED] fails CI. Tolerating it is not hypothetical:
+            # a [datetime]::TryParse with an untyped [ref] threw, sent every file
+            # read into the catch, and reported a perfectly readable log as
+            # SKIPPED -- and the earlier version of THIS assertion accepted it.
+            if ($out -match '\[SKIPPED\]') { throw "cbs_integrity_check reported SKIPPED on an elevated runner, where the CBS logs are readable: $out" }
+            # The all-clear must state the window it covers. CBS rotates and can
+            # hold less than a week, so an unbounded "no corrupt system files"
+            # claims far more than it knows.
+            if ($out -notmatch 'covering (back to \d{4}-\d{2}-\d{2}|an undetermined period)') { throw 'the live run did not state the log window it actually covered' }
+
+            # FIXTURE ROUND-TRIP through the real reader. The self-test drives
+            # only the pure functions, so the file-reading path -- accounting,
+            # timestamp window, wording -- had no coverage at all, and two bugs
+            # in it passed the self-test untouched.
+            $fx = Join-Path $env:TEMP ("dz_cbs_fx_{0}.log" -f $PID)
+            Set-Content -LiteralPath $fx -Encoding ASCII -Value @(
+              '2026-09-01 08:00:00, Info                  CBS    Starting TrustedInstaller initialization.',
+              '2026-09-07 15:24:17, Info                  DEPLOY [Pnp] Corrupt file: C:\WINDOWS\system32\drivers\bthmodem.sys',
+              '2026-09-07 16:17:40, Info                  DEPLOY [Pnp] Repaired file: C:\WINDOWS\System32\drivers\bthmodem.sys'
+            )
+            $mdF = Join-Path $env:TEMP ("dz_cbs_fx_md_{0}" -f $PID)
+            New-Item -ItemType Directory -Path $mdF -Force | Out-Null
+            try {
+              $outF = (.\tools\cbs_integrity_check.ps1 -Path $fx -MarkerDir $mdF) -join "`n"
+              Write-Host $outF
+              if ($outF -match '\[SKIPPED\]') { throw "the reader reported SKIPPED on a readable fixture: $outF" }
+              if ($outF -notmatch 'were repaired, or verify correctly now') { throw 'the real reader did not treat corrupt-then-repaired as resolved context' }
+              if ($outF -notmatch 'covering back to 2026-09-01') { throw 'the reader did not report the window from the fixture''s first timestamp' }
+              if (Test-Path (Join-Path $mdF 'dz_cbs.txt')) { throw 'a corrupt-then-repaired fixture wrote a marker -- it would raise a finding for a file Windows already fixed' }
+            } finally {
+              Remove-Item $fx, $mdF -Recurse -Force -EA SilentlyContinue
+            }
             $m = Join-Path $md 'dz_cbs.txt'
             if (Test-Path $m) {
               $sev = (Get-Content $m).Trim()

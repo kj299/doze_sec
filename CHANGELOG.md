@@ -6,6 +6,53 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Fixed: three claims that overstated what the tool knew
+All three surfaced in one field run on 2026-09-13, and all three are the same
+mistake: reporting more certainty than the evidence carried.
+
+**BITS jobs are no longer flagged for their age alone.** The rule raised a
+WARNING on any job older than 30 days. On the owner's machine it fired for
+`Edge Component Updater` -- Microsoft Edge's own updater, created 2026-08-09,
+with no notify command line. It had been 29 days old during the previous run
+and 35 during this one: **the finding reported a birthday, not a behaviour**,
+and nothing on the machine had changed. It was also the same benign job the
+notify-command arm had already been fixed for, so the false positive returned
+through the other rule -- which is what an unconditioned rule will always
+allow.
+
+T1197 persistence executes through the *notify command line*, handled
+separately. A long-parked job without one can still move bytes, so the
+discriminator is now the **destination**: a bare IP address, plain HTTP, or a
+write into a staging path raises; an unreadable file list raises with the
+uncertainty stated; an ordinary destination is reported as `[INFO]` context
+with the destination shown. Deliberately not a list of known-good job names --
+this repo already records that excluding by name lets an attacker pick the
+name. Catalogued as `[bits-long-lived-updater]` in `tests/benign_corpus.txt`,
+and CI now drives both directions against a real `bitsadmin` job.
+
+**The CBS check now states the window it covers.** It reported
+`[OK] 2 CBS log file(s) read -- Windows servicing has recorded no corrupt
+system files`, which reads as absolute. It is not: CBS logs rotate, and on that
+machine the corrupt-file records from 2026-09-07 had **completely aged out six
+days later** -- confirmed by counting `Corrupt file` lines in the retained logs,
+which came back zero. Every run now names the oldest timestamp it could see and
+says plainly that older corruption is invisible to the check.
+
+**And a counter that was wrong exactly when coverage shrank.** If the read
+budget expired part-way through a log, the file was counted as *both* read and
+unread. Files are now counted as fully read, cut short, never opened, denied,
+or failed -- separately, because they mean different things to a reader.
+
+Two bugs in that reader were found by a fixture round-trip, not by the
+self-test, which only covers the pure grading functions: `[datetime]::TryParse`
+with an untyped `[ref]` threw and sent every file read into the catch, so a
+readable log reported `[SKIPPED]`; and `StreamReader.Peek()` returns `-1` rather
+than `$null` at end of stream, so every complete file counted as partial. CI
+accepted `[SKIPPED]` as a valid outcome and would have shipped both. It now
+fails on `[SKIPPED]` from an elevated runner -- the same rule `psv2_check`
+already carries -- asserts the coverage line, and drives the real reader over a
+fixture.
+
 ### Added: the audit reads Windows' own record of corrupted system binaries
 The Windows servicing stack writes to `%WINDIR%\Logs\CBS\CBS.log` every time
 it finds a protected system binary whose bytes do not match the component

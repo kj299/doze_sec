@@ -382,6 +382,7 @@ if (-not $bitsOk) {
     '[OK] No BITS transfer jobs queued.'
 } else {
     $flagged = 0
+    $aged = 0
     $bitsUnread = 0
     foreach ($j in $jobs) {
         $name  = [string]$j.DisplayName
@@ -426,15 +427,71 @@ if (-not $bitsOk) {
             $bitsSev = Get-MaxSev $bitsSev $sev
             $flagged++
         }
+        # AGE ALONE IS NOT A FINDING. This rule used to raise a WARNING on any
+        # job older than $BitsAgeDays, and on the owner's machine 2026-09-13 it
+        # fired for 'Edge Component Updater' -- Microsoft Edge's own updater,
+        # created 2026-08-09, with NO notify command line. It had been 29 days
+        # old during the previous run and 35 during this one: the finding
+        # reported a birthday, not a behaviour, and nothing on the machine had
+        # changed.
+        #
+        # Worse, it was the SAME benign job the comment above records fixing in
+        # the notify-command arm. The false positive came back through the other
+        # door, which is what an unconditioned rule will always allow.
+        #
+        # T1197 persistence executes through the NOTIFY COMMAND LINE, handled
+        # above and independently. What a long-parked job with no notify command
+        # can still do is move bytes, so the honest discriminator is the
+        # DESTINATION, not the calendar. Deliberately NOT a list of known-good
+        # job names: this repo already records that excluding by NAME lets an
+        # attacker pick the name.
         $created = $null
         try { $created = [datetime]$j.CreationTime } catch {}
         if ($created -and $created -lt (Get-Date).AddDays(-$BitsAgeDays)) {
-            "[WARNING] BITS job '$name' (owner $owner) created $($created.ToString('yyyy-MM-dd')) -- older than $BitsAgeDays days; malware parks jobs near the 90-day max lifetime."
-            $bitsSev = Get-MaxSev $bitsSev 'WARNING'
-            $flagged++
+            $age = [int]((Get-Date) - $created).TotalDays
+            $remotes = @()
+            $locals  = @()
+            $destKnown = $true
+            try {
+                foreach ($f in @($j.FileList)) {
+                    $rn = [string]$f.RemoteName
+                    $lnm = [string]$f.LocalName
+                    if (-not [string]::IsNullOrWhiteSpace($rn))  { $remotes += $rn }
+                    if (-not [string]::IsNullOrWhiteSpace($lnm)) { $locals  += $lnm }
+                }
+            } catch { $destKnown = $false }
+            if (@($remotes).Count -eq 0 -and @($locals).Count -eq 0) { $destKnown = $false }
+
+            # Behavioural signals, in order of how much they actually say.
+            $why = @()
+            foreach ($r in $remotes) {
+                if ($r -match '^\s*https?://(\d{1,3}\.){3}\d{1,3}([:/]|$)') { $why += "fetches from a bare IP address ($r)" }
+                elseif ($r -match '^\s*http://')                              { $why += "fetches over plain HTTP, not HTTPS ($r)" }
+            }
+            foreach ($l in $locals) {
+                if ($l -match $badPathRx) { $why += "writes into a staging path ($l)" }
+            }
+
+            if (-not $destKnown) {
+                # Cannot see where it goes. Stated, never absorbed as calm.
+                "[WARNING] BITS job '$name' (owner $owner) created $($created.ToString('yyyy-MM-dd')), $age days old, and its file list could NOT be read -- so its destination is unknown and this job is NOT cleared. Inspect it: Get-BitsTransfer -AllUsers | Where-Object DisplayName -eq '$name' | Select-Object -ExpandProperty FileList"
+                $bitsSev = Get-MaxSev $bitsSev 'WARNING'
+                $flagged++
+            } elseif (@($why).Count -gt 0) {
+                "[WARNING] BITS job '$name' (owner $owner) created $($created.ToString('yyyy-MM-dd')), $age days old, and it $([string]::Join('; ', $why)). A job parked near the 90-day maximum that also moves bytes somewhere questionable is the T1197 shape."
+                $bitsSev = Get-MaxSev $bitsSev 'WARNING'
+                $flagged++
+            } else {
+                # Old, no notify command, ordinary destination. Reported so the
+                # reader can judge it, and counted -- never silently dropped.
+                $aged++
+                $shown = if (@($remotes).Count -gt 0) { @($remotes)[0] } else { @($locals)[0] }
+                "[INFO] BITS job '$name' (owner $owner) is $age days old (created $($created.ToString('yyyy-MM-dd'))) with no notify command line and an ordinary destination: $shown. Long-lived updater jobs are normal; age alone is not a finding."
+            }
         }
     }
-    if ($flagged -eq 0) { "[OK] $($jobs.Count) BITS job(s) queued, none with a notify command line or older than $BitsAgeDays days." }
+    if ($flagged -eq 0) { "[OK] $($jobs.Count) BITS job(s) queued, none with a notify command line, an unreadable file list, or a questionable destination." }
+    if ($aged -gt 0) { "[INFO] $aged long-lived BITS job(s) listed above are reported as context only -- see the destination on each line." }
     if ($bitsUnread -gt 0) {
         # Same contract as the port-monitor / print-processor / time-provider
         # arms above: an entry that could not be read is a GAP, and an all-clear

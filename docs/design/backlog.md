@@ -164,7 +164,14 @@ system binary hours before anything else on the machine acted on it.
 against the owner's machine, and it was in a log file the whole time.
 `tools/cbs_integrity_check.ps1` (Section 13, T1554) now reads
 `%WINDIR%\Logs\CBS\CBS.log` directly, so the next machine gets this answer in
-the report instead of a debugging session. The remaining follow-up from that
+the report instead of a debugging session.
+
+**Its limit, measured 2026-09-13:** CBS logs rotate, and the `bthmodem.sys`
+records were gone from that machine's retained logs **six days** after the
+event -- `Corrupt file` lines in the retained set counted zero. So this check
+catches recent corruption only. It would have answered the 2026-09-07 question
+the same day; a week later there was nothing left to read. Every run now states
+the window it covers rather than implying it can see everything. The remaining follow-up from that
 day -- surfacing HVCI state alongside an unsigned-driver finding, since a
 driver that cannot load reads very differently -- is still open.
 
