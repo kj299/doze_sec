@@ -156,6 +156,13 @@ note      = Unsigned DLLs in ordinary third-party processes are common and are c
 #
 # DO NOT re-add it on the catalog theory. That theory is measured and dead.
 
+[bits-long-lived-updater]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:persistence_extra.ps1 BITS
+signature = BITS job '[^']+' is \d+ days old
+note      = Browser and OS updaters park long-lived BITS jobs for weeks at a time; Microsoft Edge's 'Edge Component Updater' is the common one. CONFIRMED on the owner's machine 2026-09-13: that job, created 2026-08-09 with NO notify command line, was raised as '[WARNING] ... older than 30 days' purely because it crossed the 30-day threshold between two runs -- it had been 29 days old during the previous run. Nothing on the machine changed; the finding reported a birthday. It was also the SAME job the notify-command arm had already been fixed for, so the false positive returned through the other rule. T1197 persistence executes through the notify command line, so a long-parked job without one can only move bytes, and the destination is what matters. Age alone is now context at INFO with the destination shown. Verify: Get-BitsTransfer -AllUsers | Select-Object DisplayName,OwnerAccount,CreationTime,JobState and inspect FileList RemoteName -- a bare IP, plain HTTP, or a write into a staging path still raises.
+
 [driver-signed-byovd-name]
 class     = QUIET
 maxsev    = WARNING

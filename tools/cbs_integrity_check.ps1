@@ -354,37 +354,69 @@ if ($logs.Count -eq 0) {
 
 $clock = [System.Diagnostics.Stopwatch]::StartNew()
 $lines = New-Object System.Collections.Generic.List[string]
-$read = 0
-$unread = 0
-$denied = 0
+# Counted separately because they mean different things to a reader. A file
+# cut short by the budget was NOT fully examined, and the earlier version
+# incremented both $unread and $read for it -- so the number describing
+# coverage was wrong in exactly the situation where coverage had shrunk.
+$read    = 0   # opened and read to the end
+$partial = 0   # opened, budget expired part-way through
+$skipped = 0   # never opened, budget already gone
+$denied  = 0   # access denied (needs admin)
+$failed  = 0   # any other read error
+# How far back the logs actually reach. CBS rotates, and on a busy machine the
+# window can be under a week -- measured on the owner's machine 2026-09-13,
+# where records from 2026-09-07 had already aged out entirely. Without this the
+# all-clear below would claim more than it can possibly know.
+$oldest = $null
 foreach ($lg in $logs) {
-    if ($clock.Elapsed.TotalSeconds -gt $BudgetSeconds) { $unread++; continue }
+    if ($clock.Elapsed.TotalSeconds -gt $BudgetSeconds) { $skipped++; continue }
     $reader = $null
+    $complete = $false
     try {
         # Share ReadWrite: TrustedInstaller holds CBS.log open while servicing.
         $fs = [System.IO.File]::Open($lg, 'Open', 'Read', 'ReadWrite')
         $reader = New-Object System.IO.StreamReader($fs)
+        $first = $true
         while ($null -ne ($ln = $reader.ReadLine())) {
+            if ($first) {
+                $first = $false
+                # Only the first line of each file, so establishing the window
+                # costs one regex per file rather than one per line.
+                $m = [regex]::Match($ln, '^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})')
+                if ($m.Success) {
+                    # [ref] to an already-typed variable: with $t = $null,
+                    # TryParse throws converting the argument, which sent the
+                    # whole file into the catch and reported a perfectly
+                    # readable log as [SKIPPED].
+                    [datetime]$t = [datetime]::MinValue
+                    if ([datetime]::TryParse($m.Groups[1].Value, [ref]$t)) {
+                        if ($null -eq $oldest -or $t -lt $oldest) { $oldest = $t }
+                    }
+                }
+            }
             # Cheap pre-filter before any regex: these logs are mostly noise.
             if ($ln.IndexOf('Corrupt file', [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
                 $ln.IndexOf('Repaired file', [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
                 $ln.IndexOf('Cannot repair member file', [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
                 [void]$lines.Add($ln)
             }
-            if ($clock.Elapsed.TotalSeconds -gt $BudgetSeconds) { $unread++; break }
+            if ($clock.Elapsed.TotalSeconds -gt $BudgetSeconds) { break }
         }
-        $read++
+        # Reaching EOF is the only thing that counts as fully read.
+        # Peek() returns the INT -1 at end of stream, never $null.
+        $complete = ($reader.Peek() -lt 0)
+        if ($complete) { $read++ } else { $partial++ }
     } catch [System.UnauthorizedAccessException] {
         $denied++
     } catch {
-        $unread++
+        $failed++
     } finally {
         if ($reader) { $reader.Dispose() }
     }
 }
 $clock.Stop()
 
-if ($read -eq 0) {
+if (($read + $partial) -eq 0) {
     if ($denied -gt 0) {
         '[SKIPPED] CBS log(s) could not be read (access denied) -- system-file integrity NOT checked. Reading %SystemRoot%\Logs\CBS needs administrator rights.'
     } else {
@@ -411,16 +443,28 @@ if ($v.Findings.Count -gt $shown) {
 foreach ($c in $v.Context) { $c }
 
 if ($denied -gt 0) {
-    "[INFO] $denied CBS log file(s) could not be read (access denied); $read were read."
+    "[INFO] $denied CBS log file(s) could not be read (access denied); $read were read in full."
 }
-if ($unread -gt 0) {
+if ($failed -gt 0) {
+    "[INFO] $failed CBS log file(s) could not be read for another reason and were NOT examined."
+}
+if (($partial + $skipped) -gt 0) {
     # Budget exhaustion is missing coverage, and is declared as such. A clean
     # verdict over a partially read log would be a claim this run cannot make.
-    "[BUDGET] $unread CBS log file(s) NOT fully read -- the ${BudgetSeconds}s wall-clock budget ran out. This is missing coverage, not a pass."
+    "[BUDGET] $partial CBS log file(s) cut short and $skipped never opened -- the ${BudgetSeconds}s wall-clock budget ran out. This is missing coverage, not a pass."
     $v.Sev = Get-MaxSev $v.Sev 'WARNING'
 }
 
+# STATE THE WINDOW, ALWAYS. CBS logs rotate, so "nothing corrupt" is only ever
+# a claim about the retained window -- and that window is short. Measured on
+# the owner's machine 2026-09-13: a corrupt-file record from 2026-09-07 had
+# already rotated away entirely, six days later. Without this line a reader
+# takes the all-clear for far more than it is.
+$window = if ($oldest) { "back to $($oldest.ToString('yyyy-MM-dd HH:mm'))" } else { 'an undetermined period' }
 if ($v.Sev -eq 'OK' -and $v.Findings.Count -eq 0 -and $v.Context.Count -eq 0) {
-    "[OK] $read CBS log file(s) read -- Windows servicing has recorded no corrupt system files."
+    "[OK] $read CBS log file(s) read, covering $window -- Windows servicing recorded no corrupt system files in that window."
+    '[INFO] CBS logs rotate and can cover less than a week on a busy machine. Corruption older than the window above is not visible to this check, whether or not it happened.'
+} else {
+    "[INFO] $read CBS log file(s) read in full, covering $window. CBS logs rotate, so anything older is not visible here."
 }
 Write-Marker -Name 'cbs' -Sev $v.Sev
