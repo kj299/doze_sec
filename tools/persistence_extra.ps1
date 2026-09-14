@@ -468,8 +468,14 @@ if (-not $bitsOk) {
                 if ($r -match '^\s*https?://(\d{1,3}\.){3}\d{1,3}([:/]|$)') { $why += "fetches from a bare IP address ($r)" }
                 elseif ($r -match '^\s*http://')                              { $why += "fetches over plain HTTP, not HTTPS ($r)" }
             }
+            # NOT $badPathRx here, though every other arm in this file uses it.
+            # It contains \Temp\, and a BITS job writing into the temp folder is
+            # what a downloader DOES -- Edge's own updater included. Raising on
+            # that would have replaced one false positive with a broader one.
+            # An autostart folder is different: nothing legitimate streams a
+            # file straight into Startup over BITS.
             foreach ($l in $locals) {
-                if ($l -match $badPathRx) { $why += "writes into a staging path ($l)" }
+                if ($l -match '(?i)\\Start Menu\\Programs\\Startup\\') { $why += "writes directly into an autostart folder ($l)" }
             }
 
             if (-not $destKnown) {
