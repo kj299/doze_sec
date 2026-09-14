@@ -566,6 +566,19 @@ jobs:
             $m = Join-Path $md 'dz_driver.txt'
             if (-not (Test-Path $m)) { throw 'planted unsigned driver wrote no marker' }
 
+            # A signature finding must carry the Memory Integrity context, so a
+            # reader can judge urgency instead of inferring it from a different
+            # section. Exactly one such line, whatever this runner's DeviceGuard
+            # state is -- the note has an answer for on, off and unknown.
+            $hv = @($out2 -split "`n" | Where-Object { $_ -match 'Memory Integrity \(HVCI\)' })
+            if ($hv.Count -ne 1) { throw "expected exactly one Memory Integrity context line beside the finding, got $($hv.Count)" }
+            if ($hv[0] -notmatch '^\[INFO\]') { throw "the Memory Integrity context must be [INFO] -- it is context, not a finding: $($hv[0])" }
+            Write-Host ("  HVCI context: {0}" -f $hv[0].Trim())
+            # And it must not have changed the grade. The marker is the severity
+            # that reaches the ledger; a downgrade would show up here first.
+            $mv2 = (Get-Content $m).Trim()
+            if ($mv2 -notmatch '^(WARNING|CRITICAL)$') { throw "the planted unsigned driver graded '$mv2' -- the HVCI context must never downgrade a finding" }
+
             # ATTACK SURFACE vs EVIDENCE OF COMPROMISE. A known-abusable driver
             # name that is VALIDLY SIGNED and in the normal drivers directory is
             # most likely legitimate software (VirtualBox ships vboxdrv.sys,
@@ -1698,6 +1711,21 @@ jobs:
             if ($out -match 'nointegritychecks not set') { Write-Host "  integrity-flag parse ran and reported enforced" }
             elseif ($out -match 'bcdedit produced no output') { Write-Host "  bcdedit unavailable on this runner -- integrity parse skipped (honest)" }
             else { throw 'neither the integrity-OK line nor the bcdedit-skip line appeared -- parse path unclear' }
+            # The memory-integrity arm asserted NOTHING until now. A runner's
+            # real DeviceGuard state is unknown, so the assertable invariant is
+            # that each of the two questions gets exactly one answer -- and that
+            # a NULL property reports "could not be determined" rather than
+            # silently claiming the hardening is off.
+            $vbsLines  = @($out -split "`n" | Where-Object { $_ -match 'Virtualization-Based Security (is|state)' })
+            $hvciLines = @($out -split "`n" | Where-Object { $_ -match 'HVCI / Memory Integrity (is|state)' })
+            if ($out -match 'DeviceGuard status not available') {
+              Write-Host '  DeviceGuard class unavailable on this runner -- honest, and the only line expected'
+            } else {
+              if ($vbsLines.Count -ne 1)  { throw "expected exactly one Virtualization-Based Security line, got $($vbsLines.Count)" }
+              if ($hvciLines.Count -ne 1) { throw "expected exactly one HVCI / Memory Integrity line, got $($hvciLines.Count)" }
+              Write-Host ("  VBS : {0}" -f $vbsLines[0].Trim())
+              Write-Host ("  HVCI: {0}" -f $hvciLines[0].Trim())
+            }
           } finally { Remove-Item $md -Recurse -Force -EA SilentlyContinue }
           Write-Host "boot_chain_check.ps1 OK"
           exit 0

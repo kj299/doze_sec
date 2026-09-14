@@ -134,6 +134,24 @@ jobs:
       # silently stops matching, which that file warns about in as many words.
       - name: Grade both directions (signed, unsigned, staged, known-bad, unreadable)
         run: pwsh -NoProfile -File tools/driver_audit.ps1 -SelfTest
+      # The Memory Integrity context must never become a severity downgrade,
+      # and must never go silent when the state is unknown -- this tool is not
+      # admin-gated in doze_sec_noAdmin.bat, so unelevated runs are real. The
+      # probe itself is never called here: this runner is Linux and the
+      # DeviceGuard CIM namespace does not exist, which is why the note is a
+      # pure function taking a state.
+      - name: The HVCI context is present for every state and downgrades nothing
+        run: |
+          out=$(pwsh -NoProfile -File tools/driver_audit.ps1 -SelfTest)
+          echo "$out"
+          echo "$out" | grep -q 'an UNKNOWN Memory Integrity state still produces a line' \
+            || { echo 'the unknown-state case is gone -- an unelevated run could go silent'; exit 1; }
+          echo "$out" | grep -q 'the HVCI-on note states the finding still stands' \
+            || { echo 'the no-downgrade case is gone -- HVCI context could start quieting real findings'; exit 1; }
+          echo "$out" | grep -q 'Unsigned is false for a known-bad hash that is validly signed' \
+            || { echo 'the Unsigned-flag case is gone -- the context line could attach to the wrong findings'; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]')
+          [ "$n" -ge 18 ] || { echo "self-test ran only $n case(s) -- it is not exercising the grade"; exit 1; }
 
   orphan-else-lint:
     name: "Orphaned else: no clause detached from its if (parses, then dies at runtime)"

@@ -6,6 +6,50 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### An unsigned-driver finding now says whether Memory Integrity is running
+On 2026-09-07 the audit correctly reported an unsigned kernel driver, and
+exposure was nil the whole time: that machine ran HVCI / Memory Integrity, so
+kernel code integrity was hypervisor-enforced. **The audit knew that** —
+`boot_chain_check.ps1` printed it in Section 13 — and the driver finding in
+Section 18 never mentioned it. Two sections holding halves of one picture, and
+the reader left to join them.
+
+`tools/driver_audit.ps1` now prints one `[INFO]` line beside a signature
+finding, stating the measured Memory Integrity state and pointing at Section 13
+for the rest of the boot chain.
+
+**It never changes the grade.** An unsigned kernel driver is a WARNING whether
+or not HVCI is running: the file is still wrong — `bthmodem.sys` was genuinely
+corrupt — and the mitigation can be switched off while the finding outlives it.
+Downgrading a real finding because a mitigating control is present is the false
+reassurance this project treats as its worst failure, so a self-test case
+asserts the HVCI-on wording still says the finding stands, and CI asserts the
+marker severity is unchanged.
+
+The wording claims only what was measured. Not "this driver cannot load" — a
+guarantee about a specific binary — but the state and the established meaning
+of the mechanism, mirroring `boot_chain_check`'s own phrasing.
+
+**All three states produce a line**, including *unknown*: `driver_audit.ps1` is
+not admin-gated in `doze_sec_noAdmin.bat` (`boot_chain_check.ps1` is), so
+unelevated runs where the query cannot answer are real, and going silent there
+is the failure this was designed against.
+
+`Get-HvciNote` is a pure function taking a state, and the probe is never called
+during `-SelfTest` — that suite runs on Linux, where the DeviceGuard namespace
+does not exist. Nine new cases; three mutations proven to fail, including one
+that guards the no-downgrade decision.
+
+**Also fixed in `boot_chain_check.ps1`:** a `$null` `SecurityServicesRunning` or
+`VirtualizationBasedSecurityStatus` was reported as *not running* rather than
+*could not be determined* — stating hardening as absent when it merely could
+not be read. Copying that logic into the driver audit would have duplicated the
+bug. Its CI step asserted nothing at all about those lines before; it now
+requires exactly one answer to each question.
+
+Catalogued as `[hvci-off-driver-context]` in `tests/benign_corpus.txt`: most
+consumer hardware has HVCI off, and that must never read as a finding.
+
 ### Fixed: three claims that overstated what the tool knew
 All three surfaced in one field run on 2026-09-13, and all three are the same
 mistake: reporting more certainty than the evidence carried.

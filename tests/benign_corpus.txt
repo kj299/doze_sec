@@ -112,6 +112,13 @@ proof     = field:a process must start and exit between two enumerations; timing
 signature = disagreed across APIs but had exited by the final re-check
 note      = A process that exits between the .NET, WMI and tasklist enumerations shows up in some and not others. The liveness re-check distinguishes that from concealment.
 
+[hvci-off-driver-context]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:driver_audit.ps1 (BYOVD by hash
+signature = Memory Integrity \(HVCI\) is (not running|state could not be determined)
+note      = tools/driver_audit.ps1 prints one Memory Integrity line beside an unsigned-driver finding so a reader can judge urgency without cross-referencing Section 13. It is CONTEXT at INFO and never changes the grade -- an unsigned kernel driver is a finding whether or not HVCI is running, because the file is still wrong and the mitigation can be switched off. Most consumer hardware has HVCI off, and the tool is not admin-gated in doze_sec_noAdmin.bat so the state may also be unknown on an unelevated run; neither is a finding. Verify: Get-CimInstance -Namespace root\Microsoft\Windows\DeviceGuard -ClassName Win32_DeviceGuard | Select-Object SecurityServicesRunning,VirtualizationBasedSecurityStatus -- SecurityServicesRunning containing 2 means HVCI is running.
+
 [vbs-off]
 class     = QUIET
 maxsev    = INFO

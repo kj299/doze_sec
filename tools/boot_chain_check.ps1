@@ -141,11 +141,27 @@ if (-not $smOk -or $null -eq $sm) {
 # ---- 3. Memory integrity (informational context, never raised) ------------
 try {
     $dg = Get-CimInstance -Namespace 'root\Microsoft\Windows\DeviceGuard' -ClassName Win32_DeviceGuard -EA Stop
-    $running = @($dg.SecurityServicesRunning)
-    $hvci = ($running -contains 2)
-    $vbs = ($dg.VirtualizationBasedSecurityStatus -eq 2)
-    if ($vbs) { '[INFO] Virtualization-Based Security is running.' } else { '[INFO] Virtualization-Based Security is not running (optional hardening; not a compromise indicator).' }
-    if ($hvci) { '[INFO] HVCI / Memory Integrity is running -- kernel code-integrity is hypervisor-enforced.' } else { '[INFO] HVCI / Memory Integrity is not running -- enabling it strongly raises the bar against kernel/bootkit tampering (Settings > Core isolation).' }
+    # A NULL property is UNKNOWN, not "off". Some editions return the instance
+    # with nothing in these fields, and the earlier version read that as
+    # "Virtualization-Based Security is not running" / "HVCI is not running" --
+    # stating a fact it had not established. Reporting hardening as absent when
+    # it merely could not be read is the same error as reporting a check clean
+    # when it never ran, and tools/driver_audit.ps1 now cites this state beside
+    # a signature finding, so the distinction has to be real.
+    if ($null -eq $dg -or $null -eq $dg.VirtualizationBasedSecurityStatus) {
+        '[INFO] Virtualization-Based Security state could not be determined on this edition/platform.'
+    } elseif ($dg.VirtualizationBasedSecurityStatus -eq 2) {
+        '[INFO] Virtualization-Based Security is running.'
+    } else {
+        '[INFO] Virtualization-Based Security is not running (optional hardening; not a compromise indicator).'
+    }
+    if ($null -eq $dg -or $null -eq $dg.SecurityServicesRunning) {
+        '[INFO] HVCI / Memory Integrity state could not be determined on this edition/platform.'
+    } elseif (@($dg.SecurityServicesRunning) -contains 2) {
+        '[INFO] HVCI / Memory Integrity is running -- kernel code-integrity is hypervisor-enforced.'
+    } else {
+        '[INFO] HVCI / Memory Integrity is not running -- enabling it strongly raises the bar against kernel/bootkit tampering (Settings > Core isolation).'
+    }
 } catch {
     '[INFO] DeviceGuard status not available on this edition/platform.'
 }

@@ -119,6 +119,45 @@ $script:HashProbe = {
     param($p)
     try { return (Get-FileHash -LiteralPath $p -Algorithm SHA256 -EA Stop).Hash.ToLower() } catch { return $null }
 }
+# Memory Integrity state, for CONTEXT on a signature finding -- never for the
+# grade. Returns 'on' | 'off' | 'unknown', and 'unknown' is a real answer here:
+# this tool is NOT admin-gated in doze_sec_noAdmin.bat (boot_chain_check is),
+# so it can run unelevated where this query may not answer.
+#
+# Deliberately duplicated rather than shared with boot_chain_check.ps1: there
+# is no tool-to-tool state channel in this repo and no module import in
+# tools/, and every tool queries the machine independently. Write-Marker is
+# copy-pasted into a dozen tools for the same reason.
+$script:HvciProbe = {
+    try {
+        $dg = Get-CimInstance -Namespace 'root\Microsoft\Windows\DeviceGuard' -ClassName Win32_DeviceGuard -EA Stop
+        # A NULL SecurityServicesRunning is 'unknown', NOT 'off'. Some editions
+        # return nothing here, and reading that as "Memory Integrity is off"
+        # would state a fact this tool did not establish.
+        if ($null -eq $dg -or $null -eq $dg.SecurityServicesRunning) { return 'unknown' }
+        if (@($dg.SecurityServicesRunning) -contains 2) { return 'on' }
+        return 'off'
+    } catch { return 'unknown' }
+}
+
+function Get-HvciNote {
+    # PURE. The line printed beside a signature finding.
+    #
+    # It states what was MEASURED and the established meaning of the mechanism.
+    # It does NOT say "this driver cannot load": that is a guarantee about a
+    # specific binary, and claiming it would be the same overreach as the
+    # findings this tool exists to keep honest -- just pointed at reassurance
+    # instead of alarm.
+    #
+    # Every state returns a non-empty line. Silence on 'unknown' is exactly the
+    # failure this is designed against.
+    param([string]$State)
+    switch ($State) {
+        'on'  { return '[INFO] Memory Integrity (HVCI) is running on this machine, so kernel code integrity is hypervisor-enforced. The finding above still stands -- the file is what it is, and Memory Integrity can be turned off. Section 13 has the full boot-chain state.' }
+        'off' { return '[INFO] Memory Integrity (HVCI) is not running, so kernel code integrity is not hypervisor-enforced. Section 13 has the full boot-chain state.' }
+        default { return '[INFO] Memory Integrity (HVCI) state could not be determined -- this check may be running without elevation. The finding above is reported at face value, with no assumption either way.' }
+    }
+}
 
 function Get-DriverVerdict {
     # Returns @{ Sev = 'OK'|'WARNING'|'CRITICAL'; Why = @(...) }.
@@ -167,12 +206,17 @@ function Get-DriverVerdict {
             $itemSev = 'CRITICAL'
         }
     }
+    # Unsigned records whether the SIGNATURE rule fired, so the caller knows
+    # whether the Memory Integrity context line is warranted. It never affects
+    # the grade -- see Get-HvciNote.
+    $unsigned = $false
     if ($itemSev -ne 'CRITICAL' -and -not $sigValid) {
         $st = if ($Sig) { [string]$Sig.Status } else { 'unreadable' }
         $why += "unsigned or invalid Authenticode signature ($st) on a kernel driver"
         $itemSev = Get-MaxSev $itemSev 'WARNING'
+        $unsigned = $true
     }
-    return @{ Sev = $itemSev; Why = $why }
+    return @{ Sev = $itemSev; Why = $why; Unsigned = $unsigned }
 }
 
 if ($SelfTest) {
@@ -243,6 +287,41 @@ if ($SelfTest) {
     $v = Get-DriverVerdict -Path 'C:\Users\Public\vboxdrv.sys' -Hash 'aa' -Sig (FakeSig 'Valid')
     T 'the same name staged in a drop location is CRITICAL' `
       ($v.Sev -eq 'CRITICAL') "$($v.Sev)"
+
+    # --- Memory Integrity context -----------------------------------------
+    # The probe is NEVER called here: this self-test runs on ubuntu-latest in
+    # lint.yml, where the DeviceGuard CIM namespace does not exist. That is why
+    # the note is a pure function taking a state.
+    $onNote  = Get-HvciNote -State 'on'
+    $offNote = Get-HvciNote -State 'off'
+    $unkNote = Get-HvciNote -State 'unknown'
+    T 'the HVCI note says running when Memory Integrity is on' `
+      ($onNote -match 'is running' -and $onNote -match 'hypervisor-enforced') $onNote
+    T 'the HVCI note says NOT running when Memory Integrity is off' `
+      ($offNote -match 'is not running') $offNote
+    # Silence on 'unknown' is the failure mode this was designed against: the
+    # tool is not admin-gated in the non-admin bat, so unelevated runs are real.
+    T 'an UNKNOWN Memory Integrity state still produces a line, and says so' `
+      ($unkNote -match 'could not be determined') $unkNote
+    T 'every HVCI state produces a non-empty [INFO] line' `
+      ((@($onNote, $offNote, $unkNote) | Where-Object { $_ -notmatch '^\[INFO\] \S' }).Count -eq 0) `
+      "on=[$onNote] off=[$offNote] unknown=[$unkNote]"
+    # The context must never be mistaken for a verdict downgrade.
+    T 'the HVCI-on note states the finding still stands' `
+      ($onNote -match 'still stands') $onNote
+
+    # Unsigned tells the caller whether the context line is warranted. It must
+    # follow the SIGNATURE rule, not the severity: a known-bad hash is CRITICAL
+    # without the signature rule firing at all.
+    $v = Get-DriverVerdict -Path $normal -Hash 'aa' -Sig (FakeSig 'NotSigned')
+    T 'Unsigned is true when the signature rule fires' ($v.Unsigned -eq $true) "$($v.Unsigned)"
+    $v = Get-DriverVerdict -Path $normal -Hash 'aa' -Sig $null
+    T 'Unsigned is true when the signature is unreadable' ($v.Unsigned -eq $true) "$($v.Unsigned)"
+    $v = Get-DriverVerdict -Path $normal -Hash 'aa' -Sig (FakeSig 'Valid')
+    T 'Unsigned is false for a validly signed driver' ($v.Unsigned -eq $false) "$($v.Unsigned)"
+    $v = Get-DriverVerdict -Path $normal -Hash 'dead00000000000000000000000000000000000000000000000000000000beef' -Sig (FakeSig 'Valid')
+    T 'Unsigned is false for a known-bad hash that is validly signed' `
+      ($v.Unsigned -eq $false -and $v.Sev -eq 'CRITICAL') "unsigned=$($v.Unsigned) sev=$($v.Sev)"
 
     if ($fails -gt 0) { Write-Output "FAILED: $fails"; exit 1 }
     Write-Output 'driver_audit self-test: all cases passed'
@@ -324,6 +403,7 @@ foreach ($dir in $dropDirs) {
 
 $checked = 0
 $missing = 0
+$anyUnsigned = $false
 foreach ($p in $paths) {
     if (-not (Test-Path -LiteralPath $p -PathType Leaf)) {
         # A LOADED driver whose file is gone is not a non-event -- it is the
@@ -342,12 +422,24 @@ foreach ($p in $paths) {
     $sig  = & $script:SigProbe  $p
     $hash = & $script:HashProbe $p
     $v = Get-DriverVerdict -Path $p -Hash $hash -Sig $sig
+    if ($v.Unsigned) { $anyUnsigned = $true }
 
     if ($v.Sev -ne 'OK') {
         $hs = if ($hash) { $hash.Substring(0,16) + '...' } else { '(unhashable)' }
         "[$($v.Sev)] Driver $p [$hs] -- $($v.Why -join '; ')"
         $sev = Get-MaxSev $sev $v.Sev
     }
+}
+
+# ONE line, after the drivers, and only when a signature finding exists.
+# Per-driver would repeat it; on a clean machine it would be noise. It is
+# [INFO] and never touches $sev: an unsigned kernel driver is a finding whether
+# or not Memory Integrity is running. Downgrading a real finding because a
+# mitigating control happens to be present is the false reassurance this repo
+# treats as its worst failure -- and the mitigation can be switched off while
+# the file stays wrong.
+if ($anyUnsigned) {
+    Get-HvciNote -State (& $script:HvciProbe)
 }
 
 if ($sev -eq 'OK') {
