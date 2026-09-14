@@ -171,9 +171,14 @@ records were gone from that machine's retained logs **six days** after the
 event -- `Corrupt file` lines in the retained set counted zero. So this check
 catches recent corruption only. It would have answered the 2026-09-07 question
 the same day; a week later there was nothing left to read. Every run now states
-the window it covers rather than implying it can see everything. The remaining follow-up from that
-day -- surfacing HVCI state alongside an unsigned-driver finding, since a
-driver that cannot load reads very differently -- is still open.
+the window it covers rather than implying it can see everything. **DONE:** the follow-up from that day -- surfacing HVCI state alongside an
+unsigned-driver finding -- is shipped. `tools/driver_audit.ps1` prints one
+`[INFO]` Memory Integrity line beside a signature finding and points at Section
+13 for the rest of the boot chain. It never changes the grade: the file is
+still wrong and the mitigation can be switched off, so downgrading on its
+presence would be false reassurance. All three states print, including
+*unknown* -- that tool is not admin-gated in the non-admin bat, so unelevated
+runs are real.
 
 **The lesson worth keeping:** this entry asserted a mechanism, three documents
 repeated it, and a fix was designed against it -- and one measurement on a real
