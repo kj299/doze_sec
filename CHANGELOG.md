@@ -23,11 +23,18 @@ allow.
 T1197 persistence executes through the *notify command line*, handled
 separately. A long-parked job without one can still move bytes, so the
 discriminator is now the **destination**: a bare IP address, plain HTTP, or a
-write into a staging path raises; an unreadable file list raises with the
+write directly into an autostart folder raises; an unreadable file list raises with the
 uncertainty stated; an ordinary destination is reported as `[INFO]` context
 with the destination shown. Deliberately not a list of known-good job names --
 this repo already records that excluding by name lets an attacker pick the
-name. Catalogued as `[bits-long-lived-updater]` in `tests/benign_corpus.txt`,
+name. The destination signals deliberately do **not** use `$badPathRx`, though every
+other arm in that file does: it contains `\Temp\`, and a BITS job writing into
+the temp folder is what a downloader *does* — Edge's updater included. Raising
+on that would have replaced one false positive with a broader one. Caught before
+it shipped, and the CI case now downloads to `$env:TEMP` specifically to keep it
+caught.
+
+Catalogued as `[bits-long-lived-updater]` in `tests/benign_corpus.txt`,
 and CI now drives both directions against a real `bitsadmin` job.
 
 **The CBS check now states the window it covers.** It reported

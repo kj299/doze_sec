@@ -461,8 +461,14 @@ jobs:
             $mdD = Join-Path $env:TEMP ("dz_pe_bits_d_{0}" -f $PID)
             $outD = (.\tools\persistence_extra.ps1 -MarkerDir $mdD -BitsAgeDays 0) -join "`n"
             Write-Host (($outD -split "`n" | Where-Object { $_ -match 'BITS job' }) -join "`n")
+            # Note the local destination is under $env:TEMP -- i.e. it contains
+            # \Temp\, which $badPathRx (used by every other arm in that file)
+            # matches. A BITS job writing to the temp folder is what a
+            # downloader DOES, Edge's updater included, so raising on it would
+            # replace one false positive with a broader one. This case is the
+            # guard against that.
             if ($outD -match "\[(WARNING|CRITICAL)\] BITS job '$job2'") {
-              throw "an old BITS job with an ordinary https destination and no notify command was RAISED -- the Edge-updater false positive is back"
+              throw "an old BITS job with an ordinary https destination, no notify command, and a temp-folder download path was RAISED -- either the Edge-updater false positive is back or the local-path signal was broadened to \Temp\ again"
             }
             if ($outD -notmatch "\[INFO\] BITS job '$job2'[^\r\n]*age alone is not a finding") {
               throw 'the long-lived job was neither raised nor reported as context -- it vanished from the report entirely'
