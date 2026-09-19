@@ -1702,7 +1702,11 @@ jobs:
             # PROCPATH_NAMES would become the literal string '%e'.
             foreach ($fld in $f) { if ($fld -eq '') { throw "the state line has an empty field: $line" } }
             if ($f[0] -ne $case.State) { throw "expected state '$($case.State)', got '$($f[0])': $line" }
-            if ($line -match '[&|<>^%!"]' -and $f[4] -ne '-') { throw "a shell metacharacter reached the state line: $line" }
+            # Scoped to the NAME field. The first version of this ran the
+            # class over the WHOLE line and included '|' in it -- the field
+            # separator, present in every valid state line -- so the check
+            # threw on its own correct output.
+            if ($f[4] -match '[&<>^%!"|]') { throw "a shell metacharacter reached the name field of the state line: $line" }
           }
           # And the WARNING state must agree with the marker -- the tile and
           # the ledger row must never be able to say different things.
