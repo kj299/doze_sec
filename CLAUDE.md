@@ -470,6 +470,44 @@ signature says; `\AppData\` only when the binary is not validly signed. A
 signature that cannot be verified counts as unsigned — for that decision "I
 could not check" belongs with the risky half.
 
+**AND SHARING THE RULE IS NOT ENOUGH — A TILE THAT RE-MEASURES IS A SECOND
+OPINION, NOT A SUMMARY.** `proc_path_grade.ps1` was written to end that
+contradiction and its header said the rule was "now shared so the two cannot
+drift apart". It was not shared: the dashboard tile kept its own inline copy,
+which had also quietly dropped `$Recycle` from both regexes and graded `CRIT`
+where the section graded `WARNING`. A later field report then said
+`[WARNING] 2 of 3 user-profile process path(s) are suspicious` in Section 4 and
+`[INFO] Processes from user-profile paths, all validly signed: 1` in the
+dashboard — **and neither was wrong**. Section 4 grades a dump taken early in
+the run; the tile called `Get-CimInstance Win32_Process` again eight minutes
+later, and an installer finished in between. **Identical rules still contradict
+when they are two measurements.** So a tile states a verdict the section
+already reached: the tool writes it to a `-StateFile`, the bat reads it into a
+variable (`PROCPATH_STATE`, the idiom `DNSPROBE_STATE` already used), and the
+dashboard prints that. Every such line names the scope it covers, and a missing
+verdict reads "NOT graded", never `PASS`.
+
+Two mechanics that bite when a verdict crosses into cmd. A value that becomes
+part of an `echo` into `%PSRUN%` is **shell syntax**: `&`, `|`, `>`, `^`, `%`
+and `!` in a filename all mean something there, so sanitise to an allowlist and
+cap the length rather than trusting the source. And **never let the last field
+of a `for /f` line be empty** — cmd does not define a token that is not there
+and leaves the literal text `%%e` in the command, so an absent name list sets
+the variable to the string `%e`. Emit a placeholder and blank it after parsing.
+
+**A test that proves the mechanism fires has not tested the judgement.** The
+BITS destination rule raised on any `http://` remote, and its CI case used
+`http://localhost` and asserted a WARNING appeared. It passed every run. It
+could not have caught that the rule was wrong, because the only question it
+asked was whether the code did what the code said. Microsoft documents
+`*.dl.delivery.mp.microsoft.com` as HTTP/80 by design — "Be sure not to use
+HTTPS for those endpoints that specify HTTP... The connection will fail" — so
+the rule flagged the most common BITS job class on Windows, and flagged the
+same benign Edge updater a **third** time through a **third** rule, having been
+added in the change that fixed the second. Where a rule encodes a judgement,
+pin a real instance of the benign thing **verbatim** as a must-not-raise case,
+and cite the first-party source in the code beside it.
+
 **Key existence is not evidence either.** Section 18's registry IOC check
 flagged `HKLM\...\PortProxy\v4tov4\tcp [EXISTS]` while Section 3 of the same
 report said `[OK] No netsh portproxy rules.` Windows leaves that key behind,

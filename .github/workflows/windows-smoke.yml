@@ -441,14 +441,61 @@ jobs:
             # the DESTINATION says something. -BitsAgeDays 0 makes the fresh
             # probe job count as old so both directions are reachable here.
             #
-            # This probe's remote is http://localhost/... -- plain HTTP, which
-            # IS one of the destination signals, so it must raise.
+            # This probe's remote is http://localhost/... -- PLAIN HTTP TO A
+            # HOSTNAME, which must NOT raise. This case used to assert the
+            # opposite. Microsoft documents *.dl.delivery.mp.microsoft.com as
+            # HTTP on port 80 for Edge content delivery -- "Be sure not to use
+            # HTTPS for those endpoints that specify HTTP, and vice versa. The
+            # connection will fail." -- so on 2026-09-19 the plain-HTTP signal
+            # flagged Microsoft Edge's own updater, the THIRD rule to flag that
+            # same benign job. This case proved the rule FIRED; it never asked
+            # whether firing was correct.
             & bitsadmin /SetNotifyCmdLine $job 'NULL' 'NULL' 2>&1 | Out-Null
             $mdC = Join-Path $env:TEMP ("dz_pe_bits_c_{0}" -f $PID)
             $outC = (.\tools\persistence_extra.ps1 -MarkerDir $mdC -BitsAgeDays 0) -join "`n"
             Write-Host (($outC -split "`n" | Where-Object { $_ -match 'BITS job' }) -join "`n")
-            if ($outC -notmatch "\[WARNING\] BITS job '$job'[^\r\n]*plain HTTP") {
-              throw 'an old BITS job fetching over plain HTTP was not raised -- the destination signal is dead'
+            if ($outC -match "\[(WARNING|CRITICAL)\] BITS job '$job'") {
+              throw 'an old BITS job fetching over plain HTTP to a HOSTNAME was raised -- the plain-HTTP false positive is back'
+            }
+            if ($outC -match 'plain HTTP') {
+              throw 'the deleted plain-HTTP branch has been reinstated somewhere in persistence_extra.ps1'
+            }
+            if ($outC -notmatch "\[INFO\] BITS job '$job'[^\r\n]*age alone is not a finding") {
+              throw 'the plain-HTTP job was neither raised nor reported as context -- it vanished from the report'
+            }
+
+            # (c2) A bare PUBLIC IP still has no routine cause, and raises.
+            # 203.0.113.0/24 is TEST-NET-3: documentation space, so the queued
+            # job cannot reach anything real.
+            $jobIp = 'dz_selftest_bits_pubip'
+            & bitsadmin /cancel $jobIp 2>&1 | Out-Null
+            & bitsadmin /create $jobIp 2>&1 | Out-Null
+            & bitsadmin /addfile $jobIp 'http://203.0.113.10/dz_ci_nonexistent' "$env:TEMP\dz_ci_bits_pubip.bin" 2>&1 | Out-Null
+            $mdC2 = Join-Path $env:TEMP ("dz_pe_bits_c2_{0}" -f $PID)
+            $outC2 = (.\tools\persistence_extra.ps1 -MarkerDir $mdC2 -BitsAgeDays 0) -join "`n"
+            Write-Host (($outC2 -split "`n" | Where-Object { $_ -match 'BITS job' }) -join "`n")
+            if ($outC2 -notmatch "\[WARNING\] BITS job '$jobIp'[^\r\n]*bare public IP address") {
+              throw 'an old BITS job fetching from a bare PUBLIC IP was not raised -- the destination signal is dead'
+            }
+            if (-not (Test-Path (Join-Path $mdC2 'dz_bits.txt'))) {
+              throw 'the bare-public-IP finding wrote no marker -- it never reaches the ledger'
+            }
+
+            # (c3) ...but a bare PRIVATE one is an on-prem WSUS server, an SCCM
+            # distribution point or a Connected Cache node. Context, with the
+            # cause named, never an all-clear that hides the address.
+            $jobLan = 'dz_selftest_bits_lanip'
+            & bitsadmin /cancel $jobLan 2>&1 | Out-Null
+            & bitsadmin /create $jobLan 2>&1 | Out-Null
+            & bitsadmin /addfile $jobLan 'http://192.168.77.77/dz_ci_nonexistent' "$env:TEMP\dz_ci_bits_lanip.bin" 2>&1 | Out-Null
+            $mdC3 = Join-Path $env:TEMP ("dz_pe_bits_c3_{0}" -f $PID)
+            $outC3 = (.\tools\persistence_extra.ps1 -MarkerDir $mdC3 -BitsAgeDays 0) -join "`n"
+            Write-Host (($outC3 -split "`n" | Where-Object { $_ -match 'BITS job' }) -join "`n")
+            if ($outC3 -match "\[(WARNING|CRITICAL)\] BITS job '$jobLan'") {
+              throw 'a bare PRIVATE LAN destination was raised -- WSUS/SCCM/Connected Cache is the ordinary cause'
+            }
+            if ($outC3 -notmatch "\[INFO\] BITS job '$jobLan'[^\r\n]*private LAN address") {
+              throw 'the private LAN destination was not reported as context with its cause named'
             }
 
             # (d) an ORDINARY https destination, same age. Must be context, not
@@ -477,11 +524,51 @@ jobs:
           } finally {
             & bitsadmin /cancel $job 2>&1 | Out-Null
             & bitsadmin /cancel 'dz_selftest_bits_https' 2>&1 | Out-Null
+            & bitsadmin /cancel 'dz_selftest_bits_pubip' 2>&1 | Out-Null
+            & bitsadmin /cancel 'dz_selftest_bits_lanip' 2>&1 | Out-Null
+            Remove-Item "$env:TEMP\dz_ci_bits_pubip.bin" -Force -EA SilentlyContinue
+            Remove-Item "$env:TEMP\dz_ci_bits_lanip.bin" -Force -EA SilentlyContinue
             Remove-Item "$env:TEMP\dz_ci_bits_probe.bin" -Force -EA SilentlyContinue
             Remove-Item "$env:TEMP\dz_ci_bits_https.bin" -Force -EA SilentlyContinue
           }
           Write-Host "BITS OK (empty notify is not a finding; a real one is; age alone is context; a bad destination raises)"
           exit 0
+
+      - name: persistence_extra.ps1 -SelfTest (BITS destination grading, pure)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # The rule above is now graded by a PURE Get-BitsVerdict, so the whole
+          # of it is reachable without a bitsadmin job. The cases quote the real
+          # remote from SecurityReport_20260919_181422 verbatim: a test written
+          # from the shape of the RULE rather than the shape of the DATA is what
+          # let the plain-HTTP branch pass CI while being wrong.
+          #
+          # lint.yml runs the same self-test on pwsh for fast feedback. This
+          # step is the one that matters -- Windows PowerShell 5.1 is the only
+          # engine this tool ever ships to, and a 5.1-only divergence has
+          # already cost this repo a silent false negative.
+          $out = (.\tools\persistence_extra.ps1 -SelfTest) -join "`n"
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw 'persistence_extra -SelfTest failed' }
+          $ok = @($out -split "`n" | Where-Object { $_ -match '^\[OK\]' }).Count
+          if ($ok -lt 25) { throw "only $ok [OK] line(s) from the BITS self-test; cases have gone missing" }
+          # By NAME, so a case cannot be quietly deleted and still pass a count.
+          foreach ($needle in @(
+              'the real Edge Component Updater remote is context, not a finding',
+              'no line anywhere says plain HTTP',
+              'a bare public IP destination raises',
+              'a bare private LAN address is context: http://192.168.1.10/wsus/x.cab',
+              '172.32.x is outside the private block and raises',
+              'a write into an autostart folder raises',
+              'a download into the temp folder is what a downloader does',
+              'an unreadable file list is NOT cleared',
+              'an encoded-command notify payload escalates to CRITICAL')) {
+            if ($out -notmatch ('\[OK\]\s+' + [regex]::Escape($needle))) {
+              throw "the BITS self-test no longer covers: $needle"
+            }
+          }
+          Write-Host 'persistence_extra -SelfTest OK on Windows PowerShell 5.1'
 
       - name: audit_policy_check.ps1 (auditing visibility; locale-independent cmdline signal)
         shell: powershell
@@ -1592,8 +1679,73 @@ jobs:
           Write-Host $out
           if (Test-Path $mk) { throw "out-of-scope binaries (Program Files / System32 / WindowsApps) were reported: $out" }
           if ($out -notmatch 'out of scope') { throw "the out-of-scope case did not say so: $out" }
-          Remove-Item $dump, $mk, $evil -Force -EA SilentlyContinue
-          Write-Host "proc_path_grade.ps1 OK"
+          # THE STATE FILE the summary dashboard reads. The tile used to
+          # re-enumerate Win32_Process itself, roughly eight minutes later in
+          # the run, and on 2026-09-19 the two disagreed about the same machine
+          # -- an Ollama install finished between the two enumerations. The
+          # tile now prints THIS verdict, so its shape is a contract.
+          $st = Join-Path $env:TEMP 'dz_ci_proc4_state.txt'
+          foreach ($case in @(
+              @{ Lines = @("svchost.exe  399  " + (Join-Path $env:SystemRoot 'System32\svchost.exe')); State = 'ok' },
+              @{ Lines = @("powershell.exe  111  " + $signed);                                         State = 'ok' },
+              @{ Lines = @("evil.exe  222  " + $evil);                                                 State = 'warn' })) {
+            Remove-Item $st, $mk -Force -EA SilentlyContinue
+            Set-Content $dump -Value $case.Lines
+            $out = (.\tools\proc_path_grade.ps1 -Path $dump -MarkerFile $mk -StateFile $st) -join "`n"
+            if (-not (Test-Path $st)) { throw "no state file was written, so the dashboard has no verdict to print: $out" }
+            $line = (Get-Content $st -Raw).Trim()
+            Write-Host "state: $line"
+            $f = $line.Split('|')
+            if ($f.Count -ne 5) { throw "the state line must have exactly 5 fields or cmd's for /f mis-parses it: $line" }
+            # An EMPTY trailing field is the trap: cmd does not define a token
+            # that is not there and leaves the text %%e in the command, so
+            # PROCPATH_NAMES would become the literal string '%e'.
+            foreach ($fld in $f) { if ($fld -eq '') { throw "the state line has an empty field: $line" } }
+            if ($f[0] -ne $case.State) { throw "expected state '$($case.State)', got '$($f[0])': $line" }
+            if ($line -match '[&|<>^%!"]' -and $f[4] -ne '-') { throw "a shell metacharacter reached the state line: $line" }
+          }
+          # And the WARNING state must agree with the marker -- the tile and
+          # the ledger row must never be able to say different things.
+          if (-not (Test-Path $mk)) { throw 'the warn state file was written but no marker: the tile would warn while the ledger stays silent' }
+          Remove-Item $st, $mk -Force -EA SilentlyContinue
+
+          # The 2026-09-19 field instances, verbatim. winget stages under
+          # \Temp\WinGet\ and Inno Setup extracts into \Temp\is-XXXXXXXX.tmp\.
+          # Both are TRUE positives and must stay findings;
+          # tests/benign_corpus.txt carries the ADVISE note that tells the
+          # reader to ask whether they were installing something.
+          Set-Content $dump -Value @(
+            'OllamaSetup.exe  5420  C:\Users\khali\AppData\Local\Temp\WinGet\Ollama.Ollama.0.34.2\OllamaSetup.exe',
+            'OllamaSetup.tmp  20636  C:\Users\khali\AppData\Local\Temp\is-0X2Z2LGMY8.tmp\OllamaSetup.tmp',
+            ("svchost.exe  399  " + (Join-Path $env:SystemRoot 'System32\svchost.exe')))
+          $out = (.\tools\proc_path_grade.ps1 -Path $dump -MarkerFile $mk -StateFile $st) -join "`n"
+          Write-Host $out
+          if ($out -notmatch '\[WARNING\] 2 of 2 user-profile process path') {
+            throw "the installer-in-Temp field shape is no longer graded as 2 findings: $out"
+          }
+          if (-not (Test-Path $mk)) { throw 'the installer-in-Temp finding wrote no marker' }
+          $names = ((Get-Content $st -Raw).Trim() -split '\|')[4]
+          if ($names -notmatch 'OllamaSetup\.exe' -or $names -notmatch 'OllamaSetup\.tmp') {
+            throw "the state line does not name the flagged binaries: $names"
+          }
+
+          # THE TILE MUST NOT MEASURE AGAIN. Sharing the rule was not enough --
+          # the inline copy in the bats was already near-identical (it had
+          # merely dropped $Recycle) and still disagreed, because it was a
+          # SECOND ENUMERATION at a different moment.
+          foreach ($bat in @('doze_sec.bat', 'doze_sec_noAdmin.bat')) {
+            $txt = Get-Content $bat -Raw
+            if ($txt -match "ck 'INFO' \('Processes from user-profile paths") {
+              throw "$bat rebuilt the dashboard tile from its own process enumeration -- it must print PROCPATH_STATE, which Section 4 already graded"
+            }
+            foreach ($needle in @('-StateFile "%TEMP%\dz_proc4_state.txt"',
+                                  'set /p PROCPATH_LINE=',
+                                  'if "%PROCPATH_STATE%"=="ungraded"')) {
+              if ($txt -notmatch [regex]::Escape($needle)) { throw "$bat is missing the PROCPATH_STATE plumbing: $needle" }
+            }
+          }
+          Remove-Item $dump, $mk, $evil, $st -Force -EA SilentlyContinue
+          Write-Host "proc_path_grade.ps1 OK (one measurement, carried to the dashboard)"
 
       - name: psv2_check.ps1 (the AMSI-downgrade path must get a definite answer)
         shell: powershell

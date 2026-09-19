@@ -66,7 +66,8 @@
 [CmdletBinding()]
 param(
     [string]$MarkerDir = $env:TEMP,
-    [int]$BitsAgeDays  = 30
+    [int]$BitsAgeDays  = 30,
+    [switch]$SelfTest
 )
 
 $ErrorActionPreference = 'Continue'
@@ -226,6 +227,240 @@ function Get-DllVerdict {
         return @{ Sev = 'WARNING'; Why = "signed by $cn (not Microsoft): $Path" }
     }
     return @{ Sev = 'OK'; Why = "Microsoft-signed: $Path" }
+}
+
+# ---------------------------------------------------------------------------
+# BITS grading (T1197), as a PURE function.
+#
+# Every input is a plain value -- no CIM, no clock, no BITS module -- so the
+# whole rule is exercisable by -SelfTest on any platform. The BITS arm had no
+# seam at all, and that is exactly why the false positive recorded below had
+# to be caught by hand on the owner's machine instead of by a test.
+# ---------------------------------------------------------------------------
+
+# A bare IPv4 literal as the destination host.
+$script:BareIpRx = '^\s*https?://(\d{1,3}\.){3}\d{1,3}([:/]|$)'
+
+# ...of which the private and non-routable ranges are NOT a signal. An
+# on-premises WSUS server, an SCCM distribution point and a Microsoft
+# Connected Cache node are all routinely reached by bare LAN address, and
+# BITS is the transport all three use. A bare PUBLIC address has no such
+# routine cause and still raises. 172.32.x is deliberately outside this --
+# the private block ends at 172.31.
+$script:PrivateIpRx = '^\s*https?://(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)'
+
+function Get-BitsVerdict {
+    param(
+        [string]$Name,
+        [string]$Owner,
+        [object]$Created,                 # [datetime], or $null when unreadable
+        [string]$NotifyCmdLine = '',
+        [bool]$NotifyKnown = $true,
+        [string[]]$Remotes = @(),
+        [string[]]$Locals  = @(),
+        [bool]$DestKnown = $true,
+        [int]$AgeDays = 30,
+        [datetime]$Now = (Get-Date)
+    )
+    $r = @{ Lines = @(); Sev = 'OK'; Flagged = 0; Aged = 0; Unread = 0 }
+    if (-not $NotifyKnown) { $r.Unread = 1 }
+
+    if (-not [string]::IsNullOrWhiteSpace($NotifyCmdLine)) {
+        $sev = 'WARNING'
+        if ($NotifyCmdLine -match $strongContent -or $NotifyCmdLine -match $badPathRx) { $sev = 'CRITICAL' }
+        $r.Lines += "[$sev] BITS job '$Name' (owner $Owner) has a notify command line: $NotifyCmdLine"
+        $r.Sev = Get-MaxSev $r.Sev $sev
+        $r.Flagged++
+    }
+
+    # AGE ALONE IS NOT A FINDING. This rule used to raise a WARNING on any job
+    # older than $AgeDays, and on the owner's machine 2026-09-13 it fired for
+    # 'Edge Component Updater' -- Microsoft Edge's own updater, created
+    # 2026-08-09, with NO notify command line. It had been 29 days old during
+    # the previous run and 35 during this one: the finding reported a birthday,
+    # not a behaviour, and nothing on the machine had changed.
+    #
+    # T1197 persistence executes through the NOTIFY COMMAND LINE, handled
+    # above and independently. What a long-parked job with no notify command
+    # can still do is move bytes, so the honest discriminator is the
+    # DESTINATION, not the calendar. Deliberately NOT a list of known-good job
+    # names: this repo already records that excluding by NAME lets an attacker
+    # pick the name.
+    if ($null -eq $Created) { return $r }
+    [datetime]$c = $Created
+    if ($c -ge $Now.AddDays(-$AgeDays)) { return $r }
+    $age = [int]($Now - $c).TotalDays
+
+    # PLAIN HTTP IS NOT A SIGNAL, AND USED TO BE ONE HERE.
+    #
+    # The destination rule replaced the age rule above, and shipped with a
+    # branch that raised on any http:// remote. On 2026-09-19 it flagged the
+    # SAME 'Edge Component Updater', for the third time through a third rule:
+    #
+    #   [WARNING] ... it fetches over plain HTTP, not HTTPS
+    #   (http://msedge.b.tlu.dl.delivery.mp.microsoft.com/filestreamingservice/...)
+    #
+    # Microsoft documents *.dl.delivery.mp.microsoft.com as HTTP on port 80 for
+    # Edge content delivery, and states: "Be sure not to use HTTPS for those
+    # endpoints that specify HTTP, and vice versa. The connection will fail."
+    # Plain HTTP there is REQUIRED -- the payloads are signed and hash-verified
+    # separately -- so the rule flagged the single most common BITS job class
+    # on Windows. The CI case used http://localhost and proved the rule FIRED;
+    # it never asked whether firing was correct. The mechanism was tested and
+    # the judgement was not.
+    #
+    # Do not re-add it. If a destination needs grading, grade WHO is at the
+    # other end, not which scheme reaches them.
+    $why = @()
+    $lan = @()
+    foreach ($rn in @($Remotes)) {
+        if ($rn -notmatch $script:BareIpRx) { continue }
+        if ($rn -match $script:PrivateIpRx) { $lan += $rn; continue }
+        $why += "fetches from a bare public IP address ($rn)"
+    }
+    # NOT $badPathRx here, though every other arm in this file uses it. It
+    # contains \Temp\, and a BITS job writing into the temp folder is what a
+    # downloader DOES -- Edge's own updater included. An autostart folder is
+    # different: nothing legitimate streams a file straight into Startup.
+    foreach ($l in @($Locals)) {
+        if ($l -match '(?i)\\Start Menu\\Programs\\Startup\\') { $why += "writes directly into an autostart folder ($l)" }
+    }
+
+    if (-not $DestKnown) {
+        # Cannot see where it goes. Stated, never absorbed as calm.
+        $r.Lines += "[WARNING] BITS job '$Name' (owner $Owner) created $($c.ToString('yyyy-MM-dd')), $age days old, and its file list could NOT be read -- so its destination is unknown and this job is NOT cleared. Inspect it: Get-BitsTransfer -AllUsers | Where-Object DisplayName -eq '$Name' | Select-Object -ExpandProperty FileList"
+        $r.Sev = Get-MaxSev $r.Sev 'WARNING'
+        $r.Flagged++
+    } elseif (@($why).Count -gt 0) {
+        $r.Lines += "[WARNING] BITS job '$Name' (owner $Owner) created $($c.ToString('yyyy-MM-dd')), $age days old, and it $([string]::Join('; ', $why)). A job parked near the 90-day maximum that also moves bytes somewhere questionable is the T1197 shape."
+        $r.Sev = Get-MaxSev $r.Sev 'WARNING'
+        $r.Flagged++
+    } else {
+        # Old, no notify command, ordinary destination. Reported so the reader
+        # can judge it, and counted -- never silently dropped.
+        $r.Aged = 1
+        $shown = '(no file list entries)'
+        if (@($Remotes).Count -gt 0) { $shown = @($Remotes)[0] }
+        elseif (@($Locals).Count -gt 0) { $shown = @($Locals)[0] }
+        $extra = ''
+        if (@($lan).Count -gt 0) {
+            $extra = ' The destination is a private LAN address -- the ordinary shape of an on-premises WSUS server, an SCCM distribution point or a Microsoft Connected Cache node, all of which move bytes over BITS. Confirm that address is one your organisation runs.'
+        }
+        $r.Lines += "[INFO] BITS job '$Name' (owner $Owner) is $age days old (created $($c.ToString('yyyy-MM-dd'))) with no notify command line and an ordinary destination: $shown. Long-lived updater jobs are normal; age alone is not a finding.$extra"
+    }
+    return $r
+}
+
+if ($SelfTest) {
+    # The BITS destination rule, graded against the strings a real machine
+    # produced. The field instances are quoted VERBATIM: a test written from
+    # the shape of the rule rather than the shape of the data is what let the
+    # plain-HTTP branch pass CI while being wrong.
+    $script:stFails = 0
+    function T {
+        param([string]$Name, [bool]$Ok, [string]$Got)
+        if ($Ok) { Write-Output "[OK]   $Name" }
+        else { Write-Output "[FAIL] $Name :: $Got"; $script:stFails++ }
+    }
+    $now = [datetime]'2026-09-19T18:14:22'
+    $old = $now.AddDays(-41)
+    $j   = { param($v) ($v.Lines -join ' | ') }
+
+    # (1) THE REGRESSION. The exact remote from SecurityReport_20260919_181422,
+    # on the exact job, at the exact age. Microsoft serves this endpoint over
+    # HTTP/80 by design, so it must be context and nothing else.
+    $edge = 'http://msedge.b.tlu.dl.delivery.mp.microsoft.com/filestreamingservice/files/8f2c1e7a-4d31-4a5b-9c60-1f2e3d4c5b6a?P1=1789012345&P2=404&P3=2&P4=abcdef'
+    $v = Get-BitsVerdict -Name 'Edge Component Updater' -Owner 'Z4NEE52\khali' -Created $old `
+                         -Remotes @($edge) -Locals @('C:\Users\khali\AppData\Local\Temp\BIT9A2C.tmp') -Now $now
+    T 'the real Edge Component Updater remote is context, not a finding' `
+      ($v.Sev -eq 'OK' -and $v.Flagged -eq 0 -and $v.Aged -eq 1 -and (& $j $v) -match '^\[INFO\]') (& $j $v)
+    T 'no line anywhere says plain HTTP -- that branch is deleted, not narrowed' `
+      ((& $j $v) -notmatch 'plain HTTP') (& $j $v)
+    T 'the INFO line still shows the destination so a reader can judge it' `
+      ((& $j $v) -match [regex]::Escape($edge)) (& $j $v)
+
+    # (2) A bare PUBLIC IP has no routine cause and still raises.
+    $v = Get-BitsVerdict -Name 'dz_t' -Owner 'u' -Created $old -Remotes @('http://93.184.216.34/payload.bin') -Now $now
+    T 'a bare public IP destination raises' `
+      ($v.Sev -eq 'WARNING' -and $v.Flagged -eq 1 -and (& $j $v) -match 'bare public IP address') (& $j $v)
+    $v = Get-BitsVerdict -Name 'dz_t' -Owner 'u' -Created $old -Remotes @('https://198.51.100.7:8443/a.cab') -Now $now
+    T 'a bare public IP over HTTPS raises too -- the scheme was never the point' `
+      ($v.Sev -eq 'WARNING' -and (& $j $v) -match 'bare public IP address') (& $j $v)
+
+    # (3) ...but a private / non-routable one is WSUS, SCCM or Connected Cache.
+    foreach ($ip in @('http://192.168.1.10/wsus/x.cab', 'https://10.0.0.5/sccm/y.msi',
+                      'http://172.16.4.9/z.bin', 'http://172.31.255.1/z.bin',
+                      'http://127.0.0.1/local.bin', 'http://169.254.10.1/link.bin')) {
+        $v = Get-BitsVerdict -Name 'dz_t' -Owner 'u' -Created $old -Remotes @($ip) -Now $now
+        T "a bare private LAN address is context: $ip" `
+          ($v.Sev -eq 'OK' -and $v.Flagged -eq 0 -and (& $j $v) -match 'private LAN address') (& $j $v)
+    }
+    # The boundary: the private block ends at 172.31, so 172.32 is public.
+    $v = Get-BitsVerdict -Name 'dz_t' -Owner 'u' -Created $old -Remotes @('http://172.32.0.1/x.bin') -Now $now
+    T '172.32.x is outside the private block and raises' `
+      ($v.Sev -eq 'WARNING' -and (& $j $v) -match 'bare public IP address') (& $j $v)
+    $v = Get-BitsVerdict -Name 'dz_t' -Owner 'u' -Created $old -Remotes @('http://172.15.0.1/x.bin') -Now $now
+    T '172.15.x is outside the private block and raises' `
+      ($v.Sev -eq 'WARNING' -and (& $j $v) -match 'bare public IP address') (& $j $v)
+
+    # (4) A hostname is never graded on its scheme, whichever scheme it is.
+    foreach ($u in @('http://updates.example.com/pkg.cab', 'https://updates.example.com/pkg.cab')) {
+        $v = Get-BitsVerdict -Name 'dz_t' -Owner 'u' -Created $old -Remotes @($u) -Now $now
+        T "a hostname destination is context regardless of scheme: $u" `
+          ($v.Sev -eq 'OK' -and $v.Flagged -eq 0) (& $j $v)
+    }
+    # A host that merely BEGINS with digits is not a bare IP.
+    $v = Get-BitsVerdict -Name 'dz_t' -Owner 'u' -Created $old -Remotes @('http://10.cdn.example.com/x.bin') -Now $now
+    T 'a hostname starting with a private-range octet is not a bare IP' `
+      ($v.Sev -eq 'OK' -and (& $j $v) -notmatch 'private LAN address') (& $j $v)
+
+    # (5) Nothing legitimate streams a file straight into Startup.
+    $v = Get-BitsVerdict -Name 'dz_t' -Owner 'u' -Created $old -Remotes @('https://cdn.example.com/x.exe') `
+                         -Locals @('C:\Users\u\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\x.exe') -Now $now
+    T 'a write into an autostart folder raises' `
+      ($v.Sev -eq 'WARNING' -and (& $j $v) -match 'autostart folder') (& $j $v)
+    # ...but an ordinary temp download does not. $badPathRx contains \Temp\ and
+    # is deliberately not used here; using it re-flagged Edge on its own path.
+    $v = Get-BitsVerdict -Name 'dz_t' -Owner 'u' -Created $old -Remotes @('https://cdn.example.com/x.bin') `
+                         -Locals @('C:\Users\u\AppData\Local\Temp\BITB73F.tmp') -Now $now
+    T 'a download into the temp folder is what a downloader does, not a finding' `
+      ($v.Sev -eq 'OK' -and $v.Flagged -eq 0) (& $j $v)
+
+    # (6) "Unavailable" is not an answer.
+    $v = Get-BitsVerdict -Name 'dz_t' -Owner 'u' -Created $old -DestKnown $false -Now $now
+    T 'an unreadable file list is NOT cleared' `
+      ($v.Sev -eq 'WARNING' -and $v.Flagged -eq 1 -and (& $j $v) -match 'could NOT be read') (& $j $v)
+    $v = Get-BitsVerdict -Name 'dz_t' -Owner 'u' -Created $old -NotifyKnown $false `
+                         -Remotes @('https://cdn.example.com/x.bin') -Now $now
+    T 'a job with no NotifyCmdLine property is counted as unchecked' ($v.Unread -eq 1) ("Unread=$($v.Unread)")
+
+    # (7) The notify-command arm is the actual T1197 mechanism and is untouched.
+    $v = Get-BitsVerdict -Name 'dz_t' -Owner 'u' -Created $null -NotifyCmdLine 'C:\tools\post.exe /q' -Now $now
+    T 'a notify command line raises at WARNING' `
+      ($v.Sev -eq 'WARNING' -and $v.Flagged -eq 1 -and (& $j $v) -match 'notify command line') (& $j $v)
+    $v = Get-BitsVerdict -Name 'dz_t' -Owner 'u' -Created $null `
+                         -NotifyCmdLine 'powershell.exe -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQA' -Now $now
+    T 'an encoded-command notify payload escalates to CRITICAL' ($v.Sev -eq 'CRITICAL') (& $j $v)
+    $v = Get-BitsVerdict -Name 'dz_t' -Owner 'u' -Created $null -NotifyCmdLine '   ' -Now $now
+    T 'an all-whitespace notify command line is the normal empty state' `
+      ($v.Sev -eq 'OK' -and $v.Lines.Count -eq 0) (& $j $v)
+
+    # (8) Age is the gate on the destination arm, and nothing else.
+    $v = Get-BitsVerdict -Name 'dz_t' -Owner 'u' -Created $now.AddDays(-3) `
+                         -Remotes @('http://93.184.216.34/payload.bin') -Now $now
+    T 'a young job is not graded on its destination at all' `
+      ($v.Sev -eq 'OK' -and $v.Lines.Count -eq 0 -and $v.Aged -eq 0) (& $j $v)
+    $v = Get-BitsVerdict -Name 'dz_t' -Owner 'u' -Created $now.AddDays(-3) `
+                         -Remotes @('http://93.184.216.34/payload.bin') -AgeDays 0 -Now $now
+    T '-AgeDays 0 brings the same job into scope, so both directions are reachable' `
+      ($v.Sev -eq 'WARNING' -and (& $j $v) -match 'bare public IP address') (& $j $v)
+
+    if ($script:stFails) {
+        Write-Output "[FAIL] $($script:stFails) persistence_extra BITS self-test expectation(s) unmet"
+        exit 1
+    }
+    Write-Output '[OK] persistence_extra BITS self-test: plain HTTP is not a signal, a bare PUBLIC IP is, a private LAN address is context, and the notify-command arm is unchanged.'
+    exit 0
 }
 
 $sys32 = Join-Path $env:SystemRoot 'System32'
@@ -419,82 +654,33 @@ if (-not $bitsOk) {
             # into the all-clear.
             $nclKnown = $false
         }
-        if (-not $nclKnown) { $bitsUnread++ }
-        if (-not [string]::IsNullOrWhiteSpace($ncl)) {
-            $sev = 'WARNING'
-            if ($ncl -match $strongContent -or $ncl -match $badPathRx) { $sev = 'CRITICAL' }
-            "[$sev] BITS job '$name' (owner $owner) has a notify command line: $ncl"
-            $bitsSev = Get-MaxSev $bitsSev $sev
-            $flagged++
-        }
-        # AGE ALONE IS NOT A FINDING. This rule used to raise a WARNING on any
-        # job older than $BitsAgeDays, and on the owner's machine 2026-09-13 it
-        # fired for 'Edge Component Updater' -- Microsoft Edge's own updater,
-        # created 2026-08-09, with NO notify command line. It had been 29 days
-        # old during the previous run and 35 during this one: the finding
-        # reported a birthday, not a behaviour, and nothing on the machine had
-        # changed.
-        #
-        # Worse, it was the SAME benign job the comment above records fixing in
-        # the notify-command arm. The false positive came back through the other
-        # door, which is what an unconditioned rule will always allow.
-        #
-        # T1197 persistence executes through the NOTIFY COMMAND LINE, handled
-        # above and independently. What a long-parked job with no notify command
-        # can still do is move bytes, so the honest discriminator is the
-        # DESTINATION, not the calendar. Deliberately NOT a list of known-good
-        # job names: this repo already records that excluding by NAME lets an
-        # attacker pick the name.
         $created = $null
         try { $created = [datetime]$j.CreationTime } catch {}
-        if ($created -and $created -lt (Get-Date).AddDays(-$BitsAgeDays)) {
-            $age = [int]((Get-Date) - $created).TotalDays
-            $remotes = @()
-            $locals  = @()
-            $destKnown = $true
-            try {
-                foreach ($f in @($j.FileList)) {
-                    $rn = [string]$f.RemoteName
-                    $lnm = [string]$f.LocalName
-                    if (-not [string]::IsNullOrWhiteSpace($rn))  { $remotes += $rn }
-                    if (-not [string]::IsNullOrWhiteSpace($lnm)) { $locals  += $lnm }
-                }
-            } catch { $destKnown = $false }
-            if (@($remotes).Count -eq 0 -and @($locals).Count -eq 0) { $destKnown = $false }
+        $remotes = @()
+        $locals  = @()
+        $destKnown = $true
+        try {
+            foreach ($f in @($j.FileList)) {
+                $rn  = [string]$f.RemoteName
+                $lnm = [string]$f.LocalName
+                if (-not [string]::IsNullOrWhiteSpace($rn))  { $remotes += $rn }
+                if (-not [string]::IsNullOrWhiteSpace($lnm)) { $locals  += $lnm }
+            }
+        } catch { $destKnown = $false }
+        if (@($remotes).Count -eq 0 -and @($locals).Count -eq 0) { $destKnown = $false }
 
-            # Behavioural signals, in order of how much they actually say.
-            $why = @()
-            foreach ($r in $remotes) {
-                if ($r -match '^\s*https?://(\d{1,3}\.){3}\d{1,3}([:/]|$)') { $why += "fetches from a bare IP address ($r)" }
-                elseif ($r -match '^\s*http://')                              { $why += "fetches over plain HTTP, not HTTPS ($r)" }
-            }
-            # NOT $badPathRx here, though every other arm in this file uses it.
-            # It contains \Temp\, and a BITS job writing into the temp folder is
-            # what a downloader DOES -- Edge's own updater included. Raising on
-            # that would have replaced one false positive with a broader one.
-            # An autostart folder is different: nothing legitimate streams a
-            # file straight into Startup over BITS.
-            foreach ($l in $locals) {
-                if ($l -match '(?i)\\Start Menu\\Programs\\Startup\\') { $why += "writes directly into an autostart folder ($l)" }
-            }
-
-            if (-not $destKnown) {
-                # Cannot see where it goes. Stated, never absorbed as calm.
-                "[WARNING] BITS job '$name' (owner $owner) created $($created.ToString('yyyy-MM-dd')), $age days old, and its file list could NOT be read -- so its destination is unknown and this job is NOT cleared. Inspect it: Get-BitsTransfer -AllUsers | Where-Object DisplayName -eq '$name' | Select-Object -ExpandProperty FileList"
-                $bitsSev = Get-MaxSev $bitsSev 'WARNING'
-                $flagged++
-            } elseif (@($why).Count -gt 0) {
-                "[WARNING] BITS job '$name' (owner $owner) created $($created.ToString('yyyy-MM-dd')), $age days old, and it $([string]::Join('; ', $why)). A job parked near the 90-day maximum that also moves bytes somewhere questionable is the T1197 shape."
-                $bitsSev = Get-MaxSev $bitsSev 'WARNING'
-                $flagged++
-            } else {
-                # Old, no notify command, ordinary destination. Reported so the
-                # reader can judge it, and counted -- never silently dropped.
-                $aged++
-                $shown = if (@($remotes).Count -gt 0) { @($remotes)[0] } else { @($locals)[0] }
-                "[INFO] BITS job '$name' (owner $owner) is $age days old (created $($created.ToString('yyyy-MM-dd'))) with no notify command line and an ordinary destination: $shown. Long-lived updater jobs are normal; age alone is not a finding."
-            }
-        }
+        # Everything above READS the job. Get-BitsVerdict DECIDES, from plain
+        # values only -- that split is the seam -SelfTest needs, and the reason
+        # the rule below is now provable without a Windows runner.
+        $bv = Get-BitsVerdict -Name $name -Owner $owner -Created $created `
+                              -NotifyCmdLine $ncl -NotifyKnown $nclKnown `
+                              -Remotes $remotes -Locals $locals -DestKnown $destKnown `
+                              -AgeDays $BitsAgeDays
+        foreach ($outLine in @($bv.Lines)) { $outLine }
+        $bitsSev     = Get-MaxSev $bitsSev $bv.Sev
+        $flagged    += $bv.Flagged
+        $aged       += $bv.Aged
+        $bitsUnread += $bv.Unread
     }
     if ($flagged -eq 0) { "[OK] $($jobs.Count) BITS job(s) queued, none with a notify command line, an unreadable file list, or a questionable destination." }
     if ($aged -gt 0) { "[INFO] $aged long-lived BITS job(s) listed above are reported as context only -- see the destination on each line." }
