@@ -6,6 +6,91 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Plain HTTP is not a signal, and the BITS rule stops saying it is
+For the **third** time, and through a **third** rule, the 2026-09-19 field run
+raised Microsoft Edge's own updater:
+
+```
+[WARNING] BITS job 'Edge Component Updater' (owner ...) created 2026-08-09,
+41 days old, and it fetches over plain HTTP, not HTTPS
+(http://msedge.b.tlu.dl.delivery.mp.microsoft.com/filestreamingservice/files/...)
+```
+
+Microsoft documents `*.dl.delivery.mp.microsoft.com` as **HTTP on port 80** for
+Edge content delivery, and states: *"Be sure not to use HTTPS for those
+endpoints that specify HTTP, and vice versa. The connection will fail."* Plain
+HTTP there is **required** — the payloads are signed and hash-verified
+separately — so the rule flagged the most common BITS job class on Windows. The
+branch is deleted.
+
+It was added in the same change that fixed the age arm for the same job. **A
+false positive removed from one rule came back through a new one**, which is
+the pattern this file already records for the notify-command arm.
+
+**The test is the real story.** The CI case used `http://localhost` and asserted
+the rule *fired*. It passed, every run. It never asked whether firing was
+*correct* — the mechanism was tested and the judgement was not. That case now
+asserts the opposite, and a second case pins the real `msedge.b.tlu.dl...`
+remote verbatim as something that must never raise.
+
+What still raises: a bare **public** IP address, a write directly into an
+autostart folder, an unreadable file list, or a notify command line. A bare
+**private** address (10.x, 172.16–31.x, 192.168.x, 127.x, 169.254.x) is now
+context with its cause named — an on-premises WSUS server, an SCCM distribution
+point and a Microsoft Connected Cache node are all routinely reached by bare LAN
+address, and BITS is the transport all three use. `172.15.x` and `172.32.x` sit
+outside that block and still raise; the self-test pins both boundaries.
+
+`persistence_extra.ps1` had **no `-SelfTest` at all**, so this rule could only
+ever be exercised by CI against a real `bitsadmin` job on a Windows runner —
+which is why the mistake had to be caught by hand on the owner's machine. The
+grading is now a pure `Get-BitsVerdict` taking plain values, with 25 cases that
+run on any platform, and `lint.yml` gains a `persistence-bits-grade` job.
+
+### The summary dashboard no longer measures the process list a second time
+The same report said both of these about the same machine:
+
+| | |
+|---|---|
+| Section 4 | `[WARNING] 2 of 3 user-profile process path(s) are suspicious` |
+| Dashboard | `[INFO] Processes from user-profile paths, all validly signed: 1` |
+
+Neither was wrong. Section 4 grades a process dump taken early in the run; the
+dashboard tile called `Get-CimInstance Win32_Process` again about eight minutes
+later, with its own inline copy of the rule. An Ollama install finished in
+between, so the installer processes existed for one measurement and not the
+other.
+
+`proc_path_grade.ps1` was introduced to stop exactly this contradiction, and its
+header claimed the rule was *"now shared so the two cannot drift apart."* It was
+not shared — the tile's copy had also quietly dropped `$Recycle` from both its
+regexes and graded `CRIT` where the section graded `WARNING`. But **sharing the
+rule would not have been enough. Identical rules still contradict when they are
+two measurements.**
+
+So the tile no longer measures. `proc_path_grade.ps1` writes its verdict to a
+`-StateFile`; the bats read it into `PROCPATH_STATE` and the dashboard prints
+that — the same idiom `DNSPROBE_STATE` already used. Every tile now names the
+scope it covers ("in the Section 4 process snapshot"), and a missing verdict
+prints *"were NOT graded"* rather than an all-clear.
+
+The names cross into cmd.exe, where `&`, `|`, `>`, `^`, `%` and `!` in a
+filename would be shell syntax, so the state line is sanitised to a strict
+allowlist and capped. It also never has an empty trailing field: cmd's `for /f`
+does not define a token that is not there and leaves the text `%%e` in the
+command, so an empty name list would have set `PROCPATH_NAMES` to the literal
+string `%e`.
+
+### An installer running from %TEMP% is catalogued
+The same run flagged `OllamaSetup.exe` under `\Temp\WinGet\` and
+`OllamaSetup.tmp` under `\Temp\is-0X2Z2LGMY8.tmp\` (Inno Setup's extraction
+folder). **Both are true positives and stay findings** — `\Temp\` is suspicious
+whatever the signature says, because an attacker running from there looks
+identical. What was missing is the prompt to ask the right question, so
+`tests/benign_corpus.txt` gains an ADVISE entry that puts it plainly: *were you
+installing something when this audit ran?* If not, this is exactly the shape the
+check exists to catch.
+
 ### An unsigned-driver finding now says whether Memory Integrity is running
 On 2026-09-07 the audit correctly reported an unsigned kernel driver, and
 exposure was nil the whole time: that machine ran HVCI / Memory Integrity, so

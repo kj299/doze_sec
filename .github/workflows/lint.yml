@@ -153,6 +153,59 @@ jobs:
           n=$(echo "$out" | grep -c '^\[OK\]')
           [ "$n" -ge 18 ] || { echo "self-test ran only $n case(s) -- it is not exercising the grade"; exit 1; }
 
+  persistence-bits-grade:
+    name: "BITS destination rule: plain HTTP is not a signal"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The BITS arm of tools/persistence_extra.ps1 had NO seam at all: the
+      # rule was inline in a loop over Get-BitsTransfer, so it could only ever
+      # be exercised by CI against a real bitsadmin job on a Windows runner.
+      # That gap is why the false positive below had to be caught by hand on
+      # the owner's machine rather than by a test.
+      #
+      # THE FALSE POSITIVE. A destination rule replaced an age rule that had
+      # flagged Microsoft Edge's own updater for having a birthday. The new
+      # rule raised on any http:// remote -- and on 2026-09-19 flagged the
+      # SAME job, for the third time through a third rule:
+      #
+      #   [WARNING] ... it fetches over plain HTTP, not HTTPS
+      #   (http://msedge.b.tlu.dl.delivery.mp.microsoft.com/...)
+      #
+      # Microsoft documents *.dl.delivery.mp.microsoft.com as HTTP on port 80
+      # for Edge content delivery: "Be sure not to use HTTPS for those
+      # endpoints that specify HTTP, and vice versa. The connection will
+      # fail." Plain HTTP there is REQUIRED. The CI case that covered this
+      # used http://localhost and proved the rule FIRED; it never asked
+      # whether firing was correct. The mechanism was tested, the judgement
+      # was not.
+      #
+      # Get-BitsVerdict is now pure, so the whole rule runs here on Linux.
+      - name: Grade every destination shape (public IP, LAN IP, hostname, autostart, unreadable)
+        run: pwsh -NoProfile -File tools/persistence_extra.ps1 -SelfTest
+      # By NAME, so a case cannot be deleted and still satisfy a count. The
+      # first two are the regression itself.
+      - name: The deleted plain-HTTP branch stays deleted
+        run: |
+          out=$(pwsh -NoProfile -File tools/persistence_extra.ps1 -SelfTest)
+          echo "$out"
+          echo "$out" | grep -q 'the real Edge Component Updater remote is context, not a finding' \
+            || { echo 'the field regression case is gone -- the Edge updater could be flagged a fourth time'; exit 1; }
+          echo "$out" | grep -q 'no line anywhere says plain HTTP' \
+            || { echo 'nothing now stops the plain-HTTP branch being reinstated'; exit 1; }
+          echo "$out" | grep -q 'a bare public IP destination raises' \
+            || { echo 'the true-positive direction is gone -- the destination rule may be dead'; exit 1; }
+          echo "$out" | grep -q 'a bare private LAN address is context' \
+            || { echo 'the WSUS/SCCM/Connected Cache carve-out is untested'; exit 1; }
+          echo "$out" | grep -q '172.32.x is outside the private block and raises' \
+            || { echo 'the private-range boundary is untested -- 172.32 could be swallowed as LAN'; exit 1; }
+          echo "$out" | grep -q 'a download into the temp folder is what a downloader does' \
+            || { echo 'nothing stops $badPathRx being applied to BITS local names again'; exit 1; }
+          echo "$out" | grep -q 'an unreadable file list is NOT cleared' \
+            || { echo 'an unreadable destination could start reading as an all-clear'; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]')
+          [ "$n" -ge 25 ] || { echo "self-test ran only $n case(s) -- it is not exercising the rule"; exit 1; }
+
   orphan-else-lint:
     name: "Orphaned else: no clause detached from its if (parses, then dies at runtime)"
     runs-on: ubuntu-latest

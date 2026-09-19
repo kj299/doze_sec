@@ -143,6 +143,12 @@ set "CTI_SKILL_SWITCH="
 set "VT_CHECK=0"
 set "DNS_PROBE=0"
 set "DNSPROBE_STATE="
+set "PROCPATH_STATE="
+set "PROCPATH_CLEAN="
+set "PROCPATH_BAD=0"
+set "PROCPATH_TOTAL=0"
+set "PROCPATH_SEEN=0"
+set "PROCPATH_NAMES="
 set "VT_SELF_SKIP=0"
 set "BASELINE_SAVE=0"
 set "BASELINE_SKIP=0"
@@ -1938,14 +1944,21 @@ if errorlevel 2 (
     echo [SKIPPED] select_lines.ps1 helper error -- suspicious-path check NOT performed.>> "%REPORT%"
 ) else if errorlevel 1 (
     echo [OK] No processes from suspicious locations.>> "%REPORT%"
+    rem A real clean answer. proc_path_grade does not run on this branch, so no
+    rem state file is written -- this flag is what lets the dashboard tell a
+    rem genuine all-clear from "never graded".
+    set "PROCPATH_CLEAN=1"
 ) else (
     rem A path match alone is not a verdict. Brave, Chrome, Edge, Slack, Teams
     rem and VS Code all install per-user under AppData, so grade the matches on
-    rem their signature the same way the summary dashboard already does -- this
-    rem section used to raise WARNING while the dashboard reported INFO about
-    rem the very same processes.
+    rem their signature. The grade goes to a state file and is carried to the
+    rem summary dashboard in PROCPATH_STATE. The dashboard used to work the
+    rem verdict out again from its own Get-CimInstance Win32_Process call, and
+    rem on date 2026-09-19 the two disagreed about the same machine -- an
+    rem installer finished between the two enumerations. One measurement now.
     del "%TEMP%\dz_proc4_hit.txt" 2>nul
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\proc_path_grade.ps1" -Path "%TEMP%\dz_proc4.tmp" -MarkerFile "%TEMP%\dz_proc4_hit.txt">> "%REPORT%" 2>&1
+    del "%TEMP%\dz_proc4_state.txt" 2>nul
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\proc_path_grade.ps1" -Path "%TEMP%\dz_proc4.tmp" -MarkerFile "%TEMP%\dz_proc4_hit.txt" -StateFile "%TEMP%\dz_proc4_state.txt">> "%REPORT%" 2>&1
     if exist "%TEMP%\dz_proc4_hit.txt" (
         call :dz_finding WARNING 4 T1057 "Suspicious process paths found"
         del "%TEMP%\dz_proc4_hit.txt" 2>nul
@@ -1955,6 +1968,26 @@ goto :sec4_susp_done
 :sec4_susp_skip
 echo [SKIPPED] Process enumeration failed -- suspicious-path check NOT performed.>> "%REPORT%"
 :sec4_susp_done
+
+:: Carry Section 4's verdict to the summary dashboard, the way DNSPROBE_STATE
+:: already does. Read at TOP LEVEL, not inside the block above: set /p plus a
+:: for /f over a VARIABLE needs neither delayed expansion nor a cmd /c. A
+:: for /f BACKTICK command would run through cmd /c, which strips the leading
+:: quote -- the defect that stopped :dz_ps_scan raising anything at eighteen
+:: call sites.
+set "PROCPATH_STATE=ungraded"
+set "PROCPATH_LINE="
+if exist "%TEMP%\dz_proc4_state.txt" set /p PROCPATH_LINE=<"%TEMP%\dz_proc4_state.txt"
+if defined PROCPATH_LINE for /f "tokens=1,2,3,4* delims=|" %%a in ("%PROCPATH_LINE%") do (
+    set "PROCPATH_STATE=%%a"
+    set "PROCPATH_BAD=%%b"
+    set "PROCPATH_TOTAL=%%c"
+    set "PROCPATH_SEEN=%%d"
+    set "PROCPATH_NAMES=%%e"
+)
+if "%PROCPATH_NAMES%"=="-" set "PROCPATH_NAMES="
+if defined PROCPATH_CLEAN set "PROCPATH_STATE=ok"
+del "%TEMP%\dz_proc4_state.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- LOLBin Processes (mshta, certutil, regsvr32, cmstp, wscript) --->> "%REPORT%"
@@ -4429,7 +4462,10 @@ echo $ev=Get-WinEvent -FilterHashtable @{LogName='Security';Id=4732} -MaxEvents 
 echo $pp=(netsh interface portproxy show all 2^>$null)^|Out-String;if($pp -match '\d+\.\d+'){ck 'CRIT' 'netsh portproxy tunnel rules are ACTIVE' 'Volt Typhoon C2 IOC. Remove: netsh interface portproxy reset. See Section 17.'}else{ck 'PASS' 'No netsh portproxy tunnel rules - Volt Typhoon check'} >> "%PSRUN%"
 echo try{$pipes=Get-ChildItem \\.\pipe\ -EA Stop^|Where-Object{$_.Name -match 'postex_^|msagent_^|MSSE-^|metsvc'};if($pipes){ck 'CRIT' ('Cobalt Strike named pipes detected: '+@($pipes).Count) ('Pipes: '+($pipes.Name -join ', ')+'. Active C2. See Section 17.')}else{ck 'PASS' 'No Cobalt Strike default named pipes detected'}}catch{ck 'INFO' 'Named pipe check unavailable'} >> "%PSRUN%"
 echo $subs=@(Get-WMIObject -Namespace root\subscription -Class __EventFilter -EA SilentlyContinue ^| Where-Object { -not ( ($_.Name -eq 'SCM Event Log Filter' -and $_.Query -like '*MSFT_SCMEventLogEvent*') -or ($_.Name -in @('BVTConsumer','BVTFilter','RmAssistEventLog')) ) });if($subs.Count -gt 0){ck 'CRIT' ('Non-default WMI EventFilter subscriptions present: '+$subs.Count) 'Stealthy reboot-persistent implant. See Section 17. Remove: Get-WMIObject -NS root\subscription -Class __EventFilter ^| Remove-WMIObject'}else{ck 'PASS' 'No non-default WMI permanent EventFilter subscriptions'} >> "%PSRUN%"
-echo $sus=@(Get-CimInstance Win32_Process -EA SilentlyContinue^|Where-Object{$_.ExecutablePath -match '\\Temp\\^|\\AppData\\^|\\Downloads\\^|\\Users\\Public\\'});$susP=@($sus^|Select-Object -Exp ExecutablePath^|Sort-Object -Unique);$critP=@($susP^|Where-Object{ ($_ -match '\\Temp\\^|\\Downloads\\^|\\Users\\Public\\') -or ((Get-AuthenticodeSignature $_ -EA SilentlyContinue).Status -ne 'Valid') });if($critP.Count -gt 0){ck 'CRIT' ('Unsigned/untrusted processes from user-profile paths: '+$critP.Count) ('Files: '+(($critP^|ForEach-Object{Split-Path $_ -Leaf}^|Sort-Object -Unique) -join ', ')+'. See Section 4.')}elseif($susP.Count -gt 0){ck 'INFO' ('Processes from user-profile paths, all validly signed: '+$susP.Count) (($susP^|ForEach-Object{Split-Path $_ -Leaf}^|Sort-Object -Unique) -join ', ')}else{ck 'PASS' 'No processes running from Temp / AppData / Downloads'} >> "%PSRUN%"
+if "%PROCPATH_STATE%"=="warn" echo ck 'WARN' 'Suspicious process paths: %PROCPATH_BAD% of %PROCPATH_TOTAL% in the Section 4 process snapshot' 'Running from Temp, Downloads, Users\Public or $Recycle, or not validly signed: %PROCPATH_NAMES%. Full paths in Section 4. This tile reports the Section 4 grade itself -- it does not enumerate the process list a second time.' >> "%PSRUN%"
+if "%PROCPATH_STATE%"=="info" echo ck 'INFO' 'Processes from user-profile paths, all validly signed: %PROCPATH_TOTAL% in the Section 4 process snapshot' '%PROCPATH_NAMES%. Per-user installs (Brave, Chrome, Edge, Slack, Teams, VS Code) live under AppData by design. Context, not a finding.' >> "%PSRUN%"
+if "%PROCPATH_STATE%"=="ok" echo ck 'PASS' 'No processes from Temp / AppData / Downloads / Public in the Section 4 process snapshot' >> "%PSRUN%"
+if "%PROCPATH_STATE%"=="ungraded" echo ck 'INFO' 'Processes from user-profile paths were NOT graded' 'Section 4 could not enumerate processes, or the grader returned no verdict. This tile states no verdict rather than an all-clear -- see Section 4.' >> "%PSRUN%"
 if "%DNSPROBE_STATE%"=="warn" echo ck 'WARN' 'DNS/HOSTS blackhole of update/security domains' 'A legitimate Windows/Defender/update domain did not resolve to a public IP -- see the Section 3 -dnsprobe output. T1562.001 defense evasion.' >> "%PSRUN%"
 if "%DNSPROBE_STATE%"=="clean" echo ck 'PASS' 'DNS integrity probe clean -- update/security domains resolve normally' >> "%PSRUN%"
 echo. >> "%PSRUN%"
