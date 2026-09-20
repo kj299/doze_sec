@@ -206,6 +206,52 @@ jobs:
           n=$(echo "$out" | grep -c '^\[OK\]')
           [ "$n" -ge 25 ] || { echo "self-test ran only $n case(s) -- it is not exercising the rule"; exit 1; }
 
+  benign-twin-grade:
+    name: "Benign twins: the ordinary state of a real machine must not raise"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # A sweep after #212 asked of every rule: could its test fail if the
+      # rule were WRONG, as opposed to merely broken? The gap tracked the
+      # absence of a pure verdict function almost exactly -- every tool that
+      # had one carried benign must-not-raise cases, and every tool that did
+      # not carried none. These three had none and now do.
+      #
+      # What each pins is the ORDINARY state of a real machine, because that
+      # is what a false positive costs: a person told their computer is
+      # compromised when it is not.
+      - name: stalkerware_check -- the highest-stakes check had no self-test at all
+        run: |
+          out=$(pwsh -NoProfile -File tools/stalkerware_check.ps1 -SelfTest); echo "$out"
+          for n in 'the CodexSandbox pair is a finding, at WARNING and never CRITICAL' \
+                   'an account named psadmin is NOT swallowed by the note-property skip' \
+                   'an EMPTY string value is not a hide-flag' \
+                   'Shadow=unset requires consent, so it is not a finding' \
+                   'ordinary software is not a monitoring product'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 24 ] || { echo "only $n case(s)"; exit 1; }
+      - name: boot_chain_check -- Secure Boot off and VBS off are consumer defaults
+        run: |
+          out=$(pwsh -NoProfile -File tools/boot_chain_check.ps1 -SelfTest); echo "$out"
+          for n in 'an ordinary Windows 11 boot entry raises nothing' \
+                   'recoveryenabled Yes is not read as a debugger' \
+                   'legacy BIOS / a VM without UEFI variables is NOT a finding' \
+                   'a null DeviceGuard reading is never reported as "not running"'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 20 ] || { echo "only $n case(s)"; exit 1; }
+      - name: log_gap_check -- "records were lost" must not fire on ordinary rollover
+        run: |
+          out=$(pwsh -NoProfile -File tools/log_gap_check.ps1 -SelfTest); echo "$out"
+          for n in 'retention: 20 MB on Security -- the Windows default' \
+                   'retention: 0 MB on Unreadable -- size unreadable is not a small log' \
+                   'rollover: full log rolled for the ordinary reason' \
+                   'rollover: oldest record predates the boot'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 20 ] || { echo "only $n case(s)"; exit 1; }
+
   orphan-else-lint:
     name: "Orphaned else: no clause detached from its if (parses, then dies at runtime)"
     runs-on: ubuntu-latest
