@@ -1345,7 +1345,18 @@ jobs:
             for ($k = $w + 1; $k -lt $w + 8; $k++) { if ($bat[$k] -match '^\s*findstr .*dz_pipe\.tmp') { $fs = $bat[$k]; break } }
             if (-not $fs) { throw 'no findstr line follows the wevtutil 7045 line' }
             $tmp = Join-Path $env:TEMP 'dz_ci_7045.txt'
-            & cmd.exe /c ('wevtutil qe System /q:"*[System[(EventID=7045)]]" /c:20 /rd:true /f:text > "' + $tmp + '"')
+            # The Service Control Manager writes 7045 asynchronously: the first
+            # run of this step queried the log 300 ms after sc create and the
+            # newest record was 40 s old. Wait for the record before grading,
+            # and fail on its ABSENCE with its own message, so a plumbing
+            # timeout is never read as a verdict about the bat's line.
+            $seen = $false
+            for ($try = 0; $try -lt 30; $try++) {
+              & cmd.exe /c ('wevtutil qe System /q:"*[System[(EventID=7045)]]" /c:20 /rd:true /f:text > "' + $tmp + '"')
+              if ((Get-Content -LiteralPath $tmp -Raw -EA SilentlyContinue) -match 'dzsmoke_7045probe') { $seen = $true; break }
+              Start-Sleep -Seconds 2
+            }
+            if (-not $seen) { throw 'the 7045 record for the planted service never appeared in the System log within 60 s -- the pipeline could not be tested (plumbing, not a verdict about the bat)' }
             $cmdline = ($fs.Trim() -replace '>>\s*"%REPORT%"\s*$', '').Replace('"%TEMP%\dz_pipe.tmp"', '"' + $tmp + '"')
             Write-Host "running the bat's line: $cmdline"
             $out = (& cmd.exe /c $cmdline) -join "`n"
