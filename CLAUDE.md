@@ -250,6 +250,20 @@ output is report text. Console-only `echo [WARN] ...` status lines are untouched
 target, and a self-test case proves it stays quiet on them, because a lint people
 learn to work around is worse than no lint.
 
+**And the sweep that finds such things must be STRUCTURAL, not lexical.** The
+first survey for the rule below keyed on advice-shaped wording ("if you do
+not...", "this is normal") and reported one instance. There were eight, in five
+tools: a gloss is just as often a consequence ("Anyone who can reach this PC
+remotely could watch what you do"), a remedy ("Add a TECHNIQUE|TACTIC|NAME
+line") or a mechanism ("Deleting the SD value hides a task... Used by
+HAFNIUM"). `lint_unraised_findings.ps1` now counts severity tags per emitted
+block instead, and it took three tries: the first version required the two
+lines to be ADJACENT, which meant fixing each instance -- each fix leaving an
+explanatory comment in between -- made its own mutation invisible. It reported
+`[OK]` and could not fail. Skipping comments caught 3 of 8; only the
+per-region count caught all of them, and only it found the two
+`cross_api_check.ps1` instances.
+
 **The tag marks a FINDING, never the sentence that explains one.** The hidden-
 account check (T1564.002 -- the one written for someone who may be in danger)
 printed its finding and then a line of context, *"Some legitimate software

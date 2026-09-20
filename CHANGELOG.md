@@ -6,6 +6,50 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### A severity tag marks a finding, and eight lines were marking a gloss
+#212 fixed one such line and claimed a survey had found "this one instance and
+no other". **That claim was wrong.** The survey keyed on advice-shaped
+*wording*, so it saw only glosses phrased as advice, and missed ones phrased as
+a consequence (*"Anyone who can reach this PC remotely could watch what you
+do"*), a remedy (*"Add a TECHNIQUE|TACTIC|NAME line"*) or a mechanism
+(*"Deleting the SD value hides a task... Used by HAFNIUM"*).
+
+Eight instances in five tools, all retagged `[INFO]`. No severity changed: in
+every case the finding above still drives `$sev`, the marker and the ledger row.
+
+`lint_unraised_findings.ps1` now enforces the rule **structurally**: within one
+emitted block, at most one line may carry a severity tag. Getting there took
+three formulations, and the first two are the point.
+
+1. **Adjacency.** Reported `[OK]` and **could not fail** — fixing each instance
+   left an explanatory comment between the finding and its gloss, so mutating a
+   tag back was invisible to it. A lint a comment defeats is not a lint.
+2. **Adjacency skipping comments and blanks.** Caught 3 of 8.
+3. **A per-region count.** Catches all 8 — and only this one found the two
+   `cross_api_check.ps1` instances no sweep had reported.
+
+### Three checks that judged without a test that could say they were wrong
+A sweep asked of every rule: *could its test fail if the rule were WRONG, as
+opposed to merely broken?* The gap tracked the absence of a pure verdict
+function almost exactly — every tool that had one carried benign
+must-not-raise cases, and every tool that did not carried none.
+
+- **`stalkerware_check.ps1`** had **no `-SelfTest` at all**, in the one check
+  written for someone who may be in danger. Now pure, 28 cases. It immediately
+  found a real bug: PowerShell converts an empty string to `0`, so
+  `'' -as [int]` is `0` and an **empty `REG_SZ` under `SpecialAccounts\UserList`
+  was reported as an account hidden from the sign-in screen** — a false
+  accusation on that path. The rule now requires a genuinely numeric value.
+- **`boot_chain_check.ps1`** — a legacy BIOS, a VM without UEFI variables and
+  VBS/HVCI switched off are the *ordinary* state of consumer hardware, and
+  nothing executed against any of them. Now pinned, including the #210 rule
+  that a null DeviceGuard reading says "could not be determined" and never
+  "not running".
+- **`log_gap_check.ps1`** — correcting my own survey, which reported zero
+  benign cases: `Get-RecordGap` already had four. The untested rules were the
+  retention floor and the heuristic that tells a reader *"records were lost"*.
+  Both now pure, twelve new cases, behaviour unchanged.
+
 ### Plain HTTP is not a signal, and the BITS rule stops saying it is
 For the **third** time, and through a **third** rule, the 2026-09-19 field run
 raised Microsoft Edge's own updater:

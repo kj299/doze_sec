@@ -122,7 +122,7 @@ note      = tools/driver_audit.ps1 prints one Memory Integrity line beside an un
 [vbs-off]
 class     = QUIET
 maxsev    = INFO
-proof     = field:VBS/HVCI state depends on firmware and hypervisor; the boot_chain CI step only asserts no CRITICAL on a clean VM
+proof     = field:VBS/HVCI state depends on firmware and hypervisor; the boot_chain CI step only asserts no CRITICAL on a clean VM; ci:boot_chain_check.ps1
 signature = Virtualization-Based Security is not running
 note      = VBS off is the state of most consumer hardware; optional hardening, not a compromise indicator. Verify: msinfo32 -> Virtualization-based security.
 
@@ -302,7 +302,7 @@ note      = A legitimate updater running "-WindowStyle Hidden -File <path>" with
 
 [hidden-accounts-sandbox]
 class     = ADVISE
-proof     = field:the benign cause is developer tooling on a real machine; a runner has no agent sandbox accounts to hide
+proof     = field:the benign cause is developer tooling on a real machine; a runner has no agent sandbox accounts to hide; ci:stalkerware_check.ps1
 signature = account\(s\) are HIDDEN from the sign-in screen
 note      = CONFIRMED on the owner's machine 2026-09-05: CodexSandboxOffline and CodexSandboxOnline, created by OpenAI Codex's sandbox, are hidden via SpecialAccounts\UserList and reported by the hidden-account check (T1564.002) in stalkerware_check.ps1. An earlier version of this entry named the Security 4720 new-account check instead, which never fired -- the retrospective recorded the symptom without the source. Verify: Get-LocalUser, then Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList'. An account you do not recognise here is a real finding.
 

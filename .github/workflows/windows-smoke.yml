@@ -786,6 +786,24 @@ jobs:
       - name: log_gap_check.ps1 (records missing with no clear event)
         shell: powershell
         run: |
+          # The pure grading, on the engine this tool ships to. lint.yml runs
+          # the same suite on pwsh for fast feedback; a 5.1-only divergence has
+          # already cost this repo a silent false negative, so this is the
+          # authoritative run. The live planted cases below are not replaced
+          # by it -- they cover the registry and UEFI reads it cannot.
+          $stOut = (.\tools\log_gap_check.ps1 -SelfTest) -join "`n"
+          Write-Host $stOut
+          if ($LASTEXITCODE -ne 0) { throw 'log_gap_check.ps1 -SelfTest failed' }
+          $stOk = @($stOut -split "`n" | Where-Object { $_ -match '^\[OK\]' }).Count
+          if ($stOk -lt 20) { throw "only $stOk [OK] line(s) from the log_gap_check.ps1 self-test; cases have gone missing" }
+          foreach ($needle in @(
+              'retention: 20 MB on Security -- the Windows default',
+              'retention: 0 MB on Unreadable -- size unreadable is not a small log',
+              'rollover: full log rolled for the ordinary reason',
+              'rollover: oldest record predates the boot')) {
+            if ($stOut -notmatch ('\[OK\]\s+' + [regex]::Escape($needle))) { throw "the log_gap_check.ps1 self-test no longer covers: $needle" }
+          }
+
           $ErrorActionPreference = 'Stop'
           # THE ARITHMETIC, PROVEN. Selective record deletion cannot be planted
           # safely on a runner, so the decision lives in a pure function and
@@ -1419,6 +1437,25 @@ jobs:
       - name: stalkerware_check.ps1 (covert monitoring; consent inventory must not accuse)
         shell: powershell
         run: |
+          # The pure grading, on the engine this tool ships to. lint.yml runs
+          # the same suite on pwsh for fast feedback; a 5.1-only divergence has
+          # already cost this repo a silent false negative, so this is the
+          # authoritative run. The live planted cases below are not replaced
+          # by it -- they cover the registry and UEFI reads it cannot.
+          $stOut = (.\tools\stalkerware_check.ps1 -SelfTest) -join "`n"
+          Write-Host $stOut
+          if ($LASTEXITCODE -ne 0) { throw 'stalkerware_check.ps1 -SelfTest failed' }
+          $stOk = @($stOut -split "`n" | Where-Object { $_ -match '^\[OK\]' }).Count
+          if ($stOk -lt 24) { throw "only $stOk [OK] line(s) from the stalkerware_check.ps1 self-test; cases have gone missing" }
+          foreach ($needle in @(
+              'the CodexSandbox pair is a finding, at WARNING and never CRITICAL',
+              'an account named psadmin is NOT swallowed by the note-property skip',
+              'an EMPTY string value is not a hide-flag',
+              'Shadow=unset requires consent, so it is not a finding',
+              'ordinary software is not a monitoring product')) {
+            if ($stOut -notmatch ('\[OK\]\s+' + [regex]::Escape($needle))) { throw "the stalkerware_check.ps1 self-test no longer covers: $needle" }
+          }
+
           $ErrorActionPreference = 'Stop'
           $md = Join-Path $env:TEMP ("dz_sw_ci_{0}" -f $PID)
           New-Item -ItemType Directory -Path $md -Force | Out-Null
@@ -1861,6 +1898,24 @@ jobs:
       - name: boot_chain_check.ps1 (boot-chain config audit; must not false-CRITICAL a clean VM)
         shell: powershell
         run: |
+          # The pure grading, on the engine this tool ships to. lint.yml runs
+          # the same suite on pwsh for fast feedback; a 5.1-only divergence has
+          # already cost this repo a silent false negative, so this is the
+          # authoritative run. The live planted cases below are not replaced
+          # by it -- they cover the registry and UEFI reads it cannot.
+          $stOut = (.\tools\boot_chain_check.ps1 -SelfTest) -join "`n"
+          Write-Host $stOut
+          if ($LASTEXITCODE -ne 0) { throw 'boot_chain_check.ps1 -SelfTest failed' }
+          $stOk = @($stOut -split "`n" | Where-Object { $_ -match '^\[OK\]' }).Count
+          if ($stOk -lt 20) { throw "only $stOk [OK] line(s) from the boot_chain_check.ps1 self-test; cases have gone missing" }
+          foreach ($needle in @(
+              'an ordinary Windows 11 boot entry raises nothing',
+              'recoveryenabled Yes is not read as a debugger',
+              'legacy BIOS / a VM without UEFI variables is NOT a finding',
+              'a null DeviceGuard reading is never reported as "not running"')) {
+            if ($stOut -notmatch ('\[OK\]\s+' + [regex]::Escape($needle))) { throw "the boot_chain_check.ps1 self-test no longer covers: $needle" }
+          }
+
           $ErrorActionPreference = 'Stop'
           $md = Join-Path $env:TEMP ("dz_bc_ci_{0}" -f $PID)
           New-Item -ItemType Directory -Path $md -Force | Out-Null
