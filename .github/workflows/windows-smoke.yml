@@ -1450,6 +1450,23 @@ jobs:
             # A hidden account is suspicious, not proof -- legitimate software
             # hides service accounts. The wording must not condemn.
             if ($out2 -notmatch 'legitimate software') { throw 'hidden-account finding lacks the not-necessarily-malicious framing' }
+            # ...and that framing is CONTEXT, not a second finding. It carried a
+            # [WARNING] tag until a real report showed 11 [WARNING] lines
+            # against 9 counted findings: both lines aggregate into the one
+            # ledger row, so the tag changed no verdict and simply made one
+            # finding print as two -- in the check written for someone who may
+            # be in danger. The tag is what every gate reads; it marks a
+            # finding, never the sentence explaining one.
+            $warnLines = @($out2 -split "`n" | Where-Object { $_ -match '^\[WARNING\]' })
+            if ($warnLines.Count -ne 1) {
+              throw ("the hidden-account block printed {0} [WARNING] line(s), expected exactly 1:`n{1}" -f $warnLines.Count, ($warnLines -join "`n"))
+            }
+            if ($warnLines[0] -notmatch 'HIDDEN from the sign-in screen') {
+              throw ("the one [WARNING] line is not the finding: {0}" -f $warnLines[0])
+            }
+            if ($out2 -notmatch '\[INFO\][^\r\n]*legitimate software hides its own service accounts') {
+              throw 'the not-necessarily-malicious framing is no longer tagged [INFO] -- a second WARNING inflates every printed count'
+            }
 
             # A JUNK VALUE MUST NOT KILL THE SCAN. `[int]$p.Value` threw on any
             # non-numeric UserList value and the try/catch wrapped the WHOLE
