@@ -210,6 +210,11 @@ Found during the v7.1 coverage review; tracked for future work:
   roll up to 2); calling automation cannot triage on exit code alone.~~
   **Closed:** exit code 8 = audit complete with CRITICAL findings
   (the dashboard's ACTION REQUIRED verdict); 2 remains warnings-only.
+  Until 2026-09-20 this held only with `-noConsoleLog`: the default
+  console-log re-exec handed the code back through a file written as
+  `echo %EXIT_CODE%>file`, which cmd reads as a handle redirect, so every
+  such run exited 0. The full-run CI job now compares the process exit
+  code with the `EXIT CODE:` line the report prints.
 - ~~Browser extensions are not inventoried (only credential-store access
   times).~~ **Closed:** Section 15 runs `tools/browser_extensions.ps1`
   (MITRE T1176) — inventories Chrome/Edge/Brave/Vivaldi/Firefox extensions

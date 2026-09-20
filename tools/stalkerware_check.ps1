@@ -88,7 +88,7 @@ function Get-MaxSev {
 }
 
 $sev = 'OK'
-$badPathRx = '\\Temp\\|\\Downloads\\|\\Public\\|\\ProgramData\\update'
+$badPathRx = '\\Temp\\|\\Downloads\\|\\Users\\Public\\|\\ProgramData\\update'
 
 # Consumer monitoring / "spouseware" families. Distinct from the enterprise RMM
 # list in Section 4: these are sold to individuals to watch other individuals.

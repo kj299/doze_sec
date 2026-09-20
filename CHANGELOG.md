@@ -6,6 +6,55 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Field run 2026-09-20: a CRITICAL on a clean machine, and an exit code that was always 0
+The first field run after #213 scored four of five predictions correct (the
+fifth matched by cancellation), and then declared `RESULT: CRITICAL findings.
+Treat as incident response.` on a clean machine. Reading the report and the
+console log found six defects no gate could see:
+
+- **`\Public\` matched any directory named public.** `module_inspect` reported
+  Adobe Creative Cloud's Node native addon under
+  `node_modules\@growthsdk\growthsdk\public\binaries\` in Program Files as
+  "loaded from a staging path": CRITICAL, exit code 8. Nine tools carried the
+  same regex; all now anchor to `\Users\Public\`, the form the Section 18
+  7045 rule already used. The Adobe path is pinned verbatim as a must-not-raise
+  case in `module_inspect -SelfTest`, with `Users\Public`, Temp and Downloads
+  as must-raise cases, and catalogued as `[node-native-addon-public-dir]`.
+- **The exit code was 0 on the path a person runs.** Without `-noConsoleLog`
+  the bat re-runs itself under Tee-Object and hands its exit code back through
+  a file written as `echo %EXIT_CODE%>"file"`. cmd reads a digit before `>` as
+  a redirection HANDLE, so `echo 8>file` printed `ECHO is off.` (the last line
+  of every console log) and wrote nothing; the parent kept its default and
+  exited 0. Every exit code is one digit, so the #96 fix never worked, and the
+  harness passes `-noConsoleLog`, so CI only ever tested the other path. The
+  redirection now comes first. `lint_report_echo` fails on the pattern, and
+  the full-run job compares the process exit code with the report's own
+  `EXIT CODE:` line.
+- **Section 16 printed a false all-clear on Event 7045** on every machine: its
+  findstr tokens were XML element names (`ServiceName`, `ImagePath`) and
+  `wevtutil /f:text` prints `Service Name:`, `Service File Name:`. Nothing could
+  match. The same report's Section 18 listed 26 such events. CI now lifts the
+  findstr line from the bat and runs it against a record planted on the runner,
+  and proves the old tokens print nothing.
+- **Two report paragraphs lost their first two lines to the console**: only the
+  last line of each carried `>> "%REPORT%"`. A new `lint_report_echo` rule
+  fails on report prose left unredirected inside a redirected paragraph.
+- **Six of our own `rem dz_probe` service records were reported as suspicious
+  installs on every audit for three weeks.** The exclusion knew `dz_selftest`
+  and `dzsmoke`, not the marker the EDR probe used before #200. The corpus
+  entry said the residue was handled; it was not. The full-run job now plants a
+  `dz_probe` record and asserts Section 18 counts it and does not list it.
+- **`[REBOOT PENDING]` was a counted WARNING printed with no severity tag**,
+  which is why the tag count matched the finding count only by cancellation.
+  It now prints `[WARNING] Reboot pending: ...`.
+- 17 lines of `WARNING: Chain status: CERT_TRUST_IS_NOT_TIME_VALID` from
+  `Test-Certificate`'s warning stream, for services that passed, no longer
+  land in Section 7.
+
+Adjudicated as correct and left alone: the unsigned WiFiman service binary,
+PROCEXP152.SYS, BitLocker, Script Block Logging, Sticky Keys, the ASR rules and
+the CodexSandbox hidden accounts.
+
 ### A severity tag marks a finding, and eight lines were marking a gloss
 #212 fixed one such line and claimed a survey had found "this one instance and
 no other". **That claim was wrong.** The survey keyed on advice-shaped

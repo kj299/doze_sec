@@ -130,7 +130,7 @@ function Write-WhenCaveat {
 }
 
 $trusted    = '\bMicrosoft\b|\bWindows\b'
-$badPathRx  = '\\Temp\\|\\AppData\\|\\Downloads\\|\\Public\\'
+$badPathRx  = '\\Temp\\|\\AppData\\|\\Downloads\\|\\Users\\Public\\'
 
 # Classify a DLL path: returns 'CRITICAL' | 'WARNING' | 'OK' plus a reason.
 function Get-DllVerdict {

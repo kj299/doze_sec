@@ -99,9 +99,37 @@ function Invoke-Lint {
         $name = Split-Path -Leaf $bat
         $lines = Get-Content -LiteralPath $bat
         for ($i = 0; $i -lt $lines.Count; $i++) {
+            $ln = $i + 1
+
+            # 4 -- a digit directly before '>' is a HANDLE, not text.
+            #   if defined DOZE_EXIT_FILE echo %EXIT_CODE%>"%DOZE_EXIT_FILE%"
+            # with EXIT_CODE=8 is `echo` with handle 8 redirected: it prints
+            # 'ECHO is off.' to the console and writes NOTHING. Every exit code
+            # is one digit, so the parent of the console-log re-exec read an
+            # empty file, kept its default and exited 0 -- on every machine,
+            # for every run that did not pass -noConsoleLog. Put the
+            # redirection first: >"file" echo %VAR%.
+            if ($lines[$i] -match '(?i)\becho\s+(%[A-Za-z_][A-Za-z_0-9]*%|\d)>>?') {
+                $bad += "${name}:${ln}: 'echo <value>>file' with no space -- if the value is a digit cmd reads it as a redirection HANDLE, prints 'ECHO is off.' and writes nothing; write the redirection first: >'file' echo %VAR%"
+            }
+
+            # 5 -- a report paragraph must reach the report in full.
+            # Two three-line prose blocks had '>> "%REPORT%"' on the LAST line
+            # only: the first two printed to the console and the report began
+            # the sentence mid-way ('DLLs actually loaded in running
+            # processes'). Only prose lines count (two-space indent, no colour
+            # code), and only when the paragraph they run into is redirected to
+            # the report -- a console message followed by 'echo.' is untouched.
+            if ($lines[$i] -match '^echo  [^\s%]' -and $lines[$i] -notmatch '>') {
+                $k = $i + 1
+                while ($k -lt $lines.Count -and $lines[$k] -match '^echo  \S' -and $lines[$k] -notmatch '>') { $k++ }
+                if ($k -lt $lines.Count -and $lines[$k] -match '^echo  \S' -and $lines[$k] -match '>>\s*"%REPORT%"') {
+                    $bad += "${name}:${ln}: report prose with no redirection, in a paragraph whose next redirected line goes to %REPORT% -- this line prints to the CONSOLE and the report starts the sentence mid-way"
+                }
+            }
+
             $split = Split-EchoLine $lines[$i]
             if ($null -eq $split) { continue }
-            $ln = $i + 1
             $body = [string]$split.Body
 
             # 0 -- the severity tag must be spelled the way the graders read it.
@@ -206,7 +234,13 @@ if ($SelfTest) {
            To   = "('[CRIT] '+`$b+' - not found in System32')" },
         @{ Name = 'short severity tag [ERROR] on the %REPORT% path'
            From = 'echo [WARNING] C2 domain IOC matches found in DNS cache above.'
-           To   = 'echo [ERROR] C2 domain IOC matches found in DNS cache above.' }
+           To   = 'echo [ERROR] C2 domain IOC matches found in DNS cache above.' },
+        @{ Name = 'exit code written as echo N>file (digit read as a handle; the file stays empty)'
+           From = 'if defined DOZE_EXIT_FILE 2>nul >"%DOZE_EXIT_FILE%" echo %EXIT_CODE%'
+           To   = 'if defined DOZE_EXIT_FILE echo %EXIT_CODE%>"%DOZE_EXIT_FILE%" 2>nul' },
+        @{ Name = 'report prose line lost to the console (redirect missing inside a redirected paragraph)'
+           From = 'echo  Every persistence check reads a registry key or a file on disk. An implant>> "%REPORT%"'
+           To   = 'echo  Every persistence check reads a registry key or a file on disk. An implant' }
     )
     $failures = 0
     foreach ($eol in @('LF', 'CRLF')) {
@@ -244,7 +278,9 @@ if ($SelfTest) {
     New-Item -ItemType Directory -Path $tmp -Force | Out-Null
     foreach ($f in @('doze_sec.bat', 'doze_sec_noAdmin.bat')) {
         $src = Get-Content -LiteralPath (Join-Path $Root $f) -Raw
-        $ins = "echo  [WARN] console-only status line, no redirection target`r`n"
+        # ...and a console-only PROSE line followed by a blank report line
+        # (echo.) is not a lost paragraph either -- rule 5 must stay quiet.
+        $ins = "echo  [WARN] console-only status line, no redirection target`r`necho  console-only prose line, followed by a blank report line, not a paragraph`r`n"
         $anchor = 'echo.>> "%REPORT%"'
         $at = $src.IndexOf($anchor)
         if ($at -lt 0) { Write-Output "[FAIL] negative case: anchor not found in $f"; $failures++ }
@@ -253,10 +289,10 @@ if ($SelfTest) {
     }
     $neg = Invoke-Lint -RepoRoot $tmp
     if ($neg.Bad.Count -gt 0) {
-        Write-Output "[FAIL] a console-only [WARN] status line was flagged: $($neg.Bad[0])"
+        Write-Output "[FAIL] a console-only status/prose line was flagged: $($neg.Bad[0])"
         $failures++
     } else {
-        Write-Output '[OK]   console-only [WARN] status line is NOT flagged (the rule is scoped to %REPORT% and %PSRUN%)'
+        Write-Output '[OK]   console-only [WARN] status line and console-only prose before echo. are NOT flagged'
     }
 
     if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
@@ -271,5 +307,5 @@ if ($res.Bad.Count) {
     $res.Bad | ForEach-Object { Write-Output ("  - " + $_) }
     exit 1
 }
-Write-Output ("[OK] {0} report echo line(s) scanned, {1} of them 'Command:' lines: every line reaches the report, no caret prints literally, and every printed PowerShell command parses." -f $res.Echoes, $res.Commands)
+Write-Output ("[OK] {0} report echo line(s) scanned, {1} of them 'Command:' lines: every line reaches the report, no caret prints literally, every printed PowerShell command parses, no exit code is written through a digit handle, and no report paragraph is split across console and report." -f $res.Echoes, $res.Commands)
 exit 0

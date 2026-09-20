@@ -1665,9 +1665,9 @@ echo.>> "%REPORT%"
 echo --- Pending Reboot Check --->> "%REPORT%"
 echo  Command: powershell -Command "Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'"   [also CBS\RebootPending and PendingFileRenameOperations]>> "%REPORT%"
 echo $reboot=$false > "%PSRUN%"
-echo if(Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'){$reboot=$true; '[REBOOT PENDING] Windows Update requires a reboot.'} >> "%PSRUN%"
-echo if(Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'){$reboot=$true; '[REBOOT PENDING] Component Based Servicing pending reboot.'} >> "%PSRUN%"
-echo try{ $pnd=Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -Name PendingFileRenameOperations -EA Stop; if($pnd){$reboot=$true; '[REBOOT PENDING] PendingFileRenameOperations set.' }}catch{} >> "%PSRUN%"
+echo if(Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'){$reboot=$true; '[WARNING] Reboot pending: Windows Update requires a reboot -- audit results may be incomplete.'} >> "%PSRUN%"
+echo if(Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'){$reboot=$true; '[WARNING] Reboot pending: Component Based Servicing has a reboot queued -- audit results may be incomplete.'} >> "%PSRUN%"
+echo try{ $pnd=Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -Name PendingFileRenameOperations -EA Stop; if($pnd){$reboot=$true; '[WARNING] Reboot pending: PendingFileRenameOperations is set -- audit results may be incomplete.' }}catch{} >> "%PSRUN%"
 echo if(-not $reboot){'[OK] No pending reboot detected.'} >> "%PSRUN%"
 echo if($reboot){ New-Item "$env:TEMP\dz_reboot_needed.txt" -Force ^| Out-Null } >> "%PSRUN%"
 del "%TEMP%\dz_reboot_needed.txt" 2>nul
@@ -2023,8 +2023,8 @@ echo.>> "%REPORT%"
 echo.>> "%REPORT%"
 echo --- Loaded-Module Inspection ^(what is running INSIDE processes^) --->> "%REPORT%"
 echo  Command: powershell -File tools\module_inspect.ps1>> "%REPORT%"
-echo  Every persistence check reads a registry key or a file on disk. An implant
-echo  injected into a signed host process touches neither -- this inspects the
+echo  Every persistence check reads a registry key or a file on disk. An implant>> "%REPORT%"
+echo  injected into a signed host process touches neither -- this inspects the>> "%REPORT%"
 echo  DLLs actually loaded in running processes ^(T1055 / T1574^).>> "%REPORT%"
 del "%TEMP%\dz_module.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\module_inspect.ps1" (
@@ -3465,7 +3465,7 @@ wevtutil qe System /q:"*[System[(EventID=7045)]]" /c:20 /rd:true /f:text > "%TEM
 if errorlevel 1 (
     echo [INFO] wevtutil unavailable or System log inaccessible -- 7045 check skipped.>> "%REPORT%"
 ) else (
-    findstr /c:"TimeCreated" /c:"ServiceName" /c:"ImagePath" /c:"AccountName" "%TEMP%\dz_pipe.tmp">> "%REPORT%"
+    findstr /c:"Date:" /c:"Service Name:" /c:"Service File Name:" /c:"Service Account:" "%TEMP%\dz_pipe.tmp">> "%REPORT%"
     if errorlevel 1 echo [OK] No recent service install events ^(7045^) found.>> "%REPORT%"
 )
 del "%TEMP%\dz_pipe.tmp" 2>nul
@@ -3750,8 +3750,8 @@ echo.>> "%REPORT%"
 echo.>> "%REPORT%"
 echo --- Cross-API Consistency ^(is the OS telling us the truth?^) --->> "%REPORT%"
 echo  Command: powershell -File tools\cross_api_check.ps1>> "%REPORT%"
-echo  Reads processes, services and scheduled tasks through independent APIs and
-echo  flags disagreement -- the one positive rootkit signal a user-mode tool can
+echo  Reads processes, services and scheduled tasks through independent APIs and>> "%REPORT%"
+echo  flags disagreement -- the one positive rootkit signal a user-mode tool can>> "%REPORT%"
 echo  get. Also detects Tarrask-style hidden tasks ^(missing SD^).>> "%REPORT%"
 del "%TEMP%\dz_crossapi.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\cross_api_check.ps1" (
@@ -4265,13 +4265,13 @@ echo $hits = @(); $ours = 0 >> "%PSRUN%"
 echo if ($evts) { >> "%PSRUN%"
 echo   foreach ($e in $evts) { >> "%PSRUN%"
 echo     $msg = $e.Message >> "%PSRUN%"
-echo     if ($msg -match 'dz_selftest^|dz_evil^|dzsmoke') { $ours++; continue } >> "%PSRUN%"
+echo     if ($msg -match 'dz_selftest^|dz_evil^|dzsmoke^|dz_probe') { $ours++; continue } >> "%PSRUN%"
 echo     if ($msg -match '\\Temp\\^|\\AppData\\^|\\Users\\Public\\^|\\Downloads\\^|cmd\.exe^|powershell^|mshta^|regsvr32') { >> "%PSRUN%"
 echo       $hits += '['+$e.TimeCreated+'] '+($msg -replace '[\r\n]+',' ' ^| Select-Object -First 1) >> "%PSRUN%"
 echo     } >> "%PSRUN%"
 echo   } >> "%PSRUN%"
 echo } >> "%PSRUN%"
-echo if ($ours -gt 0) { '[INFO] '+$ours+' service-install event(s) were doze_sec''s own test harness (dz_selftest/dzsmoke) and were excluded. Cleanup removes the service; it cannot remove the Security log record of installing it.' } >> "%PSRUN%"
+echo if ($ours -gt 0) { '[INFO] '+$ours+' service-install event(s) were doze_sec''s own test harness (dz_selftest/dzsmoke/dz_probe) and were excluded. Cleanup removes the service; it cannot remove the Security log record of installing it.' } >> "%PSRUN%"
 echo if ($hits.Count -gt 0) { '[WARNING][T1543.003] Suspicious service installations found:'; $hits ^| Select-Object -First 10 ^| ForEach-Object { '  '+$_ } } else { '[OK] No suspicious service installations in recent Event 7045 logs.' } >> "%PSRUN%"
 call :dz_ps_scan 18 T1543.003 "Suspicious service installation in Event 7045"
 
@@ -4963,7 +4963,7 @@ if exist "%REPORT_HTML%" (
 :: If invoked via the self-tee wrapper, write our real EXIT_CODE to the file
 :: the parent reads -- otherwise the parent's exit /b reflects Tee-Object's
 :: exit code, not ours, masking documented codes 0/2/3/4/5/7. (closes #96)
-if defined DOZE_EXIT_FILE echo %EXIT_CODE%>"%DOZE_EXIT_FILE%" 2>nul
+if defined DOZE_EXIT_FILE 2>nul >"%DOZE_EXIT_FILE%" echo %EXIT_CODE%
 endlocal & exit /b %EXIT_CODE%
 
 :: ====================================================================
@@ -4979,7 +4979,7 @@ endlocal & exit /b %EXIT_CODE%
 :fatal_preinit_exit
 echo.
 echo  Exit code: %EXIT_CODE% -- audit did not run.
-if defined DOZE_EXIT_FILE echo %EXIT_CODE%>"%DOZE_EXIT_FILE%" 2>nul
+if defined DOZE_EXIT_FILE 2>nul >"%DOZE_EXIT_FILE%" echo %EXIT_CODE%
 endlocal & exit /b %EXIT_CODE%
 
 :: ====================================================================

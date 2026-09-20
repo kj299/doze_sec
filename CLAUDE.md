@@ -536,6 +536,20 @@ added in the change that fixed the second. Where a rule encodes a judgement,
 pin a real instance of the benign thing **verbatim** as a must-not-raise case,
 and cite the first-party source in the code beside it.
 
+**Anchor a path regex to the directory you mean.** `\\Public\\` was written to
+mean `C:\Users\Public\` and matched any directory named public; a field run
+reported Adobe's Node native addon under `node_modules\...\public\binaries\`
+in Program Files as "loaded from a staging path", CRITICAL, exit code 8,
+"treat as incident response", on a clean machine. Nine tools carried the same
+regex. Where a directory name is the signal, spell the parent too
+(`\\Users\\Public\\`), and pin a real path that contains the bare word as a
+must-not-raise case. The same field run showed a findstr filter whose tokens
+were XML element names run against `wevtutil /f:text` output, so it matched
+nothing and printed `[OK] No recent service install events` on every machine
+while Section 18 listed 26. **A filter that can never match is a permanent
+all-clear**; when a pipeline's vocabulary comes from another tool's output
+format, CI must run that pipeline against a real record.
+
 **Key existence is not evidence either.** Section 18's registry IOC check
 flagged `HKLM\...\PortProxy\v4tov4\tcp [EXISTS]` while Section 3 of the same
 report said `[OK] No netsh portproxy rules.` Windows leaves that key behind,
@@ -628,5 +642,18 @@ added, extend the helpers-ps51 job to execute it.
   block-parse time (see comments near the `errorlevel` checks).
 - `endlocal` and `exit /b %EXIT_CODE%` must stay on one line so the value
   is captured before `endlocal` clears it (closes #96).
+- **A digit directly before `>` is a HANDLE.** `echo %EXIT_CODE%>"file"` with
+  EXIT_CODE=8 is `echo` with handle 8 redirected: it prints `ECHO is off.` and
+  writes nothing. Every exit code is one digit, so the console-log re-exec
+  (the path a person takes by default) returned 0 for every run on every
+  machine, and the harness passes `-noConsoleLog`, so CI only ever tested the
+  other path. Write the redirection first: `>"file" echo %VAR%`. Enforced by
+  `lint_report_echo`; the full-run job compares the process exit code with the
+  report's own `EXIT CODE:` line. **The path CI exercises must be the path a
+  person takes**, or a switch that exists for CI's convenience is where the
+  defect lives.
+- A paragraph echoed to the report needs `>> "%REPORT%"` on EVERY line; a
+  line without it prints to the console and the report starts the sentence
+  mid-way. Enforced by `lint_report_echo`.
 - Parens in `echo` text written into generated scripts must be escaped
   (`^)`, `^|`) when the echo can run inside a block.

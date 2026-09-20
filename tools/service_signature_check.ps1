@@ -97,7 +97,11 @@ function Get-ServiceBinaryPath {
 # Injectable so the self-test needs no services, no files and no certificates.
 $script:ExistsProbe = { param($p) Test-Path -LiteralPath $p -PathType Leaf }
 $script:SigProbe    = { param($p) $sig = $null; try { $sig = Get-AuthenticodeSignature -FilePath $p -EA Stop } catch {}; return $sig }
-$script:CertProbe   = { param($c) try { return [bool](Test-Certificate -Cert $c -EA Stop) } catch { return $true } }
+# -WarningAction: Test-Certificate writes 'WARNING: Chain status: CERT_TRUST_IS_NOT_TIME_VALID'
+# to the warning stream for a cert past NotAfter that is countersigned -- a
+# service that PASSES. A field report carried 17 such lines inside Section 7;
+# 'WARNING:' in a report is exactly the text a reader is told to count.
+$script:CertProbe   = { param($c) try { return [bool](Test-Certificate -Cert $c -EA Stop -WarningAction SilentlyContinue) } catch { return $true } }
 # A service's MSIX package is provisioned for SYSTEM, not for the auditing
 # user, so -AllUsers (which needs admin) is tried first; the per-user query is
 # the fallback so a non-elevated run still answers what it can.
@@ -114,7 +118,7 @@ $script:AppxProbe = {
     return $null
 }
 
-$script:BadPathRx = '\\Temp\\|\\AppData\\|\\Downloads\\|\\Public\\'
+$script:BadPathRx = '\\Temp\\|\\AppData\\|\\Downloads\\|\\Users\\Public\\'
 
 function Get-MsixPackageSignature {
     # MSIX/AppX packages are CATALOG-signed: the package carries the signature,
