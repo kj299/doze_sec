@@ -90,6 +90,40 @@ function Get-RecordGap {
     return [int64]$gap
 }
 
+
+# Retention posture and the rolled-without-pressure heuristic, as PURE
+# functions. Get-RecordGap below was already pure and already carries four
+# must-not-raise cases (including a real CI false positive); these two rules
+# had none, and "records were lost" is an alarming thing to tell someone.
+function Get-RetentionVerdict {
+    param([string]$Name, [double]$MaxMb, [bool]$IsSecurity)
+    $r = @{ Lines = @(); Sev = 'OK' }
+    $floorMb = if ($IsSecurity) { 20 } else { 10 }
+    # MaxMb of 0 means the size could not be read -- not a small log.
+    if ($MaxMb -gt 0 -and $MaxMb -lt $floorMb) {
+        $r.Lines += "[WARNING] Event log '$Name' is capped at $MaxMb MB, below the $floorMb MB this log normally gets -- it rolls over and erases its own history quickly, with no clear event to show for it. Raise it in Event Viewer > Properties."
+        $r.Sev = 'WARNING'
+    }
+    return $r
+}
+
+function Get-RolloverVerdict {
+    # "Records left while there was still room" is the signal. Every one of
+    # these guards is a benign case in its own right: a FULL log rolled for
+    # the ordinary reason, a log above the fill threshold is under genuine
+    # pressure, and an oldest record predating the last boot means nothing
+    # was lost since.
+    param([string]$Name, $Booted, [bool]$IsLogFull, [double]$FileSize, [double]$MaxBytes, $OldestTime)
+    $r = @{ Lines = @(); Sev = 'OK' }
+    if (-not $Booted -or $IsLogFull -or $MaxBytes -le 0) { return $r }
+    $usedPct = 100 * ($FileSize / $MaxBytes)
+    if ($usedPct -ge 70) { return $r }
+    if (-not $OldestTime -or $OldestTime -le $Booted) { return $r }
+    $r.Lines += "[WARNING] Event log '$Name': its oldest surviving record ($($OldestTime.ToString('yyyy-MM-dd HH:mm:ss'))) is NEWER than the last boot ($($Booted.ToString('yyyy-MM-dd HH:mm:ss'))), yet the log is only $([math]::Round($usedPct))% full -- records were lost without the log running out of room."
+    $r.Sev = 'WARNING'
+    return $r
+}
+
 if ($SelfTest) {
     '--- log_gap_check self-test (gap arithmetic over fixed inputs) ---'
     $cases = @(
@@ -111,7 +145,44 @@ if ($SelfTest) {
         else { "[CRITICAL] {0} -> expected {1}, got {2}" -f $c.Name, $c.Expect, $got; $bad++ }
     }
     if ($bad -gt 0) { "[CRITICAL] $bad self-test case(s) failed."; exit 2 }
-    '[OK] Gap arithmetic behaves correctly on all fixed cases.'
+
+    # --- retention floor -----------------------------------------------------
+    # Windows' own defaults are 20 MB for Security, System and Application, so
+    # the floors sit AT the default rather than above it: an untouched machine
+    # must produce nothing here.
+    $rt = 0
+    function RT { param([string]$n, [bool]$ok, [string]$got) if ($ok) { "[OK] $n" } else { "[CRITICAL] $n -- $got"; $script:rtFails++ } }
+    $script:rtFails = 0
+    foreach ($c in @(
+        @{ N = 'Security';    Mb = 20;  Sec = $true;  Raise = $false; Why = 'the Windows default' },
+        @{ N = 'Application'; Mb = 20;  Sec = $false; Raise = $false; Why = 'the Windows default' },
+        @{ N = 'System';      Mb = 20;  Sec = $false; Raise = $false; Why = 'the Windows default' },
+        @{ N = 'PSOperational'; Mb = 15; Sec = $false; Raise = $false; Why = 'the PowerShell/Operational default' },
+        @{ N = 'Application'; Mb = 10;  Sec = $false; Raise = $false; Why = 'exactly at the floor' },
+        @{ N = 'Unreadable';  Mb = 0;   Sec = $false; Raise = $false; Why = 'size unreadable is not a small log' },
+        @{ N = 'Security';    Mb = 15;  Sec = $true;  Raise = $true;  Why = 'Security below its 20 MB floor' },
+        @{ N = 'Application'; Mb = 2;   Sec = $false; Raise = $true;  Why = 'starved at 2 MB' })) {
+        $v = Get-RetentionVerdict -Name $c.N -MaxMb $c.Mb -IsSecurity $c.Sec
+        RT ("retention: {0} MB on {1} -- {2}" -f $c.Mb, $c.N, $c.Why) (($v.Sev -eq 'WARNING') -eq $c.Raise) ("sev=$($v.Sev)")
+    }
+
+    # --- rolled without capacity pressure ------------------------------------
+    $boot = [datetime]'2026-09-19T08:00:00'
+    foreach ($c in @(
+        @{ N = 'full log rolled for the ordinary reason';     Full = $true;  Used = 0.10; Oldest = [datetime]'2026-09-19T12:00:00'; Raise = $false },
+        @{ N = 'log under genuine pressure (90% full)';       Full = $false; Used = 0.90; Oldest = [datetime]'2026-09-19T12:00:00'; Raise = $false },
+        @{ N = 'oldest record predates the boot';             Full = $false; Used = 0.10; Oldest = [datetime]'2026-09-18T08:00:00'; Raise = $false },
+        @{ N = 'oldest record time unreadable';               Full = $false; Used = 0.10; Oldest = $null;                           Raise = $false },
+        @{ N = 'records left while there was room';           Full = $false; Used = 0.10; Oldest = [datetime]'2026-09-19T12:00:00'; Raise = $true })) {
+        $v = Get-RolloverVerdict -Name 'System' -Booted $boot -IsLogFull $c.Full -FileSize ($c.Used * 1000) -MaxBytes 1000 -OldestTime $c.Oldest
+        RT ("rollover: {0}" -f $c.N) (($v.Sev -eq 'WARNING') -eq $c.Raise) ("sev=$($v.Sev)")
+    }
+    # No boot time means the heuristic cannot run; it must stay silent rather
+    # than assume.
+    $v = Get-RolloverVerdict -Name 'System' -Booted $null -IsLogFull $false -FileSize 100 -MaxBytes 1000 -OldestTime ([datetime]'2026-09-19T12:00:00')
+    RT 'rollover: no boot time is silence, not a finding' ($v.Sev -eq 'OK') ("sev=$($v.Sev)")
+    if ($script:rtFails -gt 0) { "[CRITICAL] $($script:rtFails) retention/rollover case(s) failed."; exit 2 }
+    '[OK] Gap arithmetic, the retention floor and the rolled-without-pressure heuristic all behave on fixed inputs.'
     exit 0
 }
 
@@ -174,25 +245,24 @@ foreach ($name in $LogNames) {
     # activity -- a quieter way to lose the interesting window than clearing it.
     $maxMb = 0
     try { $maxMb = [math]::Round($cfg.MaximumSizeInBytes / 1MB, 1) } catch {}
-    $floorMb = if ($isSecurity) { 20 } else { 10 }
-    if ($maxMb -gt 0 -and $maxMb -lt $floorMb) {
-        "[WARNING] Event log '$name' is capped at $maxMb MB, below the $floorMb MB this log normally gets -- it rolls over and erases its own history quickly, with no clear event to show for it. Raise it in Event Viewer > Properties."
-        $sev = Get-MaxSev $sev 'WARNING'
-    }
+    $rv = Get-RetentionVerdict -Name $name -MaxMb $maxMb -IsSecurity $isSecurity
+    foreach ($l in $rv.Lines) { $l }
+    $sev = Get-MaxSev $sev $rv.Sev
 
     # Rolled without capacity pressure: records left while there was room.
+    # The oldest-record read stays here (it needs the live log); the RULE is
+    # in Get-RolloverVerdict, whose every guard is itself a benign case.
+    $oldestTime = $null
     if ($booted -and -not $cfg.IsLogFull -and $cfg.MaximumSizeInBytes -gt 0) {
-        $usedPct = 0
-        try { $usedPct = 100 * ($cfg.FileSize / $cfg.MaximumSizeInBytes) } catch {}
-        if ($usedPct -lt 70) {
-            $oldestTime = $null
-            try { $oldestTime = (Get-WinEvent -LogName $name -MaxEvents 1 -Oldest -EA Stop).TimeCreated } catch {}
-            if ($oldestTime -and $oldestTime -gt $booted) {
-                "[WARNING] Event log '$name': its oldest surviving record ($($oldestTime.ToString('yyyy-MM-dd HH:mm:ss'))) is NEWER than the last boot ($($booted.ToString('yyyy-MM-dd HH:mm:ss'))), yet the log is only $([math]::Round($usedPct))% full -- records were lost without the log running out of room."
-                $sev = Get-MaxSev $sev 'WARNING'
-            }
-        }
+        try { $oldestTime = (Get-WinEvent -LogName $name -MaxEvents 1 -Oldest -EA Stop).TimeCreated } catch {}
     }
+    $fs = 0
+    try { $fs = [double]$cfg.FileSize } catch {}
+    $mb = 0
+    try { $mb = [double]$cfg.MaximumSizeInBytes } catch {}
+    $ov = Get-RolloverVerdict -Name $name -Booted $booted -IsLogFull ([bool]$cfg.IsLogFull) -FileSize $fs -MaxBytes $mb -OldestTime $oldestTime
+    foreach ($l in $ov.Lines) { $l }
+    $sev = Get-MaxSev $sev $ov.Sev
 
     if ($cfg.LogMode -and $cfg.LogMode -ne 'Circular') {
         "[INFO] Event log '$name' uses LogMode $($cfg.LogMode) (archives rather than overwrites), so its record accounting differs from the circular case above."
