@@ -159,7 +159,8 @@ if ($null -ne $shadow -and ($shadow -eq 2 -or $shadow -eq 4)) {
     $what = 'view'
     if ($shadow -eq 2) { $what = 'view AND control' }
     "[CRITICAL] Remote session shadowing is set to $what this session WITHOUT asking permission (Shadow=$shadow, T1113)."
-    '[CRITICAL] Anyone who can reach this PC remotely could watch what you do with no prompt and no visible indication. There is no ordinary reason for this on a personal computer.'
+    # [INFO]: the consequence of the finding above, not a second finding.
+    '[INFO] Anyone who can reach this PC remotely could watch what you do with no prompt and no visible indication. There is no ordinary reason for this on a personal computer.'
     $sev = Get-MaxSev $sev 'CRITICAL'
 } elseif ($null -ne $shadow) {
     "[OK] Remote session shadowing requires the user's permission (Shadow=$shadow)."
@@ -274,8 +275,11 @@ if ($hits.Count -gt 0) {
     '[WARNING] Software commonly sold for monitoring another person is present on this PC:'
     foreach ($h in ($hits | Select-Object -First $MaxList)) { "  $h" }
     if ($hits.Count -gt $MaxList) { "  ...and $($hits.Count - $MaxList) more." }
-    '[WARNING] These products are also sold legitimately for parental control and workplace monitoring, so this is NOT proof of wrongdoing -- but if you did not install it and were not told it was here, treat it seriously.'
-    '[WARNING] Before removing it, read the READ THIS FIRST section at the top of this report: removing it can alert whoever installed it, and you may want to preserve evidence first.'
+    # Both of these are CONTEXT for the finding above. They print in the same
+    # place and carry the same weight to a reader; what the tag changes is the
+    # count, and one finding was printing as three.
+    '[INFO] These products are also sold legitimately for parental control and workplace monitoring, so this is NOT proof of wrongdoing -- but if you did not install it and were not told it was here, treat it seriously.'
+    '[INFO] Before removing it, read the READ THIS FIRST section at the top of this report: removing it can alert whoever installed it, and you may want to preserve evidence first.'
     $sev = Get-MaxSev $sev 'WARNING'
 } else {
     '[OK] No known consumer monitoring/spouseware products detected.'

@@ -228,6 +228,65 @@ if ($markerBad.Count) {
 }
 "[OK] $(@(Get-ChildItem -LiteralPath (Join-Path $Root 'tools') -Filter '*.ps1' | Where-Object { (Get-Content -LiteralPath $_.FullName -Raw) -match 'function\s+Write-Marker' }).Count) marker-writing tool(s) ensure their directory and surface write failures."
 
+# ---------------------------------------------------------------------------
+# A severity tag marks a FINDING, never the sentence that explains one.
+#
+# A tool that prints its finding and then a gloss -- the consequence, the
+# not-necessarily-malicious framing, the remedy -- and tags BOTH inflates
+# every printed count while the ledger stays right, because the block
+# aggregates into one row. No existing gate could see it: the block DOES
+# raise, so lint_unraised_findings passed it, and the section DOES declare
+# ISSUES FOUND, so verdict_audit passed it too. A real report showed 11
+# [WARNING] lines against 9 counted findings.
+#
+# The first sweep for this was keyed on advice-shaped WORDING ("if you do
+# not...", "this is normal") and found one instance. It missed five, because
+# a gloss can equally be consequence-shaped ("Anyone who can reach this PC
+# could...") or a remedy ("Add a TECHNIQUE|TACTIC|NAME line..."). So the rule
+# is STRUCTURAL: two severity-tagged output literals emitted back to back.
+# That shape is a finding plus a gloss; a block that really has two findings
+# separates them with the code that discovers the second.
+$glossBad = @()
+foreach ($tf in (Get-ChildItem -LiteralPath (Join-Path $Root 'tools') -Filter '*.ps1' | Sort-Object Name)) {
+    $lines = @(Get-Content -LiteralPath $tf.FullName)
+    # A bare emitted string literal carrying a severity tag.
+    $sevRx  = '^([''"])\[(WARNING|CRITICAL)\]'
+    # Lines that do not end an emission region: comments, blanks, other
+    # emitted literals ([INFO]/[OK] or plain), and the one-line item echoes a
+    # findings block uses to list what it found.
+    $contRx = '^(#|$)|^([''"])|^foreach\s*\(.*\)\s*\{\s*["''].*\}\s*$|^if\s*\(.*\)\s*\{\s*["''].*\}\s*$'
+    # Pre-formatted messages for the tagged lines seen in the current region.
+    # Strings, not nested arrays: PowerShell unrolls a one-element slice of an
+    # array-of-arrays into its inner elements, which turned $r[0] into a
+    # character index and threw.
+    $region = New-Object System.Collections.ArrayList
+    for ($i = 0; $i -le $lines.Count; $i++) {
+        $t = if ($i -lt $lines.Count) { $lines[$i].Trim() } else { 'END OF FILE' }
+        if ($i -lt $lines.Count -and $t -match $contRx) {
+            if ($t -match $sevRx -and -not (Test-Allowed -FileName $tf.Name -Line $t)) {
+                [void]$region.Add(("{0}:{1}: a second severity-tagged line in the same emitted block -- if it explains the first, tag it [INFO]: {2}" -f $tf.Name, ($i + 1), $t.Substring(0, [Math]::Min(96, $t.Length))))
+            }
+            continue
+        }
+        # Region closed by real code (or end of file). Two or more severity
+        # tags inside one region is a finding plus a gloss.
+        if ($region.Count -ge 2) {
+            for ($k = 1; $k -lt $region.Count; $k++) { $glossBad += $region[$k] }
+        }
+        $region = New-Object System.Collections.ArrayList
+    }
+}
+if ($glossBad.Count) {
+    ''
+    "[FAIL] $($glossBad.Count) severity tag(s) sit on a gloss rather than a finding:"
+    foreach ($g in $glossBad) { "  - $g" }
+    '  A finding printing as two inflates every count a reader can make, while'
+    '  the ledger stays right -- so the tool disagrees with itself. Tag the'
+    '  explanation [INFO]; the finding above it still drives the severity.'
+    exit 1
+}
+"[OK] No tool tags a gloss as a finding (checked $(@(Get-ChildItem -LiteralPath (Join-Path $Root 'tools') -Filter '*.ps1').Count) tools for adjacent severity-tagged lines)."
+
 if ($failures.Count -eq 0) {
     '[OK] Every check that prints a severity also raises it into the findings ledger.'
     exit 0

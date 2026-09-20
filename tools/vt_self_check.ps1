@@ -126,8 +126,11 @@ foreach ($e in $entries) {
 if ($malicious.Count -gt 0) {
     ""
     "[CRITICAL] $($malicious.Count) script-critical binar(ies) flagged as malicious by VirusTotal."
-    "[CRITICAL] Audit results from this system CANNOT be trusted. Aborting before any check runs."
-    "[CRITICAL] Investigate via independent forensics; do not act on prior reports from this host."
+    # Consequence and next step, both [INFO]: the finding is the line above.
+    # This block aborts the whole audit, so its weight comes from that, not
+    # from repeating the tag three times.
+    "[INFO] Audit results from this system CANNOT be trusted. Aborting before any check runs."
+    "[INFO] Investigate via independent forensics; do not act on prior reports from this host."
     exit 1
 }
 
