@@ -169,7 +169,8 @@ if (-not $pOk -or $setNet.Count -eq 0 -or $setWmi.Count -eq 0 -or $setTl.Count -
     if ($realHits.Count -gt 0) {
         "[CRITICAL] Process visible to some enumeration APIs but not others -- process-hiding rootkit indicator (T1014):"
         foreach ($h in $realHits) { "  $h" }
-        '[CRITICAL] A live process has no legitimate reason to be missing from one authoritative view of the system.'
+        # The consequence, not a second finding.
+        '[INFO] A live process has no legitimate reason to be missing from one authoritative view of the system.'
         $sev = Get-MaxSev $sev 'CRITICAL'
     } else {
         "[OK] Process lists agree across .NET, WMI and tasklist ($($setNet.Count) processes; transient start/exit differences resolved on re-check)."
@@ -359,7 +360,8 @@ if (-not $tOk -or $treeTasks.Count -eq 0) {
     if ($noSd.Count -gt 0) {
         '[CRITICAL] Scheduled task registered in TaskCache with NO security descriptor (SD) -- Tarrask-style hidden task (T1053.005):'
         foreach ($h in $noSd) { "  $h" }
-        '[CRITICAL] Deleting the SD value hides a task from schtasks and the Task Scheduler UI while it still runs. Used by HAFNIUM.'
+        # What the technique achieves, not a second finding.
+        '[INFO] Deleting the SD value hides a task from schtasks and the Task Scheduler UI while it still runs. Used by HAFNIUM.'
         $sev = Get-MaxSev $sev 'CRITICAL'
     }
     # Only claim a clean result when the check could actually reach one. Two

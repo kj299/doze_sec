@@ -194,7 +194,8 @@ if ($documentedOnly.Count -gt 0) {
 # 6. Completeness self-check. This is what keeps the matrix honest over time.
 if ($unmapped.Count -gt 0) {
     "[WARNING] $($unmapped.Count) technique(s) are referenced by the audit but NOT mapped in ttp_manifest.txt: $($unmapped -join ', ')."
-    '[WARNING] Add a TECHNIQUE|TACTIC|NAME line for each so the coverage matrix stays complete.'
+    # The remedy for the finding above, not a second finding.
+    '[INFO] Add a TECHNIQUE|TACTIC|NAME line for each so the coverage matrix stays complete.'
     if ($Strict) { exit 2 }
 } else {
     '[OK] Every technique the audit references is mapped in the manifest -- coverage matrix is complete.'
