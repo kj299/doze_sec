@@ -138,7 +138,15 @@ try {
 } catch {}
 if ($hidden.Count -gt 0) {
     "[WARNING] $($hidden.Count) account(s) are HIDDEN from the sign-in screen and from Settings (T1564.002): $($hidden -join ', ')"
-    '[WARNING] Some legitimate software hides its own service accounts this way. If you do not recognise one of these, someone may have created an account to access this PC without appearing on the login screen.'
+    # [INFO], not [WARNING]. This sentence is the CONTEXT for the finding above,
+    # not a second finding, and the tag is what every gate reads to decide. Both
+    # lines aggregate into the one ledger row (WARNING|10|T1564.002), so tagging
+    # this one WARNING changed no verdict -- it simply made one finding print as
+    # two. A real report showed 11 [WARNING] lines against 9 counted findings,
+    # and a reader who counts is then reading a different number from the tool.
+    # The severity of the block is unaffected: the line above still drives
+    # $sev, the dz_stalkerware marker and the ledger row.
+    '[INFO] Some legitimate software hides its own service accounts this way. If you do not recognise one of these, someone may have created an account to access this PC without appearing on the login screen.'
     $sev = Get-MaxSev $sev 'WARNING'
 } else {
     '[OK] No accounts are hidden from the sign-in screen.'

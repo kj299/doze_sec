@@ -250,6 +250,20 @@ output is report text. Console-only `echo [WARN] ...` status lines are untouched
 target, and a self-test case proves it stays quiet on them, because a lint people
 learn to work around is worse than no lint.
 
+**The tag marks a FINDING, never the sentence that explains one.** The hidden-
+account check (T1564.002 -- the one written for someone who may be in danger)
+printed its finding and then a line of context, *"Some legitimate software
+hides its own service accounts this way..."*, and tagged BOTH `[WARNING]`.
+Every gate stayed quiet, correctly: both lines aggregate into the single ledger
+row the block raises, so no verdict was wrong. But a real report then showed
+**11 `[WARNING]` lines against 9 counted findings**, and a reader who counts is
+reading a different number from the tool it is meant to trust. Context beside a
+finding is `[INFO]`; the finding line still drives the block's severity, its
+marker and its ledger row. Where a block prints several severity-tagged lines
+on purpose -- the three ASR rules not in Block mode are three findings
+aggregated into one row -- that is the documented aggregate pattern and stays.
+The test is whether the extra line is another finding or a gloss on the first.
+
 `block_sev`, `lint_unraised_findings` and `verdict_audit` now also *grade* the
 short forms. That is the backstop, not the rule: banning them at the source is
 what stops a new spelling going ungraded again.
