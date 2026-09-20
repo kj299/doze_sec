@@ -1324,6 +1324,45 @@ jobs:
           Write-Host "hosts_check OK ($n self-test cases)"
           exit 0
 
+      - name: Section 16 Event 7045 pipeline prints the record (wevtutil /f:text vocabulary, the bat's own findstr line)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # A field report said '[OK] No recent service install events (7045)
+          # found.' while Section 18 listed 26 of them from the same log. The
+          # findstr tokens (TimeCreated, ServiceName, ImagePath, AccountName)
+          # were XML element names; wevtutil /f:text prints 'Date:',
+          # 'Service Name:', 'Service File Name:', 'Service Account:'. Nothing
+          # could ever match, so the line was a permanent false all-clear.
+          # This lifts the findstr line FROM doze_sec.bat and runs it against
+          # a record planted now, so the bat's text is what is tested.
+          & sc.exe create dzsmoke_7045probe binPath= 'C:\Windows\System32\cmd.exe /c rem dz_selftest_7045' start= demand | Out-Null
+          try {
+            $bat = [string[]](Get-Content .\doze_sec.bat)
+            $w = [array]::FindIndex($bat, [Predicate[string]]{ param($l) $l -match '^wevtutil qe System .*EventID=7045.*dz_pipe\.tmp' })
+            if ($w -lt 0) { throw 'the Section 16 wevtutil 7045 line was not found in doze_sec.bat' }
+            $fs = $null
+            for ($k = $w + 1; $k -lt $w + 8; $k++) { if ($bat[$k] -match '^\s*findstr .*dz_pipe\.tmp') { $fs = $bat[$k]; break } }
+            if (-not $fs) { throw 'no findstr line follows the wevtutil 7045 line' }
+            $tmp = Join-Path $env:TEMP 'dz_ci_7045.txt'
+            & cmd.exe /c ('wevtutil qe System /q:"*[System[(EventID=7045)]]" /c:20 /rd:true /f:text > "' + $tmp + '"')
+            $cmdline = ($fs.Trim() -replace '>>\s*"%REPORT%"\s*$', '').Replace('"%TEMP%\dz_pipe.tmp"', '"' + $tmp + '"')
+            Write-Host "running the bat's line: $cmdline"
+            $out = (& cmd.exe /c $cmdline) -join "`n"
+            Write-Host $out
+            if ($out -notmatch 'Service Name:\s+dzsmoke_7045probe') { throw "the bat's findstr line did not print the planted 7045 record -- Section 16 would report no service was installed" }
+            if ($out -notmatch 'Service File Name:\s+.*dz_selftest_7045') { throw 'the image path of the planted record was not printed' }
+            # The tokens that shipped must print NOTHING against the same file,
+            # so this step is known to fail on the defect, not only pass on the fix.
+            $old = (& cmd.exe /c ('findstr /c:"TimeCreated" /c:"ServiceName" /c:"ImagePath" /c:"AccountName" "' + $tmp + '"')) -join "`n"
+            if ($old.Trim()) { throw 'the old XML-vocabulary tokens matched /f:text output -- this step no longer distinguishes the defect' }
+            Write-Host 'Section 16 7045 pipeline OK: the planted record prints through the bat''s own findstr line; the old tokens print nothing'
+          } finally {
+            & sc.exe delete dzsmoke_7045probe 2>&1 | Out-Null
+            Remove-Item $tmp -Force -EA SilentlyContinue
+          }
+          exit 0
+
       - name: module_inspect.ps1 -SelfTest (virtualized module paths are not injections)
         shell: powershell
         run: |
@@ -1337,7 +1376,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'module_inspect self-test failed' }
           # Non-vacuity: a self-test that asserted nothing would exit 0 too.
           $n = @($out -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($n -lt 20) { throw "module_inspect self-test ran only $n case(s) -- it is not asserting what it claims" }
+          if ($n -lt 26) { throw "module_inspect self-test ran only $n case(s) -- it is not asserting what it claims" }
+          # The staging-path rule pins the Adobe native addon a field run reported
+          # as CRITICAL; a lost case here is a lost false-positive guard.
+          if ($out -notmatch '\[OK\]   a Node native addon under node_modules') { throw 'the Adobe node_modules\public\ must-not-raise case did not run' }
+          if ($out -notmatch '\[OK\]   C:\\Users\\Public\\ IS a staging path') { throw 'the Users\Public must-raise case did not run' }
           Write-Host "module_inspect -SelfTest OK ($n cases)"
           exit 0
 
@@ -2218,6 +2261,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Plant a 7045 record carrying the retired dz_probe marker (residue the audit must count, not list)
+        shell: powershell
+        run: |
+          # Six records exactly like this outlived a manual run of the EDR
+          # verification block on the owner's machine (2026-08-30, before the
+          # marker became dz_selftest_ci_probe) and were reported as suspicious
+          # service installations on every audit for three weeks. sc delete
+          # removes the service, never the log record; the exclusion has to
+          # know the marker. Section 16 must LIST the record (it is a real
+          # 7045), Section 18 must COUNT it as harness residue.
+          & sc.exe create dzsmoke_probe_residue binPath= 'C:\Windows\System32\cmd.exe /c rem dz_probe' start= demand | Out-Null
+          & sc.exe delete dzsmoke_probe_residue | Out-Null
+
       - name: Run the full audit; fail on hang (timeout), fatal error, or early exit
         shell: cmd
         run: |
@@ -2254,6 +2310,23 @@ jobs:
           rem technique. The runner has the Sticky Keys shortcut enabled, so this
           rem exercises the real path rather than a fixture.
           powershell -NoProfile -ExecutionPolicy Bypass -File tests\assert_printed_findings_raised.ps1 -Report "%REP%" || exit /b 1
+          rem THE EXIT CODE A PERSON SEES. Without -noConsoleLog the bat re-runs
+          rem itself under Tee-Object and hands its real exit code back through
+          rem a file. That write was `echo %EXIT_CODE%>"file"`: cmd reads a digit
+          rem before `>` as a HANDLE, so `echo 8>file` printed "ECHO is off." and
+          rem wrote nothing, and every such run on every machine exited 0. This
+          rem job took that path all along and asserted only RC==1, which could
+          rem never fire. Compare RC with the code the report itself printed.
+          set "REPRC="
+          for /f "tokens=3" %%c in ('findstr /c:"EXIT CODE:" "%REP%"') do set "REPRC=%%c"
+          if not defined REPRC ( echo REPORT HAS NO "EXIT CODE:" LINE & exit /b 1 )
+          echo report says EXIT CODE: %REPRC% -- the process exited %RC%
+          if not "%RC%"=="%REPRC%" ( echo EXIT CODE LOST ON THE CONSOLE-LOG PATH: process exited %RC%, report says %REPRC% & exit /b 1 )
+          rem Section 16 lists the 7045 record the plant step left (it is real);
+          rem Section 18 counts it as harness residue and does not list it.
+          findstr /r /c:"^Service Name: *dzsmoke_probe_residue" "%REP%" >nul || ( echo SECTION 16 DID NOT PRINT THE PLANTED 7045 RECORD & exit /b 1 )
+          findstr /r /c:"system\. Service Name: *dzsmoke_probe_residue" "%REP%" >nul && ( echo SECTION 18 LISTED OUR OWN dz_probe RESIDUE AS A SUSPICIOUS SERVICE INSTALL & exit /b 1 )
+          findstr /c:"(dz_selftest/dzsmoke/dz_probe) and were excluded" "%REP%" >nul || ( echo SECTION 18 DID NOT DECLARE THE EXCLUDED RESIDUE COUNT & exit /b 1 )
           echo Completed end-to-end through Section 18 and the exit handler.
           exit /b 0
 
