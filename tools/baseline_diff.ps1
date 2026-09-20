@@ -347,7 +347,7 @@ $strongContent = @(
     'regsvr32[^\r\n]*/i:http', 'regsvr32[^\r\n]*scrobj', 'rundll32[^\r\n]*javascript'
 )
 $hiddenLauncher = '-w(indowstyle)?\s+hidden'
-$suspPath       = @('\\Temp\\', '\\Downloads\\', '\\Public\\', '\\ProgramData\\', '\\AppData\\')
+$suspPath       = @('\\Temp\\', '\\Downloads\\', '\\Users\\Public\\', '\\ProgramData\\', '\\AppData\\')
 function Test-SuspiciousArgs {
     param([string]$Detail)
     if (-not $Detail) { return $false }

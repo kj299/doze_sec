@@ -80,7 +80,7 @@ function Write-Marker {
 
 # Ported verbatim from the bat block.
 $script:Trusted = '\bMicrosoft\b|\bAdobe\b|\bBrave\b|\bGoogle\b|\bMozilla\b|\bWinSCP\b|\bCisco\b|\bCitrix\b|\bLogitech\b|\bVMware\b|\bDropbox\b|\bZoom\b|\bApple\b|\bNVIDIA\b|\bIntel\b|\bRealtek\b|\bLenovo\b|\bHP Inc\b|\bDell\b'
-$script:BadPathRx = '\\Temp\\|\\Downloads\\|\\Public\\'
+$script:BadPathRx = '\\Temp\\|\\Downloads\\|\\Users\\Public\\'
 $script:SkipPathRx = 'Microsoft|Windows|System32'
 
 # Script-scope so the self-test can set it: GetFolderPath('System') is empty on
@@ -247,9 +247,26 @@ if ($SelfTest) {
       ($script:probed -eq 'C:\Windows\System32\somemodule.dll') "probed=$($script:probed)"
 
     # --- a staging path must be caught even before normalisation -----------
+    # The raw (pre-expansion) text is checked as well as the expanded path, so
+    # a staging directory spelled out around an env var is caught even where
+    # the variable does not expand. The fixture names \Users\Public\ in full:
+    # the old fixture '%PUBLIC%\..\Public\' only passed because the bare
+    # '\\Public\\' regex matched ANY directory called public -- the regex a
+    # field run showed flagging Adobe's node_modules\...\public\ as CRITICAL.
     $script:ExistsProbe = { param($p) $false }
-    $v = Get-ClsidVerdict -Guid '{j}' -RawPath '%PUBLIC%\..\Public\evil.dll'
-    T 'a staging path expressed via an env var is still flagged' ($v.Bucket -eq 'flagged') "$($v.Bucket)/$($v.Label)"
+    $v = Get-ClsidVerdict -Guid '{j}' -RawPath '%SystemDrive%\Users\Public\evil.dll'
+    T 'a staging path spelled around an env var is flagged from the raw text' ($v.Bucket -eq 'flagged') "$($v.Bucket)/$($v.Label)"
+    # ...and %PUBLIC% itself, the way a registration would really write it,
+    # is caught after expansion. The variable is pinned so the case means the
+    # same thing on a runner without it.
+    $savedPublic = $env:PUBLIC
+    $env:PUBLIC = 'C:\Users\Public'
+    try {
+        $v = Get-ClsidVerdict -Guid '{j2}' -RawPath '%PUBLIC%\evil.dll'
+        T 'a %PUBLIC%-relative path is flagged once expanded' ($v.Bucket -eq 'flagged') "$($v.Bucket)/$($v.Label)"
+    } finally { $env:PUBLIC = $savedPublic }
+    $v = Get-ClsidVerdict -Guid '{j3}' -RawPath 'C:\Program Files\Vendor\public\helper.dll'
+    T 'a vendor directory named public under Program Files is NOT a staging path' ($v.Bucket -ne 'flagged') "$($v.Bucket)/$($v.Label)"
 
     # --- enumeration must not invent an entry from an empty registry -------
     T 'an absent CLSID root yields zero entries under @()' `

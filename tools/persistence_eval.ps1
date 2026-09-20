@@ -188,8 +188,10 @@ $hiddenLauncher = '-w(indowstyle)?\s+hidden'
 $hiddenCombine  = @('-enc', 'frombase64', 'downloadstring', 'downloadfile',
                     'https?:', '(iex|invoke-expression)\b', '-e\s+[A-Za-z0-9+/=]{24,}')
 # Unusual autorun LOCATIONS (path-only signal; kept narrow to avoid FPs).
-# (\Users\Public\ is intentionally omitted -- it is already subsumed by \Public\.)
-$suspPath = @('\\Temp\\', '\\Downloads\\', '\\Public\\')
+# Anchored to \Users\Public\ on purpose: a bare \Public\ matched any directory
+# named public, e.g. a Node native addon under node_modules\...\public\ in
+# Program Files (field false positive 2026-09-20, CRITICAL, exit code 8).
+$suspPath = @('\\Temp\\', '\\Downloads\\', '\\Users\\Public\\')
 
 $runKeys = @(
     'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run',

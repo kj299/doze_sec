@@ -115,7 +115,13 @@ function Get-MaxSev {
     return 'OK'
 }
 
-$badPathRx = '\\Temp\\|\\Downloads\\|\\Public\\|\\ProgramData\\update'
+$badPathRx = '\\Temp\\|\\Downloads\\|\\Users\\Public\\|\\ProgramData\\update'
+# \Users\Public\, not \Public\: the bare form matched ANY directory named
+# public. A field run reported Adobe's Node native addon under
+# ...\node_modules\@growthsdk\growthsdk\public\binaries\... in Program Files as
+# 'loaded from a staging path' -- CRITICAL, exit code 8, 'treat as incident
+# response', on a clean machine. The self-test pins that path verbatim.
+function Test-StagingPath { param([string]$Path) return [bool]($Path -match $badPathRx) }
 $coreProcs = @('lsass', 'winlogon', 'services', 'csrss', 'smss', 'wininit')
 
 # Paths where a MISSING file is ambiguous rather than damning: the locations an
@@ -484,6 +490,20 @@ if ($SelfTest) {
       ($null -ne $emptyRoots -and @($emptyRoots).Count -eq 0) ("null=" + ($null -eq $emptyRoots) + " count=" + @($emptyRoots).Count)
     $script:VfsRoots = $null
 
+    # STAGING PATH. The rule encodes a judgement (which directories mean
+    # 'dropped here to run', not 'installed here'), so a real benign instance
+    # is pinned verbatim: the Adobe Creative Cloud native addon that a field
+    # run on 2026-09-20 reported as CRITICAL because '\Public\' matched the
+    # 'public' directory of a Node package. Users\Public and Temp still raise.
+    $adobe1 = 'C:\Program Files\Adobe\Adobe Creative Cloud Experience\js\node_modules\@growthsdk\growthsdk\public\binaries\win.x64\Release\growthsdk.node'
+    $adobe2 = 'C:\Program Files\Adobe\Adobe Creative Cloud Experience\js\node_modules\@growthsdk\growthsdk\public\binaries\win.x64\Release\AdobeGrowthSDK.dll'
+    T 'a Node native addon under node_modules\...\public\ in Program Files is NOT a staging path (field FP 2026-09-20)' (-not (Test-StagingPath $adobe1)) $adobe1
+    T 'the sibling DLL from the same field report is NOT a staging path' (-not (Test-StagingPath $adobe2)) $adobe2
+    T 'a vendor directory literally named public under Program Files is NOT a staging path' (-not (Test-StagingPath 'C:\Program Files\Vendor\public\helper.dll')) ''
+    T 'C:\Users\Public\ IS a staging path' (Test-StagingPath 'C:\Users\Public\dz_x.dll') ''
+    T 'a user Temp directory IS a staging path' (Test-StagingPath 'C:\Users\u\AppData\Local\Temp\dz_x.dll') ''
+    T 'Downloads IS a staging path' (Test-StagingPath 'C:\Users\u\Downloads\dz_x.dll') ''
+
     if ($fails) { Write-Output "[FAIL] $fails module_inspect self-test expectation(s) unmet"; exit 1 }
     Write-Output '[OK] module_inspect self-test: Click-to-Run/MSIX virtual paths resolve or are stated as uncertain; a genuinely unbacked module still raises T1055.'
     exit 0
@@ -585,12 +605,12 @@ $capped = $false
 # report still said no module came from a staging path. Ordering staged paths
 # ahead of everything else means the cap can only ever discard the least
 # interesting candidates.
-$ordered = @($modOwners.Keys | Sort-Object @{Expression = { if ($_ -match $badPathRx) { 0 } else { 1 } }}, @{Expression = { $_ }})
+$ordered = @($modOwners.Keys | Sort-Object @{Expression = { if (Test-StagingPath $_) { 0 } else { 1 } }}, @{Expression = { $_ }})
 foreach ($path in $ordered) {
     $owners = $modOwners[$path]
     $inCore = $false
     foreach ($o in $owners) { if ($coreProcs -contains $o.ToLower()) { $inCore = $true; break } }
-    $staged = ($path -match $badPathRx)
+    $staged = Test-StagingPath $path
 
     # .NET NGEN native images are compiled ON THIS MACHINE from assemblies that
     # were already validated, and are unsigned by design -- they are not a

@@ -156,7 +156,7 @@ function Write-WhenCaveat {
 $psNoteProps = @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider')
 
 $trusted   = '\bMicrosoft\b|\bWindows\b'
-$badPathRx = '\\Temp\\|\\Downloads\\|\\Public\\|\\ProgramData\\update'
+$badPathRx = '\\Temp\\|\\Downloads\\|\\Users\\Public\\|\\ProgramData\\update'
 # Strong command-content indicators, kept in sync with persistence_eval.ps1
 # and startup_eval.ps1.
 $strongContent = @(
