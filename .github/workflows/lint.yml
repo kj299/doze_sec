@@ -251,6 +251,59 @@ jobs:
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
           n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 20 ] || { echo "only $n case(s)"; exit 1; }
+      # The last four tools without a seam. Each pins a real machine's ordinary
+      # state: a laptop with no network, the owner's fifteen autoruns, Process
+      # Explorer's documented IFEO value, Patch Tuesday driver churn and the RPC
+      # endpoint mapper's moving ports, a German auditpol.
+      - name: dns_probe -- a probe that resolved NOTHING is unverified, not nine blackholes
+        run: |
+          out=$(pwsh -NoProfile -File tools/dns_probe.ps1 -SelfTest); echo "$out"
+          for n in 'nine real public answers raise nothing and write no marker' \
+                   'ALL FAIL: marker is unverified, never blackhole' \
+                   'ALL FAIL: no [WARNING] line is printed' \
+                   'ONE of nine fails while eight resolve: marker is blackhole' \
+                   'the REAL wdcp answer 172.178.160.22 is public' \
+                   'a loopback resolver is INFO, and the probe stays clean'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 26 ] || { echo "only $n case(s)"; exit 1; }
+      - name: audit_policy_check -- a localized setting is unread, never reported OFF
+        run: |
+          out=$(pwsh -NoProfile -File tools/audit_policy_check.ps1 -SelfTest); echo "$out"
+          for n in 'a localized header still yields the rows' \
+                   '"Success and Failure" is ON' \
+                   'a localized setting (Erfolg) is SKIPPED, never reported as OFF' \
+                   'Failure alone is OFF' \
+                   'cmdline value absent is DISABLED'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 18 ] || { echo "only $n case(s)"; exit 1; }
+      - name: persistence_eval -- the owner's real autoruns, and Process Explorer's Replace Task Manager
+        run: |
+          out=$(pwsh -NoProfile -File tools/persistence_eval.ps1 -SelfTest); echo "$out"
+          for n in "owner's real autorun is not a finding: OneDrive" \
+                   "owner's real autorun is not a finding: deviceTRUST Client User" \
+                   'a hidden-window launcher ALONE is common in updaters and is not a finding' \
+                   'hidden window + -enc is a finding' \
+                   'IFEO taskmgr.exe -> Microsoft-signed procexp64.exe is Replace Task Manager: INFO, no finding' \
+                   'an UNSIGNED procexp64.exe on taskmgr.exe is the hijack' \
+                   'sethc.exe -> cmd.exe is the classic hijack'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 32 ] || { echo "only $n case(s)"; exit 1; }
+      - name: baseline_diff -- update churn is context, a replaced unsigned binary is a finding
+        run: |
+          out=$(pwsh -NoProfile -File tools/baseline_diff.ps1 -SelfTest); echo "$out"
+          for n in 'CHANGED Microsoft-signed driver (Windows Update replaced it) is INFO' \
+                   'CHANGED driver whose new binary is NOT Microsoft-signed is WARNING' \
+                   'NEW dynamic-range listener owned by svchost is INFO' \
+                   'NEW listener BELOW the dynamic range is WARNING even for svchost' \
+                   'NEW service hosted by signed rundll32 pointed at ProgramData is WARNING' \
+                   'NEW service whose Microsoft-signed binary sits in Users\Public is WARNING' \
+                   'NEW root CA is WARNING'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 27 ] || { echo "only $n case(s)"; exit 1; }
 
   orphan-else-lint:
     name: "Orphaned else: no clause detached from its if (parses, then dies at runtime)"

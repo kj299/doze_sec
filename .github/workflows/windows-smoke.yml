@@ -570,10 +570,16 @@ jobs:
           }
           Write-Host 'persistence_extra -SelfTest OK on Windows PowerShell 5.1'
 
-      - name: audit_policy_check.ps1 (auditing visibility; locale-independent cmdline signal)
+      - name: audit_policy_check.ps1 -SelfTest + live (auditing visibility; locale-independent cmdline signal)
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
+          # The pure verdicts on real Windows PowerShell 5.1 (the engine this ships to).
+          $st = (.\tools\audit_policy_check.ps1 -SelfTest) -join "`n"
+          if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'audit_policy_check.ps1 -SelfTest failed' }
+          $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($nst -lt 18) { throw "audit_policy_check self-test ran only $nst case(s)" }
+          Write-Host "audit_policy_check -SelfTest OK ($nst cases)"
           $md = Join-Path $env:TEMP ("dz_ap_ci_{0}" -f $PID)
           New-Item -ItemType Directory -Path $md -Force | Out-Null
           try {
@@ -1114,10 +1120,16 @@ jobs:
           Write-Host "report_safety.ps1 OK (incl. missing-helper skips and anchored counting)"
           exit 0
 
-      - name: baseline_diff.ps1 (save/diff round-trip; new item must be detected)
+      - name: baseline_diff.ps1 -SelfTest + live (save/diff round-trip; new item must be detected)
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
+          # The pure verdicts on real Windows PowerShell 5.1 (the engine this ships to).
+          $st = (.\tools\baseline_diff.ps1 -SelfTest) -join "`n"
+          if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'baseline_diff.ps1 -SelfTest failed' }
+          $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($nst -lt 27) { throw "baseline_diff self-test ran only $nst case(s)" }
+          Write-Host "baseline_diff -SelfTest OK ($nst cases)"
           $md = Join-Path $env:TEMP ("dz_bl_ci_{0}" -f $PID)
           New-Item -ItemType Directory -Path $md -Force | Out-Null
           $snap = Join-Path $md 'baseline.snapshot'
@@ -2037,10 +2049,16 @@ jobs:
           Write-Host "service_signature_check OK (marker contract: flagged=$flagged marker=$marked)"
           exit 0
 
-      - name: persistence_eval.ps1 (Run-key + IFEO evaluation; clean host stays clean)
+      - name: persistence_eval.ps1 -SelfTest + live (Run-key + IFEO evaluation; clean host stays clean; planted IFEO raises)
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
+          # The pure verdicts on real Windows PowerShell 5.1 (the engine this ships to).
+          $st = (.\tools\persistence_eval.ps1 -SelfTest) -join "`n"
+          if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'persistence_eval.ps1 -SelfTest failed' }
+          $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($nst -lt 32) { throw "persistence_eval self-test ran only $nst case(s)" }
+          Write-Host "persistence_eval -SelfTest OK ($nst cases)"
           # On a clean runner (no planted autoruns/IFEO) it must print the OK
           # line and must NOT false-positive on any pre-existing autorun.
           $out = .\tools\persistence_eval.ps1 -MarkerFile "$env:TEMP\dz_ci_persist.txt"
@@ -2052,6 +2070,21 @@ jobs:
             throw "persistence_eval did not emit the clean-state OK line"
           }
           Write-Host "persistence_eval OK"
+          # THE ONE BRANCH THAT PRODUCES A FINDING, on the real registry: an IFEO
+          # Debugger on a non-accessibility target must be a WARNING with a marker.
+          $ik = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\dz_selftest_ci_tgt.exe'
+          $im = Join-Path $env:TEMP 'dz_ci_persist_ifeo.txt'
+          try {
+            New-Item -Path $ik -Force | Out-Null
+            Set-ItemProperty -Path $ik -Name Debugger -Value 'C:\Users\Public\dz_selftest_dbg.exe' -Force
+            $o2 = (.\tools\persistence_eval.ps1 -MarkerFile $im) -join "`n"
+            if ($o2 -notmatch '\[WARNING\] IFEO Debugger hijack: dz_selftest_ci_tgt\.exe => C:\\Users\\Public\\dz_selftest_dbg\.exe') { Write-Host $o2; throw 'a planted IFEO Debugger was not reported as a hijack' }
+            if (-not (Test-Path $im)) { throw 'the IFEO hijack wrote no marker -- it never reaches the ledger' }
+          } finally {
+            Remove-Item -Path $ik -Recurse -Force -EA SilentlyContinue
+            Remove-Item $im -Force -EA SilentlyContinue
+          }
+          Write-Host 'persistence_eval IFEO plant OK'
           exit 0
 
       - name: logon_persistence.ps1 (logon/unlock vectors; clean runner has no CRITICAL)
@@ -2127,17 +2160,30 @@ jobs:
           Write-Host "INIT-path extractions OK (self_update_check, disk_info x5, smart_health x2)"
           exit 0
 
-      - name: dns_probe.ps1 (active DNS integrity probe, -dnsprobe)
+      - name: dns_probe.ps1 -SelfTest + live (active DNS integrity probe, -dnsprobe)
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
+          # The pure verdicts on real Windows PowerShell 5.1 (the engine this ships to).
+          $st = (.\tools\dns_probe.ps1 -SelfTest) -join "`n"
+          if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'dns_probe.ps1 -SelfTest failed' }
+          $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($nst -lt 26) { throw "dns_probe self-test ran only $nst case(s)" }
+          Write-Host "dns_probe -SelfTest OK ($nst cases)"
           $marker = Join-Path $env:TEMP 'dz_ci_dnsprobe.txt'
           if (Test-Path $marker) { Remove-Item $marker -Force }
           $out = .\tools\dns_probe.ps1 -MarkerFile $marker | Out-String
           # Lenient on network variance: just require recognizable probe output
-          # (per-domain '->' lines, or the all-clear / blackhole summary).
-          if ($out -notmatch '->|security/update domains|did not resolve') {
+          # (per-domain '->' lines, or the all-clear / blackhole / unverified summary).
+          if ($out -notmatch '->|security/update domains|did not resolve|NOT verified') {
             Write-Host "dns_probe produced no recognizable output:"; Write-Host $out; exit 1
+          }
+          # The marker is a VALUE the bat reads with set /p: only these two words
+          # may ever appear in it, and a healthy runner writes none.
+          if (Test-Path $marker) {
+            $mv = (Get-Content $marker -Raw).Trim()
+            if ($mv -notin @('blackhole', 'unverified')) { throw "dns_probe wrote an unknown marker value '$mv'" }
+            Write-Host "dns_probe marker: $mv"
           }
           Write-Host "dns_probe OK"
           Write-Host $out

