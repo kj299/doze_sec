@@ -1846,13 +1846,20 @@ if "%DNS_PROBE%"=="1" (
     echo %C_GREEN%[3/18]%C_RESET% DNS integrity probe via -dnsprobe...
     del "%TEMP%\dz_dnsprobe_warn.txt" 2>nul
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\dns_probe.ps1">> "%REPORT%" 2>&1
-    if exist "%TEMP%\dz_dnsprobe_warn.txt" (
+    rem The marker carries a VALUE: blackhole (some domains resolved, some did
+    rem not, or only to a non-public address) or unverified (NOTHING resolved:
+    rem offline or resolver down). An offline laptop used to raise nine
+    rem blackhole WARNINGs and a ledger row; it is not a finding, and it is
+    rem not an all-clear either, so the tile reads NOT VERIFIED.
+    set "DNSPROBE_STATE=clean"
+    set "_DNSMARK="
+    if exist "%TEMP%\dz_dnsprobe_warn.txt" set /p _DNSMARK=<"%TEMP%\dz_dnsprobe_warn.txt"
+    del "%TEMP%\dz_dnsprobe_warn.txt" 2>nul
+    if "!_DNSMARK!"=="blackhole" (
         set "DNSPROBE_STATE=warn"
         call :dz_finding WARNING 3 T1071.004 "DNS or HOSTS blackhole of update/security domains"
-        del "%TEMP%\dz_dnsprobe_warn.txt" 2>nul
-    ) else (
-        set "DNSPROBE_STATE=clean"
     )
+    if "!_DNSMARK!"=="unverified" set "DNSPROBE_STATE=unverified"
 ) else (
     echo  [INFO] Skipped -- enable with -dnsprobe. Resolves only legitimate update/security domains ^(never C2 IOCs^) to detect DNS/HOSTS blackholing.>> "%REPORT%"
 )
@@ -4468,6 +4475,7 @@ if "%PROCPATH_STATE%"=="ok" echo ck 'PASS' 'No processes from Temp / AppData / D
 if "%PROCPATH_STATE%"=="ungraded" echo ck 'INFO' 'Processes from user-profile paths were NOT graded' 'Section 4 could not enumerate processes, or the grader returned no verdict. This tile states no verdict rather than an all-clear -- see Section 4.' >> "%PSRUN%"
 if "%DNSPROBE_STATE%"=="warn" echo ck 'WARN' 'DNS/HOSTS blackhole of update/security domains' 'A legitimate Windows/Defender/update domain did not resolve to a public IP -- see the Section 3 -dnsprobe output. T1562.001 defense evasion.' >> "%PSRUN%"
 if "%DNSPROBE_STATE%"=="clean" echo ck 'PASS' 'DNS integrity probe clean -- update/security domains resolve normally' >> "%PSRUN%"
+if "%DNSPROBE_STATE%"=="unverified" echo ck 'INFO' 'DNS integrity probe could NOT verify update/security domains' 'None of the probed domains resolved when Section 3 ran -- the machine was offline or its resolver was unreachable. Not a blackhole finding, and not an all-clear: re-run with -dnsprobe once connected.' >> "%PSRUN%"
 echo. >> "%PSRUN%"
 
 :: ===== CREDENTIAL PROTECTION =========================================

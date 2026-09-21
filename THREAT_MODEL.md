@@ -235,7 +235,11 @@ Found during the v7.1 coverage review; tracked for future work:
     fail to resolve or resolve to a non-public IP — the signature of malware
     blackholing update/AV traffic via a DNS or HOSTS hijack (T1562.001). It
     queries only known-good infrastructure, so it sends **no** outbound
-    lookups to attacker domains. Off by default; opt-in like `-vt`.
+    lookups to attacker domains. Off by default; opt-in like `-vt`. A probe
+    in which *nothing* resolves (offline, VPN down, resolver unreachable)
+    is reported `[SKIPPED]` / NOT VERIFIED rather than as nine blackholes;
+    only selective failure, or a null-route/loopback/private answer, is
+    the hijack signature and raises.
   - *Risky active probe — still DEFERRED by design:* resolving the
     `ioc_domains.txt` C2 entries themselves would generate outbound DNS
     queries *from the audited host to attacker-controlled infrastructure*.

@@ -35,13 +35,24 @@
 # values), PORT (listening ports), ADMIN (local administrators), CERT (root CA
 # certificates -- a new root CA is how TLS interception is installed).
 #
-# FALSE-POSITIVE CONTROL: Windows Update legitimately adds drivers and services,
-# so a NEW item that is validly MICROSOFT-signed is reported [INFO] rather than
-# raised. NEW unsigned/non-Microsoft binaries, and any NEW admin, listening
-# port, persistence value or root CA, are WARNING -- those are not routine.
-# REMOVED items are reported [INFO]: uninstalls are normal, and the goal here is
-# to inform, not to bury the user in noise. CHANGED (same identity, different
-# binary hash or signer) is WARNING -- that is the shape of a replaced binary.
+# FALSE-POSITIVE CONTROL -- a change detector has to know what changes BY
+# DESIGN, or it teaches its reader to ignore it:
+#   * Windows Update adds and REPLACES drivers, services and tasks every month.
+#     A NEW or CHANGED item whose current binary is validly MICROSOFT-signed and
+#     whose arguments carry nothing suspicious is reported [INFO], not raised.
+#     A hash change to an unsigned or non-Microsoft binary is WARNING -- that is
+#     the shape of a replaced binary. (CHANGED used to be WARNING always, which
+#     meant every Patch Tuesday raised dozens of driver findings.)
+#   * The RPC endpoint mapper hands out dynamic listening ports (49152-65535)
+#     to svchost/lsass/wininit/services on every boot, so those move without
+#     anyone touching the machine. A NEW listener in that range owned by one
+#     of those system processes is [INFO]; any other new listener is WARNING.
+#   * A NEW autorun whose binary is validly Microsoft-signed with clean
+#     arguments is [INFO] (OneDrive setup, SecurityHealth). A signed LOLBin host
+#     with a suspicious argument stays WARNING: the arguments are graded first.
+#   * Any NEW admin or root CA is WARNING -- those are never routine.
+#   * REMOVED items are reported [INFO]: uninstalls are normal.
+# Get-AddedVerdict / Get-ChangedVerdict hold these rules; -SelfTest pins them.
 #
 # MARKER: writes the severity word to $env:TEMP\dz_baseline.txt; the caller
 # raises via :dz_finding. No marker when nothing noteworthy changed.
@@ -52,9 +63,10 @@
 [CmdletBinding()]
 param(
     [ValidateSet('Save', 'Diff')][string]$Mode = 'Diff',
-    [Parameter(Mandatory = $true)][string]$Path,
+    [string]$Path = '',
     [string]$MarkerDir = $env:TEMP,
-    [int]$MaxReport = 40
+    [int]$MaxReport = 40,
+    [switch]$SelfTest
 )
 
 $ErrorActionPreference = 'Continue'
@@ -118,6 +130,184 @@ function Get-BinPath {
     $m = [regex]::Match($s, '^[^\s]+\.(exe|sys|dll)', 'IgnoreCase')
     if ($m.Success) { return $m.Value }
     return $s
+}
+
+# Argument-content test for signed LOLBin hosts. Patterns are deliberately the
+# same ones persistence_eval.ps1 uses to judge Run-key values, so a command line
+# that would be flagged as an autorun is flagged here too.
+$script:LolbinHosts   = 'rundll32|regsvr32|mshta|powershell|pwsh|wscript|cscript|cmd|msiexec|installutil|certutil|bitsadmin|curl|wget|conhost|forfiles|mftrace'
+$script:StrongContent = @(
+    '-enc(odedcommand)?\b',
+    '-e\s+[A-Za-z0-9+/=]{24,}',
+    'frombase64string',
+    'downloadstring', 'downloadfile',
+    '(invoke-webrequest|\biwr\b|\bcurl\b|\bwget\b)[^\r\n]*https?:',
+    '(iex|invoke-expression)\s*[\(\$]', '\|\s*(iex|invoke-expression)\b',
+    'mshta\s+https?:', 'mshta\s+javascript', 'mshtml,runhtmlapplication',
+    'certutil[^\r\n]*-urlcache', 'certutil[^\r\n]*-decode', 'bitsadmin[^\r\n]*/transfer',
+    'regsvr32[^\r\n]*/i:http', 'regsvr32[^\r\n]*scrobj', 'rundll32[^\r\n]*javascript'
+)
+$script:HiddenLauncher = '-w(indowstyle)?\s+hidden'
+$script:SuspPath       = @('\\Temp\\', '\\Downloads\\', '\\Users\\Public\\', '\\ProgramData\\', '\\AppData\\')
+function Test-SuspiciousArgs {
+    param([string]$Detail)
+    if (-not $Detail) { return $false }
+    foreach ($p in $script:StrongContent) { if ($Detail -match $p) { return $true } }
+    if ($Detail -match $script:HiddenLauncher) { return $true }
+    # A signed LOLBin host pointed at a user-writable staging directory is the
+    # shape of the technique even when no single argument token is damning.
+    if ($Detail -match $script:LolbinHosts) {
+        foreach ($p in $script:SuspPath) { if ($Detail -match $p) { return $true } }
+    }
+    return $false
+}
+
+
+# ---------------------------------------------------------------------------
+# PURE VERDICTS. A record's category, identity and detail in, a severity out.
+# No CIM, no disk, no signature check: the caller says whether the binary is
+# Microsoft-signed, so every rule here can be pinned against real records.
+# ---------------------------------------------------------------------------
+$script:CatLabel = @{
+    'DRV' = 'kernel driver'; 'SVC' = 'service'; 'TASK' = 'scheduled task'
+    'RUN' = 'autorun/persistence value'; 'PORT' = 'listening port'
+    'ADMIN' = 'local administrator'; 'CERT' = 'root CA certificate'
+}
+$script:BinaryCats       = @('DRV', 'SVC', 'TASK', 'RUN')
+# The processes the RPC endpoint mapper and the OS itself give dynamic-range
+# listeners to on every boot.
+$script:DynamicPortOwner = '^(svchost|lsass|wininit|services|spoolsv|System|Idle)$'
+$script:DynamicPortFloor = 49152
+# A binary living in a staging directory is a finding whatever its signature
+# says (the proc_path_grade rule): a Microsoft-signed file COPIED to
+# Users\Public and registered as a service is the relocation, not the update.
+$script:StagingRx = '\\Temp\\|\\Downloads\\|\\Users\\Public\\'
+
+function Get-CatLabel { param([string]$Cat) $l = $script:CatLabel[$Cat]; if ($l) { return $l }; return $Cat }
+
+# A record present now and absent from the baseline.
+function Get-AddedVerdict {
+    param([string]$Cat, [string]$Id, [string]$Detail, [bool]$MsSigned)
+    if ($script:BinaryCats -contains $Cat) {
+        # The arguments are graded FIRST: a Microsoft signature on the host
+        # binary is not a clean bill of health (rundll32 <staging>\x.dll).
+        if (Test-SuspiciousArgs $Detail) { return @{ Sev = 'WARNING'; Why = 'suspicious arguments' } }
+        if ($Detail -match $script:StagingRx) { return @{ Sev = 'WARNING'; Why = 'runs from a staging path' } }
+        if ($MsSigned) { return @{ Sev = 'INFO'; Why = 'Microsoft-signed, likely a Windows update' } }
+        return @{ Sev = 'WARNING'; Why = 'not validly Microsoft-signed' }
+    }
+    if ($Cat -eq 'PORT') {
+        $port = 0
+        if ($Id -match '^tcp/(\d+)$') { $port = [int]$Matches[1] }
+        if ($port -ge $script:DynamicPortFloor -and $Detail -match $script:DynamicPortOwner) {
+            return @{ Sev = 'INFO'; Why = 'dynamic RPC range, system-owned -- reassigned on every boot' }
+        }
+        return @{ Sev = 'WARNING'; Why = 'new listener' }
+    }
+    return @{ Sev = 'WARNING'; Why = 'never routine' }
+}
+
+# A record present in both, with different detail.
+function Get-ChangedVerdict {
+    param([string]$Cat, [string]$Id, [string]$Old, [string]$New, [bool]$MsSignedNow)
+    if ($script:BinaryCats -contains $Cat) {
+        if (Test-SuspiciousArgs $New) { return @{ Sev = 'WARNING'; Why = 'suspicious arguments' } }
+        if ($New -match $script:StagingRx) { return @{ Sev = 'WARNING'; Why = 'now runs from a staging path' } }
+        if ($Cat -ne 'RUN' -and $MsSignedNow) { return @{ Sev = 'INFO'; Why = 'Microsoft-signed, likely a Windows update' } }
+        return @{ Sev = 'WARNING'; Why = 'binary or command changed' }
+    }
+    if ($Cat -eq 'PORT') {
+        # Same port, different owner: only quiet when the new owner is still a
+        # system process in the dynamic range (svchost -> lsass on reboot).
+        $port = 0
+        if ($Id -match '^tcp/(\d+)$') { $port = [int]$Matches[1] }
+        if ($port -ge $script:DynamicPortFloor -and $New -match $script:DynamicPortOwner) {
+            return @{ Sev = 'INFO'; Why = 'dynamic RPC range, system-owned' }
+        }
+        return @{ Sev = 'WARNING'; Why = 'listener owner changed' }
+    }
+    return @{ Sev = 'WARNING'; Why = 'never routine' }
+}
+
+if ($SelfTest) {
+    $fails = 0
+    function T { param([string]$Name, [bool]$Ok, [string]$Got)
+        if ($Ok) { Write-Output "[OK]   $Name" } else { Write-Output "[FAIL] $Name$(if($Got){": $Got"})"; $script:fails++ }
+    }
+    # Patch Tuesday: a Microsoft-signed driver's hash changes.
+    $v = Get-ChangedVerdict -Cat 'DRV' -Id 'tcpip' -Old 'C:\Windows\System32\drivers\tcpip.sys sha256=AAAA' -New 'C:\Windows\System32\drivers\tcpip.sys sha256=BBBB' -MsSignedNow $true
+    T 'CHANGED Microsoft-signed driver (Windows Update replaced it) is INFO' ($v.Sev -eq 'INFO') ("sev=" + $v.Sev)
+    $v = Get-ChangedVerdict -Cat 'DRV' -Id 'gdrv' -Old 'C:\Windows\System32\drivers\gdrv.sys sha256=AAAA' -New 'C:\Windows\System32\drivers\gdrv.sys sha256=BBBB' -MsSignedNow $false
+    T 'CHANGED driver whose new binary is NOT Microsoft-signed is WARNING (a replaced binary)' ($v.Sev -eq 'WARNING') ("sev=" + $v.Sev)
+    $v = Get-ChangedVerdict -Cat 'SVC' -Id 'Spooler' -Old 'C:\Windows\System32\spoolsv.exe start=Auto' -New 'C:\Users\Public\spoolsv.exe start=Auto' -MsSignedNow $true
+    T 'CHANGED service repointed at Users\Public is WARNING even with a signed host' ($v.Sev -eq 'WARNING') ("sev=" + $v.Sev)
+    $v = Get-ChangedVerdict -Cat 'SVC' -Id 'WinDefend' -Old 'C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.24090.11-0\MsMpEng.exe start=Auto' -New 'C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.25070.5-0\MsMpEng.exe start=Auto' -MsSignedNow $true
+    T 'CHANGED Defender platform path (monthly platform update, signed) is INFO' ($v.Sev -eq 'INFO') ("sev=" + $v.Sev)
+    $v = Get-ChangedVerdict -Cat 'RUN' -Id 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\SecurityHealth' -Old '%windir%\system32\SecurityHealthSystray.exe' -New '%windir%\system32\SecurityHealthSystray.exe -x' -MsSignedNow $true
+    T 'CHANGED autorun value stays WARNING even when signed (persistence content changed)' ($v.Sev -eq 'WARNING') ("sev=" + $v.Sev)
+    $v = Get-ChangedVerdict -Cat 'ADMIN' -Id 'Z4NEE52\khali' -Old 'Local' -New 'MicrosoftAccount' -MsSignedNow $false
+    T 'CHANGED admin record is WARNING' ($v.Sev -eq 'WARNING') ''
+    $v = Get-ChangedVerdict -Cat 'PORT' -Id 'tcp/49668' -Old 'svchost' -New 'lsass' -MsSignedNow $false
+    T 'CHANGED dynamic port owner svchost -> lsass (reboot reshuffle) is INFO' ($v.Sev -eq 'INFO') ("sev=" + $v.Sev)
+    $v = Get-ChangedVerdict -Cat 'PORT' -Id 'tcp/49668' -Old 'svchost' -New 'evil' -MsSignedNow $false
+    T 'CHANGED dynamic port owner to a non-system process is WARNING' ($v.Sev -eq 'WARNING') ''
+
+    # New items.
+    $v = Get-AddedVerdict -Cat 'PORT' -Id 'tcp/49668' -Detail 'svchost' -MsSigned $false
+    T 'NEW dynamic-range listener owned by svchost is INFO (RPC reassigns these every boot)' ($v.Sev -eq 'INFO') ("sev=" + $v.Sev)
+    $v = Get-AddedVerdict -Cat 'PORT' -Id 'tcp/49670' -Detail 'lsass' -MsSigned $false
+    T 'NEW dynamic-range listener owned by lsass is INFO' ($v.Sev -eq 'INFO') ''
+    $v = Get-AddedVerdict -Cat 'PORT' -Id 'tcp/49668' -Detail 'evil' -MsSigned $false
+    T 'NEW dynamic-range listener owned by an unknown process is WARNING' ($v.Sev -eq 'WARNING') ''
+    $v = Get-AddedVerdict -Cat 'PORT' -Id 'tcp/4444' -Detail 'svchost' -MsSigned $false
+    T 'NEW listener BELOW the dynamic range is WARNING even for svchost' ($v.Sev -eq 'WARNING') ''
+    $v = Get-AddedVerdict -Cat 'PORT' -Id 'tcp/49152' -Detail 'services' -MsSigned $false
+    T 'the dynamic range starts at 49152 inclusive' ($v.Sev -eq 'INFO') ''
+    $v = Get-AddedVerdict -Cat 'PORT' -Id 'tcp/49151' -Detail 'services' -MsSigned $false
+    T '49151 is below the range: WARNING' ($v.Sev -eq 'WARNING') ''
+    $v = Get-AddedVerdict -Cat 'PORT' -Id 'tcp/50000' -Detail 'pid=1234' -MsSigned $false
+    T 'the netstat fallback (pid=N, no name) cannot prove a system owner: WARNING' ($v.Sev -eq 'WARNING') ''
+    $v = Get-AddedVerdict -Cat 'DRV' -Id 'newdrv' -Detail 'C:\Windows\System32\drivers\newdrv.sys sha256=AAAA' -MsSigned $true
+    T 'NEW Microsoft-signed driver is INFO' ($v.Sev -eq 'INFO') ''
+    $v = Get-AddedVerdict -Cat 'DRV' -Id 'newdrv' -Detail 'C:\Windows\System32\drivers\newdrv.sys sha256=AAAA' -MsSigned $false
+    T 'NEW unsigned driver is WARNING' ($v.Sev -eq 'WARNING') ''
+    $v = Get-AddedVerdict -Cat 'SVC' -Id 'helper' -Detail 'C:\Users\Public\helper.exe start=Auto' -MsSigned $true
+    T 'NEW service whose Microsoft-signed binary sits in Users\Public is WARNING (relocation, not update)' ($v.Sev -eq 'WARNING' -and $v.Why -match 'staging') ($v.Sev + '/' + $v.Why)
+    $v = Get-AddedVerdict -Cat 'SVC' -Id 'dz_selftest_ci_lolbin' -Detail 'C:\Windows\System32\rundll32.exe C:\ProgramData\dz_selftest_ci_stage\x.dll,Run start=Demand' -MsSigned $true
+    T 'NEW service hosted by signed rundll32 pointed at ProgramData is WARNING (the CI case)' ($v.Sev -eq 'WARNING' -and $v.Why -eq 'suspicious arguments') ("sev=" + $v.Sev)
+    $v = Get-AddedVerdict -Cat 'RUN' -Id 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\SecurityHealth' -Detail '%windir%\system32\SecurityHealthSystray.exe' -MsSigned $true
+    T 'NEW autorun of a Microsoft-signed binary with clean arguments is INFO' ($v.Sev -eq 'INFO') ("sev=" + $v.Sev)
+    $v = Get-AddedVerdict -Cat 'RUN' -Id 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\Updater' -Detail 'powershell.exe -w hidden -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQA' -MsSigned $true
+    T 'NEW autorun of signed powershell with -enc is WARNING (arguments graded first)' ($v.Sev -eq 'WARNING') ("sev=" + $v.Sev)
+    $v = Get-AddedVerdict -Cat 'RUN' -Id 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\X' -Detail 'C:\Users\u\AppData\Local\Vendor\app.exe' -MsSigned $false
+    T 'NEW autorun of an unsigned third-party binary is WARNING' ($v.Sev -eq 'WARNING') ''
+    $v = Get-AddedVerdict -Cat 'ADMIN' -Id 'Z4NEE52\helper' -Detail 'Local' -MsSigned $false
+    T 'NEW local administrator is WARNING' ($v.Sev -eq 'WARNING') ''
+    $v = Get-AddedVerdict -Cat 'CERT' -Id 'ABCDEF0123456789' -Detail 'CN=Corp Proxy Root' -MsSigned $false
+    T 'NEW root CA is WARNING' ($v.Sev -eq 'WARNING') ''
+    $v = Get-AddedVerdict -Cat 'TASK' -Id '\Microsoft\Windows\UpdateOrchestrator\Schedule Scan' -Detail '%systemroot%\system32\usoclient.exe StartScan' -MsSigned $true
+    T 'NEW Microsoft-signed scheduled task with clean arguments is INFO' ($v.Sev -eq 'INFO') ''
+
+    # The argument grader on the owner's real autoruns: nothing suspicious.
+    $real = @(
+        '"C:\Program Files\Microsoft OneDrive\OneDrive.exe" /background',
+        '"C:\Users\khali\AppData\Local\BraveSoftware\Update\1.3.361.151\BraveUpdateCore.exe"',
+        'C:\Users\khali\AppData\Local\Programs\signal-desktop\Signal.exe --start-in-tray',
+        '"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --no-startup-window --win-session-start',
+        '"C:\WINDOWS\System32\DriverStore\FileRepository\wavesapo12de.inf_amd64_7705ab85ca3fc744\WavesSvc64.exe" -Jack',
+        '"C:\Program Files (x86)\Microsoft\EdgeWebView\Application\153.0.4234.48\Installer\setup.exe" --msedgewebview --delete-old-versions --system-level --verbose-logging'
+    )
+    foreach ($r in $real) { T ("owner's real autorun has no suspicious arguments: " + $r.Substring(0, [Math]::Min(60, $r.Length))) (-not (Test-SuspiciousArgs $r)) '' }
+    T 'a hidden-window launcher IS suspicious here (baseline records have no updater exemption)' (Test-SuspiciousArgs 'powershell -w hidden -File x.ps1') ''
+
+    if ($fails) { Write-Output "[FAIL] $fails baseline_diff self-test expectation(s) unmet"; exit 1 }
+    Write-Output '[OK] baseline_diff self-test: update churn (signed replacements, dynamic RPC ports) is context; replaced unsigned binaries, new admins, new roots and suspicious arguments are findings.'
+    exit 0
+}
+
+if (-not $Path) {
+    '[SKIPPED] baseline_diff: -Path is required for -Mode Save and -Mode Diff.'
+    exit 2
 }
 
 # ---- Collect the current state ------------------------------------------
@@ -307,11 +497,6 @@ foreach ($ln in $snapshot) {
 
 # NEW items that are validly Microsoft-signed are almost always Windows Update
 # doing its job -- reported for the record, but not raised.
-$catLabel = @{
-    'DRV' = 'kernel driver'; 'SVC' = 'service'; 'TASK' = 'scheduled task'
-    'RUN' = 'autorun/persistence value'; 'PORT' = 'listening port'
-    'ADMIN' = 'local administrator'; 'CERT' = 'root CA certificate'
-}
 $sev = 'OK'
 $added = @(); $changed = @(); $removed = @()
 
@@ -331,63 +516,23 @@ foreach ($k in $old.Keys) { if (-not $new.ContainsKey($k)) { $removed += $k } }
 # drivers would exhaust the budget and silently push an actual malicious new
 # autorun off the end of the report. Severity decides who gets printed, never
 # alphabetical luck.
-# Argument-content test for signed LOLBin hosts. Patterns are deliberately the
-# same ones persistence_eval.ps1 uses to judge Run-key values, so a command line
-# that would be flagged as an autorun is flagged here too.
-$lolbinHosts   = 'rundll32|regsvr32|mshta|powershell|pwsh|wscript|cscript|cmd|msiexec|installutil|certutil|bitsadmin|curl|wget|conhost|forfiles|mftrace'
-$strongContent = @(
-    '-enc(odedcommand)?\b',
-    '-e\s+[A-Za-z0-9+/=]{24,}',
-    'frombase64string',
-    'downloadstring', 'downloadfile',
-    '(invoke-webrequest|\biwr\b|\bcurl\b|\bwget\b)[^\r\n]*https?:',
-    '(iex|invoke-expression)\s*[\(\$]', '\|\s*(iex|invoke-expression)\b',
-    'mshta\s+https?:', 'mshta\s+javascript', 'mshtml,runhtmlapplication',
-    'certutil[^\r\n]*-urlcache', 'certutil[^\r\n]*-decode', 'bitsadmin[^\r\n]*/transfer',
-    'regsvr32[^\r\n]*/i:http', 'regsvr32[^\r\n]*scrobj', 'rundll32[^\r\n]*javascript'
-)
-$hiddenLauncher = '-w(indowstyle)?\s+hidden'
-$suspPath       = @('\\Temp\\', '\\Downloads\\', '\\Users\\Public\\', '\\ProgramData\\', '\\AppData\\')
-function Test-SuspiciousArgs {
-    param([string]$Detail)
-    if (-not $Detail) { return $false }
-    foreach ($p in $strongContent) { if ($Detail -match $p) { return $true } }
-    if ($Detail -match $hiddenLauncher) { return $true }
-    # A signed LOLBin host pointed at a user-writable staging directory is the
-    # shape of the technique even when no single argument token is damning.
-    if ($Detail -match $lolbinHosts) {
-        foreach ($p in $suspPath) { if ($Detail -match $p) { return $true } }
-    }
-    return $false
+# Helper: is the binary behind a record's detail validly Microsoft-signed?
+function Test-RecordMsSigned {
+    param([string]$Cat, [string]$Detail)
+    if ($script:BinaryCats -notcontains $Cat) { return $false }
+    $bin = Get-BinPath ($Detail -replace ' sha256=[0-9A-Fa-f]*$', '' -replace ' start=\w+$', '')
+    return (Test-MsSigned $bin)
 }
 
 $addEval = @()
 foreach ($k in ($added | Sort-Object)) {
     $cat = $k.Split('|')[0]
     $id  = $k.Substring($cat.Length + 1)
-    $lbl = $catLabel[$cat]
-    if (-not $lbl) { $lbl = $cat }
+    $lbl = Get-CatLabel $cat
     $detail = $new[$k]
-    # Signature-gate the binary-backed categories to keep update noise down.
-    $msSigned = $false
-    if ($cat -eq 'DRV' -or $cat -eq 'SVC' -or $cat -eq 'TASK') {
-        $bin = Get-BinPath ($detail -replace ' sha256=[0-9A-Fa-f]*$', '' -replace ' start=\w+$', '')
-        $msSigned = Test-MsSigned $bin
-    }
-    # A Microsoft signature on the HOST binary is not a clean bill of health.
-    # `rundll32.exe C:\ProgramData\upd\x.dll,Run` and
-    # `powershell.exe -enc <base64>` both resolve to a Microsoft-signed binary,
-    # so this gate used to downgrade them to INFO -- excluded from $warnAdds,
-    # $sev never raised, no marker, no ledger entry, Section 17 CLEAN -- and the
-    # INFO line omitted the command line, so nothing on the page even hinted at
-    # it. That is LOLBin persistence reported as a Windows update, in the check
-    # this file's own header calls the strongest signal it has against a
-    # targeted implant that matches no signature. Signed suppresses to INFO only
-    # when the arguments carry nothing suspicious.
-    $itemSev = 'WARNING'
-    if ($msSigned -and -not (Test-SuspiciousArgs $detail)) { $itemSev = 'INFO' }
-    if ($itemSev -eq 'WARNING') { $sev = Get-MaxSev $sev 'WARNING' }
-    $addEval += New-Object PSObject -Property @{ Lbl = $lbl; Id = $id; Detail = $detail; Sev = $itemSev }
+    $v = Get-AddedVerdict -Cat $cat -Id $id -Detail $detail -MsSigned (Test-RecordMsSigned -Cat $cat -Detail $detail)
+    if ($v.Sev -eq 'WARNING') { $sev = Get-MaxSev $sev 'WARNING' }
+    $addEval += New-Object PSObject -Property @{ Lbl = $lbl; Id = $id; Detail = $detail; Sev = $v.Sev; Why = $v.Why }
 }
 $warnAdds = @($addEval | Where-Object { $_.Sev -eq 'WARNING' })
 $infoAdds = @($addEval | Where-Object { $_.Sev -ne 'WARNING' })
@@ -403,32 +548,46 @@ foreach ($a in $infoAdds) {
     # Print the detail on INFO items too. Omitting it is how a signed LOLBin
     # host with a malicious command line stayed invisible even to someone
     # reading the report line by line.
-    if ($n -le $MaxReport) { "[INFO] NEW $($a.Lbl) since baseline (Microsoft-signed, likely a Windows update): $($a.Id)  =>  $($a.Detail)" }
+    if ($n -le $MaxReport) { "[INFO] NEW $($a.Lbl) since baseline ($($a.Why)): $($a.Id)  =>  $($a.Detail)" }
 }
-if ($infoAdds.Count -gt $MaxReport) { "[INFO] ...and $($infoAdds.Count - $MaxReport) more Microsoft-signed new item(s) not listed (report cap $MaxReport)." }
+if ($infoAdds.Count -gt $MaxReport) { "[INFO] ...and $($infoAdds.Count - $MaxReport) more routine new item(s) not listed (report cap $MaxReport)." }
 
-$chShown = 0
+$chEval = @()
 foreach ($k in ($changed | Sort-Object)) {
     $cat = $k.Split('|')[0]
     $id  = $k.Substring($cat.Length + 1)
-    $lbl = $catLabel[$cat]
-    if (-not $lbl) { $lbl = $cat }
+    $v = Get-ChangedVerdict -Cat $cat -Id $id -Old $old[$k] -New $new[$k] -MsSignedNow (Test-RecordMsSigned -Cat $cat -Detail $new[$k])
+    if ($v.Sev -eq 'WARNING') { $sev = Get-MaxSev $sev 'WARNING' }
+    $chEval += New-Object PSObject -Property @{ Lbl = (Get-CatLabel $cat); Id = $id; Key = $k; Sev = $v.Sev; Why = $v.Why }
+}
+$warnCh = @($chEval | Where-Object { $_.Sev -eq 'WARNING' })
+$infoCh = @($chEval | Where-Object { $_.Sev -ne 'WARNING' })
+$chShown = 0
+foreach ($c in $warnCh) {
     $chShown++
     if ($chShown -le $MaxReport) {
-        "[WARNING] CHANGED $lbl since baseline: $id"
-        "          was: $($old[$k])"
-        "          now: $($new[$k])"
+        "[WARNING] CHANGED $($c.Lbl) since baseline: $($c.Id)"
+        "          was: $($old[$c.Key])"
+        "          now: $($new[$c.Key])"
     }
-    $sev = Get-MaxSev $sev 'WARNING'
 }
-if ($chShown -gt $MaxReport) { "[INFO] ...and $($chShown - $MaxReport) more changed item(s) not listed (report cap $MaxReport)." }
+if ($chShown -gt $MaxReport) { "[INFO] ...and $($chShown - $MaxReport) more changed item(s) needing review, not listed (report cap $MaxReport)." }
+$n = 0
+foreach ($c in $infoCh) {
+    $n++
+    if ($n -le $MaxReport) {
+        "[INFO] CHANGED $($c.Lbl) since baseline ($($c.Why)): $($c.Id)"
+        "          was: $($old[$c.Key])"
+        "          now: $($new[$c.Key])"
+    }
+}
+if ($infoCh.Count -gt $MaxReport) { "[INFO] ...and $($infoCh.Count - $MaxReport) more routine changed item(s) not listed (report cap $MaxReport)." }
 
 $rmShown = 0
 foreach ($k in ($removed | Sort-Object)) {
     $cat = $k.Split('|')[0]
     $id  = $k.Substring($cat.Length + 1)
-    $lbl = $catLabel[$cat]
-    if (-not $lbl) { $lbl = $cat }
+    $lbl = Get-CatLabel $cat
     $rmShown++
     # Removals are reported but not raised: uninstalls and update churn are
     # normal, and burying a real NEW finding under removal noise helps nobody.

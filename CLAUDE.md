@@ -550,6 +550,19 @@ while Section 18 listed 26. **A filter that can never match is a permanent
 all-clear**; when a pipeline's vocabulary comes from another tool's output
 format, CI must run that pipeline against a real record.
 
+**"All fail" is a different claim from "some fail".** `dns_probe` graded each
+domain on its own, so a laptop with no network -- nine domains, nine failures
+-- printed nine blackhole WARNINGs and a DNS/HOSTS-hijack ledger row. Nothing
+resolving is the resolver or the link, not nine independent hijacks; it is
+`[SKIPPED]`, marker `unverified`, and a tile that reads NOT VERIFIED rather
+than PASS. When a tool grades N things by the same probe, ask what N failures
+at once means before asking what one means. **And a change detector must know
+what changes by design**: `baseline_diff` raised on every replaced
+Microsoft-signed driver after a Patch Tuesday and on every RPC dynamic-port
+reshuffle after a reboot. Routine churn is `[INFO]` with was/now shown; a
+replaced unsigned binary, a signed binary relocated to a staging path, a new
+admin or a new root CA is still the finding.
+
 **Key existence is not evidence either.** Section 18's registry IOC check
 flagged `HKLM\...\PortProxy\v4tov4\tcp [EXISTS]` while Section 3 of the same
 report said `[OK] No netsh portproxy rules.` Windows leaves that key behind,

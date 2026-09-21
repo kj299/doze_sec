@@ -6,6 +6,48 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### The last four tools get a seam, and each had a judgement a real machine would trip
+`dns_probe`, `audit_policy_check`, `persistence_eval` and `baseline_diff` were the
+remaining severity-emitting tools with no pure verdict function and no
+`-SelfTest`. Extracting the grading found, in each, a rule that the ordinary
+state of a real machine would have tripped:
+
+- **`dns_probe`: all-fail is not nine blackholes.** A laptop with no network,
+  a VPN not yet up or a resolver that is down fails every probe domain, and the
+  rule printed nine `[WARNING]` blackhole lines, wrote the marker and put a
+  DNS/HOSTS blackhole finding in the ledger. Nothing resolving is now
+  `[SKIPPED]` with marker value `unverified`; the bats read the marker VALUE
+  with `set /p` and the dashboard tile reads NOT VERIFIED, never PASS. Some
+  resolving and some not, or an answer of `0.0.0.0`/loopback/private, is the
+  hijack shape and stays WARNING. `0/8`, broadcast and multicast answers are now
+  non-public too. The runner's real answers are pinned verbatim, including
+  `wdcp.microsoft.com -> 172.178.160.22`, a 172.x address outside 172.16/12.
+- **`persistence_eval`: Process Explorer's "Replace Task Manager" is an IFEO
+  Debugger on `taskmgr.exe`** (Sysinternals documents it). It is `[INFO]` only
+  when the debugger file is named procexp and is validly Microsoft-signed; an
+  unsigned or third-party-signed file with that name, or signed procexp on any
+  other target, is still the hijack. The owner's fifteen real autoruns are
+  pinned verbatim as must-not-raise.
+- **`baseline_diff`: a change detector must know what changes by design.**
+  CHANGED was WARNING unconditionally, so the first run after a Patch Tuesday
+  would have raised a finding per replaced Microsoft driver; a NEW listener
+  was WARNING unconditionally, so every reboot's RPC dynamic-port reshuffle
+  raised findings. A CHANGED record whose current binary is validly
+  Microsoft-signed, not in a staging path, with clean arguments is `[INFO]`;
+  a NEW dynamic-range (49152+) listener owned by a system process is `[INFO]`.
+  Replaced unsigned binaries, anything in Temp/Downloads/Users\Public even
+  when signed, new admins, new root CAs, RUN changes and suspicious arguments
+  stay WARNING; the CI LOLBin case keeps passing.
+- **`audit_policy_check`**: the positional GUID parse and the
+  Success / No Auditing / localized classification are now pure and pinned
+  against a real English `auditpol /r` answer and a German header; `Erfolg`
+  is stated as unread, never reported as OFF.
+
+Every new judgement has a mutation that fails its own self-test; the
+`benign-twin-grade` lint job and the four Windows smoke steps run them, and
+the persistence_eval step now plants an IFEO Debugger on the real registry and
+requires the WARNING and the marker.
+
 ### Field run 2026-09-20: a CRITICAL on a clean machine, and an exit code that was always 0
 The first field run after #213 scored four of five predictions correct (the
 fifth matched by cancellation), and then declared `RESULT: CRITICAL findings.

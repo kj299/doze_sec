@@ -187,7 +187,7 @@ note      = vboxdrv.sys, procexp152.sys, gdrv.sys and similar are abusable by a 
 [loopback-dns]
 class     = QUIET
 maxsev    = INFO
-proof     = field:only observable with -dnsprobe, which -readonly refuses (it resolves names); DoH clients and local proxies set a 127.0.0.1 resolver
+proof     = ci:dns_probe.ps1 -SelfTest; field:the live probe is only observable with -dnsprobe, which -readonly refuses (it resolves names)
 signature = loopback DNS resolver is configured
 note      = DNS-over-HTTPS clients and local filtering proxies point the resolver at 127.0.0.1. Verify you installed it: Get-DnsClientServerAddress.
 
@@ -348,3 +348,31 @@ maxsev    = INFO
 proof     = ci:module_inspect.ps1 -SelfTest
 signature = \\node_modules\\.*\\public\\.*\.(node|dll)
 note      = A Node/Electron application loads its native addons (.node, and DLLs beside them) from inside node_modules, and a package directory is often literally named 'public'. Field false positive 2026-09-20: Adobe Creative Cloud Experience's @growthsdk addon under C:\Program Files\...\node_modules\@growthsdk\growthsdk\public\binaries\win.x64\Release\ was reported by module_inspect as 'loaded from a staging path' -- CRITICAL, exit code 8, RESULT: treat as incident response -- on a clean machine, because the staging regex '\\Public\\' matched any directory named public. Nine tools carried the same regex; all now anchor to \\Users\\Public\\. The path is pinned verbatim in module_inspect -SelfTest as a must-not-raise case. C:\Users\Public\ itself, Temp and Downloads still raise.
+
+[dns-offline-not-blackhole]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:dns_probe.ps1 -SelfTest
+signature = none of the [0-9]+ probed domain\(s\) resolved -- the machine is offline
+note      = A laptop with no network, a VPN that has not come up, or a resolver that is down fails EVERY probe domain. Until 2026-09-21 that produced nine [WARNING] blackhole lines, the marker, and a ledger row claiming a DNS/HOSTS blackhole on a machine with nothing wrong but no connectivity. All-fail is a different claim from some-fail: it is now [SKIPPED] with marker value 'unverified', the dashboard tile reads NOT VERIFIED (never PASS), and no finding is raised. Selective failure -- some domains resolve, some do not, or one resolves to 0.0.0.0/loopback/private -- is the hijack shape and stays WARNING. Verify by re-running with -dnsprobe once connected.
+
+[ifeo-procexp-replace-taskmgr]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:persistence_eval.ps1 -SelfTest
+signature = IFEO Debugger on taskmgr\.exe is Process Explorer's 'Replace Task Manager'
+note      = Sysinternals Process Explorer > Options > Replace Task Manager is implemented as IFEO\taskmgr.exe\Debugger = "<path>\procexp64.exe" (https://learn.microsoft.com/sysinternals/downloads/process-explorer). That is the exact registry shape of the IFEO hijack, so every IFEO Debugger used to be a WARNING. The exception is narrow on purpose: target taskmgr.exe, debugger file named procexp.exe/procexp64.exe, AND the file validly Microsoft-signed. An unsigned or third-party-signed file with that name, or signed procexp on any other target, is still the hijack. Verify: Get-AuthenticodeSignature on the debugger path shows Status Valid and a Microsoft subject.
+
+[baseline-update-churn]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:baseline_diff.ps1 -SelfTest
+signature = CHANGED (kernel driver|service|scheduled task) since baseline \(Microsoft-signed, likely a Windows update\)
+note      = Windows Update replaces drivers, the Defender platform and servicing tasks every month, so their hashes and paths change against any baseline older than a Patch Tuesday. CHANGED used to be WARNING unconditionally, which would have raised dozens of findings on the first run after an update -- the noise that makes a change detector unusable. A CHANGED record whose CURRENT binary is validly Microsoft-signed, does not sit in a staging path, and whose arguments carry nothing suspicious is now [INFO] with was/now shown. A hash change to an unsigned or non-Microsoft binary stays WARNING: that is a replaced binary. RUN, ADMIN and CERT changes are never downgraded.
+
+[baseline-rpc-dynamic-port]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:baseline_diff.ps1 -SelfTest
+signature = NEW listening port since baseline \(dynamic RPC range, system-owned
+note      = The RPC endpoint mapper assigns svchost, lsass, wininit, services and spoolsv their listeners from the dynamic range (49152-65535) at boot, and the numbers differ from one boot to the next. Every reboot therefore produced NEW and REMOVED port records against the baseline, each NEW one a WARNING. A NEW listener at or above 49152 owned by one of those system processes is now [INFO]; a listener below 49152, or one owned by any other process (including the netstat fallback's pid=N form, which cannot prove an owner), stays WARNING. A real implant's listener is almost never in that range under that owner; if it is, Section 3's connection listing still shows it.
