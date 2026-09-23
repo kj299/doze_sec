@@ -327,3 +327,49 @@ audience, not effort.
 - The two older deferred items above.
 - Any further plant-harness runs on a daily-driver machine until item 2
   exists.
+
+## Status of the 2026-08 recommendations (2026-09-23)
+
+P0 1-3 done (#189, #190, #191). P1 4 done by the seam sweep (#213, #215):
+every severity-emitting tool now has a pure verdict function, a self-test and
+pinned benign twins. P2 8 and 10 done. Open: 5 (provider-qualified event
+queries as a lint), 6 (the signed-under-System32 audit), 7 (non-vacuity as a
+lint over `tests/*.ps1`), 9 (CI economics). None caused a defect this period.
+
+## Recommendations from the 2026-09 retrospective
+
+Source and reasoning: `docs/design/retrospective-2026-09-seams-and-field-runs.md`.
+The systemic finding is that the verification gap moved rather than closed:
+every field run has been on the owner's laptop, elevated, read-only. The
+tool has never run on the machine of the person it exists for, never as a
+standard user, and its two strongest capable-actor detections (baseline diff,
+the DNS probe) have never run in the field.
+
+### P0 -- reach the target
+
+1. **A second real machine, read-only** (`tests\field_test.ps1`, nothing to
+   undo; predictions written in advance; every finding adjudicated).
+2. **The same laptop as a standard user** (`doze_sec_noAdmin.bat`, CI-only so
+   far).
+
+### P1 -- exercise the strongest detections
+
+3. **Capture a baseline and run the DNS probe once** on the owner's machine
+   (`-baseline save -dnsprobe`); every later field run then diffs, and the
+   October Patch Tuesday tests the churn rule #215 pinned.
+4. **Close T1036 masquerading** (system-process names outside their canonical
+   directory) and **relabel T1219/T1218** on the RMM and LOLBin checks that
+   already exist.
+
+### P2 -- hygiene
+
+5. Stop layering gates until a field run demands one.
+6. Keep the prediction-before-run discipline, misses reported first.
+7. The four open 2026-08 items above, none ahead of P0.
+
+### Explicitly not recommended
+
+- A second retrospective-driven fix cycle.
+- Any plant-harness run on a machine a person depends on.
+- Building the twenty-two unlabelled manifest ids into detections: most are
+  not host-observable; relabel the ones that exist and note the rest.
