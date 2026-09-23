@@ -13,9 +13,9 @@ user a safe, reviewable path to fix it. The protection chain it supports:
    Secure Boot, BitLocker, SmartScreen. doze_sec *audits that these are on
    and untampered* (Sections 8, 9, 13) rather than duplicating them.
 2. **Detection** is doze_sec's core job: 14 pre-flight checks + 18 audit
-   sections + a CTI-driven IOC sweep (Section 18) covering 84 MITRE ATT&CK
+   sections + a CTI-driven IOC sweep (Section 18) covering 88 MITRE ATT&CK
    techniques and 282 indicators across 10 IOC categories. (The manifest maps
-   107 techniques; the 23-technique difference is documented-but-not-yet-
+   107 techniques; the 19-technique difference is documented-but-not-yet-
    detected, and `attack_matrix.ps1` lists it on every run so the gap between
    what is described and what is implemented stays visible.)
 3. **Response** is user-gated by design: a severity-sorted report (text +
@@ -51,10 +51,10 @@ break untested nor drift out of sync with its test.
 | Tactic | Coverage | Where |
 |---|---|---|
 | Initial Access | Partial — artifacts, not prevention | S1 (patch level), S13 (Office macro policy, MOTW, SmartScreen state), S14 (HTML smuggling, Downloads), S18 AiTM token cache |
-| Execution | Yes | S4 (processes, LOLBins), S11 (PowerShell), S16 (4688), S18g |
+| Execution | Yes | S4 (processes, LOLBins: T1218.005 mshta, T1218.010 regsvr32), S11 (PowerShell), S16 (4688), S18g |
 | Persistence | Strong | S5 (Run/Winlogon/IFEO/AppInit/Active Setup), S6 (tasks), S7 (services), S17 (WMI subscriptions), S18 (COM hijack, registry IOCs) |
 | Privilege Escalation | Yes | S13 (UAC, accessibility binaries T1546.008), S16 (4672/4732) |
-| Defense Evasion | Strong | S9 (Defender tamper/exclusions, ASR rule state), S18 (AMSI bypass, BYOVD drivers), S16 (1102 log clear) |
+| Defense Evasion | Strong | S4 (system-process name masquerading, T1036), S9 (Defender tamper/exclusions, ASR rule state), S18 (AMSI bypass, BYOVD drivers), S16 (1102 log clear) |
 | Credential Access | Strong | S12 (LSASS PPL, WDigest, NTLM, Credential Guard), S16 (4769 Kerberoast, 4776), S18 (browser/cloud cred stores) |
 | Discovery | Yes | S17 (4688 discovery commands: nltest, dsquery, ntdsutil) |
 | Lateral Movement | Yes | S10 (SMBv1, RDP/NLA, WinRM, sshd), S17/S18 (PsExec pipes, portproxy) |

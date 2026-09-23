@@ -304,6 +304,22 @@ jobs:
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
           n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 27 ] || { echo "only $n case(s)"; exit 1; }
+      # T1036: the one real detection gap the 2026-09 retrospective found. The
+      # benign twins are Windows' own casing, SysWOW64, wbem, the Defender
+      # platform directory, and a path the tool could not read.
+      - name: masquerade_check -- a system name outside its directory, without flagging Windows' own casing
+        run: |
+          out=$(pwsh -NoProfile -File tools/masquerade_check.ps1 -SelfTest); echo "$out"
+          for n in "svchost.exe at C:\\WINDOWS\\system32\\svchost.exe (the owner's casing) is canonical" \
+                   "Explorer.EXE at C:\\WINDOWS\\Explorer.EXE (the owner's casing) is canonical" \
+                   'a 32-bit svchost.exe under SysWOW64 is canonical' \
+                   'WmiPrvSE.exe lives under System32\wbem, not System32' \
+                   'a system name with NO path is UNVERIFIED, not a finding' \
+                   'svchost.exe from AppData\Roaming is WARNING' \
+                   'svchost.exe from System32x (a prefix trick) is WARNING'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 28 ] || { echo "only $n case(s)"; exit 1; }
 
   orphan-else-lint:
     name: "Orphaned else: no clause detached from its if (parses, then dies at runtime)"

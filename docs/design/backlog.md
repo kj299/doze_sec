@@ -373,3 +373,18 @@ the DNS probe) have never run in the field.
 - Any plant-harness run on a machine a person depends on.
 - Building the twenty-two unlabelled manifest ids into detections: most are
   not host-observable; relabel the ones that exist and note the rest.
+
+## Masquerading by parent, not only by path (deferred 2026-09-23)
+
+`masquerade_check.ps1` grades a system-process NAME by its directory. The
+second classic signal is the PARENT: every svchost.exe is a child of
+services.exe, lsass/services/winlogon are children of wininit or smss, and a
+svchost.exe whose parent is explorer.exe or a browser is an impostor even when
+it was copied into System32 itself.
+
+**Why deferred.** The Section 4 snapshot carries Name, PID and Path only;
+adding ParentProcessId is cheap, but a correct rule also needs creation-time
+ordering (a PID is reused once its owner exits, so "parent is not services.exe"
+is also what a parent that has since exited looks like) and a benign twin for
+that case pinned in the self-test. Build it when a field run or the harness
+can show the exited-parent shape; do not build it on the assumption.

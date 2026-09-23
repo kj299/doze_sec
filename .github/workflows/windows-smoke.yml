@@ -1871,6 +1871,48 @@ jobs:
           Remove-Item $dump, $mk, $evil, $st -Force -EA SilentlyContinue
           Write-Host "proc_path_grade.ps1 OK (one measurement, carried to the dashboard)"
 
+      - name: masquerade_check.ps1 -SelfTest + live (a system-process name outside its directory)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $st = (.\tools\masquerade_check.ps1 -SelfTest) -join "`n"
+          if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'masquerade_check.ps1 -SelfTest failed' }
+          $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($nst -lt 28) { throw "masquerade_check self-test ran only $nst case(s)" }
+          Write-Host "masquerade_check -SelfTest OK ($nst cases)"
+          # Against a dump in the exact shape Section 4 writes, with the RUNNER'S
+          # real paths: its own svchost and explorer must not raise, a copy of
+          # ping.exe named svchost.exe under Users\Public must.
+          $dump = Join-Path $env:TEMP 'dz_ci_masq.tmp'
+          $mk   = Join-Path $env:TEMP 'dz_ci_masq_hit.txt'
+          Remove-Item $mk -Force -EA SilentlyContinue
+          $real = @()
+          foreach ($n in 'svchost', 'explorer', 'lsass', 'csrss', 'WmiPrvSE') {
+            $p = Get-Process -Name $n -EA SilentlyContinue | Where-Object { $_.Path } | Select-Object -First 1
+            if ($p) { $real += ($p.ProcessName + '.exe  ' + $p.Id + '  ' + $p.Path) }
+          }
+          if ($real.Count -lt 2) { throw 'could not read the paths of the runner''s own system processes' }
+          Set-Content $dump -Value $real
+          $out = (.\tools\masquerade_check.ps1 -Path $dump -MarkerFile $mk) -join "`n"
+          Write-Host $out
+          if (Test-Path $mk) { throw "the runner's own system processes were reported as masquerading: $out" }
+          if ($out -notmatch '\[OK\] \d+ system-process name\(s\) run from their canonical directories') { throw 'the clean snapshot did not print the OK line' }
+          $md = 'C:\Users\Public\dz_ci_masq'
+          New-Item -ItemType Directory -Path $md -Force | Out-Null
+          Copy-Item (Join-Path $env:SystemRoot 'System32\ping.exe') (Join-Path $md 'svchost.exe') -Force
+          try {
+            Set-Content $dump -Value ($real + ('svchost.exe  4242  ' + (Join-Path $md 'svchost.exe')))
+            $out = (.\tools\masquerade_check.ps1 -Path $dump -MarkerFile $mk) -join "`n"
+            Write-Host $out
+            if (-not (Test-Path $mk)) { throw "svchost.exe under Users\Public was NOT reported: $out" }
+            if ((Get-Content $mk).Trim() -ne 'WARNING') { throw ("expected WARNING marker, got " + (Get-Content $mk)) }
+            if ($out -notmatch '\[WARNING\] Process svchost\.exe \(PID 4242\) runs from C:\\Users\\Public\\dz_ci_masq --') { throw 'the WARNING line does not name the process, PID and directory' }
+          } finally {
+            Remove-Item $md, $dump, $mk -Recurse -Force -EA SilentlyContinue
+          }
+          Write-Host 'masquerade_check live OK'
+          exit 0
+
       - name: psv2_check.ps1 (the AMSI-downgrade path must get a definite answer)
         shell: powershell
         run: |

@@ -376,3 +376,38 @@ maxsev    = INFO
 proof     = ci:baseline_diff.ps1 -SelfTest
 signature = NEW listening port since baseline \(dynamic RPC range, system-owned
 note      = The RPC endpoint mapper assigns svchost, lsass, wininit, services and spoolsv their listeners from the dynamic range (49152-65535) at boot, and the numbers differ from one boot to the next. Every reboot therefore produced NEW and REMOVED port records against the baseline, each NEW one a WARNING. A NEW listener at or above 49152 owned by one of those system processes is now [INFO]; a listener below 49152, or one owned by any other process (including the netstat fallback's pid=N form, which cannot prove an owner), stays WARNING. A real implant's listener is almost never in that range under that owner; if it is, Section 3's connection listing still shows it.
+
+[system-process-canonical-casing]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:masquerade_check.ps1 -SelfTest
+signature = system-process name\(s\) run from their canonical directories
+note      = Windows reports its own binaries with whatever casing the process was started with: the owner's machine shows C:\WINDOWS\system32\svchost.exe and C:\WINDOWS\Explorer.EXE. The masquerading check compares case-insensitively and anchors on the Windows directory of THIS machine (D:\Win is graded against D:\Win), so casing and drive letter are never the difference. Verify with (Get-Process explorer).Path.
+
+[system-process-syswow64]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:masquerade_check.ps1 -SelfTest
+signature = system-process name\(s\) run from their canonical directories
+note      = 32-bit hosts of svchost.exe, dllhost.exe, conhost.exe, RuntimeBroker.exe, rundll32.exe, WerFault.exe and explorer.exe live in SysWOW64 on 64-bit Windows and run whenever a 32-bit component needs them. Those names accept SysWOW64; names with no 32-bit twin (lsass, csrss, smss, wininit, services, winlogon) do not, so lsass.exe under SysWOW64 is still a finding.
+
+[wmiprvse-under-wbem]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:masquerade_check.ps1 -SelfTest
+signature = system-process name\(s\) run from their canonical directories
+note      = WmiPrvSE.exe, the WMI provider host, lives in System32\wbem (and SysWOW64\wbem), not System32 itself. A rule that expected System32 would flag every WMI query on every machine; a WmiPrvSE.exe directly in System32 is the impostor.
+
+[defender-platform-directory]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:masquerade_check.ps1 -SelfTest
+signature = system-process name\(s\) run from their canonical directories
+note      = MsMpEng.exe and NisSrv.exe run from C:\ProgramData\Microsoft\Windows Defender\Platform\<version>\ (the monthly platform update installs a new versioned directory) or from C:\Program Files\Windows Defender\. Both are canonical; the same names anywhere else are a finding.
+
+[system-process-path-unreadable]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:masquerade_check.ps1 -SelfTest
+signature = system-process name\(s\) had no readable path
+note      = Win32_Process returns an empty ExecutablePath for protected processes and, on a non-admin run, for every other user's processes. A system name with no path is reported as NOT GRADED ([INFO], counted), never as a finding and never folded into the all-clear: a path the tool could not read is not a path it verified, and a snapshot where nothing could be graded reads [SKIPPED].

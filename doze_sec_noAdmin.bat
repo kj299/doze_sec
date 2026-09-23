@@ -1617,7 +1617,7 @@ if defined PROCPATH_CLEAN set "PROCPATH_STATE=ok"
 del "%TEMP%\dz_proc4_state.txt" 2>nul
 
 echo.>> "%REPORT%"
-echo --- LOLBin Processes (mshta, certutil, regsvr32, cmstp, wscript) --->> "%REPORT%"
+echo --- LOLBin Processes (mshta, certutil, regsvr32, cmstp, wscript) [T1218.005 mshta, T1218.010 regsvr32] --->> "%REPORT%"
 echo  Command: Get-CimInstance Win32_Process ^| select_lines.ps1 mshta regsvr32 certutil ...>> "%REPORT%"
 if not defined _ENUM4 goto :sec4_lol_skip
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_proc4.tmp" "mshta" "regsvr32" "certutil" "cmstp" "wscript" "cscript" "msiexec" "installutil">> "%REPORT%" 2>&1
@@ -1630,7 +1630,7 @@ echo [SKIPPED] Process enumeration failed -- LOLBin process check NOT performed.
 :sec4_lol_done
 
 echo.>> "%REPORT%"
-echo --- Remote Monitoring and Management Tools (DPRK/Iran C2 vector) --->> "%REPORT%"
+echo --- Remote Monitoring and Management Tools (DPRK/Iran C2 vector) [T1219] --->> "%REPORT%"
 echo  Command: Get-CimInstance Win32_Process ^| select_lines.ps1 ScreenConnect AnyDesk TeamViewer ...>> "%REPORT%"
 if not defined _ENUM4 goto :sec4_rmm_skip
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_proc4.tmp" "ScreenConnect" "AnyDesk" "TeamViewer" "Ammyy" "RustDesk" "Splashtop" "Atera" "Kaseya" "ConnectWise">> "%REPORT%" 2>&1
@@ -1641,6 +1641,23 @@ goto :sec4_rmm_done
 :sec4_rmm_skip
 echo [SKIPPED] Process enumeration failed -- RMM tool check NOT performed.>> "%REPORT%"
 :sec4_rmm_done
+echo.>> "%REPORT%"
+echo --- System-Process Name Masquerading (T1036: a system name running outside its directory) --->> "%REPORT%"
+echo  Command: powershell -File tools\masquerade_check.ps1>> "%REPORT%"
+echo  Grades the SAME snapshot as the checks above: svchost, lsass, csrss, explorer and>> "%REPORT%"
+echo  the other Windows names run only from fixed directories, so a familiar name from>> "%REPORT%"
+echo  AppData, ProgramData, Temp or a vendor folder is an impostor by path alone.>> "%REPORT%"
+if not defined _ENUM4 goto :sec4_masq_skip
+del "%TEMP%\dz_masq.txt" 2>nul
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\masquerade_check.ps1" -Path "%TEMP%\dz_proc4.tmp" -MarkerFile "%TEMP%\dz_masq.txt">> "%REPORT%" 2>&1
+if exist "%TEMP%\dz_masq.txt" (
+    call :dz_finding WARNING 4 T1036 "System-process name running outside its canonical directory"
+    del "%TEMP%\dz_masq.txt" 2>nul
+)
+goto :sec4_masq_done
+:sec4_masq_skip
+echo [SKIPPED] Process enumeration failed -- masquerading check NOT performed.>> "%REPORT%"
+:sec4_masq_done
 del "%TEMP%\dz_proc4.tmp" 2>nul
 set "_ENUM4="
 echo.>> "%REPORT%"
