@@ -6,6 +6,12 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Retrospective 2026-09
+`docs/design/retrospective-2026-09-seams-and-field-runs.md`: twenty-eight
+PRs, ten or more field runs on one machine, three mechanisms that had never
+worked, the first clean confirmation run, and why the next step is a second
+machine rather than more code.
+
 ### The last four tools get a seam, and each had a judgement a real machine would trip
 `dns_probe`, `audit_policy_check`, `persistence_eval` and `baseline_diff` were the
 remaining severity-emitting tools with no pure verdict function and no
