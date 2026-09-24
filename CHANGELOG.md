@@ -6,6 +6,38 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Standard-user field run 2026-09-24: a Microsoft service called a rootkit, and UAC ON called an IOC
+The first field run of `doze_sec_noAdmin.bat` scored three of eight predictions
+and exited 8. Four defects, all specific to the path a person who is not an
+administrator takes:
+
+- **`cross_api_check` reported `zthelper` as a hidden service, CRITICAL.**
+  ZTHelper is Windows 11's Zero Trust DNS helper (KB5058411); its service DACL
+  denies enumeration to standard users, so it is in the registry and absent
+  from `Get-Service` and `Win32_Service` for that token. The check now asks
+  the SCM for each such service BY NAME: error 5 is the DACL and is reported
+  as not enumerable from this token (counted, named, never a finding, never
+  cleared; a WARNING when an administrator is refused); error 1060, the SCM
+  has never heard of it, stays CRITICAL. Pure verdicts, a 12-case self-test,
+  and the standard-user smoke job now plants a DACL-restricted service.
+- **A stale per-user copy of `ioc_registry.txt` flagged `EnableLUA = 1` and
+  `RunAsPPL = 1`**, the secure values. The runtime ThreatLists were seeded by
+  copy-if-missing and never reconciled, and the per-user copy predated the
+  `|BadValue` column. `tools/threat_list_seed.ps1` replaces a runtime list
+  older than or forked from the release, keeps one `-updateTTP` refreshed
+  after the release, and prints what it did into the report.
+- **Section 16 skipped `log_gap_check` and `audit_policy_check` silently on
+  the standard-user path, and the coverage block certified
+  `Audit visibility : OK`** for a check that never ran. The gap check now runs
+  unelevated (the Security log declared unreadable), the audit-policy check
+  is declared DEFERRED, and `report_safety` says `NOT VERIFIED` unless it has
+  seen evidence of auditing ON.
+- **The Section 18 tally line** `[WARNING] N IOC category matches found` is
+  a tally, retagged `[INFO]`; its allowlist exemption is gone.
+
+Also wrong in the predictions: Section 9 (ASR) is deferred wholesale without
+elevation, so the ASR row does not survive a standard-user run.
+
 ### Added: a system-process name running outside its directory is a finding (T1036)
 `tools/masquerade_check.ps1`, Section 4. Naming an implant svchost.exe,
 lsass.exe or explorer.exe and running it from AppData, ProgramData, Temp or a

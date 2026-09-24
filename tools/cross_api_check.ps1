@@ -49,7 +49,17 @@
 #
 # SEVERITY: a persistent cross-API disagreement is CRITICAL -- there is no benign
 # reason for a live process or service to exist in one authoritative view of the
-# system and not another. A missing task SD (Tarrask) is CRITICAL. Where an API
+# system and not another. ONE EXCEPTION, AND IT IS THE TOKEN, NOT THE SERVICE:
+# a service whose DACL denies enumeration to standard users is in the registry
+# and absent from Get-Service and Win32_Service when the audit runs unelevated.
+# Windows 11's own ZTHelper (the Zero Trust DNS helper, KB5058411) is one; the
+# first standard-user field run reported it as a rootkit indicator, CRITICAL,
+# exit code 8. Enumeration cannot tell hidden from denied, but ONE open can:
+# ServiceController on the name throws with NativeErrorCode 5 (the DACL refuses
+# this token) or 1060 (the SCM has never heard of it). 1060 is the hidden
+# service; 5 unelevated is 'not enumerable from a standard-user token', counted
+# and named, never a finding and never cleared; 5 elevated is a WARNING (a
+# service that refuses an administrator's query is not routine). A missing task SD (Tarrask) is CRITICAL. Where an API
 # cannot be consulted at all (access denied, service stopped), the check reports
 # [SKIPPED] rather than a false clean.
 #
@@ -74,7 +84,11 @@ param(
     # says, which gives CI a seam to prove the degraded path reports itself
     # honestly instead of claiming a clean result it cannot reach. Production
     # never passes it.
-    [switch]$SkipLiveTaskCompare
+    [switch]$SkipLiveTaskCompare,
+    # Whether this process runs elevated. Read once from the token below;
+    # injectable so the self-test can grade both tokens. -1 = detect.
+    [int]$Elevated = -1,
+    [switch]$SelfTest
 )
 
 $ErrorActionPreference = 'Continue'
@@ -96,6 +110,91 @@ function Get-MaxSev {
     if ($A -eq 'CRITICAL' -or $B -eq 'CRITICAL') { return 'CRITICAL' }
     if ($A -eq 'WARNING'  -or $B -eq 'WARNING')  { return 'WARNING' }
     return 'OK'
+}
+
+# ---------------------------------------------------------------------------
+# PURE: one registry-only service, graded by what the SCM said when asked for
+# it by name. No token, no SCM: the caller passes the error code it got.
+# ---------------------------------------------------------------------------
+function Get-ServiceVisibilityVerdict {
+    param([string]$Name, [bool]$IsElevated, [int]$NativeError)
+    if ($NativeError -eq 5) {
+        if ($IsElevated) {
+            return @{ Sev = 'WARNING'; Kind = 'denied-admin'; Line = ('[WARNING] Service ' + $Name + ' refuses an administrator''s query (access denied) while present in the registry -- a service DACL that denies Administrators is not routine (T1014 or hardening; verify: sc sdshow ' + $Name + ')') }
+        }
+        return @{ Sev = 'OK'; Kind = 'denied-user'; Line = $null }
+    }
+    return @{ Sev = 'CRITICAL'; Kind = 'hidden'; Line = ('  ' + $Name) }
+}
+
+# PURE: the whole set of registry-only names with their per-name codes.
+function Get-ServiceCrossCheckReport {
+    param([array]$Probes, [bool]$IsElevated, [int]$RegistryCount)
+    $out = New-Object System.Collections.ArrayList
+    $hidden = @(); $deniedUser = @(); $sev = 'OK'
+    foreach ($pr in @($Probes)) {
+        $v = Get-ServiceVisibilityVerdict -Name ([string]$pr.Name) -IsElevated $IsElevated -NativeError ([int]$pr.NativeError)
+        switch ($v.Kind) {
+            'hidden'       { $hidden += [string]$pr.Name }
+            'denied-user'  { $deniedUser += [string]$pr.Name }
+            'denied-admin' { [void]$out.Add($v.Line); $sev = Get-MaxSev $sev 'WARNING' }
+        }
+    }
+    if ($deniedUser.Count -gt 0) {
+        [void]$out.Add(('[INFO] ' + $deniedUser.Count + ' service(s) registered but not enumerable from a standard-user token: ' + ($deniedUser -join ', ') + ' -- a restricted service DACL (as Windows'' own ZTHelper carries) and a hidden service look identical without elevation. Not graded, not cleared; re-run as administrator to grade them.'))
+    }
+    if ($hidden.Count -gt 0) {
+        [void]$out.Add('[CRITICAL] Service present in the registry but unknown to the SCM and WMI (T1014):')
+        foreach ($n in $hidden) { [void]$out.Add('  ' + $n) }
+        $sev = Get-MaxSev $sev 'CRITICAL'
+    }
+    if ($hidden.Count -eq 0 -and $sev -eq 'OK') {
+        $graded = $RegistryCount - $deniedUser.Count
+        [void]$out.Add(('[OK] Service views agree across SCM, WMI and registry (' + $graded + ' Win32 services graded' + $(if ($deniedUser.Count -gt 0) { ', ' + $deniedUser.Count + ' not enumerable from this token' } else { '' }) + ').'))
+    }
+    return @{ Lines = @($out.ToArray()); Sev = $sev }
+}
+
+if ($SelfTest) {
+    $fails = 0
+    function T { param([string]$Name, [bool]$Ok, [string]$Got)
+        if ($Ok) { Write-Output "[OK]   $Name" } else { Write-Output "[FAIL] $Name$(if($Got){": $Got"})"; $script:fails++ }
+    }
+    # The standard-user twin, by name: Windows 11's Zero Trust DNS helper.
+    $v = Get-ServiceVisibilityVerdict -Name 'zthelper' -IsElevated $false -NativeError 5
+    T 'zthelper denied (error 5) to a standard-user token is NOT a finding' ($v.Sev -eq 'OK' -and $v.Kind -eq 'denied-user') ($v.Sev + '/' + $v.Kind)
+    $v = Get-ServiceVisibilityVerdict -Name 'zthelper' -IsElevated $true -NativeError 5
+    T 'a service that denies an ADMINISTRATOR is a WARNING, named, with the sdshow command' ($v.Sev -eq 'WARNING' -and $v.Line -match 'sc sdshow zthelper') $v.Line
+    $v = Get-ServiceVisibilityVerdict -Name 'dz_hidden' -IsElevated $false -NativeError 1060
+    T 'error 1060 (SCM has never heard of it) is the hidden service: CRITICAL even unelevated' ($v.Sev -eq 'CRITICAL') $v.Sev
+    $v = Get-ServiceVisibilityVerdict -Name 'dz_hidden' -IsElevated $true -NativeError 1060
+    T 'error 1060 elevated is CRITICAL' ($v.Sev -eq 'CRITICAL') $v.Sev
+    $v = Get-ServiceVisibilityVerdict -Name 'dz_odd' -IsElevated $true -NativeError 0
+    T 'any other outcome (no error, yet absent from both enumerations) stays CRITICAL -- never explained away' ($v.Sev -eq 'CRITICAL') $v.Sev
+
+    $r = Get-ServiceCrossCheckReport -Probes @(@{ Name = 'zthelper'; NativeError = 5 }) -IsElevated $false -RegistryCount 321
+    T 'standard user, one DACL-restricted service: INFO line names it, no CRITICAL, OK line counts 320 graded' ($r.Sev -eq 'OK' -and (($r.Lines -join "`n") -match '\[INFO\] 1 service\(s\) registered but not enumerable from a standard-user token: zthelper') -and (($r.Lines -join "`n") -match '\[OK\] .*320 Win32 services graded, 1 not enumerable')) ($r.Lines -join ' | ')
+    T '...and the INFO line says not graded, not cleared' (($r.Lines -join "`n") -match 'Not graded, not cleared') ''
+    T '...and no [CRITICAL] line is printed' (@($r.Lines | Where-Object { $_ -match '^\[CRITICAL\]' }).Count -eq 0) ''
+    $r = Get-ServiceCrossCheckReport -Probes @(@{ Name = 'zthelper'; NativeError = 5 }, @{ Name = 'dz_rootkit'; NativeError = 1060 }) -IsElevated $false -RegistryCount 321
+    T 'standard user, a DACL-restricted service AND a hidden one: CRITICAL names only the hidden one' ($r.Sev -eq 'CRITICAL' -and (($r.Lines -join "`n") -match '\[CRITICAL\] Service present in the registry but unknown to the SCM and WMI \(T1014\):\n  dz_rootkit') -and (($r.Lines -join "`n") -notmatch '^\s*zthelper$')) ($r.Lines -join ' | ')
+    $r = Get-ServiceCrossCheckReport -Probes @(@{ Name = 'zthelper'; NativeError = 5 }) -IsElevated $true -RegistryCount 321
+    T 'elevated, a service denying admins: WARNING, no OK line' ($r.Sev -eq 'WARNING' -and (($r.Lines -join "`n") -notmatch '\[OK\]')) ($r.Lines -join ' | ')
+    $r = Get-ServiceCrossCheckReport -Probes @() -IsElevated $true -RegistryCount 300
+    T 'no registry-only services: plain OK with the count' ($r.Sev -eq 'OK' -and (($r.Lines -join "`n") -match '\[OK\] Service views agree across SCM, WMI and registry \(300 Win32 services graded\)\.')) ($r.Lines -join ' | ')
+    T 'Get-MaxSev never lowers a CRITICAL' ((Get-MaxSev 'CRITICAL' 'OK') -eq 'CRITICAL') ''
+
+    if ($fails) { Write-Output "[FAIL] $fails cross_api_check self-test expectation(s) unmet"; exit 1 }
+    Write-Output '[OK] cross_api_check self-test: a service the SCM refuses to a standard user is stated as not enumerable, one the SCM has never heard of is the hidden service, and only the latter is CRITICAL.'
+    exit 0
+}
+
+if ($Elevated -lt 0) {
+    $Elevated = 0
+    try {
+        $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+        if ((New-Object Security.Principal.WindowsPrincipal($id)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { $Elevated = 1 }
+    } catch {}
 }
 
 $sev = 'OK'
@@ -209,25 +308,35 @@ if (-not $sOk -or $svcReg.Count -eq 0) {
     }
     if ($hidden.Count -gt 0) {
         # Re-verify individually: a service installed or removed during the scan
-        # settles consistently on the second look.
+        # settles consistently on the second look. Then ask the SCM for each
+        # survivor BY NAME: the error code is what separates a DACL that refuses
+        # this token (5) from a service the SCM does not know (1060).
         Start-Sleep -Milliseconds $SettleMs
-        $confirmed = @()
+        $probes = @()
         foreach ($n in $hidden) {
             $stillReg = Test-Path -LiteralPath (Join-Path $svcRoot $n)
             $seen = $false
             try { if (Get-Service -Name $n -EA Stop) { $seen = $true } } catch {}
             try { if (Get-CimInstance Win32_Service -Filter ("Name='{0}'" -f ($n -replace "'", "''")) -EA Stop) { $seen = $true } } catch {}
-            if ($stillReg -and -not $seen) { $confirmed += $n }
+            if (-not $stillReg -or $seen) { continue }
+            $code = 1060
+            try {
+                $sc = New-Object System.ServiceProcess.ServiceController($n)
+                $null = $sc.Status
+                # No error at all: the SCM answered by name although it did
+                # not enumerate the service. Treat as hidden, never as fine.
+                $code = 0
+            } catch {
+                $inner = $_.Exception.InnerException
+                if ($inner -and ($inner.PSObject.Properties.Name -contains 'NativeErrorCode')) { $code = [int]$inner.NativeErrorCode }
+            }
+            $probes += @{ Name = $n; NativeError = $code }
         }
-        if ($confirmed.Count -gt 0) {
-            '[CRITICAL] Service present in the registry but hidden from both SCM and WMI (T1014):'
-            foreach ($n in $confirmed) { "  $n" }
-            $sev = Get-MaxSev $sev 'CRITICAL'
-        } else {
-            "[OK] Service views agree across SCM, WMI and registry ($($svcReg.Count) Win32 services)."
-        }
+        $rep = Get-ServiceCrossCheckReport -Probes $probes -IsElevated ($Elevated -eq 1) -RegistryCount $svcReg.Count
+        foreach ($l in $rep.Lines) { $l }
+        $sev = Get-MaxSev $sev $rep.Sev
     } else {
-        "[OK] Service views agree across SCM, WMI and registry ($($svcReg.Count) Win32 services)."
+        "[OK] Service views agree across SCM, WMI and registry ($($svcReg.Count) Win32 services graded)."
     }
 }
 

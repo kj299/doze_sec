@@ -28,4 +28,3 @@
 
 # ---- per-item lines whose aggregate raise is elsewhere ----------------------
 *|SMART failure status on PhysicalDrive|per-drive detail line; the aggregate raise is `call :dz_finding WARNING INIT SMART` after the loop, and raising per drive would count one failing disk many times
-*|IOC category matches found. Review|end-of-section tally of Section 18 categories that each already raised their own finding; raising again would double-count every IOC hit

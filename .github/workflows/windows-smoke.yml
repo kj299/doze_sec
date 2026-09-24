@@ -1074,10 +1074,21 @@ jobs:
           Write-Host "edr_presence.ps1 OK"
           exit 0
 
-      - name: report_safety.ps1 (Tier 0 preamble + coverage framing)
+      - name: report_safety.ps1 -SelfTest + live (Tier 0 preamble + coverage framing)
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
+          $st = (.\tools\report_safety.ps1 -SelfTest) -join "`n"
+          if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'report_safety.ps1 -SelfTest failed' }
+          $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($nst -lt 8) { throw "report_safety self-test ran only $nst case(s)" }
+          Write-Host "report_safety -SelfTest OK ($nst cases)"
+          # A report with no audit-policy result must never read OK.
+          $rep0 = Join-Path $env:TEMP 'dz_ci_rs_none.txt'
+          Set-Content $rep0 -Value @('[OK] something unrelated', '[DEFERRED - ADMIN REQUIRED] auditpol (audit-policy visibility) requires admin -- x')
+          $cov0 = (.\tools\report_safety.ps1 -Mode Coverage -Report $rep0) -join "`n"
+          if ($cov0 -notmatch 'Audit visibility\s+: NOT VERIFIED') { Write-Host $cov0; throw 'coverage block certified audit visibility with no audit-policy result' }
+          Remove-Item $rep0 -Force -EA SilentlyContinue
           $pre = (.\tools\report_safety.ps1 -Mode Preamble) -join "`n"
           foreach ($needle in @('READ THIS FIRST','CLEAN" result does NOT prove','accessnow.org/help','stopstalkerware.org','PRESERVE EVIDENCE')) {
             if ($pre -notmatch [regex]::Escape($needle)) { throw ("preamble missing: {0}" -f $needle) }
@@ -1182,10 +1193,15 @@ jobs:
           Write-Host "baseline_diff.ps1 OK (incl. signed-LOLBin service not downgraded)"
           exit 0
 
-      - name: cross_api_check.ps1 (rootkit discrepancy; race-tolerance + Tarrask logic)
+      - name: cross_api_check.ps1 -SelfTest + live (rootkit discrepancy; race-tolerance + Tarrask logic)
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
+          $st = (.\tools\cross_api_check.ps1 -SelfTest) -join "`n"
+          if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'cross_api_check.ps1 -SelfTest failed' }
+          $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($nst -lt 11) { throw "cross_api_check self-test ran only $nst case(s)" }
+          Write-Host "cross_api_check -SelfTest OK ($nst cases)"
           $md = Join-Path $env:TEMP ("dz_ca_ci_{0}" -f $PID)
           New-Item -ItemType Directory -Path $md -Force | Out-Null
           $tc = "HKCU:\Software\dz_ci_taskcache_$PID"
@@ -1384,6 +1400,28 @@ jobs:
             & sc.exe delete dzsmoke_7045probe 2>&1 | Out-Null
             Remove-Item $tmp -Force -EA SilentlyContinue
           }
+          exit 0
+
+      - name: threat_list_seed.ps1 -SelfTest + live (a runtime IOC copy behind the release is replaced)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $st = (.\tools\threat_list_seed.ps1 -SelfTest) -join "`n"
+          if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'threat_list_seed.ps1 -SelfTest failed' }
+          $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($nst -lt 14) { throw "threat_list_seed self-test ran only $nst case(s)" }
+          Write-Host "threat_list_seed -SelfTest OK ($nst cases)"
+          # Live: the SHIPPED lists against a runtime copy of ioc_registry.txt that
+          # lacks the BadValue column -- the exact file the field run read.
+          $rt = Join-Path $env:TEMP ('dz_ci_seed_' + $PID)
+          New-Item -ItemType Directory -Path $rt -Force | Out-Null
+          Set-Content (Join-Path $rt 'ioc_registry.txt') -Value @('# Last verified by doze_sec: 2026-05-01 09:00:00', 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System|EnableLUA') -Encoding ASCII
+          $out = (.\tools\threat_list_seed.ps1 -ShippedDir .\ThreatLists -RuntimeDir $rt) -join "`n"
+          Write-Host $out
+          if ($out -notmatch 'ioc_registry\.txt: runtime copy replaced by the release baseline') { throw 'the stale registry list was not replaced' }
+          if (-not (Select-String -Path (Join-Path $rt 'ioc_registry.txt') -Pattern 'EnableLUA\|0' -Quiet)) { throw 'the replaced file does not carry the release BadValue column' }
+          if ($out -notmatch '9 seeded, 1 replaced') { throw "expected the nine other lists seeded and one replaced: $out" }
+          Remove-Item $rt -Recurse -Force -EA SilentlyContinue
           exit 0
 
       - name: module_inspect.ps1 -SelfTest (virtualized module paths are not injections)

@@ -461,8 +461,17 @@ if not exist "%OUTDIR%\ThreatLists" mkdir "%OUTDIR%\ThreatLists"
 :: ThreatLists/ stays as the shipped baseline (and is the committable
 :: destination of -updateTTP via ttp_merge.ps1's repo-side mirror; noAdmin
 :: itself doesn't expose -updateTTP).
-for %%f in (ioc_processes.txt ioc_named_pipes.txt ioc_services.txt ioc_registry.txt ioc_file_paths.txt ioc_scheduled_tasks.txt ioc_domains.txt ioc_hashes.txt ioc_lolbins.txt ttp_manifest.txt) do (
-    if not exist "%OUTDIR%\ThreatLists\%%f" if exist "%SCRIPT_DIR%ThreatLists\%%f" copy /y "%SCRIPT_DIR%ThreatLists\%%f" "%OUTDIR%\ThreatLists\" >nul 2>&1
+:: Reconcile the runtime lists with the release baseline (tools\threat_list_seed.ps1):
+:: a copy older than or forked from the shipped file is replaced and reported;
+:: an -updateTTP refresh newer than the release is kept. Copy-if-missing alone
+:: left a per-user copy of ioc_registry.txt behind the |BadValue column, and it
+:: reported UAC ON and LSASS PPL ON as registry IOCs (2026-09-24).
+if exist "%SCRIPT_DIR%tools\threat_list_seed.ps1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\threat_list_seed.ps1" -ShippedDir "%SCRIPT_DIR%ThreatLists" -RuntimeDir "%OUTDIR%\ThreatLists" > "%TEMP%\dz_seed.txt" 2>&1
+) else (
+    for %%f in (ioc_processes.txt ioc_named_pipes.txt ioc_services.txt ioc_registry.txt ioc_file_paths.txt ioc_scheduled_tasks.txt ioc_domains.txt ioc_hashes.txt ioc_lolbins.txt ttp_manifest.txt) do (
+        if not exist "%OUTDIR%\ThreatLists\%%f" if exist "%SCRIPT_DIR%ThreatLists\%%f" copy /y "%SCRIPT_DIR%ThreatLists\%%f" "%OUTDIR%\ThreatLists\" >nul 2>&1
+    )
 )
 
 :: ---- Compute TIMESTAMP first (needed by changelog, undo, and report filenames) ----
@@ -581,6 +590,16 @@ rem In a tools\*.ps1 (not echoed into PSRUN) because it is long static text.
 if exist "%SCRIPT_DIR%tools\report_safety.ps1" (
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\report_safety.ps1" -Mode Preamble>> "%REPORT%" 2>&1
     echo.>> "%REPORT%"
+)
+:: What the seed step did to the runtime ThreatLists (see
+:: tools\threat_list_seed.ps1): a per-user copy older than the release read
+:: UAC ON and LSASS PPL ON as registry IOCs on 2026-09-24. The reader sees
+:: which lists were replaced and why.
+if exist "%TEMP%\dz_seed.txt" (
+    echo  ThreatLists provenance ^(runtime copies vs the release baseline^):>> "%REPORT%"
+    type "%TEMP%\dz_seed.txt">> "%REPORT%"
+    echo.>> "%REPORT%"
+    del "%TEMP%\dz_seed.txt" 2>nul
 )
 echo  TABLE OF CONTENTS>> "%REPORT%"
 echo  ------------------------------------------------------------------>> "%REPORT%"
@@ -3278,6 +3297,30 @@ goto :sec16_admin_done
 echo  [DEFERRED - ADMIN REQUIRED] Security event log queries require admin.>> "%REPORT%"
 echo  Affected: Events 1102, 4720, 4732, 4672, 4625, 4624, 4698, 4702, 4688, 4769, 4776.>> "%REPORT%"
 set /a DEFERRED_COUNT+=1
+:: The gap check reads the System, Application and PowerShell logs without
+:: elevation and states the Security log as unreadable; the audit-policy check
+:: needs auditpol, which needs admin. Both were skipped SILENTLY here until the
+:: first standard-user field run (2026-09-24), and the COVERAGE block then
+:: certified "Audit visibility : OK" for a check that never ran.
+echo.>> "%REPORT%"
+echo --- Event-Log Gaps ^(records missing with NO clear event^) --->> "%REPORT%"
+echo  Command: powershell -File tools\log_gap_check.ps1>> "%REPORT%"
+del "%TEMP%\dz_loggap.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\log_gap_check.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\log_gap_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo  [INFO] tools\log_gap_check.ps1 not found -- event-log gap check skipped.>> "%REPORT%"
+)
+if exist "%TEMP%\dz_loggap.txt" (
+    set "_LGSEV="
+    set /p _LGSEV=<"%TEMP%\dz_loggap.txt"
+    call :dz_finding !_LGSEV! 16 T1070.001 "Event-log records missing with no clear event, or retention set to self-erase"
+    del "%TEMP%\dz_loggap.txt" 2>nul
+)
+echo.>> "%REPORT%"
+echo --- Audit-Policy Visibility ^(can these checks even see anything?^) --->> "%REPORT%"
+echo  [DEFERRED - ADMIN REQUIRED] auditpol ^(audit-policy visibility^) requires admin -- whether process-creation, logon and account auditing are ON was NOT verified.>> "%REPORT%"
+set /a DEFERRED_COUNT+=1
 :sec16_admin_done
 
 :: These event logs can be read without admin
@@ -3940,7 +3983,10 @@ echo --- [18 SUMMARY] IOC Sweep Results --->> "%REPORT%"
 if "!IOC_HITS!"=="0" (
     echo [OK] No threat indicator matches found across all IOC categories.>> "%REPORT%"
 ) else (
-    echo [WARNING] !IOC_HITS! IOC category matches found. Review [WARNING] and [CRITICAL] entries above.>> "%REPORT%"
+    rem A tally, not a finding: every category above already raised its own
+    rem ledger row. Tagging the tally WARNING made a reader count one more
+    rem finding than the tool did (standard-user field run 2026-09-24).
+    echo [INFO] !IOC_HITS! IOC category matches found. Review [WARNING] and [CRITICAL] entries above.>> "%REPORT%"
 )
 echo.>> "%REPORT%"
 

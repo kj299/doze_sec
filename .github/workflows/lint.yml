@@ -320,6 +320,39 @@ jobs:
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
           n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 28 ] || { echo "only $n case(s)"; exit 1; }
+      # The first standard-user field run (2026-09-24): a DACL-restricted
+      # Microsoft service reported as a rootkit, a stale per-user IOC copy
+      # reporting UAC ON as an IOC, and a coverage block certifying an audit
+      # check that never ran. A standard-user token is a different machine.
+      - name: cross_api_check -- a service the SCM refuses to a standard user is not a hidden service
+        run: |
+          out=$(pwsh -NoProfile -File tools/cross_api_check.ps1 -SelfTest); echo "$out"
+          for n in 'zthelper denied (error 5) to a standard-user token is NOT a finding' \
+                   'error 1060 (SCM has never heard of it) is the hidden service: CRITICAL even unelevated' \
+                   'a service that denies an ADMINISTRATOR is a WARNING' \
+                   'CRITICAL names only the hidden one'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 11 ] || { echo "only $n case(s)"; exit 1; }
+      - name: threat_list_seed -- a runtime IOC copy behind the release is replaced and reported
+        run: |
+          out=$(pwsh -NoProfile -File tools/threat_list_seed.ps1 -SelfTest); echo "$out"
+          for n in 'a runtime copy OLDER than the release, different content: Replace' \
+                   'a runtime copy -updateTTP wrote AFTER the release (newer date, more rows): Keep' \
+                   'same date, different content (a fork nobody chose): Replace' \
+                   'directory pass: the stale registry list is replaced'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 14 ] || { echo "only $n case(s)"; exit 1; }
+      - name: report_safety -- audit visibility is never OK by default
+        run: |
+          out=$(pwsh -NoProfile -File tools/report_safety.ps1 -SelfTest); echo "$out"
+          for n in 'auditpol deferred, no ON line -> DEFERRED, never OK' \
+                   'a report with no audit-policy lines at all -> UNKNOWN, never OK' \
+                   'one OFF among ON lines: REDUCED'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 8 ] || { echo "only $n case(s)"; exit 1; }
 
   orphan-else-lint:
     name: "Orphaned else: no clause detached from its if (parses, then dies at runtime)"

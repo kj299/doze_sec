@@ -503,8 +503,17 @@ if not exist "%OUTDIR%\ThreatLists" mkdir "%OUTDIR%\ThreatLists" 2>nul
 :: -updateTTP appends new IOCs to the runtime copy (never the git checkout).
 :: Per-file copy-if-missing -- mirrors the main seeding at INIT time and is
 :: idempotent, so hand-edited runtime files are preserved.
-for %%f in (ioc_processes.txt ioc_named_pipes.txt ioc_services.txt ioc_registry.txt ioc_file_paths.txt ioc_scheduled_tasks.txt ioc_domains.txt ioc_hashes.txt ioc_lolbins.txt ttp_manifest.txt) do (
-    if not exist "%OUTDIR%\ThreatLists\%%f" if exist "%~dp0ThreatLists\%%f" copy /y "%~dp0ThreatLists\%%f" "%OUTDIR%\ThreatLists\" >nul 2>&1
+:: Reconcile the runtime lists with the release baseline (tools\threat_list_seed.ps1):
+:: a copy older than or forked from the shipped file is replaced and reported;
+:: an -updateTTP refresh newer than the release is kept. Copy-if-missing alone
+:: left a per-user copy of ioc_registry.txt behind the |BadValue column, and it
+:: reported UAC ON and LSASS PPL ON as registry IOCs (2026-09-24).
+if exist "%~dp0tools\threat_list_seed.ps1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\threat_list_seed.ps1" -ShippedDir "%~dp0ThreatLists" -RuntimeDir "%OUTDIR%\ThreatLists" >nul 2>&1
+) else (
+    for %%f in (ioc_processes.txt ioc_named_pipes.txt ioc_services.txt ioc_registry.txt ioc_file_paths.txt ioc_scheduled_tasks.txt ioc_domains.txt ioc_hashes.txt ioc_lolbins.txt ttp_manifest.txt) do (
+        if not exist "%OUTDIR%\ThreatLists\%%f" if exist "%~dp0ThreatLists\%%f" copy /y "%~dp0ThreatLists\%%f" "%OUTDIR%\ThreatLists\" >nul 2>&1
+    )
 )
 :: Compute today's date as locale-independent yyyyMMdd via PowerShell.
 :: %date% is locale-dependent (US=ddd MM/DD/YYYY, ISO=YYYY-MM-DD, DE=DD.MM.YYYY,
@@ -884,8 +893,17 @@ if not exist "%OUTDIR%\ThreatLists" mkdir "%OUTDIR%\ThreatLists"
 :: writes its merges only to %OUTDIR%\ThreatLists, never back into the checkout.
 :: This copy is per-file so users can hand-edit individual runtime files
 :: without them being overwritten on subsequent runs.
-for %%f in (ioc_processes.txt ioc_named_pipes.txt ioc_services.txt ioc_registry.txt ioc_file_paths.txt ioc_scheduled_tasks.txt ioc_domains.txt ioc_hashes.txt ioc_lolbins.txt ttp_manifest.txt) do (
-    if not exist "%OUTDIR%\ThreatLists\%%f" if exist "%SCRIPT_DIR%ThreatLists\%%f" copy /y "%SCRIPT_DIR%ThreatLists\%%f" "%OUTDIR%\ThreatLists\" >nul 2>&1
+:: Reconcile the runtime lists with the release baseline (tools\threat_list_seed.ps1):
+:: a copy older than or forked from the shipped file is replaced and reported;
+:: an -updateTTP refresh newer than the release is kept. Copy-if-missing alone
+:: left a per-user copy of ioc_registry.txt behind the |BadValue column, and it
+:: reported UAC ON and LSASS PPL ON as registry IOCs (2026-09-24).
+if exist "%SCRIPT_DIR%tools\threat_list_seed.ps1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\threat_list_seed.ps1" -ShippedDir "%SCRIPT_DIR%ThreatLists" -RuntimeDir "%OUTDIR%\ThreatLists" > "%TEMP%\dz_seed.txt" 2>&1
+) else (
+    for %%f in (ioc_processes.txt ioc_named_pipes.txt ioc_services.txt ioc_registry.txt ioc_file_paths.txt ioc_scheduled_tasks.txt ioc_domains.txt ioc_hashes.txt ioc_lolbins.txt ttp_manifest.txt) do (
+        if not exist "%OUTDIR%\ThreatLists\%%f" if exist "%SCRIPT_DIR%ThreatLists\%%f" copy /y "%SCRIPT_DIR%ThreatLists\%%f" "%OUTDIR%\ThreatLists\" >nul 2>&1
+    )
 )
 
 :: ---- Compute TIMESTAMP first (needed by changelog, undo, and report filenames) ----
@@ -989,6 +1007,16 @@ rem In a tools\*.ps1 (not echoed into PSRUN) because it is long static text.
 if exist "%SCRIPT_DIR%tools\report_safety.ps1" (
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\report_safety.ps1" -Mode Preamble>> "%REPORT%" 2>&1
     echo.>> "%REPORT%"
+)
+:: What the seed step did to the runtime ThreatLists (see
+:: tools\threat_list_seed.ps1): a per-user copy older than the release read
+:: UAC ON and LSASS PPL ON as registry IOCs on 2026-09-24. The reader sees
+:: which lists were replaced and why.
+if exist "%TEMP%\dz_seed.txt" (
+    echo  ThreatLists provenance ^(runtime copies vs the release baseline^):>> "%REPORT%"
+    type "%TEMP%\dz_seed.txt">> "%REPORT%"
+    echo.>> "%REPORT%"
+    del "%TEMP%\dz_seed.txt" 2>nul
 )
 echo  TABLE OF CONTENTS>> "%REPORT%"
 echo  ------------------------------------------------------------------>> "%REPORT%"
@@ -4132,7 +4160,10 @@ echo --- [18 SUMMARY] IOC Sweep Results --->> "%REPORT%"
 if "!IOC_HITS!"=="0" (
     echo [OK] No threat indicator matches found across all IOC categories.>> "%REPORT%"
 ) else (
-    echo [WARNING] !IOC_HITS! IOC category matches found. Review [WARNING] and [CRITICAL] entries above.>> "%REPORT%"
+    rem A tally, not a finding: every category above already raised its own
+    rem ledger row. Tagging the tally WARNING made a reader count one more
+    rem finding than the tool did (standard-user field run 2026-09-24).
+    echo [INFO] !IOC_HITS! IOC category matches found. Review [WARNING] and [CRITICAL] entries above.>> "%REPORT%"
 )
 echo.>> "%REPORT%"
 
