@@ -76,6 +76,33 @@ function Get-SeedVerdict {
     return @{ Action = 'Replace'; Why = ('runtime copy ' + $whyR + ', ' + $whyS + ' -- content differs and the copy is not newer') }
 }
 
+# Defined BEFORE the self-test that calls it: PowerShell binds functions in
+# script order, and a self-test that reached this function first got a
+# CommandNotFoundException that terminated its try block -- five directory-pass
+# cases never ran and the summary still read [OK]. CI's by-name grep caught it.
+function Invoke-Seed {
+    param([string]$Shipped, [string]$Runtime)
+    $lines = @()
+    $seeded = 0; $replaced = 0; $kept = 0
+    if (-not (Test-Path -LiteralPath $Runtime)) { New-Item -ItemType Directory -Path $Runtime -Force -EA SilentlyContinue | Out-Null }
+    foreach ($f in $script:Files) {
+        $src = Join-Path $Shipped $f
+        $dst = Join-Path $Runtime $f
+        if (-not (Test-Path -LiteralPath $src)) { continue }
+        $shippedLines = @(Get-Content -LiteralPath $src -EA SilentlyContinue)
+        $runtimeLines = $null
+        if (Test-Path -LiteralPath $dst) { $runtimeLines = @(Get-Content -LiteralPath $dst -EA SilentlyContinue) }
+        $v = Get-SeedVerdict -ShippedLines $shippedLines -RuntimeLines $runtimeLines
+        switch ($v.Action) {
+            'Seed'    { Copy-Item -LiteralPath $src -Destination $dst -Force; $seeded++;   $lines += ('[INFO] ThreatLists\' + $f + ': seeded from the release baseline.') }
+            'Replace' { Copy-Item -LiteralPath $src -Destination $dst -Force; $replaced++; $lines += ('[INFO] ThreatLists\' + $f + ': runtime copy replaced by the release baseline (' + $v.Why + ').') }
+            default   { $kept++ }
+        }
+    }
+    $lines += ('[INFO] ThreatLists: ' + $seeded + ' seeded, ' + $replaced + ' replaced from the release baseline, ' + $kept + ' kept.')
+    return $lines
+}
+
 if ($SelfTest) {
     $fails = 0
     function T { param([string]$Name, [bool]$Ok, [string]$Got)
@@ -131,29 +158,6 @@ if ($SelfTest) {
     if ($fails) { Write-Output "[FAIL] $fails threat_list_seed self-test expectation(s) unmet"; exit 1 }
     Write-Output '[OK] threat_list_seed self-test: a runtime list older than or forked from the release is replaced and reported; one -updateTTP refreshed after the release is kept.'
     exit 0
-}
-
-function Invoke-Seed {
-    param([string]$Shipped, [string]$Runtime)
-    $lines = @()
-    $seeded = 0; $replaced = 0; $kept = 0
-    if (-not (Test-Path -LiteralPath $Runtime)) { New-Item -ItemType Directory -Path $Runtime -Force -EA SilentlyContinue | Out-Null }
-    foreach ($f in $script:Files) {
-        $src = Join-Path $Shipped $f
-        $dst = Join-Path $Runtime $f
-        if (-not (Test-Path -LiteralPath $src)) { continue }
-        $shippedLines = @(Get-Content -LiteralPath $src -EA SilentlyContinue)
-        $runtimeLines = $null
-        if (Test-Path -LiteralPath $dst) { $runtimeLines = @(Get-Content -LiteralPath $dst -EA SilentlyContinue) }
-        $v = Get-SeedVerdict -ShippedLines $shippedLines -RuntimeLines $runtimeLines
-        switch ($v.Action) {
-            'Seed'    { Copy-Item -LiteralPath $src -Destination $dst -Force; $seeded++;   $lines += ('[INFO] ThreatLists\' + $f + ': seeded from the release baseline.') }
-            'Replace' { Copy-Item -LiteralPath $src -Destination $dst -Force; $replaced++; $lines += ('[INFO] ThreatLists\' + $f + ': runtime copy replaced by the release baseline (' + $v.Why + ').') }
-            default   { $kept++ }
-        }
-    }
-    $lines += ('[INFO] ThreatLists: ' + $seeded + ' seeded, ' + $replaced + ' replaced from the release baseline, ' + $kept + ' kept.')
-    return $lines
 }
 
 if (-not $ShippedDir -or -not $RuntimeDir) {
