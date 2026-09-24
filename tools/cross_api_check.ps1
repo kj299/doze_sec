@@ -59,14 +59,18 @@
 # this token) or 1060 (the SCM has never heard of it). 1060 is the hidden
 # service; 5 unelevated is 'not enumerable from a standard-user token', counted
 # and named, never a finding and never cleared; 5 elevated is a WARNING (a
-# service that refuses an administrator's query is not routine). THE CODE IS
-# THREE LAYERS DOWN: PowerShell wraps a .NET property-getter exception, so the
-# chain is GetValueInvocationException -> InvalidOperationException ->
-# Win32Exception. The first version read one layer, found no code, and fell
-# back to a DEFAULT of 1060 -- so the standard-user CI job reported its own
-# DACL plant as a rootkit, exactly the field defect. Get-Win32ErrorCode walks
-# the chain; when no code is readable the verdict is 'unprobed' (WARNING,
-# never CRITICAL, never cleared). A probe's fallback is never a grade.
+# service that refuses an administrator's query is not routine). THE PROBE IS
+# `sc.exe query <name>`, whose exit code is the SCM's own error from
+# OpenService(SERVICE_QUERY_STATUS). NOT .NET's ServiceController: it resolves
+# the name through GetServiceDisplayName first and, when that fails for ANY
+# reason, throws a HARD-CODED 1060 (dotnet/runtime ServiceController.cs,
+# GenerateNames) -- so it reports a service the token cannot query as a
+# service that does not exist. Two pushes of PR #218 learned this: the first
+# read the code from the wrong exception layer and defaulted to 1060; the
+# second read the chain correctly and got .NET's fabricated 1060. Both CI
+# jobs reported their own DACL plant as a rootkit, exactly the field defect.
+# When no code can be read at all the verdict is 'unprobed' (WARNING, never
+# CRITICAL, never cleared). A probe's fallback is never a grade.
 # A missing task SD (Tarrask) is CRITICAL. Where an API
 # cannot be consulted at all (access denied, service stopped), the check reports
 # [SKIPPED] rather than a false clean.
@@ -138,23 +142,26 @@ function Get-ServiceVisibilityVerdict {
         # is a probe that could not answer. Say so, never grade it either way.
         return @{ Sev = 'WARNING'; Kind = 'unprobed'; Line = ('[WARNING] Service ' + $Name + ' is in the registry, absent from SCM and WMI enumeration, and the by-name query returned no Win32 error code (' + $Detail + ') -- cannot separate a restricted DACL from a hidden service; not cleared. Verify: sc query ' + $Name + '; sc sdshow ' + $Name) }
     }
-    return @{ Sev = 'CRITICAL'; Kind = 'hidden'; Line = ('  ' + $Name) }
+    $how = if ($NativeError -eq 0) { 'the SCM answered the by-name query yet omitted it from enumeration' } else { 'by-name query: error ' + $NativeError + $(if ($Detail) { ', ' + $Detail } else { '' }) }
+    return @{ Sev = 'CRITICAL'; Kind = 'hidden'; Line = ('  ' + $Name + ' (' + $how + ')') }
 }
 
-# PURE: the Win32 error code carried anywhere in an exception chain, or -1.
-# PowerShell wraps a .NET property getter's exception (GetValueInvocationException),
-# ServiceController wraps the Win32 failure in an InvalidOperationException, so
-# the Win32Exception is the third link. Walk the chain rather than assume a depth.
-function Get-Win32ErrorCode {
-    param($Exception)
-    $e = $Exception
-    $depth = 0
-    while ($null -ne $e -and $depth -lt 8) {
-        if ($e.PSObject.Properties.Name -contains 'NativeErrorCode') { return [int]$e.NativeErrorCode }
-        $e = $e.InnerException
-        $depth++
+# PURE: the SCM's answer to `sc.exe query <name>`, as (Code, Detail). sc.exe
+# exits with the Win32 error of the failing call: 5 (access denied), 1060 (does
+# not exist), 0 (answered). A null exit code (sc.exe could not run) is -1.
+function ConvertFrom-ScQuery {
+    param($ExitCode, [string[]]$Lines)
+    $code = -1
+    if ($null -ne $ExitCode) { try { $code = [int]$ExitCode } catch { $code = -1 } }
+    if ($code -lt 0) { $code = -1 }
+    $detail = ''
+    foreach ($l in @($Lines)) {
+        $t = ([string]$l).Trim()
+        if ($t.Length -gt 0 -and $t -match 'FAILED \d+') { $detail = $t; break }
     }
-    return -1
+    if ($detail -eq '') { foreach ($l in @($Lines)) { $t = ([string]$l).Trim(); if ($t.Length -gt 0) { $detail = $t; break } } }
+    if ($detail.Length -gt 120) { $detail = $detail.Substring(0, 120) }
+    return @{ Code = $code; Detail = $detail }
 }
 
 # PURE: the whole set of registry-only names with their per-name codes.
@@ -203,18 +210,21 @@ if ($SelfTest) {
     $v = Get-ServiceVisibilityVerdict -Name 'dz_odd' -IsElevated $true -NativeError 0
     T 'any other outcome (no error, yet absent from both enumerations) stays CRITICAL -- never explained away' ($v.Sev -eq 'CRITICAL') $v.Sev
 
-    # The extraction itself, against the REAL chain a property getter produces.
-    # The first version read one layer and defaulted to 1060; the standard-user
-    # CI job then reported its own DACL plant as a rootkit (PR #218, run 1).
-    $chain = [System.Management.Automation.GetValueInvocationException]::new('Exception getting "Status"', [System.InvalidOperationException]::new('Cannot open dz_dacl service on computer', [System.ComponentModel.Win32Exception]::new(5)))
-    T 'Win32 code is read through GetValueInvocationException -> InvalidOperationException -> Win32Exception (the real chain)' ((Get-Win32ErrorCode $chain) -eq 5) ([string](Get-Win32ErrorCode $chain))
-    $one = [System.InvalidOperationException]::new('Cannot open', [System.ComponentModel.Win32Exception]::new(1060))
-    T 'Win32 code is read one layer down too' ((Get-Win32ErrorCode $one) -eq 1060) ([string](Get-Win32ErrorCode $one))
-    T 'a bare Win32Exception yields its own code' ((Get-Win32ErrorCode ([System.ComponentModel.Win32Exception]::new(5))) -eq 5) ''
-    T 'an exception chain with no Win32 code yields -1, never a default grade' ((Get-Win32ErrorCode ([System.InvalidOperationException]::new('no code'))) -eq -1) ''
-    T 'a null exception yields -1' ((Get-Win32ErrorCode $null) -eq -1) ''
-    $v = Get-ServiceVisibilityVerdict -Name 'dz_odd' -IsElevated $false -NativeError -1 -Detail 'InvalidOperationException: no code'
-    T 'no readable code, standard user: WARNING unprobed -- not CRITICAL, not cleared, names the exception' ($v.Sev -eq 'WARNING' -and $v.Kind -eq 'unprobed' -and $v.Line -match 'no Win32 error code \(InvalidOperationException: no code\)' -and $v.Line -match 'not cleared' -and $v.Line -match 'sc sdshow dz_odd') $v.Line
+    # The probe's answer, parsed. sc.exe's exit code IS the SCM's error; two
+    # pushes of PR #218 tried .NET's ServiceController first and got a
+    # hard-coded 1060 for a service the token merely could not query.
+    $q = ConvertFrom-ScQuery -ExitCode 5 -Lines @('[SC] OpenService FAILED 5:', '', 'Access is denied.')
+    T 'sc query exit 5 is error 5 and the detail names the failing call' ($q.Code -eq 5 -and $q.Detail -eq '[SC] OpenService FAILED 5:') ($q.Code.ToString() + '/' + $q.Detail)
+    $q = ConvertFrom-ScQuery -ExitCode 1060 -Lines @('[SC] EnumQueryServicesStatus:OpenService FAILED 1060:', '', 'The specified service does not exist as an installed service.')
+    T 'sc query exit 1060 is error 1060' ($q.Code -eq 1060) ([string]$q.Code)
+    $q = ConvertFrom-ScQuery -ExitCode 0 -Lines @('SERVICE_NAME: x', '        STATE              : 1  STOPPED')
+    T 'sc query exit 0 is an answer (code 0)' ($q.Code -eq 0) ([string]$q.Code)
+    $q = ConvertFrom-ScQuery -ExitCode $null -Lines @()
+    T 'no exit code at all (sc.exe did not run) is -1, never a default grade' ($q.Code -eq -1) ([string]$q.Code)
+    $v = Get-ServiceVisibilityVerdict -Name 'dz_hidden' -IsElevated $false -NativeError 1060 -Detail '[SC] OpenService FAILED 1060:'
+    T 'the hidden-service line states how it was established (the by-name error)' ($v.Line -match '^  dz_hidden \(by-name query: error 1060, \[SC\] OpenService FAILED 1060:\)$') $v.Line
+    $v = Get-ServiceVisibilityVerdict -Name 'dz_odd' -IsElevated $false -NativeError -1 -Detail 'sc.exe did not run'
+    T 'no readable code, standard user: WARNING unprobed -- not CRITICAL, not cleared, names the probe output' ($v.Sev -eq 'WARNING' -and $v.Kind -eq 'unprobed' -and $v.Line -match 'no Win32 error code \(sc\.exe did not run\)' -and $v.Line -match 'not cleared' -and $v.Line -match 'sc sdshow dz_odd') $v.Line
     $v = Get-ServiceVisibilityVerdict -Name 'dz_odd' -IsElevated $true -NativeError -1
     T 'no readable code, elevated: WARNING unprobed as well' ($v.Sev -eq 'WARNING' -and $v.Kind -eq 'unprobed') ($v.Sev + '/' + $v.Kind)
     $r = Get-ServiceCrossCheckReport -Probes @(@{ Name = 'dz_odd'; NativeError = -1; Detail = 'x' }) -IsElevated $false -RegistryCount 10
@@ -367,19 +377,20 @@ if (-not $sOk -or $svcReg.Count -eq 0) {
             try { if (Get-Service -Name $n -EA Stop) { $seen = $true } } catch {}
             try { if (Get-CimInstance Win32_Service -Filter ("Name='{0}'" -f ($n -replace "'", "''")) -EA Stop) { $seen = $true } } catch {}
             if (-not $stillReg -or $seen) { continue }
-            # No default grade: the code comes from the SCM's answer or the
-            # verdict says the probe could not read one.
-            $code = -1; $detail = ''
+            # No default grade: the code is the SCM's own answer to an
+            # OpenService(SERVICE_QUERY_STATUS) by name, via sc.exe's exit
+            # code, or the verdict says the probe could not read one.
+            $scOut = @(); $scExit = $null
             try {
-                $sc = New-Object System.ServiceProcess.ServiceController($n)
-                $null = $sc.Status
-                # No error at all: the SCM answered by name although it did
-                # not enumerate the service. Treat as hidden, never as fine.
-                $code = 0
-            } catch {
-                $code = Get-Win32ErrorCode $_.Exception
-                $detail = $_.Exception.GetType().Name + ': ' + (([string]$_.Exception.Message) -replace '[\r\n]+', ' ')
-            }
+                $scExe = Join-Path $env:SystemRoot 'System32\sc.exe'
+                if (-not (Test-Path -LiteralPath $scExe)) { $scExe = 'sc.exe' }
+                $scOut = @(& $scExe query $n 2>&1 | ForEach-Object { [string]$_ })
+                $scExit = $LASTEXITCODE
+            } catch { $scOut = @([string]$_.Exception.Message); $scExit = $null }
+            $q = ConvertFrom-ScQuery -ExitCode $scExit -Lines $scOut
+            $code = $q.Code
+            $detail = $q.Detail
+            if ($code -lt 0 -and $detail -eq '') { $detail = 'sc.exe did not run' }
             $probes += @{ Name = $n; NativeError = $code; Detail = $detail }
         }
         $rep = Get-ServiceCrossCheckReport -Probes $probes -IsElevated ($Elevated -eq 1) -RegistryCount $svcReg.Count

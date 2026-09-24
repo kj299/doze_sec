@@ -1231,12 +1231,15 @@ jobs:
             # right to a service, the service is silently omitted from the
             # list of services returned" -- EnumServicesStatusEx remarks,
             # learn.microsoft.com) and OpenService by name fails with error 5.
-            # The first version of the probe read that code from the wrong
-            # exception layer and defaulted to 1060; the standard-user job
-            # then reported its own plant as a rootkit. The verdict here must
-            # be the elevated 'refuses an administrator' WARNING: not
-            # CRITICAL, and not the 'no Win32 error code' fallback. DELETE and
-            # WRITE_DAC stay granted to Administrators so cleanup works.
+            # The first probe read that code from the wrong exception layer
+            # and defaulted to 1060; the second read .NET ServiceController's
+            # HARD-CODED 1060 (it resolves the name via GetServiceDisplayName
+            # and discards the real error). Both graded this very plant as a
+            # rootkit. The probe is now `sc.exe query`, whose exit code is the
+            # SCM's own. The verdict here must be the elevated 'refuses an
+            # administrator' WARNING: not CRITICAL, and not the 'no Win32
+            # error code' fallback. DELETE and WRITE_DAC stay granted to
+            # Administrators so cleanup works.
             $md5 = Join-Path $md 'dacl'
             New-Item -ItemType Directory -Path $md5 -Force | Out-Null
             & sc.exe create dz_ci_dacl_admin binPath= 'C:\Windows\System32\cmd.exe /c rem dz_selftest_dacl' start= demand | Out-Null
@@ -1245,7 +1248,7 @@ jobs:
               $t5 = (.\tools\cross_api_check.ps1 -MarkerDir $md5) -join "`n"
               Write-Host ($t5 -split "`n" | Where-Object { $_ -match 'dz_ci_dacl_admin|Service views|T1014' })
               if ($t5 -match '\[CRITICAL\] Service present in the registry') { throw 'a DACL-restricted service was graded as a hidden service (CRITICAL) -- the by-name probe did not read error 5' }
-              if ($t5 -match 'no Win32 error code') { throw 'the by-name probe could not read a Win32 code from the ServiceController exception on 5.1 (the extraction regressed)' }
+              if ($t5 -match 'no Win32 error code') { throw 'the by-name probe could not read a Win32 code from sc.exe on 5.1 (the probe regressed)' }
               if ($t5 -notmatch "\[WARNING\] Service dz_ci_dacl_admin refuses an administrator's query") {
                 if ($t5 -match 'Service views agree across SCM, WMI and registry \(\d+ Win32 services graded\)') { throw 'the DACL plant was enumerated after all -- the SERVICE_QUERY_STATUS omission assumption did not hold on this runner; the by-name probe was not exercised' }
                 throw 'the DACL-restricted service was not reported as refusing an administrator'

@@ -571,17 +571,22 @@ the rootkit shape. Every check that enumerates must know its own privilege,
 and where the token rather than the machine explains an absence it must say
 "not enumerable from this token", counted and named, never a finding and
 never cleared. Ask for the thing BY NAME when enumeration is ambiguous: error
-5 is the DACL, 1060 is the SCM saying it does not exist. **And read the code
-from where it actually is.** The first fix read one `InnerException` down and
-defaulted to 1060 when nothing was there; PowerShell wraps a .NET property
-getter's exception (`GetValueInvocationException`), ServiceController wraps
-the Win32 failure in an `InvalidOperationException`, so the `Win32Exception`
-is the third link. The standard-user CI job reported its own DACL plant as a
-rootkit, exactly the field defect, because the seam had been cut one layer
-above the failure: the self-test injected the code and never exercised the
-extraction. Walk the chain, test the extraction with the real nested type,
-and never let a probe's fallback be a grade (no readable code is "unprobed",
-a WARNING that names the exception, never CRITICAL and never cleared). The same run showed a
+5 is the DACL, 1060 is the SCM saying it does not exist. **And ask the SCM
+itself, not a wrapper that answers for it.** The fix probed each such
+service by name with .NET's `ServiceController`, and the standard-user CI job
+reported its own DACL plant as a rootkit twice. Push one read the Win32 code
+one exception layer down (PowerShell wraps a property getter's exception in
+`GetValueInvocationException`; the `Win32Exception` is the third link) and
+defaulted to 1060. Push two walked the chain and got 1060 anyway:
+`ServiceController` resolves the name through `GetServiceDisplayName` and
+throws a HARD-CODED `ERROR_SERVICE_DOES_NOT_EXIST` when that fails for any
+reason, so "cannot query" and "does not exist" are the same answer from it.
+`sc.exe query <name>` exits with the SCM's own error. The self-test injected
+codes, so the extraction was never tested; the real probe is exercised by a
+DACL plant in BOTH Windows jobs now. Never let a probe's fallback be a grade
+(no readable code is "unprobed", a WARNING that names the probe output,
+never CRITICAL and never cleared), and print how a hidden-service verdict was
+established so the reader can repeat the query. The same run showed a
 `goto` that skipped two tools silently on the non-admin path while the
 coverage block certified `Audit visibility : OK` -- the OK-default mistake
 again. **And a runtime copy of a shipped list is a fork.** The IOC lists are

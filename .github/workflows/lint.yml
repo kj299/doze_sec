@@ -331,8 +331,9 @@ jobs:
                    'error 1060 (SCM has never heard of it) is the hidden service: CRITICAL even unelevated' \
                    'a service that denies an ADMINISTRATOR is a WARNING' \
                    'CRITICAL names only the hidden one' \
-                   'Win32 code is read through GetValueInvocationException -> InvalidOperationException -> Win32Exception' \
-                   'an exception chain with no Win32 code yields -1, never a default grade' \
+                   'sc query exit 5 is error 5 and the detail names the failing call' \
+                   'no exit code at all (sc.exe did not run) is -1, never a default grade' \
+                   'the hidden-service line states how it was established' \
                    'no readable code, standard user: WARNING unprobed'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
