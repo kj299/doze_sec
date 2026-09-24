@@ -174,6 +174,13 @@ Remove-Path (Join-Path $startupDir ("{0}_benign.lnk" -f $MARK)) 'Startup benign 
 Remove-Path ("C:\Users\Public\{0}.sys" -f $MARK)               'Fake kernel driver (Public\*.sys)'
 Remove-Path 'C:\Users\Public\dz_selftest_evil_com.dll'          'COM hijack DLL (Public)'
 Remove-Path 'C:\Users\Public\dz_selftest_flag_svc.exe'          'Flag-service binary (Public)'
+# The masquerading plant is a RUNNING copy of ping.exe named svchost.exe;
+# stop it by PATH (never by name -- the real svchost instances stay) before
+# the directory can be removed.
+Get-Process -Name 'svchost' -EA SilentlyContinue |
+    Where-Object { $_.Path -and $_.Path.StartsWith('C:\Users\Public\dz_selftest_masq', [StringComparison]::OrdinalIgnoreCase) } |
+    Stop-Process -Force -EA SilentlyContinue
+Remove-Path 'C:\Users\Public\dz_selftest_masq'                 'Masquerading svchost.exe directory (Public\dz_selftest_masq)'
 Remove-Path 'C:\Program Files\dz selftest fp'                   'FP-service directory'
 Remove-Path 'C:\dz_selftest_excl_dir'                           'Defender exclusion directory'
 Remove-Path (Join-Path $OutDir 'baseline.snapshot')            'Seeded baseline snapshot'

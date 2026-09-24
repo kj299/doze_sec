@@ -6,6 +6,30 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Added: a system-process name running outside its directory is a finding (T1036)
+`tools/masquerade_check.ps1`, Section 4. Naming an implant svchost.exe,
+lsass.exe or explorer.exe and running it from AppData, ProgramData, Temp or a
+vendor folder is the most common evasion on a client machine; Task Manager
+shows a familiar name and most readers stop there. The check grades the SAME
+process snapshot Section 4 already takes (one measurement), against the
+canonical directory of each Windows name on THIS machine's Windows directory:
+System32 for most, SysWOW64 too for the names that have a 32-bit twin, the
+Windows root for explorer, System32\wbem for WmiPrvSE, the versioned Defender
+platform directory for MsMpEng. Case-insensitive (the owner's machine spells
+it `C:\WINDOWS\system32\` and `Explorer.EXE`), anchored on directory AND name
+(`System32x\` and `System32\drivers\` are not System32). A name with no
+readable path is stated as NOT GRADED, never cleared and never a finding.
+WARNING, not CRITICAL: the path says the file is not the Windows binary, not
+what it is. A harness plant runs a copy of ping.exe named svchost.exe from
+Users\Public and requires the WARNING and its ledger row; five benign twins
+are catalogued and pinned in the self-test.
+
+The Section 4 LOLBin and RMM inventories now carry the ids the manifest
+already assigned them (T1218.005, T1218.010, T1219). They list matching
+processes without a severity, as before; the id marks where the technique is
+observed, so `attack_matrix` stops reporting them as documented-but-not-
+detected. Technique count 84 -> 88.
+
 ### Retrospective 2026-09
 `docs/design/retrospective-2026-09-seams-and-field-runs.md`: twenty-eight
 PRs, ten or more field runs on one machine, three mechanisms that had never

@@ -41,7 +41,11 @@ $script:Contracts = @(
     @{ Name      = 'Sticky Keys shortcut at the logon screen'
        Signature = '^\s*\[WARNING\].*Sticky Keys shortcut ENABLED'
        Section   = '13'
-       Technique = 'T1546.008' }
+       Technique = 'T1546.008' },
+    @{ Name      = 'System-process name outside its canonical directory'
+       Signature = '^\s*\[WARNING\] Process \S+ \(PID \d+\) runs from .*\(T1036 masquerading\)'
+       Section   = '4'
+       Technique = 'T1036' }
 )
 
 function Get-UnraisedContracts {

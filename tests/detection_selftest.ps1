@@ -109,6 +109,11 @@ $comKey      = 'HKCU:\Software\Classes\CLSID\{dead1111-0000-0000-0000-00000000c0
 # System32/Microsoft, so the planted DLL path must be neutral (Public), which is
 # also a staging path the check treats as suspicious.
 $comDll      = 'C:\Users\Public\dz_selftest_evil_com.dll'
+# Masquerading: a copy of ping.exe named svchost.exe, run from a directory
+# that is not System32. Loopback only, so it touches no network; the NAME
+# is the plant, the path is what the check grades.
+$masqDir     = 'C:\Users\Public\dz_selftest_masq'
+$masqExe     = Join-Path $masqDir 'svchost.exe'
 # Baseline/diff: the audit auto-diffs when a snapshot exists at OUTDIR. The
 # harness seeds one BEFORE the audit runs, with the planted Run-key backdoor
 # deliberately absent from it, so the audit's diff must report that autorun as
@@ -292,6 +297,22 @@ $cases = @(
         Plant  = { New-Item -Path $sethcIfeoKey -Force | Out-Null
                    Set-ItemProperty -Path $sethcIfeoKey -Name 'Debugger' -Value 'cmd.exe' -Force }
         Cleanup= { Remove-Item -Path $sethcIfeoKey -Recurse -Force -EA SilentlyContinue }
+    },
+    @{
+        Name   = 'svchost.exe running from Users\Public -> flagged as masquerading (T1036)'
+        Attack = @('T1036')
+        Tier   = 'required'  # masquerade_check.ps1; the one real gap the 2026-09 retrospective found
+        Touches= @('file:C:\Users\Public\dz_selftest_masq\svchost.exe|dz_selftest_masq')
+        Affects= @()
+        Expect = '(?im)\[WARNING\] Process svchost\.exe \(PID \d+\) runs from .*dz_selftest_masq'
+        Plant  = { New-Item -ItemType Directory -Path $masqDir -Force | Out-Null
+                   Copy-Item -LiteralPath (Join-Path $env:SystemRoot 'System32\ping.exe') -Destination $masqExe -Force
+                   Start-Process -FilePath $masqExe -ArgumentList '-n 1500 127.0.0.1' -WindowStyle Hidden | Out-Null }
+        Cleanup= { Get-Process -Name 'svchost' -EA SilentlyContinue |
+                     Where-Object { $_.Path -and $_.Path.StartsWith($masqDir, [StringComparison]::OrdinalIgnoreCase) } |
+                     Stop-Process -Force -EA SilentlyContinue
+                   Start-Sleep -Milliseconds 500
+                   Remove-Item -LiteralPath $masqDir -Recurse -Force -EA SilentlyContinue }
     },
     @{
         Name   = 'Rogue LSA Authentication package -> flagged (T1547.002)'
