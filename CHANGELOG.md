@@ -18,8 +18,20 @@ administrator takes:
   the SCM for each such service BY NAME: error 5 is the DACL and is reported
   as not enumerable from this token (counted, named, never a finding, never
   cleared; a WARNING when an administrator is refused); error 1060, the SCM
-  has never heard of it, stays CRITICAL. Pure verdicts, a 12-case self-test,
+  has never heard of it, stays CRITICAL. Pure verdicts, a 20-case self-test,
   and the standard-user smoke job now plants a DACL-restricted service.
+  **That job failed on the first push, on exactly the field defect**: the
+  probe read `$_.Exception.InnerException.NativeErrorCode`, but PowerShell
+  wraps a property getter's exception, so the chain is
+  `GetValueInvocationException -> InvalidOperationException -> Win32Exception`
+  and the code is three links down. One layer down had no code, `$code` kept
+  its default of 1060, and the plant was CRITICAL. The self-test injected
+  codes and never exercised the extraction. `Get-Win32ErrorCode` now walks
+  the chain, the self-test builds the real nested type and asserts on it, the
+  default grade is gone (no readable code is an `unprobed` WARNING, never
+  CRITICAL, never cleared, naming the exception), and the elevated helpers job
+  plants a service whose DACL denies Administrators `SERVICE_QUERY_STATUS` so
+  the extraction runs against a real SCM answer on 5.1.
 - **A stale per-user copy of `ioc_registry.txt` flagged `EnableLUA = 1` and
   `RunAsPPL = 1`**, the secure values. The runtime ThreatLists were seeded by
   copy-if-missing and never reconciled, and the per-user copy predated the

@@ -59,7 +59,15 @@
 # this token) or 1060 (the SCM has never heard of it). 1060 is the hidden
 # service; 5 unelevated is 'not enumerable from a standard-user token', counted
 # and named, never a finding and never cleared; 5 elevated is a WARNING (a
-# service that refuses an administrator's query is not routine). A missing task SD (Tarrask) is CRITICAL. Where an API
+# service that refuses an administrator's query is not routine). THE CODE IS
+# THREE LAYERS DOWN: PowerShell wraps a .NET property-getter exception, so the
+# chain is GetValueInvocationException -> InvalidOperationException ->
+# Win32Exception. The first version read one layer, found no code, and fell
+# back to a DEFAULT of 1060 -- so the standard-user CI job reported its own
+# DACL plant as a rootkit, exactly the field defect. Get-Win32ErrorCode walks
+# the chain; when no code is readable the verdict is 'unprobed' (WARNING,
+# never CRITICAL, never cleared). A probe's fallback is never a grade.
+# A missing task SD (Tarrask) is CRITICAL. Where an API
 # cannot be consulted at all (access denied, service stopped), the check reports
 # [SKIPPED] rather than a false clean.
 #
@@ -117,14 +125,36 @@ function Get-MaxSev {
 # it by name. No token, no SCM: the caller passes the error code it got.
 # ---------------------------------------------------------------------------
 function Get-ServiceVisibilityVerdict {
-    param([string]$Name, [bool]$IsElevated, [int]$NativeError)
+    param([string]$Name, [bool]$IsElevated, [int]$NativeError, [string]$Detail = '')
     if ($NativeError -eq 5) {
         if ($IsElevated) {
             return @{ Sev = 'WARNING'; Kind = 'denied-admin'; Line = ('[WARNING] Service ' + $Name + ' refuses an administrator''s query (access denied) while present in the registry -- a service DACL that denies Administrators is not routine (T1014 or hardening; verify: sc sdshow ' + $Name + ')') }
         }
         return @{ Sev = 'OK'; Kind = 'denied-user'; Line = $null }
     }
+    if ($NativeError -lt 0) {
+        # The by-name query threw something that carried no Win32 code. That
+        # is not evidence of a hidden service and not evidence of a DACL; it
+        # is a probe that could not answer. Say so, never grade it either way.
+        return @{ Sev = 'WARNING'; Kind = 'unprobed'; Line = ('[WARNING] Service ' + $Name + ' is in the registry, absent from SCM and WMI enumeration, and the by-name query returned no Win32 error code (' + $Detail + ') -- cannot separate a restricted DACL from a hidden service; not cleared. Verify: sc query ' + $Name + '; sc sdshow ' + $Name) }
+    }
     return @{ Sev = 'CRITICAL'; Kind = 'hidden'; Line = ('  ' + $Name) }
+}
+
+# PURE: the Win32 error code carried anywhere in an exception chain, or -1.
+# PowerShell wraps a .NET property getter's exception (GetValueInvocationException),
+# ServiceController wraps the Win32 failure in an InvalidOperationException, so
+# the Win32Exception is the third link. Walk the chain rather than assume a depth.
+function Get-Win32ErrorCode {
+    param($Exception)
+    $e = $Exception
+    $depth = 0
+    while ($null -ne $e -and $depth -lt 8) {
+        if ($e.PSObject.Properties.Name -contains 'NativeErrorCode') { return [int]$e.NativeErrorCode }
+        $e = $e.InnerException
+        $depth++
+    }
+    return -1
 }
 
 # PURE: the whole set of registry-only names with their per-name codes.
@@ -133,11 +163,12 @@ function Get-ServiceCrossCheckReport {
     $out = New-Object System.Collections.ArrayList
     $hidden = @(); $deniedUser = @(); $sev = 'OK'
     foreach ($pr in @($Probes)) {
-        $v = Get-ServiceVisibilityVerdict -Name ([string]$pr.Name) -IsElevated $IsElevated -NativeError ([int]$pr.NativeError)
+        $v = Get-ServiceVisibilityVerdict -Name ([string]$pr.Name) -IsElevated $IsElevated -NativeError ([int]$pr.NativeError) -Detail ([string]$pr.Detail)
         switch ($v.Kind) {
             'hidden'       { $hidden += [string]$pr.Name }
             'denied-user'  { $deniedUser += [string]$pr.Name }
             'denied-admin' { [void]$out.Add($v.Line); $sev = Get-MaxSev $sev 'WARNING' }
+            'unprobed'     { [void]$out.Add($v.Line); $sev = Get-MaxSev $sev 'WARNING' }
         }
     }
     if ($deniedUser.Count -gt 0) {
@@ -171,6 +202,23 @@ if ($SelfTest) {
     T 'error 1060 elevated is CRITICAL' ($v.Sev -eq 'CRITICAL') $v.Sev
     $v = Get-ServiceVisibilityVerdict -Name 'dz_odd' -IsElevated $true -NativeError 0
     T 'any other outcome (no error, yet absent from both enumerations) stays CRITICAL -- never explained away' ($v.Sev -eq 'CRITICAL') $v.Sev
+
+    # The extraction itself, against the REAL chain a property getter produces.
+    # The first version read one layer and defaulted to 1060; the standard-user
+    # CI job then reported its own DACL plant as a rootkit (PR #218, run 1).
+    $chain = [System.Management.Automation.GetValueInvocationException]::new('Exception getting "Status"', [System.InvalidOperationException]::new('Cannot open dz_dacl service on computer', [System.ComponentModel.Win32Exception]::new(5)))
+    T 'Win32 code is read through GetValueInvocationException -> InvalidOperationException -> Win32Exception (the real chain)' ((Get-Win32ErrorCode $chain) -eq 5) ([string](Get-Win32ErrorCode $chain))
+    $one = [System.InvalidOperationException]::new('Cannot open', [System.ComponentModel.Win32Exception]::new(1060))
+    T 'Win32 code is read one layer down too' ((Get-Win32ErrorCode $one) -eq 1060) ([string](Get-Win32ErrorCode $one))
+    T 'a bare Win32Exception yields its own code' ((Get-Win32ErrorCode ([System.ComponentModel.Win32Exception]::new(5))) -eq 5) ''
+    T 'an exception chain with no Win32 code yields -1, never a default grade' ((Get-Win32ErrorCode ([System.InvalidOperationException]::new('no code'))) -eq -1) ''
+    T 'a null exception yields -1' ((Get-Win32ErrorCode $null) -eq -1) ''
+    $v = Get-ServiceVisibilityVerdict -Name 'dz_odd' -IsElevated $false -NativeError -1 -Detail 'InvalidOperationException: no code'
+    T 'no readable code, standard user: WARNING unprobed -- not CRITICAL, not cleared, names the exception' ($v.Sev -eq 'WARNING' -and $v.Kind -eq 'unprobed' -and $v.Line -match 'no Win32 error code \(InvalidOperationException: no code\)' -and $v.Line -match 'not cleared' -and $v.Line -match 'sc sdshow dz_odd') $v.Line
+    $v = Get-ServiceVisibilityVerdict -Name 'dz_odd' -IsElevated $true -NativeError -1
+    T 'no readable code, elevated: WARNING unprobed as well' ($v.Sev -eq 'WARNING' -and $v.Kind -eq 'unprobed') ($v.Sev + '/' + $v.Kind)
+    $r = Get-ServiceCrossCheckReport -Probes @(@{ Name = 'dz_odd'; NativeError = -1; Detail = 'x' }) -IsElevated $false -RegistryCount 10
+    T 'report with an unprobed service: WARNING, no [CRITICAL], no [OK]' ($r.Sev -eq 'WARNING' -and (($r.Lines -join "`n") -notmatch '\[CRITICAL\]') -and (($r.Lines -join "`n") -notmatch '\[OK\]') -and (($r.Lines -join "`n") -match '\[WARNING\] Service dz_odd')) ($r.Lines -join ' | ')
 
     $r = Get-ServiceCrossCheckReport -Probes @(@{ Name = 'zthelper'; NativeError = 5 }) -IsElevated $false -RegistryCount 321
     T 'standard user, one DACL-restricted service: INFO line names it, no CRITICAL, OK line counts 320 graded' ($r.Sev -eq 'OK' -and (($r.Lines -join "`n") -match '\[INFO\] 1 service\(s\) registered but not enumerable from a standard-user token: zthelper') -and (($r.Lines -join "`n") -match '\[OK\] .*320 Win32 services graded, 1 not enumerable')) ($r.Lines -join ' | ')
@@ -319,7 +367,9 @@ if (-not $sOk -or $svcReg.Count -eq 0) {
             try { if (Get-Service -Name $n -EA Stop) { $seen = $true } } catch {}
             try { if (Get-CimInstance Win32_Service -Filter ("Name='{0}'" -f ($n -replace "'", "''")) -EA Stop) { $seen = $true } } catch {}
             if (-not $stillReg -or $seen) { continue }
-            $code = 1060
+            # No default grade: the code comes from the SCM's answer or the
+            # verdict says the probe could not read one.
+            $code = -1; $detail = ''
             try {
                 $sc = New-Object System.ServiceProcess.ServiceController($n)
                 $null = $sc.Status
@@ -327,10 +377,10 @@ if (-not $sOk -or $svcReg.Count -eq 0) {
                 # not enumerate the service. Treat as hidden, never as fine.
                 $code = 0
             } catch {
-                $inner = $_.Exception.InnerException
-                if ($inner -and ($inner.PSObject.Properties.Name -contains 'NativeErrorCode')) { $code = [int]$inner.NativeErrorCode }
+                $code = Get-Win32ErrorCode $_.Exception
+                $detail = $_.Exception.GetType().Name + ': ' + (([string]$_.Exception.Message) -replace '[\r\n]+', ' ')
             }
-            $probes += @{ Name = $n; NativeError = $code }
+            $probes += @{ Name = $n; NativeError = $code; Detail = $detail }
         }
         $rep = Get-ServiceCrossCheckReport -Probes $probes -IsElevated ($Elevated -eq 1) -RegistryCount $svcReg.Count
         foreach ($l in $rep.Lines) { $l }

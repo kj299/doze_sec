@@ -330,10 +330,13 @@ jobs:
           for n in 'zthelper denied (error 5) to a standard-user token is NOT a finding' \
                    'error 1060 (SCM has never heard of it) is the hidden service: CRITICAL even unelevated' \
                    'a service that denies an ADMINISTRATOR is a WARNING' \
-                   'CRITICAL names only the hidden one'; do
+                   'CRITICAL names only the hidden one' \
+                   'Win32 code is read through GetValueInvocationException -> InvalidOperationException -> Win32Exception' \
+                   'an exception chain with no Win32 code yields -1, never a default grade' \
+                   'no readable code, standard user: WARNING unprobed'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
-          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 11 ] || { echo "only $n case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 20 ] || { echo "only $n case(s)"; exit 1; }
       - name: threat_list_seed -- a runtime IOC copy behind the release is replaced and reported
         run: |
           out=$(pwsh -NoProfile -File tools/threat_list_seed.ps1 -SelfTest); echo "$out"
