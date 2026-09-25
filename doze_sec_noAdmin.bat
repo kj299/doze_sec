@@ -3191,6 +3191,7 @@ echo  or shrinking a log so ordinary activity rolls it over, leaves no event at>
 echo  all -- and every event-based check above then reads a truncated log and>> "%REPORT%"
 echo  reports clean. This asks whether each log's own record numbering adds up.>> "%REPORT%"
 del "%TEMP%\dz_loggap.txt" 2>nul
+del "%TEMP%\dz_loggap_deferred.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\log_gap_check.ps1" (
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\log_gap_check.ps1">> "%REPORT%" 2>&1
 ) else (
@@ -3201,6 +3202,15 @@ if exist "%TEMP%\dz_loggap.txt" (
     set /p _LGSEV=<"%TEMP%\dz_loggap.txt"
     call :dz_finding !_LGSEV! 16 T1070.001 "Event-log records missing with no clear event, or retention set to self-erase"
     del "%TEMP%\dz_loggap.txt" 2>nul
+)
+if exist "%TEMP%\dz_loggap_deferred.txt" (
+    rem The tool DEFERRED a check this token cannot perform. Counted as
+    rem deferred, never raised: a deferral is not a finding, and the first
+    rem standard-user field run put one in the ledger with nothing printed.
+    set "_LGDEF=0"
+    set /p _LGDEF=<"%TEMP%\dz_loggap_deferred.txt"
+    set /a DEFERRED_COUNT+=!_LGDEF!
+    del "%TEMP%\dz_loggap_deferred.txt" 2>nul
 )
 
 echo --- Log Tampering and Account Changes (evaluated) --->> "%REPORT%"
@@ -3306,6 +3316,7 @@ echo.>> "%REPORT%"
 echo --- Event-Log Gaps ^(records missing with NO clear event^) --->> "%REPORT%"
 echo  Command: powershell -File tools\log_gap_check.ps1>> "%REPORT%"
 del "%TEMP%\dz_loggap.txt" 2>nul
+del "%TEMP%\dz_loggap_deferred.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\log_gap_check.ps1" (
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\log_gap_check.ps1">> "%REPORT%" 2>&1
 ) else (
@@ -3316,6 +3327,15 @@ if exist "%TEMP%\dz_loggap.txt" (
     set /p _LGSEV=<"%TEMP%\dz_loggap.txt"
     call :dz_finding !_LGSEV! 16 T1070.001 "Event-log records missing with no clear event, or retention set to self-erase"
     del "%TEMP%\dz_loggap.txt" 2>nul
+)
+if exist "%TEMP%\dz_loggap_deferred.txt" (
+    rem The tool DEFERRED a check this token cannot perform. Counted as
+    rem deferred, never raised: a deferral is not a finding, and the first
+    rem standard-user field run put one in the ledger with nothing printed.
+    set "_LGDEF=0"
+    set /p _LGDEF=<"%TEMP%\dz_loggap_deferred.txt"
+    set /a DEFERRED_COUNT+=!_LGDEF!
+    del "%TEMP%\dz_loggap_deferred.txt" 2>nul
 )
 echo.>> "%REPORT%"
 echo --- Audit-Policy Visibility ^(can these checks even see anything?^) --->> "%REPORT%"
@@ -3624,6 +3644,7 @@ echo  Reads processes, services and scheduled tasks through independent APIs and
 echo  flags disagreement -- the one positive rootkit signal a user-mode tool can>> "%REPORT%"
 echo  get. Also detects Tarrask-style hidden tasks ^(missing SD^).>> "%REPORT%"
 del "%TEMP%\dz_crossapi.txt" 2>nul
+del "%TEMP%\dz_crossapi_deferred.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\cross_api_check.ps1" (
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\cross_api_check.ps1">> "%REPORT%" 2>&1
 ) else (
@@ -3634,6 +3655,15 @@ if exist "%TEMP%\dz_crossapi.txt" (
     set /p _CASEV=<"%TEMP%\dz_crossapi.txt"
     call :dz_finding !_CASEV! 17 T1014 "Cross-API disagreement or hidden task - rootkit indicator"
     del "%TEMP%\dz_crossapi.txt" 2>nul
+)
+if exist "%TEMP%\dz_crossapi_deferred.txt" (
+    rem The tool DEFERRED a check this token cannot perform. Counted as
+    rem deferred, never raised: a deferral is not a finding, and the first
+    rem standard-user field run put one in the ledger with nothing printed.
+    set "_CADEF=0"
+    set /p _CADEF=<"%TEMP%\dz_crossapi_deferred.txt"
+    set /a DEFERRED_COUNT+=!_CADEF!
+    del "%TEMP%\dz_crossapi_deferred.txt" 2>nul
 )
 
 rem ---- Baseline / differential analysis (T1543/T1053/T1136 -- novel-actor) ----
@@ -4274,7 +4304,7 @@ if exist "%SCRIPT_DIR%tools\verdict_audit.ps1" (
     del "%TEMP%\dz_vaudit.txt" 2>nul
 )
 if exist "%TEMP%\dz_verdict_gap.txt" (
-    call :dz_finding WARNING INIT AUDITGAP "A section printed a finding that never reached the findings ledger - see the audit self-check in the report"
+    call :dz_finding WARNING INIT AUDITGAP "A section printed a finding that never reached the findings ledger, or holds a ledger record the report never shows - see the audit self-check in the report"
     del "%TEMP%\dz_verdict_gap.txt" 2>nul
 )
 
