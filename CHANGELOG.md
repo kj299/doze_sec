@@ -6,6 +6,25 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Standard-user confirmation run 2026-09-25 08:46: the field test itself had never run as a standard user
+Six of seven predictions held: exit code 6 (reboot pending), six ledger rows
+with six printed finding lines, Sections 16 and 17 PARTIAL with the Security
+log and TaskCache declared deferred, Section 5 graded and naming the one IFEO
+subkey the token cannot read (`DefenderAgentScan.exe`), the zthelper and
+audit-visibility lines unchanged. The miss was the field test's own verdict:
+`FAIL: 1 read-only / integrity / corpus check(s) failed` -- it demanded the
+read-only skip line `no restore point created`, but a standard user cannot
+create a restore point, so `doze_sec_noAdmin.bat` defers that step (needs
+admin) before read-only mode has anything to skip. Every standard-user field
+run had ended in that FAIL; CI had only ever run `tests\field_test.ps1`
+elevated. A second bug in the same branch: an explicit `-BatPath
+doze_sec_noAdmin.bat` while unelevated dropped `-noAdmin`, so the bat would
+abort FATAL. Both fixed: the expected declaration is token-aware ("restore
+point deferred (needs admin) -- the token cannot create one"), and the
+standard-user CI job now runs `field_test.ps1` AS the standard user for its
+unplanted run -- exit 0, no `[FAIL]`, the proof lines executed -- and holds
+the report it produced to the deferral contract.
+
 ### Standard-user confirmation run 2026-09-24 21:03: what the token cannot see is a deferral, not a finding
 The confirmation run after #218/#219 scored four of eight predictions, one
 partial, three wrong. Three defects, all of one class -- a check the TOKEN

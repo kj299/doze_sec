@@ -36,6 +36,11 @@ if (-not $BatPath) {
 } elseif ((Split-Path -Leaf $BatPath) -ieq 'doze_sec.bat' -and -not $elevated) {
     Write-Host '[FAIL] doze_sec.bat needs an elevated PowerShell. Re-run elevated, or omit -BatPath to use doze_sec_noAdmin.bat -noAdmin.'
     exit 1
+} elseif ((Split-Path -Leaf $BatPath) -ieq 'doze_sec_noAdmin.bat' -and -not $elevated) {
+    # The adaptive bat takes its partial path only when told to; without the
+    # switch an unelevated run aborts FATAL before any report exists. The
+    # default branch above always passed it; an explicit -BatPath did not.
+    $batArgs += '-noAdmin'
 }
 if (-not (Test-Path -LiteralPath $BatPath)) { Write-Host ("[FAIL] not found: {0}" -f $BatPath); exit 1 }
 if ($NoConsoleLog) { $batArgs += '-noConsoleLog' }
@@ -108,8 +113,22 @@ else {
     Check ($text -match 'READ-ONLY RUN -- this audit makes no changes') 'report carries the READ-ONLY banner' 'the -readonly switch did not take effect'
     Check ($text -match '(?m)^\s*EXIT CODE:') 'report has an EXIT CODE line (the audit completed)' 'no EXIT CODE line -- the audit aborted'
     Check ($text -match '\[18/18\]') 'report reached section [18/18]' 'the audit did not reach the last section'
-    foreach ($step in @('RunOnce resume key not created', 'network check not performed', 'self-update check and threat-list sync not performed', 'no restore point created')) {
-        Check ($text -match [regex]::Escape($step)) ("read-only skip declared: {0}" -f $step) 'the report does not declare this skip'
+    $skips = @(
+        @{ Needle = 'RunOnce resume key not created';                       Label = 'RunOnce resume key not created' },
+        @{ Needle = 'network check not performed';                          Label = 'network check not performed' },
+        @{ Needle = 'self-update check and threat-list sync not performed'; Label = 'self-update check and threat-list sync not performed' })
+    if ($batArgs -contains '-noAdmin') {
+        # A standard user cannot create a restore point, so the bat DEFERS that
+        # step (needs admin) before read-only mode has anything to skip. This
+        # check demanded the read-only skip line anyway and read FAIL on every
+        # standard-user field run (2026-09-24 and 09-25) -- a "read-only proof
+        # failed" verdict for a step the token could never have performed.
+        $skips += @{ Needle = 'Checkpoint-Computer requires administrator privileges'; Label = 'restore point deferred (needs admin) -- the token cannot create one' }
+    } else {
+        $skips += @{ Needle = 'no restore point created'; Label = 'no restore point created' }
+    }
+    foreach ($sk in $skips) {
+        Check ($text -match [regex]::Escape($sk.Needle)) ("read-only skip declared: {0}" -f $sk.Label) 'the report does not declare this skip'
     }
     if ($elevated -and ($batArgs -notcontains '-noAdmin')) { Check ($text -match 'boot menu left as found') 'read-only skip declared: boot menu left as found' 'the report does not declare the bcdedit skip' }
 
