@@ -172,7 +172,7 @@ if ($Ledger -and (Test-Path -LiteralPath $Ledger)) { $ledgerRows = @(Get-Content
 $bad = @(Get-VerdictDefects -Lines $lines -LedgerRows $ledgerRows -Exempt $exempt)
 
 if ($bad.Count) {
-    ('[WARNING] {0} section(s) disagree with the findings ledger -- a finding printed but never raised (NOT counted in FINDINGS COUNTED or the exit code), or a finding counted that the report never shows:' -f $bad.Count)
+    ('[WARNING] {0} section(s) printed a finding that never reached the findings ledger (NOT counted in FINDINGS COUNTED or the exit code), or hold a ledger record the report never shows:' -f $bad.Count)
     foreach ($b in $bad) { '          ' + $b }
     '          This is a defect in the audit, not in this machine. Please report it with the section number.'
     Write-MarkerFile -Path $MarkerFile -Value 'hit'

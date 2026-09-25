@@ -4304,7 +4304,7 @@ if exist "%SCRIPT_DIR%tools\verdict_audit.ps1" (
     del "%TEMP%\dz_vaudit.txt" 2>nul
 )
 if exist "%TEMP%\dz_verdict_gap.txt" (
-    call :dz_finding WARNING INIT AUDITGAP "A section printed a finding that never reached the findings ledger - see the audit self-check in the report"
+    call :dz_finding WARNING INIT AUDITGAP "A section printed a finding that never reached the findings ledger, or holds a ledger record the report never shows - see the audit self-check in the report"
     del "%TEMP%\dz_verdict_gap.txt" 2>nul
 )
 
