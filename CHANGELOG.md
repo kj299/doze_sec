@@ -6,6 +6,55 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Standard-user field run 2026-09-24: a Microsoft service called a rootkit, and UAC ON called an IOC
+The first field run of `doze_sec_noAdmin.bat` scored three of eight predictions
+and exited 8. Four defects, all specific to the path a person who is not an
+administrator takes:
+
+- **`cross_api_check` reported `zthelper` as a hidden service, CRITICAL.**
+  ZTHelper is Windows 11's Zero Trust DNS helper (KB5058411); its service DACL
+  denies enumeration to standard users, so it is in the registry and absent
+  from `Get-Service` and `Win32_Service` for that token. The check now asks
+  the SCM for each such service BY NAME: error 5 is the DACL and is reported
+  as not enumerable from this token (counted, named, never a finding, never
+  cleared; a WARNING when an administrator is refused); error 1060, the SCM
+  has never heard of it, stays CRITICAL. Pure verdicts, a 20-case self-test,
+  and the standard-user smoke job now plants a DACL-restricted service.
+  **That job failed on the first push, on exactly the field defect, and
+  again on the second.** The probe asked .NET's `ServiceController` for the
+  service by name. Push one read the Win32 code one exception layer down
+  (PowerShell wraps a property getter's exception, so the code is three
+  links deep), found nothing, and kept a default of 1060. Push two walked
+  the chain and still got 1060: `ServiceController` resolves the name
+  through `GetServiceDisplayName` and throws a hard-coded
+  `ERROR_SERVICE_DOES_NOT_EXIST` when that fails for any reason
+  (dotnet/runtime, `ServiceController.GenerateNames`), so it cannot tell a
+  service the token may not query from one that does not exist. The probe
+  is now `sc.exe query <name>`, whose exit code is the SCM's own answer to
+  `OpenService(SERVICE_QUERY_STATUS)`: 5, 1060 or 0. No default grade
+  remains: no readable code is an `unprobed` WARNING, never CRITICAL, never
+  cleared, and the hidden-service line now states the by-name error it was
+  established from. The elevated helpers job plants a service whose DACL
+  denies Administrators `SERVICE_QUERY_STATUS` so the probe meets a real SCM
+  answer on 5.1 under both tokens.
+- **A stale per-user copy of `ioc_registry.txt` flagged `EnableLUA = 1` and
+  `RunAsPPL = 1`**, the secure values. The runtime ThreatLists were seeded by
+  copy-if-missing and never reconciled, and the per-user copy predated the
+  `|BadValue` column. `tools/threat_list_seed.ps1` replaces a runtime list
+  older than or forked from the release, keeps one `-updateTTP` refreshed
+  after the release, and prints what it did into the report.
+- **Section 16 skipped `log_gap_check` and `audit_policy_check` silently on
+  the standard-user path, and the coverage block certified
+  `Audit visibility : OK`** for a check that never ran. The gap check now runs
+  unelevated (the Security log declared unreadable), the audit-policy check
+  is declared DEFERRED, and `report_safety` says `NOT VERIFIED` unless it has
+  seen evidence of auditing ON.
+- **The Section 18 tally line** `[WARNING] N IOC category matches found` is
+  a tally, retagged `[INFO]`; its allowlist exemption is gone.
+
+Also wrong in the predictions: Section 9 (ASR) is deferred wholesale without
+elevation, so the ASR row does not survive a standard-user run.
+
 ### Added: a system-process name running outside its directory is a finding (T1036)
 `tools/masquerade_check.ps1`, Section 4. Naming an implant svchost.exe,
 lsass.exe or explorer.exe and running it from AppData, ProgramData, Temp or a

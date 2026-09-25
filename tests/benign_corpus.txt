@@ -411,3 +411,16 @@ maxsev    = INFO
 proof     = ci:masquerade_check.ps1 -SelfTest
 signature = system-process name\(s\) had no readable path
 note      = Win32_Process returns an empty ExecutablePath for protected processes and, on a non-admin run, for every other user's processes. A system name with no path is reported as NOT GRADED ([INFO], counted), never as a finding and never folded into the all-clear: a path the tool could not read is not a path it verified, and a snapshot where nothing could be graded reads [SKIPPED].
+
+[ztdns-helper-hidden-from-standard-user]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:cross_api_check.ps1 -SelfTest
+signature = service\(s\) registered but not enumerable from a standard-user token
+note      = A service whose DACL denies enumeration to BUILTIN\Users is in the Services registry and absent from both Get-Service and Win32_Service when the audit runs as a standard user -- exactly the hidden-service shape. Windows 11's own ZTHelper (the Zero Trust DNS helper, KB5058411, Microsoft-signed) ships that way; the first standard-user field run 2026-09-24 reported it as a rootkit indicator, CRITICAL, exit code 8. The check now asks the SCM for each such service by name: error 5 (access denied) is the DACL and is reported as not enumerable from this token, counted and named, never a finding and never cleared; error 1060 (the SCM has never heard of it) stays CRITICAL in both modes. Verify: sc sdshow <name> from an elevated prompt shows the deny ACE for BU; re-run as administrator to grade the service.
+
+[ioc-list-runtime-copy]
+class     = ADVISE
+proof     = ci:threat_list_seed.ps1 -SelfTest
+signature = runtime copy replaced by the release baseline
+note      = The audit reads its IOC lists from a runtime directory (C:\SecurityAudit\ThreatLists elevated, %USERPROFILE%\SecurityAudit\ThreatLists as a standard user). Until 2026-09-24 a file was copied there only when missing, so a copy made from an older release was never reconciled: the standard-user copy of ioc_registry.txt predated the |BadValue column and the parser's no-BadValue fallback reported EnableLUA = 1 and RunAsPPL = 1 -- UAC ON and LSASS PPL ON -- as suspicious registry IOCs. The seed step now replaces a runtime list that differs from the release unless its '# Last verified by doze_sec:' date is strictly newer (an -updateTTP refresh after the release), and prints this line for each file it replaced. Expected once after any upgrade; a -updateTTP refresh is kept.

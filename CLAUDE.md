@@ -563,6 +563,38 @@ reshuffle after a reboot. Routine churn is `[INFO]` with was/now shown; a
 replaced unsigned binary, a signed binary relocated to a staging path, a new
 admin or a new root CA is still the finding.
 
+**A standard-user token is a different machine.** The first field run of
+`doze_sec_noAdmin.bat` reported Windows 11's own ZTHelper service as a hidden
+service (CRITICAL, exit 8): its DACL denies enumeration to standard users, so
+from that token it is in the registry and absent from every SCM view, which is
+the rootkit shape. Every check that enumerates must know its own privilege,
+and where the token rather than the machine explains an absence it must say
+"not enumerable from this token", counted and named, never a finding and
+never cleared. Ask for the thing BY NAME when enumeration is ambiguous: error
+5 is the DACL, 1060 is the SCM saying it does not exist. **And ask the SCM
+itself, not a wrapper that answers for it.** The fix probed each such
+service by name with .NET's `ServiceController`, and the standard-user CI job
+reported its own DACL plant as a rootkit twice. Push one read the Win32 code
+one exception layer down (PowerShell wraps a property getter's exception in
+`GetValueInvocationException`; the `Win32Exception` is the third link) and
+defaulted to 1060. Push two walked the chain and got 1060 anyway:
+`ServiceController` resolves the name through `GetServiceDisplayName` and
+throws a HARD-CODED `ERROR_SERVICE_DOES_NOT_EXIST` when that fails for any
+reason, so "cannot query" and "does not exist" are the same answer from it.
+`sc.exe query <name>` exits with the SCM's own error. The self-test injected
+codes, so the extraction was never tested; the real probe is exercised by a
+DACL plant in BOTH Windows jobs now. Never let a probe's fallback be a grade
+(no readable code is "unprobed", a WARNING that names the probe output,
+never CRITICAL and never cleared), and print how a hidden-service verdict was
+established so the reader can repeat the query. The same run showed a
+`goto` that skipped two tools silently on the non-admin path while the
+coverage block certified `Audit visibility : OK` -- the OK-default mistake
+again. **And a runtime copy of a shipped list is a fork.** The IOC lists are
+copied into a runtime directory so `-updateTTP` never touches the checkout;
+copy-if-missing meant a per-user copy from an older release was never
+reconciled, and a format change (the `|BadValue` column) turned UAC ON into an
+IOC. Reconcile on every run and print what was replaced.
+
 **Key existence is not evidence either.** Section 18's registry IOC check
 flagged `HKLM\...\PortProxy\v4tov4\tcp [EXISTS]` while Section 3 of the same
 report said `[OK] No netsh portproxy rules.` Windows leaves that key behind,

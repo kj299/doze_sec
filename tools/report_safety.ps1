@@ -30,10 +30,49 @@
 [CmdletBinding()]
 param(
     [ValidateSet('Preamble', 'Coverage')][string]$Mode = 'Preamble',
-    [string]$Report = ''
+    [string]$Report = '',
+    [switch]$SelfTest
 )
 
 $ErrorActionPreference = 'Continue'
+
+# PURE: what the report's own audit-policy lines allow this block to claim.
+# OK only when at least one 'auditing is ON' line was seen and no OFF line;
+# REDUCED on any OFF; otherwise NOT VERIFIED. The old rule was 'no OFF line
+# seen' -- an OK default -- and the first standard-user field run, where the
+# audit-policy check never executed (auditpol needs admin), read
+# 'Audit visibility : OK' for a check that did not run.
+function Get-AuditVisibility {
+    param([string[]]$Lines)
+    $on = $false; $off = $false; $deferred = $false
+    foreach ($l in @($Lines)) {
+        if ($l -match 'auditing is OFF' -or $l -match 'command-line logging is DISABLED') { $off = $true }
+        elseif ($l -match 'auditing is ON' -or $l -match 'command-line logging is ENABLED') { $on = $true }
+        elseif ($l -match 'DEFERRED - ADMIN REQUIRED\] auditpol') { $deferred = $true }
+    }
+    if ($off) { return 'REDUCED' }
+    if ($on) { return 'OK' }
+    if ($deferred) { return 'DEFERRED' }
+    return 'UNKNOWN'
+}
+
+if ($SelfTest) {
+    $fails = 0
+    function T { param([string]$Name, [bool]$Ok, [string]$Got)
+        if ($Ok) { Write-Output "[OK]   $Name" } else { Write-Output "[FAIL] $Name$(if($Got){": $Got"})"; $script:fails++ }
+    }
+    T 'four ON lines and the cmdline ENABLED line: OK' ((Get-AuditVisibility -Lines @('[OK] Process Creation (4688) auditing is ON -- feeds x.', '[OK] Logon (4624/4625) auditing is ON -- feeds y.', '[OK] Process-creation command-line logging is ENABLED (4688 events include the command line).')) -eq 'OK') ''
+    T 'one OFF among ON lines: REDUCED' ((Get-AuditVisibility -Lines @('[OK] Logon (4624/4625) auditing is ON -- feeds y.', '[WARNING] Process Creation (4688) auditing is OFF [No Auditing] -- ...')) -eq 'REDUCED') ''
+    T 'cmdline DISABLED alone: REDUCED' ((Get-AuditVisibility -Lines @('[OK] Logon (4624/4625) auditing is ON -- feeds y.', '[WARNING] Process-creation command-line logging is DISABLED -- ...')) -eq 'REDUCED') ''
+    T 'the standard-user report: auditpol deferred, no ON line -> DEFERRED, never OK' ((Get-AuditVisibility -Lines @('[DEFERRED - ADMIN REQUIRED] auditpol (audit-policy visibility) requires admin -- ...')) -eq 'DEFERRED') ''
+    T 'a report with no audit-policy lines at all -> UNKNOWN, never OK' ((Get-AuditVisibility -Lines @('[OK] something else')) -eq 'UNKNOWN') ''
+    T 'an empty report -> UNKNOWN' ((Get-AuditVisibility -Lines @()) -eq 'UNKNOWN') ''
+    T 'a SKIPPED localized row beside ON rows is still OK (the ON rows are evidence)' ((Get-AuditVisibility -Lines @('[OK] Logon (4624/4625) auditing is ON', '[SKIPPED] User Account Management (4720/4732) auditing state could not be read')) -eq 'OK') ''
+    T 'auditpol itself SKIPPED (needs admin) with nothing else -> UNKNOWN, never OK' ((Get-AuditVisibility -Lines @('[SKIPPED] auditpol could not be queried -- audit-policy visibility NOT verified (needs admin).')) -eq 'UNKNOWN') ''
+    if ($fails) { Write-Output "[FAIL] $fails report_safety self-test expectation(s) unmet"; exit 1 }
+    Write-Output '[OK] report_safety self-test: audit visibility is OK only on evidence of auditing ON, REDUCED on any OFF, and never OK by default.'
+    exit 0
+}
 
 if ($Mode -eq 'Preamble') {
     @'
@@ -77,10 +116,11 @@ if ($Mode -eq 'Preamble') {
 
 # ---- Coverage mode -------------------------------------------------------
 $crit = 0; $warn = 0; $skip = 0
-$auditBlind = $false
+$auditVis = 'UNKNOWN'
 if ($Report -and (Test-Path -LiteralPath $Report)) {
     try {
         $lines = Get-Content -LiteralPath $Report -EA Stop
+        $auditVis = Get-AuditVisibility -Lines $lines
         foreach ($l in $lines) {
             $t = $l.TrimStart()
             # Anchor to the line's OWN leading tag, the same rule block_sev.ps1
@@ -101,7 +141,6 @@ if ($Report -and (Test-Path -LiteralPath $Report)) {
             # honesty block that certifies coverage it does not have is worse
             # than no honesty block at all.
             elseif ($t -match '^\[INFO\]' -and $t -match 'not found' -and $t -match 'skip') { $skip++ }
-            if ($l -match 'auditing is OFF' -or $l -match 'command-line logging is DISABLED') { $auditBlind = $true }
         }
     } catch {}
 }
@@ -118,13 +157,25 @@ if ($skip -gt 0) {
 } else {
     '  Checks SKIPPED    : 0 -- every attempted check produced a result.'
 }
-if ($auditBlind) {
-    '  Audit visibility  : REDUCED -- Windows security auditing is partly'
-    '                      OFF (Section 16). A clean event-log result may'
-    '                      only mean the events were never recorded. Enable'
-    '                      auditing and re-run before trusting a clean pass.'
-} else {
-    '  Audit visibility  : OK -- the event-based checks had auditing enabled.'
+switch ($auditVis) {
+    'REDUCED' {
+        '  Audit visibility  : REDUCED -- Windows security auditing is partly'
+        '                      OFF (Section 16). A clean event-log result may'
+        '                      only mean the events were never recorded. Enable'
+        '                      auditing and re-run before trusting a clean pass.'
+    }
+    'OK' { '  Audit visibility  : OK -- the event-based checks had auditing enabled.' }
+    'DEFERRED' {
+        '  Audit visibility  : NOT VERIFIED -- the audit-policy check needs'
+        '                      administrator rights and did not run. Whether the'
+        '                      event-based checks could see anything is unknown;'
+        '                      re-run as administrator.'
+    }
+    default {
+        '  Audit visibility  : NOT VERIFIED -- no audit-policy result was found'
+        '                      in this report. Treat every event-based clean'
+        '                      result as unconfirmed.'
+    }
 }
 '  ------------------------------------------------------------------'
 '  A clean result lowers the odds of commodity compromise. It cannot'

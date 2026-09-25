@@ -35,7 +35,8 @@ $Touches = @(
     'account:local user dzsmoke (created for the run, removed in finally; a pre-existing user of that name is REMOVED first)',
     'service:seclogon startup type -> Manual and started (not reverted; Manual is the Windows default)',
     'file:<repo> ACL grant BUILTIN\Users (OI)(CI)RX (not reverted; read/execute on a checkout)',
-    'registry:HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest\UseLogonCredential (restored to the prior value in finally)'
+    'registry:HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest\UseLogonCredential (restored to the prior value in finally)',
+    'service:dzsmoke_dacl (a demand-start service whose DACL denies BUILTIN\Users, never started; deleted in finally)'
 )
 $Affects = @('defense')
 
@@ -113,6 +114,7 @@ function Assert-LedgerConsistency {
 $wdKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest'
 $wdPrior = (Get-ItemProperty -LiteralPath $wdKey -Name UseLogonCredential -EA SilentlyContinue).UseLogonCredential
 $userCreated = $false
+$daclCreated = $false
 $artDir = Join-Path $repo 'noadmin-smoke-output'
 
 try {
@@ -130,6 +132,15 @@ try {
     # the bat and its tools\*.ps1 helpers. Inherited grant at the repo root.
     & icacls $repo /grant '*S-1-5-32-545:(OI)(CI)RX' /Q | Out-Null
     $cred = New-Object System.Management.Automation.PSCredential($UserName, $pw)
+
+    # A service whose DACL denies BUILTIN\Users is in the registry and absent
+    # from Get-Service and Win32_Service for a standard user -- the rootkit
+    # shape. Windows 11's own ZTHelper ships this way, and the first
+    # standard-user field run (2026-09-24) reported it as CRITICAL, exit 8.
+    # Never started; demand-start; deleted in finally.
+    & sc.exe create dzsmoke_dacl binPath= 'C:\Windows\System32\cmd.exe /c rem dz_selftest_dacl' start= demand | Out-Null
+    & sc.exe sdset dzsmoke_dacl 'D:(D;;CCLCSWRPWPDTLOCRRC;;;BU)(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)' | Out-Null
+    $daclCreated = $true
 
     Write-Host ""
     Write-Host "== Run 1: standard user, no plants (partial-audit contract) =="
@@ -150,6 +161,24 @@ try {
     Assert ($text1 -match '\[SECTION \d+/18 RESULT: PARTIAL') `
         'at least one section reports PARTIAL (deferred non-admin checks)' `
         'no PARTIAL section verdict -- the deferral path did not engage'
+    # The DACL-restricted service: named as not enumerable, never CRITICAL.
+    Assert ($text1 -match '\[INFO\] \d+ service\(s\) registered but not enumerable from a standard-user token: [^\r\n]*dzsmoke_dacl') `
+        'a DACL-restricted service is stated as not enumerable from this token, by name' `
+        'the DACL-restricted service was not reported as not-enumerable (silently cleared, or absent)'
+    Assert ($text1 -notmatch '\[CRITICAL\] Service present in the registry') `
+        'no rootkit CRITICAL for a service the token merely cannot enumerate' `
+        'a DACL-restricted service was reported as a hidden service (CRITICAL) on a standard-user run'
+    # Section 16 declares what it could not do, and the coverage block does
+    # not certify auditing it never checked.
+    Assert ($text1 -match 'DEFERRED - ADMIN REQUIRED\] auditpol') `
+        'audit-policy check declared DEFERRED (auditpol needs admin)' `
+        'audit-policy check skipped silently on the standard-user path'
+    Assert ($text1 -match 'Audit visibility\s+: NOT VERIFIED') `
+        'coverage block reads Audit visibility : NOT VERIFIED' `
+        'coverage block certifies audit visibility for a check that did not run'
+    Assert ($text1 -match 'record numbering is consistent|\[SKIPPED\] Log ''Security'' could not be read') `
+        'the event-log gap check ran unelevated (readable logs graded, Security declared unreadable)' `
+        'the event-log gap check did not run on the standard-user path'
     $max1 = Assert-LedgerConsistency -Text $text1 -Ledger $ledger1 -Label 'run 1'
     if ($max1 -eq 'CRITICAL') {
         Assert ($code1 -eq 8) 'exit code 8 with an organic CRITICAL (outranks partial-audit 6)' `
@@ -194,6 +223,7 @@ finally {
         Set-ItemProperty -LiteralPath $wdKey -Name UseLogonCredential -Value $wdPrior -Type DWord -EA SilentlyContinue
     }
     if ($userCreated) { Remove-LocalUser -Name $UserName -EA SilentlyContinue }
+    if ($daclCreated) { & sc.exe delete dzsmoke_dacl 2>&1 | Out-Null }
 }
 
 Write-Host ""

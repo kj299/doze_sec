@@ -1074,10 +1074,21 @@ jobs:
           Write-Host "edr_presence.ps1 OK"
           exit 0
 
-      - name: report_safety.ps1 (Tier 0 preamble + coverage framing)
+      - name: report_safety.ps1 -SelfTest + live (Tier 0 preamble + coverage framing)
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
+          $st = (.\tools\report_safety.ps1 -SelfTest) -join "`n"
+          if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'report_safety.ps1 -SelfTest failed' }
+          $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($nst -lt 8) { throw "report_safety self-test ran only $nst case(s)" }
+          Write-Host "report_safety -SelfTest OK ($nst cases)"
+          # A report with no audit-policy result must never read OK.
+          $rep0 = Join-Path $env:TEMP 'dz_ci_rs_none.txt'
+          Set-Content $rep0 -Value @('[OK] something unrelated', '[DEFERRED - ADMIN REQUIRED] auditpol (audit-policy visibility) requires admin -- x')
+          $cov0 = (.\tools\report_safety.ps1 -Mode Coverage -Report $rep0) -join "`n"
+          if ($cov0 -notmatch 'Audit visibility\s+: NOT VERIFIED') { Write-Host $cov0; throw 'coverage block certified audit visibility with no audit-policy result' }
+          Remove-Item $rep0 -Force -EA SilentlyContinue
           $pre = (.\tools\report_safety.ps1 -Mode Preamble) -join "`n"
           foreach ($needle in @('READ THIS FIRST','CLEAN" result does NOT prove','accessnow.org/help','stopstalkerware.org','PRESERVE EVIDENCE')) {
             if ($pre -notmatch [regex]::Escape($needle)) { throw ("preamble missing: {0}" -f $needle) }
@@ -1182,10 +1193,15 @@ jobs:
           Write-Host "baseline_diff.ps1 OK (incl. signed-LOLBin service not downgraded)"
           exit 0
 
-      - name: cross_api_check.ps1 (rootkit discrepancy; race-tolerance + Tarrask logic)
+      - name: cross_api_check.ps1 -SelfTest + live (rootkit discrepancy; race-tolerance + Tarrask logic)
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
+          $st = (.\tools\cross_api_check.ps1 -SelfTest) -join "`n"
+          if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'cross_api_check.ps1 -SelfTest failed' }
+          $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($nst -lt 20) { throw "cross_api_check self-test ran only $nst case(s)" }
+          Write-Host "cross_api_check -SelfTest OK ($nst cases)"
           $md = Join-Path $env:TEMP ("dz_ca_ci_{0}" -f $PID)
           New-Item -ItemType Directory -Path $md -Force | Out-Null
           $tc = "HKCU:\Software\dz_ci_taskcache_$PID"
@@ -1208,6 +1224,38 @@ jobs:
             }
             if ($out -notmatch 'Process lists agree') { throw 'process cross-check did not run' }
             if ($out -notmatch 'Service views agree') { throw 'service cross-check did not run' }
+            # The by-name probe against a REAL SCM answer, on 5.1, under the
+            # token this job has (elevated). A service whose DACL denies
+            # Administrators SERVICE_QUERY_STATUS is omitted from enumeration
+            # ("If the caller does not have the SERVICE_QUERY_STATUS access
+            # right to a service, the service is silently omitted from the
+            # list of services returned" -- EnumServicesStatusEx remarks,
+            # learn.microsoft.com) and OpenService by name fails with error 5.
+            # The first probe read that code from the wrong exception layer
+            # and defaulted to 1060; the second read .NET ServiceController's
+            # HARD-CODED 1060 (it resolves the name via GetServiceDisplayName
+            # and discards the real error). Both graded this very plant as a
+            # rootkit. The probe is now `sc.exe query`, whose exit code is the
+            # SCM's own. The verdict here must be the elevated 'refuses an
+            # administrator' WARNING: not CRITICAL, and not the 'no Win32
+            # error code' fallback. DELETE and WRITE_DAC stay granted to
+            # Administrators so cleanup works.
+            $md5 = Join-Path $md 'dacl'
+            New-Item -ItemType Directory -Path $md5 -Force | Out-Null
+            & sc.exe create dz_ci_dacl_admin binPath= 'C:\Windows\System32\cmd.exe /c rem dz_selftest_dacl' start= demand | Out-Null
+            try {
+              & sc.exe sdset dz_ci_dacl_admin 'D:(D;;LC;;;BA)(A;;CCDCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWRPWPDTLOCRRC;;;SY)' | Out-Null
+              $t5 = (.\tools\cross_api_check.ps1 -MarkerDir $md5) -join "`n"
+              Write-Host ($t5 -split "`n" | Where-Object { $_ -match 'dz_ci_dacl_admin|Service views|T1014' })
+              if ($t5 -match '\[CRITICAL\] Service present in the registry') { throw 'a DACL-restricted service was graded as a hidden service (CRITICAL) -- the by-name probe did not read error 5' }
+              if ($t5 -match 'no Win32 error code') { throw 'the by-name probe could not read a Win32 code from sc.exe on 5.1 (the probe regressed)' }
+              if ($t5 -notmatch "\[WARNING\] Service dz_ci_dacl_admin refuses an administrator's query") {
+                if ($t5 -match 'Service views agree across SCM, WMI and registry \(\d+ Win32 services graded\)') { throw 'the DACL plant was enumerated after all -- the SERVICE_QUERY_STATUS omission assumption did not hold on this runner; the by-name probe was not exercised' }
+                throw 'the DACL-restricted service was not reported as refusing an administrator'
+              }
+            } finally {
+              & sc.exe delete dz_ci_dacl_admin 2>&1 | Out-Null
+            }
             # Tarrask logic against a SYNTHETIC hive -- never touches the real
             # TaskCache, so the live Task Scheduler is unaffected.
             $guid = '{dead0000-0000-0000-0000-00000000cafe}'
@@ -1384,6 +1432,28 @@ jobs:
             & sc.exe delete dzsmoke_7045probe 2>&1 | Out-Null
             Remove-Item $tmp -Force -EA SilentlyContinue
           }
+          exit 0
+
+      - name: threat_list_seed.ps1 -SelfTest + live (a runtime IOC copy behind the release is replaced)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $st = (.\tools\threat_list_seed.ps1 -SelfTest) -join "`n"
+          if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'threat_list_seed.ps1 -SelfTest failed' }
+          $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($nst -lt 14) { throw "threat_list_seed self-test ran only $nst case(s)" }
+          Write-Host "threat_list_seed -SelfTest OK ($nst cases)"
+          # Live: the SHIPPED lists against a runtime copy of ioc_registry.txt that
+          # lacks the BadValue column -- the exact file the field run read.
+          $rt = Join-Path $env:TEMP ('dz_ci_seed_' + $PID)
+          New-Item -ItemType Directory -Path $rt -Force | Out-Null
+          Set-Content (Join-Path $rt 'ioc_registry.txt') -Value @('# Last verified by doze_sec: 2026-05-01 09:00:00', 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System|EnableLUA') -Encoding ASCII
+          $out = (.\tools\threat_list_seed.ps1 -ShippedDir .\ThreatLists -RuntimeDir $rt) -join "`n"
+          Write-Host $out
+          if ($out -notmatch 'ioc_registry\.txt: runtime copy replaced by the release baseline') { throw 'the stale registry list was not replaced' }
+          if (-not (Select-String -Path (Join-Path $rt 'ioc_registry.txt') -Pattern 'EnableLUA\|0' -Quiet)) { throw 'the replaced file does not carry the release BadValue column' }
+          if ($out -notmatch '9 seeded, 1 replaced') { throw "expected the nine other lists seeded and one replaced: $out" }
+          Remove-Item $rt -Recurse -Force -EA SilentlyContinue
           exit 0
 
       - name: module_inspect.ps1 -SelfTest (virtualized module paths are not injections)
