@@ -424,3 +424,24 @@ class     = ADVISE
 proof     = ci:threat_list_seed.ps1 -SelfTest
 signature = runtime copy replaced by the release baseline
 note      = The audit reads its IOC lists from a runtime directory (C:\SecurityAudit\ThreatLists elevated, %USERPROFILE%\SecurityAudit\ThreatLists as a standard user). Until 2026-09-24 a file was copied there only when missing, so a copy made from an older release was never reconciled: the standard-user copy of ioc_registry.txt predated the |BadValue column and the parser's no-BadValue fallback reported EnableLUA = 1 and RunAsPPL = 1 -- UAC ON and LSASS PPL ON -- as suspicious registry IOCs. The seed step now replaces a runtime list that differs from the release unless its '# Last verified by doze_sec:' date is strictly newer (an -updateTTP refresh after the release), and prints this line for each file it replaced. Expected once after any upgrade; a -updateTTP refresh is kept.
+
+[security-log-unlistable-standard-user]
+class     = QUIET
+maxsev    = OK
+proof     = ci:Create standard user, run the audit twice
+signature = \[DEFERRED - ADMIN REQUIRED\] Log 'Security' needs administrator rights
+note      = A standard user cannot list the Security event log; that is the token, not the machine. Until 2026-09-24 log_gap_check printed [SKIPPED] for it and then raised WARNING, so the standard-user field run carried a ledger row reading "Event-log records missing with no clear event" for records nobody had shown were missing, and Section 16 read ISSUES FOUND with no [WARNING] line to review. Unelevated it is now DEFERRED: named, added to DEFERRED_COUNT, never a ledger row. Elevated, a Security log an administrator cannot list is still a raised gap.
+
+[taskcache-unreadable-standard-user]
+class     = QUIET
+maxsev    = OK
+proof     = ci:Create standard user, run the audit twice
+signature = \[DEFERRED - ADMIN REQUIRED\] TaskCache registry or Task Scheduler not readable from a standard-user token
+note      = The TaskCache registry (Schedule\TaskCache\Tree and \Tasks) is not readable from a standard-user token, so the Tarrask hidden-task check cannot run there. Until 2026-09-24 cross_api_check printed [SKIPPED] and raised WARNING, and the standard-user field run carried a ledger row reading "Cross-API disagreement or hidden task - rootkit indicator" for a view the token simply could not open. Unelevated it is now DEFERRED: named, counted, never a ledger row. Elevated, a TaskCache an administrator cannot read is still a raised gap.
+
+[ifeo-subkey-unreadable-from-standard-user]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:Create standard user, run the audit twice
+signature = IFEO entr(y|ies) not readable from this token
+note      = Some Image File Execution Options subkeys carry ACLs a standard user cannot read. persistence_eval enumerated the key with -EA Stop, so the first unreadable subkey terminated the enumeration and the whole Debugger-hijack check printed [SKIPPED] on both standard-user field runs of 2026-09-24 -- an accessibility-binary hijack in a READABLE subkey would have gone unaudited because a different subkey was restricted. The readable subkeys are now graded and the unreadable ones are named as [INFO], not graded, not cleared; elevated, an IFEO entry an administrator cannot read is a WARNING that names it.

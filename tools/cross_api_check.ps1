@@ -76,7 +76,12 @@
 # [SKIPPED] rather than a false clean.
 #
 # MARKER: severity word to $env:TEMP\dz_crossapi.txt; caller raises via
-# :dz_finding. No marker when every view agrees.
+# :dz_finding. No marker when every view agrees. A SECOND marker,
+# dz_crossapi_deferred.txt, holds the COUNT of checks this token could not
+# perform (TaskCache / Task Scheduler as a standard user); the caller adds it
+# to DEFERRED_COUNT. A deferral is never a ledger row: the first standard-user
+# field run raised "rootkit indicator" for a TaskCache a standard user cannot
+# read, with nothing printed to review.
 #
 # Windows PowerShell 5.1 compatible. Read-only. Executed by helpers-ps51 CI.
 
@@ -164,6 +169,18 @@ function ConvertFrom-ScQuery {
     return @{ Code = $code; Detail = $detail }
 }
 
+# PURE: the TaskCache / Task Scheduler view could not be read. Elevated, a
+# view an administrator cannot open is a raised gap (WARNING): the machine,
+# not the token. As a standard user TaskCache is unreadable by design, so it
+# is DEFERRED -- named, counted, never a ledger row.
+function Get-TaskViewVerdict {
+    param([string]$What, [bool]$IsElevated)
+    if (-not $IsElevated) {
+        return @{ Deferred = $true; Sev = 'OK'; Line = ('[DEFERRED - ADMIN REQUIRED] ' + $What + ' not readable from a standard-user token -- hidden-task (Tarrask) check NOT performed; re-run as administrator.') }
+    }
+    return @{ Deferred = $false; Sev = 'WARNING'; Line = $null }
+}
+
 # PURE: the whole set of registry-only names with their per-name codes.
 function Get-ServiceCrossCheckReport {
     param([array]$Probes, [bool]$IsElevated, [int]$RegistryCount)
@@ -241,6 +258,16 @@ if ($SelfTest) {
     $r = Get-ServiceCrossCheckReport -Probes @() -IsElevated $true -RegistryCount 300
     T 'no registry-only services: plain OK with the count' ($r.Sev -eq 'OK' -and (($r.Lines -join "`n") -match '\[OK\] Service views agree across SCM, WMI and registry \(300 Win32 services graded\)\.')) ($r.Lines -join ' | ')
     T 'Get-MaxSev never lowers a CRITICAL' ((Get-MaxSev 'CRITICAL' 'OK') -eq 'CRITICAL') ''
+
+    # The TaskCache view: the standard-user field run 2026-09-24 21:03 raised
+    # "rootkit indicator" for a TaskCache a standard user cannot read.
+    $v = Get-TaskViewVerdict -What 'TaskCache registry or Task Scheduler' -IsElevated $false
+    T 'TaskCache unreadable as a standard user is DEFERRED (the token, not the machine) -- no raise, named' ($v.Deferred -and $v.Sev -eq 'OK' -and $v.Line -match '^\[DEFERRED - ADMIN REQUIRED\] TaskCache registry or Task Scheduler not readable from a standard-user token') ($v.Sev + '/' + $v.Line)
+    $v = Get-TaskViewVerdict -What 'TaskCache registry or Task Scheduler' -IsElevated $true
+    T 'TaskCache unreadable while ELEVATED is a raised gap (WARNING), never a deferral' ((-not $v.Deferred) -and $v.Sev -eq 'WARNING') ($v.Sev)
+    $v = Get-TaskViewVerdict -What 'Task Scheduler' -IsElevated $false
+    T 'Task Scheduler not enumerable as a standard user is DEFERRED too' ($v.Deferred -and $v.Sev -eq 'OK') ($v.Sev)
+    T 'a deferral never carries a severity tag (nothing for the ledger to count)' (((Get-TaskViewVerdict -What 'x' -IsElevated $false).Line) -notmatch '^\[(WARNING|CRITICAL)\]') ''
 
     if ($fails) { Write-Output "[FAIL] $fails cross_api_check self-test expectation(s) unmet"; exit 1 }
     Write-Output '[OK] cross_api_check self-test: a service the SCM refuses to a standard user is stated as not enumerable, one the SCM has never heard of is the hidden service, and only the latter is CRITICAL.'
@@ -407,6 +434,7 @@ if (-not $sOk -or $svcReg.Count -eq 0) {
 $treeRoot  = $TreeRoot
 $tasksRoot = $TasksRoot
 $tOk = $true
+$deferred = 0
 # Live task list, used ONLY to corroborate a missing-SD hit (see below). Failure
 # to enumerate is not fatal -- it just means corroboration is unavailable.
 $live = @{}
@@ -452,8 +480,14 @@ try {
 } catch { $tOk = $false }
 
 if (-not $tOk -or $treeTasks.Count -eq 0) {
-    '[SKIPPED] TaskCache registry or Task Scheduler unavailable (needs admin) -- task cross-check NOT performed.'
-    $sev = Get-MaxSev $sev 'WARNING'
+    $tv = Get-TaskViewVerdict -What 'TaskCache registry or Task Scheduler' -IsElevated ($Elevated -eq 1)
+    if ($tv.Deferred) {
+        $tv.Line
+        $deferred++
+    } else {
+        '[SKIPPED] TaskCache registry or Task Scheduler unavailable (needs admin) -- task cross-check NOT performed.'
+        $sev = Get-MaxSev $sev $tv.Sev
+    }
 } else {
     $noSd = @()
     $unreadable = 0
@@ -518,8 +552,14 @@ if (-not $tOk -or $treeTasks.Count -eq 0) {
         # statements on a host where the Schedule service is stopped or
         # tampered with, which is exactly what an implant that just planted a
         # hidden task would arrange. Report the blind spot and raise it.
-        '[SKIPPED] Task Scheduler could not be enumerated, so the hidden-task (Tarrask) check could NOT run -- it requires both signals: a missing security descriptor AND absence from the scheduler. A stopped or tampered Schedule service is itself worth investigating.'
-        $sev = Get-MaxSev $sev 'WARNING'
+        $tv = Get-TaskViewVerdict -What 'Task Scheduler' -IsElevated ($Elevated -eq 1)
+        if ($tv.Deferred) {
+            $tv.Line
+            $deferred++
+        } else {
+            '[SKIPPED] Task Scheduler could not be enumerated, so the hidden-task (Tarrask) check could NOT run -- it requires both signals: a missing security descriptor AND absence from the scheduler. A stopped or tampered Schedule service is itself worth investigating.'
+            $sev = Get-MaxSev $sev $tv.Sev
+        }
     }
     if ($sdOnly -gt 0) {
         "[INFO] $sdOnly task(s) lack a readable security descriptor but ARE enumerable by Task Scheduler -- expected at admin privilege (descriptor reads want SYSTEM), not treated as hidden."
@@ -546,3 +586,4 @@ if (-not $tOk -or $treeTasks.Count -eq 0) {
 }
 
 Write-Marker -Name 'crossapi' -Sev $sev
+if ($deferred -gt 0) { Write-Marker -Name 'crossapi_deferred' -Sev ([string]$deferred) }

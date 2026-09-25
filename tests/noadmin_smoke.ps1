@@ -11,10 +11,13 @@
 #
 # Two audit runs:
 #   Run 1 (no plant): exit code must honor the partial-audit contract as the
-#          bat defines it -- 8 when ledger MAXSEV is CRITICAL, 2 when it is
-#          WARNING (the ledger-derived verdict is never discarded), 6 only
-#          when nothing was raised (escalated from 0/4) -- and at least one
-#          section must report PARTIAL (deferred checks).
+#          bat defines it -- 8 when ledger MAXSEV is CRITICAL; else 6 when
+#          a reboot is pending (4, escalated); else 2 when it is WARNING (the
+#          ledger-derived verdict is never discarded); else 6 (nothing
+#          raised, escalated from 0) -- and at least one section must report
+#          PARTIAL (deferred checks). Every ledger row must have a printed
+#          [CRITICAL]/[WARNING] line in its section: a check the token cannot
+#          perform is DEFERRED, never a finding.
 #   Run 2 (WDigest UseLogonCredential=1 planted as admin): HKLM is world-
 #          readable, so the NON-ADMIN audit must still detect it, raise
 #          CRITICAL|12| in the ledger, and exit 8 (CRITICAL outranks 6).
@@ -38,7 +41,8 @@ $Touches = @(
     'service:seclogon startup type -> Manual and started (not reverted; Manual is the Windows default)',
     'file:<repo> ACL grant BUILTIN\Users (OI)(CI)RX (not reverted; read/execute on a checkout)',
     'registry:HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest\UseLogonCredential (restored to the prior value in finally)',
-    'service:dzsmoke_dacl (a demand-start service whose DACL denies BUILTIN\Users, never started; deleted in finally)'
+    'service:dzsmoke_dacl (a demand-start service whose DACL denies BUILTIN\Users, never started; deleted in finally)',
+    'registry:HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\dzsmoke_ifeo.exe (an empty IFEO subkey whose DACL denies BUILTIN\Users ReadKey; no Debugger value; deleted in finally)'
 )
 $Affects = @('defense')
 
@@ -110,6 +114,32 @@ function Assert-LedgerConsistency {
     Assert (-not ($Text -match 'a raise is missing|an in-section raise is missing')) `
         ("{0}: no ledger-divergence alarm fired" -f $Label) `
         ("{0}: a ledger-divergence alarm fired under non-admin deferral" -f $Label)
+    # THE INVERSE of "printed but not raised": every ledger row must be
+    # visible in its section as a [CRITICAL]/[WARNING] line. The standard-user
+    # field run 2026-09-24 21:03 carried two rows -- "records missing with no
+    # clear event" and "rootkit indicator" -- raised from checks that printed
+    # only [SKIPPED] (needs admin). A check the token cannot perform is a
+    # deferral, never a finding; a row nobody can see is a finding the reader
+    # cannot act on. Section bodies are walked from the line-anchored banner
+    # to the verdict, so the TOP FINDINGS block cannot satisfy this.
+    $printed = @{}
+    $cur = 0
+    foreach ($ln in ($Text -split "\r?\n")) {
+        $b = [regex]::Match($ln, '^\s*\[(\d{1,2})/18\]\s')
+        if ($b.Success) { $cur = [int]$b.Groups[1].Value; continue }
+        if ($cur -eq 0) { continue }
+        if ($ln -match '^\s*\[SECTION (\d{1,2})/18 RESULT:') { $cur = 0; continue }
+        if ($ln -match '^\s*\[(CRITICAL|WARNING)\]') { $printed[[string]$cur] = $true }
+    }
+    $unseen = @()
+    foreach ($row in @($Ledger)) {
+        $f = $row.Split('|')
+        if ($f.Length -lt 3) { continue }
+        if ($f[0] -notmatch '^(CRITICAL|WARNING)$' -or $f[1] -notmatch '^\d{1,2}$') { continue }
+        if (-not $printed.ContainsKey($f[1])) { $unseen += $row }
+    }
+    Assert ($unseen.Count -eq 0) ("{0}: every ledger row has a printed [CRITICAL]/[WARNING] line in its section" -f $Label) `
+                                ("{0}: {1} ledger row(s) raised from a check that printed no finding line (a deferral or a [SKIPPED] reported as a finding): {2}" -f $Label, $unseen.Count, ($unseen -join ' ; '))
     return $lgMax
 }
 
@@ -117,6 +147,8 @@ $wdKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest'
 $wdPrior = (Get-ItemProperty -LiteralPath $wdKey -Name UseLogonCredential -EA SilentlyContinue).UseLogonCredential
 $userCreated = $false
 $daclCreated = $false
+$ifeoCreated = $false
+$ifeoKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\dzsmoke_ifeo.exe'
 $artDir = Join-Path $repo 'noadmin-smoke-output'
 
 try {
@@ -143,6 +175,16 @@ try {
     & sc.exe create dzsmoke_dacl binPath= 'C:\Windows\System32\cmd.exe /c rem dz_selftest_dacl' start= demand | Out-Null
     & sc.exe sdset dzsmoke_dacl 'D:(D;;CCLCSWRPWPDTLOCRRC;;;BU)(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)' | Out-Null
     $daclCreated = $true
+
+    # An IFEO subkey a standard user cannot open. persistence_eval enumerated
+    # with -EA Stop, so one such subkey lost the whole Debugger-hijack check
+    # ([SKIPPED]) on both standard-user field runs of 2026-09-24. No Debugger
+    # value: the plant is the ACL, not a hijack. Removed in finally.
+    New-Item -Path $ifeoKey -Force | Out-Null
+    $ifeoAcl = Get-Acl -Path $ifeoKey
+    $ifeoAcl.AddAccessRule((New-Object System.Security.AccessControl.RegistryAccessRule('BUILTIN\Users', 'ReadKey', 'Deny')))
+    Set-Acl -Path $ifeoKey -AclObject $ifeoAcl
+    $ifeoCreated = $true
 
     Write-Host ""
     Write-Host "== Run 1: standard user, no plants (partial-audit contract) =="
@@ -178,9 +220,33 @@ try {
     Assert ($text1 -match 'Audit visibility\s+: NOT VERIFIED') `
         'coverage block reads Audit visibility : NOT VERIFIED' `
         'coverage block certifies audit visibility for a check that did not run'
-    Assert ($text1 -match 'record numbering is consistent|\[SKIPPED\] Log ''Security'' could not be read') `
-        'the event-log gap check ran unelevated (readable logs graded, Security declared unreadable)' `
+    Assert ($text1 -match 'record numbering is consistent') `
+        'the event-log gap check ran unelevated (readable logs graded)' `
         'the event-log gap check did not run on the standard-user path'
+    # A check the token cannot perform is DEFERRED -- named, counted, never a
+    # ledger row. The field run raised "records missing with no clear event"
+    # (Section 16) and "rootkit indicator" (Section 17) for the Security log
+    # and the TaskCache a standard user cannot read, with nothing printed.
+    Assert ($text1 -match '\[DEFERRED - ADMIN REQUIRED\] Log ''Security'' needs administrator rights') `
+        'the Security log is declared DEFERRED on the standard-user path, not skipped-and-raised' `
+        'the Security log was not declared DEFERRED (it was skipped silently, or raised as a finding)'
+    Assert ($text1 -match '\[DEFERRED - ADMIN REQUIRED\] TaskCache registry or Task Scheduler not readable from a standard-user token') `
+        'the TaskCache hidden-task check is declared DEFERRED on the standard-user path' `
+        'the TaskCache hidden-task check was not declared DEFERRED (skipped silently, or raised as a rootkit indicator)'
+    Assert (-not @($ledger1 | Where-Object { $_ -match '^\w+\|16\|T1070\.001\|' }).Count) `
+        'no T1070.001 row for a Security log the token cannot list' `
+        ("a T1070.001 row was raised on a standard-user run with nothing printed: {0}" -f (($ledger1 | Where-Object { $_ -match '\|16\|T1070\.001\|' }) -join ' ; '))
+    Assert (-not @($ledger1 | Where-Object { $_ -match '^\w+\|17\|T1014\|' }).Count) `
+        'no T1014 row for a TaskCache the token cannot read' `
+        ("a T1014 row was raised on a standard-user run with nothing printed: {0}" -f (($ledger1 | Where-Object { $_ -match '\|17\|T1014\|' }) -join ' ; '))
+    # One restricted IFEO subkey must not lose the check: the readable
+    # subkeys are graded and the unreadable one is named.
+    Assert ($text1 -notmatch '\[SKIPPED\] IFEO enumeration failed') `
+        'the IFEO Debugger-hijack check still ran with one subkey unreadable' `
+        'one unreadable IFEO subkey lost the whole Debugger-hijack check ([SKIPPED])'
+    Assert ($text1 -match '\[INFO\] \d+ IFEO entr(y|ies) not readable from this token: [^\r\n]*dzsmoke_ifeo\.exe') `
+        'the unreadable IFEO subkey is named as not graded from this token' `
+        'the unreadable IFEO subkey was not named (silently cleared, or absent)'
     $max1 = Assert-LedgerConsistency -Text $text1 -Ledger $ledger1 -Label 'run 1'
     # The bat escalates to 6 ONLY from 0 and 4: 2 is the ledger-derived
     # "findings were raised" verdict and is never discarded (its rem block
@@ -192,9 +258,16 @@ try {
     # not a variable to branch on: no plant means no CRITICAL.
     Assert ($max1 -ne 'CRITICAL') 'run 1 (no plant) raised no CRITICAL on a clean runner' `
                                   ("run 1 ledger MAXSEV is CRITICAL with nothing planted -- a false positive on a clean runner: {0}" -f (($ledger1 | Where-Object { $_ -like 'CRITICAL|*' }) -join ' ; '))
-    $want1 = switch ($max1) { 'CRITICAL' { 8 } 'WARNING' { 2 } default { 6 } }
-    Assert ($code1 -eq $want1) ("exit code {0} (bat rule: CRITICAL->8, WARNING->2, nothing raised->6; MAXSEV={1})" -f $want1, $max1) `
-                               ("exit code {0} expected {1} for a non-admin run with MAXSEV={2}" -f $code1, $want1, $max1)
+    # The bat's rule, whole: a CRITICAL raise sets 8; a pending reboot sets 4
+    # and a WARNING raise only lifts a code that is still below 2, so the
+    # reboot wins and non-admin then turns 4 into 6; otherwise WARNING is 2
+    # and nothing raised is 6. The owner's laptop had a reboot pending on the
+    # 21:03 field run and read 6 with MAXSEV WARNING -- correct per the bat,
+    # and not what the first version of this rule expected.
+    $reboot1 = [bool](@($ledger1 | Where-Object { $_ -match '^\w+\|1\|REBOOT\|' }).Count)
+    $want1 = if ($max1 -eq 'CRITICAL') { 8 } elseif ($reboot1) { 6 } elseif ($max1 -eq 'WARNING') { 2 } else { 6 }
+    Assert ($code1 -eq $want1) ("exit code {0} (bat rule: CRITICAL->8, reboot pending->6, WARNING->2, nothing raised->6; MAXSEV={1}, reboot={2})" -f $want1, $max1, $reboot1) `
+                               ("exit code {0} expected {1} for a non-admin run with MAXSEV={2}, reboot pending={3}" -f $code1, $want1, $max1, $reboot1)
 
     Write-Host ""
     Write-Host "== Run 2: standard user, WDigest planted as admin (HKLM-read detection) =="
@@ -232,6 +305,7 @@ finally {
     }
     if ($userCreated) { Remove-LocalUser -Name $UserName -EA SilentlyContinue }
     if ($daclCreated) { & sc.exe delete dzsmoke_dacl 2>&1 | Out-Null }
+    if ($ifeoCreated) { Remove-Item -Path $ifeoKey -Recurse -Force -EA SilentlyContinue }
 }
 
 Write-Host ""

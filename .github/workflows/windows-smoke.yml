@@ -801,12 +801,14 @@ jobs:
           Write-Host $stOut
           if ($LASTEXITCODE -ne 0) { throw 'log_gap_check.ps1 -SelfTest failed' }
           $stOk = @($stOut -split "`n" | Where-Object { $_ -match '^\[OK\]' }).Count
-          if ($stOk -lt 20) { throw "only $stOk [OK] line(s) from the log_gap_check.ps1 self-test; cases have gone missing" }
+          if ($stOk -lt 23) { throw "only $stOk [OK] line(s) from the log_gap_check.ps1 self-test; cases have gone missing" }
           foreach ($needle in @(
               'retention: 20 MB on Security -- the Windows default',
               'retention: 0 MB on Unreadable -- size unreadable is not a small log',
               'rollover: full log rolled for the ordinary reason',
-              'rollover: oldest record predates the boot')) {
+              'rollover: oldest record predates the boot',
+              'unlistable: Security as a standard user is DEFERRED',
+              'unlistable: Security while ELEVATED is a raised gap')) {
             if ($stOut -notmatch ('\[OK\]\s+' + [regex]::Escape($needle))) { throw "the log_gap_check.ps1 self-test no longer covers: $needle" }
           }
 
@@ -1200,7 +1202,8 @@ jobs:
           $st = (.\tools\cross_api_check.ps1 -SelfTest) -join "`n"
           if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'cross_api_check.ps1 -SelfTest failed' }
           $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($nst -lt 20) { throw "cross_api_check self-test ran only $nst case(s)" }
+          if ($nst -lt 24) { throw "cross_api_check self-test ran only $nst case(s)" }
+          if ($st -notmatch 'TaskCache unreadable as a standard user is DEFERRED') { throw 'cross_api_check self-test no longer covers the standard-user TaskCache deferral' }
           Write-Host "cross_api_check -SelfTest OK ($nst cases)"
           $md = Join-Path $env:TEMP ("dz_ca_ci_{0}" -f $PID)
           New-Item -ItemType Directory -Path $md -Force | Out-Null
@@ -1781,6 +1784,14 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
+          # The pure rules on 5.1, including the INVERSE: a ledger record whose
+          # section printed neither a finding line nor a [SKIPPED] line.
+          $st = (.\tools\verdict_audit.ps1 -SelfTest) -join "`n"
+          if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'verdict_audit.ps1 -SelfTest failed' }
+          $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($nst -lt 9) { throw "verdict_audit self-test ran only $nst case(s)" }
+          if ($st -notmatch 'raised with NOTHING printed') { throw 'verdict_audit self-test no longer covers the inverse rule' }
+          Write-Host "verdict_audit -SelfTest OK ($nst cases)"
           # This is the check a REAL run never had. The harness asserted the
           # invariant; a user's own audit did not, so a live miss went unseen.
           $r = Join-Path $env:TEMP ("dz_va_{0}.txt" -f $PID)
@@ -1800,6 +1811,16 @@ jobs:
           $o = (.\tools\verdict_audit.ps1 -Report $r -MarkerFile $m) -join "`n"
           if ($o -notmatch '^\[OK\]') { throw "a correctly raised finding was flagged: $o" }
           if (Test-Path $m) { throw 'marker written when there was no mismatch' }
+
+          # THE INVERSE, on files: a ledger record whose section shows nothing.
+          $l = Join-Path $env:TEMP ("dz_va_l_{0}.txt" -f $PID)
+          @(' [17/18] NATION-STATE', '[INFO] 1 service(s) registered but not enumerable', ' [SECTION 17/18 RESULT: ISSUES FOUND -- review]') | Set-Content -LiteralPath $r -Encoding UTF8
+          @('WARNING|17|T1014|Cross-API disagreement or hidden task - rootkit indicator') | Set-Content -LiteralPath $l -Encoding UTF8
+          Remove-Item $m -Force -EA SilentlyContinue
+          $o = (.\tools\verdict_audit.ps1 -Report $r -Ledger $l -MarkerFile $m) -join "`n"
+          if ($o -notmatch 'never shows') { throw "a ledger record with nothing printed was NOT detected: $o" }
+          if (-not (Test-Path $m)) { throw 'no marker written for the inverse defect' }
+          Remove-Item $l, $m -Force -EA SilentlyContinue
 
           # Anything before the first section banner is outside every section.
           $init | Set-Content -LiteralPath $r -Encoding UTF8
@@ -2169,7 +2190,8 @@ jobs:
           $st = (.\tools\persistence_eval.ps1 -SelfTest) -join "`n"
           if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'persistence_eval.ps1 -SelfTest failed' }
           $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($nst -lt 32) { throw "persistence_eval self-test ran only $nst case(s)" }
+          if ($nst -lt 39) { throw "persistence_eval self-test ran only $nst case(s)" }
+          if ($st -notmatch 'an unreadable IFEO subkey as a standard user is INFO') { throw 'persistence_eval self-test no longer covers the unreadable-IFEO-subkey case' }
           Write-Host "persistence_eval -SelfTest OK ($nst cases)"
           # On a clean runner (no planted autoruns/IFEO) it must print the OK
           # line and must NOT false-positive on any pre-existing autorun.

@@ -48,7 +48,10 @@
 [CmdletBinding()]
 param(
     [string]$MarkerFile,
-    [switch]$SelfTest
+    [switch]$SelfTest,
+    # Whether this process runs elevated. Read once from the token below;
+    # injectable so the self-test can grade both tokens. -1 = detect.
+    [int]$Elevated = -1
 )
 
 $ErrorActionPreference = 'Continue'
@@ -244,6 +247,25 @@ function Get-IfeoVerdict {
     return @{ Sev = 'WARNING'; Line = "[WARNING] IFEO Debugger hijack: $Target => $Debugger" }
 }
 
+# PURE: IFEO subkeys the token could not open. The enumeration used to run
+# with -EA Stop, so ONE restricted subkey terminated it and the whole
+# Debugger-hijack check printed [SKIPPED] -- both standard-user field runs of
+# 2026-09-24 lost it that way. Now the readable subkeys are graded and the
+# unreadable ones are NAMED: as a standard user that is the token (INFO, not
+# graded, not cleared); elevated, an IFEO entry an administrator cannot read
+# is itself worth a finding (WARNING) -- a Debugger value there cannot be
+# audited, and a restricted ACL is how one would be hidden.
+function Get-IfeoReadReport {
+    param([string[]]$Unreadable, [bool]$IsElevated)
+    $u = @($Unreadable | Where-Object { $_ })
+    if ($u.Count -eq 0) { return @{ Lines = @(); Sev = 'OK' } }
+    $noun = if ($u.Count -eq 1) { 'entry' } else { 'entries' }
+    if ($IsElevated) {
+        return @{ Sev = 'WARNING'; Lines = @(("[WARNING] {0} IFEO {1} not readable by an administrator: {2} -- a Debugger value there cannot be audited, and a restricted ACL is how a hijack would be hidden (verify: reg query ""HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\<name>"" from an elevated prompt)." -f $u.Count, $noun, ($u -join ', '))) }
+    }
+    return @{ Sev = 'OK'; Lines = @(("[INFO] {0} IFEO {1} not readable from this token: {2} -- not graded, not cleared; re-run as administrator to grade them." -f $u.Count, $noun, ($u -join ', '))) }
+}
+
 if ($SelfTest) {
     $fails = 0
     function T { param([string]$Name, [bool]$Ok, [string]$Got)
@@ -316,9 +338,26 @@ if ($SelfTest) {
     T 'a non-accessibility target with an unsigned debugger is a WARNING' ($v.Sev -eq 'WARNING') $v.Line
     T 'Get-CommandPath strips quotes and arguments' ((Get-CommandPath '"C:\Program Files\X\y.exe" --flag') -eq 'C:\Program Files\X\y.exe' -and (Get-CommandPath 'C:\T\z.exe -a') -eq 'C:\T\z.exe') ''
 
+    # IFEO subkeys the token cannot open (both standard-user field runs of
+    # 2026-09-24 lost the whole check to one such subkey).
+    $r = Get-IfeoReadReport -Unreadable @('dzsmoke_ifeo.exe') -IsElevated $false
+    T 'an unreadable IFEO subkey as a standard user is INFO, named, not graded, not cleared -- and the check still runs' ($r.Sev -eq 'OK' -and $r.Lines.Count -eq 1 -and $r.Lines[0] -match '^\[INFO\] 1 IFEO entry not readable from this token: dzsmoke_ifeo\.exe -- not graded, not cleared') ($r.Lines -join ' | ')
+    $r = Get-IfeoReadReport -Unreadable @('a.exe', 'b.exe') -IsElevated $true
+    T 'IFEO subkeys an ADMINISTRATOR cannot read are a WARNING that names them' ($r.Sev -eq 'WARNING' -and $r.Lines[0] -match '^\[WARNING\] 2 IFEO entries not readable by an administrator: a\.exe, b\.exe') ($r.Lines -join ' | ')
+    $r = Get-IfeoReadReport -Unreadable @() -IsElevated $false
+    T 'no unreadable IFEO subkeys prints nothing and raises nothing' ($r.Sev -eq 'OK' -and $r.Lines.Count -eq 0) ($r.Lines -join ' | ')
+
     if ($fails) { Write-Output "[FAIL] $fails persistence_eval self-test expectation(s) unmet"; exit 1 }
     Write-Output "[OK] persistence_eval self-test: the owner's $($benign.Count) real autoruns are not findings, encoded/downloading/staged ones are, and Process Explorer's Replace Task Manager is context while an unsigned impostor is the hijack."
     exit 0
+}
+
+if ($Elevated -lt 0) {
+    $Elevated = 0
+    try {
+        $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+        if ((New-Object Security.Principal.WindowsPrincipal($id)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { $Elevated = 1 }
+    } catch {}
 }
 
 $runKeys = @(
@@ -366,11 +405,29 @@ foreach ($k in $runKeys) {
 
 $ifeoBase = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options'
 $ifeoOk = $true
-$subs = $null
-try { $subs = Get-ChildItem -Path $ifeoBase -EA Stop } catch { $ifeoOk = $false }
+$subs = @()
+$ifeoErr = @()
+# Per-subkey errors ("Requested registry access is not allowed") are collected,
+# not fatal: one restricted subkey used to terminate the enumeration (-EA Stop)
+# and lose the entire check. [SKIPPED] is now reserved for the BASE key being
+# unreadable.
+try {
+    if (Test-Path -LiteralPath $ifeoBase) {
+        $subs = @(Get-ChildItem -Path $ifeoBase -EA SilentlyContinue -ErrorVariable ifeoErr)
+    } else { $ifeoOk = $false }
+} catch { $ifeoOk = $false }
 if (-not $ifeoOk) {
     '[SKIPPED] IFEO enumeration failed -- Debugger-hijack evaluation NOT performed.'
 } else {
+    $ifeoUnreadable = @()
+    foreach ($e in @($ifeoErr)) {
+        $t = [string]$e.TargetObject
+        if (-not $t) { $t = [string]$e.CategoryInfo.TargetName }
+        if ($t) { $ifeoUnreadable += ($t -replace '^.*[\\/]', '') }
+    }
+    $rr = Get-IfeoReadReport -Unreadable $ifeoUnreadable -IsElevated ($Elevated -eq 1)
+    foreach ($l in $rr.Lines) { $l }
+    if ($rr.Sev -eq 'WARNING') { $found = $true }
     foreach ($sub in $subs) {
         $d = Get-ItemProperty -Path $sub.PSPath -Name Debugger -EA SilentlyContinue
         if ($d -and $d.Debugger) {

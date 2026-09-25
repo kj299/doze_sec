@@ -591,7 +591,23 @@ this defect on every main run**: the standard-user smoke job's unplanted run
 read "exit code 8 with an organic CRITICAL" and the test's CRITICAL branch
 accepted it. A test branch that accepts an "organic" CRITICAL on a clean
 runner accepts the false positive; a clean runner's expected MAXSEV is a
-claim to pin, not a variable to branch on. The same run showed a
+claim to pin, not a variable to branch on. **And a needs-admin skip on a
+standard-user token is a DEFERRAL, never a ledger row.** The confirmation
+run raised "records missing with no clear event" for the Security log a
+standard user cannot list and "rootkit indicator" for the TaskCache a
+standard user cannot read: both tools printed `[SKIPPED] (needs admin)` and
+wrote a WARNING marker, so the ledger held two rows with nothing printed to
+review, and the ledger message described something the tool never observed.
+A tool that knows its token (`-Elevated`, the cross_api idiom) prints
+`[DEFERRED - ADMIN REQUIRED]` and counts it through a second marker
+(`dz_<name>_deferred.txt`, added to `DEFERRED_COUNT`); elevated, the same
+gap stays a raised finding. `noadmin_smoke` asserts the inverse of "printed
+but not raised" (every row has a printed finding line), and `verdict_audit`
+declares a row whose section printed neither a finding nor a `[SKIPPED]`
+line. **And a per-subkey denial must not lose the check**: `persistence_eval`
+enumerated IFEO with `-EA Stop`, one restricted subkey terminated it, and
+both standard-user runs printed `[SKIPPED] IFEO enumeration failed` -- grade
+what is readable and NAME what is not. The same run showed a
 `goto` that skipped two tools silently on the non-admin path while the
 coverage block certified `Audit visibility : OK` -- the OK-default mistake
 again. **And a runtime copy of a shipped list is a fork.** The IOC lists are

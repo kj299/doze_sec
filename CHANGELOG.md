@@ -6,6 +6,46 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Standard-user confirmation run 2026-09-24 21:03: what the token cannot see is a deferral, not a finding
+The confirmation run after #218/#219 scored four of eight predictions, one
+partial, three wrong. Three defects, all of one class -- a check the TOKEN
+could not perform was raised as a finding or lost outright:
+
+- **Section 16 raised "Event-log records missing with no clear event" for the
+  Security log a standard user cannot list**, and Section 17 raised
+  "Cross-API disagreement or hidden task - rootkit indicator" for the
+  TaskCache a standard user cannot read. Both tools printed `[SKIPPED] ...
+  (needs admin)` and then wrote a WARNING marker: two ledger rows, two
+  ISSUES FOUND verdicts, and nothing printed to review -- eight rows counted
+  against six `[WARNING]` lines. On a standard-user token a needs-admin gap
+  is the token, not the machine: both are now `[DEFERRED - ADMIN REQUIRED]`,
+  added to `DEFERRED_COUNT` through a second marker (`dz_<name>_deferred.txt`
+  holds the count), never a ledger row. Elevated, a view an administrator
+  cannot open is still a raised gap. Pure `Get-UnlistableLogVerdict` and
+  `Get-TaskViewVerdict` with self-test cases both ways.
+- **One unreadable IFEO subkey lost the whole Debugger-hijack check.**
+  `persistence_eval` enumerated with `-EA Stop`, so the first subkey the
+  token could not open terminated the enumeration and Section 5 printed
+  `[SKIPPED] IFEO enumeration failed` on both standard-user runs -- a
+  `sethc.exe` hijack in a readable subkey would have gone unaudited. The
+  readable subkeys are now graded and the unreadable ones named
+  (`Get-IfeoReadReport`): `[INFO]`, not graded, not cleared, as a standard
+  user; a WARNING that names them when an administrator cannot read them.
+- **The smoke test's exit-code rule omitted reboot precedence.** The bat sets
+  4 for a pending reboot, a WARNING raise only lifts a code still below 2,
+  and non-admin turns 4 into 6; the laptop had a reboot pending and read 6
+  with MAXSEV WARNING, correctly. The rule now mirrors the whole bat.
+- **Gates.** `tests/noadmin_smoke.ps1` asserts the inverse of "printed but
+  not raised": every ledger row has a printed `[CRITICAL]`/`[WARNING]` line
+  in its section (the assertion that caught the two rows), plants an IFEO
+  subkey with a deny-Users ACL and requires the check to run and name it,
+  and requires the two DEFERRED lines and the absence of the two rows.
+  `tools/verdict_audit.ps1` gains the weak inverse rule for real runs -- a
+  ledger record whose section printed neither a finding line nor a
+  `[SKIPPED]` line is an AUDITGAP -- and a `-SelfTest` (it had none). Three
+  corpus entries; a structural survey found 25 skip-then-raise sites in ten
+  tools, which stay as the documented elevated-token design.
+
 ### Standard-user field run 2026-09-24: a Microsoft service called a rootkit, and UAC ON called an IOC
 The first field run of `doze_sec_noAdmin.bat` scored three of eight predictions
 and exited 8. Four defects, all specific to the path a person who is not an

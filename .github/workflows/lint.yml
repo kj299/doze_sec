@@ -247,10 +247,12 @@ jobs:
           for n in 'retention: 20 MB on Security -- the Windows default' \
                    'retention: 0 MB on Unreadable -- size unreadable is not a small log' \
                    'rollover: full log rolled for the ordinary reason' \
-                   'rollover: oldest record predates the boot'; do
+                   'rollover: oldest record predates the boot' \
+                   'unlistable: Security as a standard user is DEFERRED (the token, not the machine)' \
+                   'unlistable: Security while ELEVATED is a raised gap (WARNING), never a deferral'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
-          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 20 ] || { echo "only $n case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 23 ] || { echo "only $n case(s)"; exit 1; }
       # The last four tools without a seam. Each pins a real machine's ordinary
       # state: a laptop with no network, the owner's fifteen autoruns, Process
       # Explorer's documented IFEO value, Patch Tuesday driver churn and the RPC
@@ -287,10 +289,12 @@ jobs:
                    'hidden window + -enc is a finding' \
                    'IFEO taskmgr.exe -> Microsoft-signed procexp64.exe is Replace Task Manager: INFO, no finding' \
                    'an UNSIGNED procexp64.exe on taskmgr.exe is the hijack' \
-                   'sethc.exe -> cmd.exe is the classic hijack'; do
+                   'sethc.exe -> cmd.exe is the classic hijack' \
+                   'an unreadable IFEO subkey as a standard user is INFO, named, not graded, not cleared' \
+                   'IFEO subkeys an ADMINISTRATOR cannot read are a WARNING that names them'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
-          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 32 ] || { echo "only $n case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 39 ] || { echo "only $n case(s)"; exit 1; }
       - name: baseline_diff -- update churn is context, a replaced unsigned binary is a finding
         run: |
           out=$(pwsh -NoProfile -File tools/baseline_diff.ps1 -SelfTest); echo "$out"
@@ -334,10 +338,22 @@ jobs:
                    'sc query exit 5 is error 5 and the detail names the failing call' \
                    'no exit code at all (sc.exe did not run) is -1, never a default grade' \
                    'the hidden-service line states how it was established' \
-                   'no readable code, standard user: WARNING unprobed'; do
+                   'no readable code, standard user: WARNING unprobed' \
+                   'TaskCache unreadable as a standard user is DEFERRED (the token, not the machine)' \
+                   'TaskCache unreadable while ELEVATED is a raised gap (WARNING), never a deferral'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
-          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 20 ] || { echo "only $n case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 24 ] || { echo "only $n case(s)"; exit 1; }
+      - name: verdict_audit -- a raised finding must be printed, or at least declared SKIPPED
+        run: |
+          out=$(pwsh -NoProfile -File tools/verdict_audit.ps1 -SelfTest); echo "$out"
+          for n in 'printed but not raised: a [WARNING] line under a CLEAN verdict is a defect' \
+                   'raised from a [SKIPPED] line (a blind spot raised on purpose): not a defect of THIS rule' \
+                   'raised with NOTHING printed (no finding line, no [SKIPPED]): the inverse defect' \
+                   'anything before the first section banner is outside every section'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 9 ] || { echo "only $n case(s)"; exit 1; }
       - name: threat_list_seed -- a runtime IOC copy behind the release is replaced and reported
         run: |
           out=$(pwsh -NoProfile -File tools/threat_list_seed.ps1 -SelfTest); echo "$out"

@@ -388,3 +388,20 @@ ordering (a PID is reused once its owner exits, so "parent is not services.exe"
 is also what a parent that has since exited looks like) and a benign twin for
 that case pinned in the self-test. Build it when a field run or the harness
 can show the exited-parent shape; do not build it on the assumption.
+
+## Raised gaps: `[SKIPPED]` or `[WARNING]`? (vocabulary decision, deferred)
+
+A structural survey (2026-09-25) found 25 sites in ten tools where a
+`[SKIPPED] ... NOT performed` line is followed by a severity raise: a blind
+spot the tool raises on purpose, because a view an administrator cannot open
+is itself an anomaly. On a standard-user token those needs-admin gaps are now
+deferrals (#220). What remains open is the ELEVATED shape: the section then
+reads "ISSUES FOUND -- review [WARNING] entries above" while the only
+non-OK line is tagged `[SKIPPED]`, and the ledger message names the finding
+the check would have made rather than the gap it hit. Two consistent
+choices: (a) a raised gap prints a `[WARNING]` tag (the rule "raising is
+printing" made literal; the coverage note's `[SKIPPED]` count then covers
+only unraised gaps), or (b) keep `[SKIPPED]` + raise and change the section
+verdict text to "review [WARNING]/[SKIPPED] entries above". Either touches
+all 25 sites at once; `verdict_audit`'s inverse rule already accepts both.
+Decide when an elevated field run shows one, not before.

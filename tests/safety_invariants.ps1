@@ -299,7 +299,7 @@ else {
     if (-not $decl.ContainsKey('$Affects')) { $fail += 'noadmin_smoke.ps1 has no $Affects blast-radius declaration' }
     if ($decl.ContainsKey('$Touches')) {
         $st = @($decl['$Touches'].Lits)
-        $verbs = @{ 'New-LocalUser' = 'account:'; 'icacls' = 'file:'; 'Set-Service' = 'service:'; 'WDigest' = 'registry:' }
+        $verbs = @{ 'New-LocalUser' = 'account:'; 'icacls' = 'file:'; 'Set-Service' = 'service:'; 'WDigest' = 'registry:'; 'sc.exe create' = 'service:'; 'Image File Execution Options' = 'registry:' }
         foreach ($verb in $verbs.Keys) {
             if ($smokeSrc.IndexOf($verb, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
                 if (-not @($st | Where-Object { $_ -like ($verbs[$verb] + '*') }).Count) {

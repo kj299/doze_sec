@@ -39,6 +39,11 @@
 #
 # MARKER: max severity word to $env:TEMP\dz_loggap.txt; the caller raises via
 # :dz_finding. No marker when every log's accounting is consistent.
+# A SECOND marker, dz_loggap_deferred.txt, holds the COUNT of checks this token
+# could not perform (the Security log as a standard user); the caller adds it
+# to DEFERRED_COUNT. A deferral is never a ledger row: the first standard-user
+# field run raised "records missing with no clear event" for the Security log
+# a standard user cannot list, with nothing printed to review.
 #
 # Windows PowerShell 5.1 compatible. Read-only. Executed by helpers-ps51 CI.
 
@@ -50,7 +55,10 @@ param(
     # Selective record deletion cannot be planted safely on a runner, so this is
     # how CI proves the decision logic rather than merely that the script runs.
     # No effect on a production run; the audit never passes it.
-    [switch]$SelfTest
+    [switch]$SelfTest,
+    # Whether this process runs elevated. Read once from the token below;
+    # injectable so the self-test can grade both tokens. -1 = detect.
+    [int]$Elevated = -1
 )
 
 $ErrorActionPreference = 'Continue'
@@ -105,6 +113,20 @@ function Get-RetentionVerdict {
         $r.Sev = 'WARNING'
     }
     return $r
+}
+
+# PURE: a log the token could not even list. Elevated, a log an administrator
+# cannot open is a raised gap (WARNING): the machine, not the token. As a
+# standard user the Security log is unreadable BY DESIGN, so that one is
+# DEFERRED -- named, counted, never a ledger row. Any OTHER log a standard user
+# cannot list is still a raised gap: users can read System, Application and
+# PowerShell/Operational, so their absence is not the token.
+function Get-UnlistableLogVerdict {
+    param([string]$Name, [bool]$IsElevated)
+    if (-not $IsElevated -and $Name -eq 'Security') {
+        return @{ Deferred = $true; Sev = 'OK'; Line = "[DEFERRED - ADMIN REQUIRED] Log 'Security' needs administrator rights -- gap check NOT performed for it; re-run as administrator." }
+    }
+    return @{ Deferred = $false; Sev = 'WARNING'; Line = "[SKIPPED] Log '$Name' could not be read -- gap check NOT performed for it (the Security log needs administrator rights)." }
 }
 
 function Get-RolloverVerdict {
@@ -181,14 +203,33 @@ if ($SelfTest) {
     # than assume.
     $v = Get-RolloverVerdict -Name 'System' -Booted $null -IsLogFull $false -FileSize 100 -MaxBytes 1000 -OldestTime ([datetime]'2026-09-19T12:00:00')
     RT 'rollover: no boot time is silence, not a finding' ($v.Sev -eq 'OK') ("sev=$($v.Sev)")
+
+    # --- a log the token cannot list --------------------------------------
+    # The standard-user field run 2026-09-24 21:03: Security unlistable as a
+    # standard user was raised as "records missing with no clear event".
+    $v = Get-UnlistableLogVerdict -Name 'Security' -IsElevated $false
+    RT 'unlistable: Security as a standard user is DEFERRED (the token, not the machine) -- no raise' ($v.Deferred -and $v.Sev -eq 'OK' -and $v.Line -match "^\[DEFERRED - ADMIN REQUIRED\] Log 'Security'") ("sev=$($v.Sev) line=$($v.Line)")
+    $v = Get-UnlistableLogVerdict -Name 'Security' -IsElevated $true
+    RT 'unlistable: Security while ELEVATED is a raised gap (WARNING), never a deferral' ((-not $v.Deferred) -and $v.Sev -eq 'WARNING' -and $v.Line -match '^\[SKIPPED\]') ("sev=$($v.Sev)")
+    $v = Get-UnlistableLogVerdict -Name 'System' -IsElevated $false
+    RT 'unlistable: System as a standard user is a raised gap -- users can read System, so its absence is not the token' ((-not $v.Deferred) -and $v.Sev -eq 'WARNING') ("sev=$($v.Sev)")
     if ($script:rtFails -gt 0) { "[CRITICAL] $($script:rtFails) retention/rollover case(s) failed."; exit 2 }
     '[OK] Gap arithmetic, the retention floor and the rolled-without-pressure heuristic all behave on fixed inputs.'
     exit 0
 }
 
+if ($Elevated -lt 0) {
+    $Elevated = 0
+    try {
+        $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+        if ((New-Object Security.Principal.WindowsPrincipal($id)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { $Elevated = 1 }
+    } catch {}
+}
+
 '--- [T1070.001] Event-log gap check (records missing with no clear event) ---'
 $sev = 'OK'
 $inspected = 0
+$deferred = 0
 
 # Last boot: a log whose oldest surviving record post-dates the boot, while the
 # log is nowhere near full, lost records without capacity pressure.
@@ -199,8 +240,9 @@ foreach ($name in $LogNames) {
     $cfg = $null
     try { $cfg = Get-WinEvent -ListLog $name -EA Stop } catch {}
     if (-not $cfg) {
-        "[SKIPPED] Log '$name' could not be read -- gap check NOT performed for it (the Security log needs administrator rights)."
-        $sev = Get-MaxSev $sev 'WARNING'
+        $uv = Get-UnlistableLogVerdict -Name $name -IsElevated ($Elevated -eq 1)
+        $uv.Line
+        if ($uv.Deferred) { $deferred++ } else { $sev = Get-MaxSev $sev $uv.Sev }
         continue
     }
     $inspected++
@@ -277,3 +319,4 @@ if ($inspected -eq 0) {
 }
 
 Write-Marker -Name 'loggap' -Sev $sev
+if ($deferred -gt 0) { Write-Marker -Name 'loggap_deferred' -Sev ([string]$deferred) }
