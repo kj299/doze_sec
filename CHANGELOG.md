@@ -37,6 +37,15 @@ administrator takes:
   established from. The elevated helpers job plants a service whose DACL
   denies Administrators `SERVICE_QUERY_STATUS` so the probe meets a real SCM
   answer on 5.1 under both tokens.
+  **And the defect had been in CI on every main run.** The standard-user
+  smoke job's run 1 (nothing planted) read `LEDGER MAXSEV (CRITICAL)` and
+  `exit code 8 with an organic CRITICAL` on a clean runner, on main, before
+  this PR: the runner carries a DACL-restricted Windows service of its own,
+  and the test's CRITICAL branch accepted the false positive as organic.
+  With the probe fixed the same runner reads WARNING, and the never-run
+  branch turned out to expect 6 where the bat deliberately keeps 2. The test
+  now pins "no plant means no CRITICAL" and mirrors the bat's rule
+  (CRITICAL 8, WARNING 2, nothing raised 6).
 - **A stale per-user copy of `ioc_registry.txt` flagged `EnableLUA = 1` and
   `RunAsPPL = 1`**, the secure values. The runtime ThreatLists were seeded by
   copy-if-missing and never reconciled, and the per-user copy predated the

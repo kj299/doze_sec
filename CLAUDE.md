@@ -586,7 +586,12 @@ codes, so the extraction was never tested; the real probe is exercised by a
 DACL plant in BOTH Windows jobs now. Never let a probe's fallback be a grade
 (no readable code is "unprobed", a WARNING that names the probe output,
 never CRITICAL and never cleared), and print how a hidden-service verdict was
-established so the reader can repeat the query. The same run showed a
+established so the reader can repeat the query. **The CI runner had shown
+this defect on every main run**: the standard-user smoke job's unplanted run
+read "exit code 8 with an organic CRITICAL" and the test's CRITICAL branch
+accepted it. A test branch that accepts an "organic" CRITICAL on a clean
+runner accepts the false positive; a clean runner's expected MAXSEV is a
+claim to pin, not a variable to branch on. The same run showed a
 `goto` that skipped two tools silently on the non-admin path while the
 coverage block certified `Audit visibility : OK` -- the OK-default mistake
 again. **And a runtime copy of a shipped list is a fork.** The IOC lists are

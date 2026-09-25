@@ -10,9 +10,11 @@
 # needs the seclogon service).
 #
 # Two audit runs:
-#   Run 1 (no plant): exit code must honor the partial-audit contract --
-#          6 when ledger MAXSEV is not CRITICAL, 8 when it is -- and at least
-#          one section must report PARTIAL (deferred checks).
+#   Run 1 (no plant): exit code must honor the partial-audit contract as the
+#          bat defines it -- 8 when ledger MAXSEV is CRITICAL, 2 when it is
+#          WARNING (the ledger-derived verdict is never discarded), 6 only
+#          when nothing was raised (escalated from 0/4) -- and at least one
+#          section must report PARTIAL (deferred checks).
 #   Run 2 (WDigest UseLogonCredential=1 planted as admin): HKLM is world-
 #          readable, so the NON-ADMIN audit must still detect it, raise
 #          CRITICAL|12| in the ledger, and exit 8 (CRITICAL outranks 6).
@@ -180,13 +182,19 @@ try {
         'the event-log gap check ran unelevated (readable logs graded, Security declared unreadable)' `
         'the event-log gap check did not run on the standard-user path'
     $max1 = Assert-LedgerConsistency -Text $text1 -Ledger $ledger1 -Label 'run 1'
-    if ($max1 -eq 'CRITICAL') {
-        Assert ($code1 -eq 8) 'exit code 8 with an organic CRITICAL (outranks partial-audit 6)' `
-                              ("exit code {0} despite ledger CRITICAL (expected 8)" -f $code1)
-    } else {
-        Assert ($code1 -eq 6) ("exit code 6 (partial audit, MAXSEV={0})" -f $max1) `
-                              ("exit code {0} expected 6 for a non-admin run with MAXSEV={1}" -f $code1, $max1)
-    }
+    # The bat escalates to 6 ONLY from 0 and 4: 2 is the ledger-derived
+    # "findings were raised" verdict and is never discarded (its rem block
+    # says why). This branch used to expect 6 for WARNING and had never run:
+    # on every main run the runner carried a DACL-restricted service that the
+    # pre-#218 probe reported as a hidden service, so run 1 always read
+    # "organic CRITICAL", exit 8, and the branch that accepted it accepted
+    # the false positive. A clean runner's expected MAXSEV is a claim to pin,
+    # not a variable to branch on: no plant means no CRITICAL.
+    Assert ($max1 -ne 'CRITICAL') 'run 1 (no plant) raised no CRITICAL on a clean runner' `
+                                  ("run 1 ledger MAXSEV is CRITICAL with nothing planted -- a false positive on a clean runner: {0}" -f (($ledger1 | Where-Object { $_ -like 'CRITICAL|*' }) -join ' ; '))
+    $want1 = switch ($max1) { 'CRITICAL' { 8 } 'WARNING' { 2 } default { 6 } }
+    Assert ($code1 -eq $want1) ("exit code {0} (bat rule: CRITICAL->8, WARNING->2, nothing raised->6; MAXSEV={1})" -f $want1, $max1) `
+                               ("exit code {0} expected {1} for a non-admin run with MAXSEV={2}" -f $code1, $want1, $max1)
 
     Write-Host ""
     Write-Host "== Run 2: standard user, WDigest planted as admin (HKLM-read detection) =="
