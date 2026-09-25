@@ -10,7 +10,15 @@
 # needs the seclogon service).
 #
 # Two audit runs:
-#   Run 1 (no plant): exit code must honor the partial-audit contract as the
+#   Run 1 (no plant) goes THROUGH tests\field_test.ps1, launched as the standard
+#          user -- the script a person runs on their own machine, on the path
+#          a standard user takes. CI had only ever run field_test elevated, and
+#          the script's own standard-user path carried two bugs no runner had
+#          seen: it demanded the read-only restore-point skip that the token
+#          can never reach (FAIL on every standard-user field run), and an
+#          explicit -BatPath doze_sec_noAdmin.bat dropped -noAdmin. field_test
+#          must exit 0 and print its proof lines; then the report it produced
+#          is held to the contract below. Its exit code must honor the partial-audit contract as the
 #          bat defines it -- 8 when ledger MAXSEV is CRITICAL; else 6 when
 #          a reboot is pending (4, escalated); else 2 when it is WARNING (the
 #          ledger-derived verdict is never discarded); else 6 (nothing
@@ -71,6 +79,30 @@ function Invoke-NonAdminAudit {
         throw ("audit run '{0}' hung past {1}s -- killed" -f $Label, $TimeoutSec)
     }
     return $p.ExitCode
+}
+
+# tests\field_test.ps1 as the standard user: -readonly, no -selftest (a real
+# run, as a person would make it), output under the user's own SecurityAudit.
+function Invoke-NonAdminFieldTest {
+    param([System.Management.Automation.PSCredential]$Cred, [string]$Label)
+    $out = Join-Path $env:TEMP ("dz_noadmin_{0}_ft_out.txt" -f $Label)
+    $err = Join-Path $env:TEMP ("dz_noadmin_{0}_ft_err.txt" -f $Label)
+    Remove-Item $out, $err -Force -EA SilentlyContinue
+    $ft = Join-Path $repo 'tests\field_test.ps1'
+    $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $p = Start-Process -FilePath $ps `
+        -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $ft), '-NoConsoleLog' `
+        -Credential $Cred -LoadUserProfile -WorkingDirectory $repo `
+        -RedirectStandardOutput $out -RedirectStandardError $err -PassThru
+    $null = $p.Handle
+    if (-not $p.WaitForExit($TimeoutSec * 1000)) {
+        & taskkill /T /F /PID $p.Id 2>$null | Out-Null
+        throw ("field_test run '{0}' hung past {1}s -- killed" -f $Label, $TimeoutSec)
+    }
+    $text = ''
+    if (Test-Path -LiteralPath $out) { $text = [IO.File]::ReadAllText($out) }
+    if (Test-Path -LiteralPath $err) { $text += "`n" + [IO.File]::ReadAllText($err) }
+    return @{ Exit = $p.ExitCode; Out = $text }
 }
 
 function Get-NewestFile {
@@ -187,17 +219,34 @@ try {
     $ifeoCreated = $true
 
     Write-Host ""
-    Write-Host "== Run 1: standard user, no plants (partial-audit contract) =="
-    $code1 = Invoke-NonAdminAudit -Cred $cred -Label 'run1'
+    Write-Host "== Run 1: standard user, no plants, through tests\field_test.ps1 (the script a person runs) =="
+    $ft1 = Invoke-NonAdminFieldTest -Cred $cred -Label 'run1'
+    $ftLines = @($ft1.Out -split "\r?\n")
+    foreach ($ln in $ftLines) { if ($ln -match '^\s*(\[OK     \]|\[FAIL   \]|\[SKIP   \]|\[ADVISE \]|== |FAIL:|OK:)') { Write-Host ("    ft| " + $ln.TrimEnd()) } }
+    $m = [regex]::Match($ft1.Out, '== Audit finished: exit code (\d+)')
+    if (-not $m.Success) { throw ("field_test did not report the audit's exit code (field_test exit {0}); output starts: {1}" -f $ft1.Exit, (($ftLines | Select-Object -First 20) -join ' | ')) }
+    $code1 = [int]$m.Groups[1].Value
     $sid = (Get-LocalUser -Name $UserName).SID.Value
     $prof = (Get-CimInstance Win32_UserProfile -Filter "SID='$sid'").LocalPath
     if (-not $prof) { throw "no profile materialized for $UserName -- -LoadUserProfile failed" }
-    $outDir = Join-Path $prof 'SecurityAudit\selftest'   # -selftest quarantines test output
-    $report1 = Get-NewestFile -Dir $outDir -Filter 'SecurityReport_*.txt'
-    if (-not $report1) { throw "run 1 produced no report under $outDir (exit $code1)" }
+    $outDir1 = Join-Path $prof 'SecurityAudit'           # field_test's real run (no -selftest): the path a person takes
+    $outDir  = Join-Path $prof 'SecurityAudit\selftest'  # run 2 plants, so it is quarantined
+    $report1 = Get-NewestFile -Dir $outDir1 -Filter 'SecurityReport_*.txt'
+    if (-not $report1) { throw "run 1 produced no report under $outDir1 (audit exit $code1, field_test exit $($ft1.Exit))" }
     $text1 = Get-Content -LiteralPath $report1.FullName -Raw
-    $ledger1File = Get-NewestFile -Dir $outDir -Filter 'SecurityReport_*.ledger'
+    $ledger1File = Get-NewestFile -Dir $outDir1 -Filter 'SecurityReport_*.ledger'
     $ledger1 = if ($ledger1File) { @(Get-Content -LiteralPath $ledger1File.FullName -EA SilentlyContinue) } else { @() }
+
+    # field_test's own verdict on the standard-user path: exit 0, no [FAIL]
+    # line, and its proof lines actually executed (not skipped).
+    Assert ($ft1.Exit -eq 0) 'field_test.ps1 (the script a person runs) passed on the standard-user path' `
+                             ("field_test.ps1 exited {0} on the standard-user path (see the ft| lines above)" -f $ft1.Exit)
+    Assert ($ft1.Out -notmatch '\[FAIL') 'field_test printed no [FAIL] line' 'field_test printed a [FAIL] line (see the ft| lines above)'
+    foreach ($must in @('RunOnce resume key: absent after the run', 'report carries the READ-ONLY banner', 'report carries no TEST RUN banner',
+                        'read-only skip declared: RunOnce resume key not created', 'read-only skip declared: restore point deferred (needs admin)',
+                        'no known benign look-alike is reported above')) {
+        Assert ($ft1.Out -match [regex]::Escape($must)) ("field_test proof line executed: {0}" -f $must) ("field_test output lacks the proof line: {0}" -f $must)
+    }
 
     Assert ($text1 -match '(?m)^\s*Admin\s+:\s+0') `
         'audit really ran non-admin (report says Admin : 0)' `
@@ -293,9 +342,12 @@ try {
                           ("exit code {0} expected 8 with a planted CRITICAL" -f $code2)
     [void](Assert-LedgerConsistency -Text $text2 -Ledger $ledger2 -Label 'run 2')
 
-    # Stage artifacts where the workflow can upload them.
+    # Stage artifacts where the workflow can upload them: run 1 (field_test,
+    # real-run directory), run 2 (quarantined), and field_test's own output.
     New-Item -ItemType Directory -Path $artDir -Force | Out-Null
+    Copy-Item (Join-Path $outDir1 'SecurityReport_*') $artDir -Force -EA SilentlyContinue
     Copy-Item (Join-Path $outDir '*') $artDir -Force -EA SilentlyContinue
+    Copy-Item (Join-Path $env:TEMP 'dz_noadmin_run1_ft_out.txt') (Join-Path $artDir 'field_test_run1_output.txt') -Force -EA SilentlyContinue
 }
 finally {
     if ($null -eq $wdPrior) {

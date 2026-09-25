@@ -607,7 +607,14 @@ declares a row whose section printed neither a finding nor a `[SKIPPED]`
 line. **And a per-subkey denial must not lose the check**: `persistence_eval`
 enumerated IFEO with `-EA Stop`, one restricted subkey terminated it, and
 both standard-user runs printed `[SKIPPED] IFEO enumeration failed` -- grade
-what is readable and NAME what is not. The same run showed a
+what is readable and NAME what is not. **And the proof script has a
+standard-user path too.** `tests\field_test.ps1` demanded the read-only skip
+line for the restore point on a token that can never create one (the bat
+defers that step, needs admin), so every standard-user field run ended in
+`FAIL: 1 read-only ... check(s) failed`; CI had only ever run field_test
+elevated. The standard-user CI job now runs field_test AS the standard user
+for its unplanted run. A proof that runs only on the path CI takes proves the
+path CI takes. The same run showed a
 `goto` that skipped two tools silently on the non-admin path while the
 coverage block certified `Audit visibility : OK` -- the OK-default mistake
 again. **And a runtime copy of a shipped list is a fork.** The IOC lists are
