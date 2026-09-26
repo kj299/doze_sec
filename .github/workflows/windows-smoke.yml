@@ -2762,10 +2762,16 @@ jobs:
           # catalogued benign twin this runner shows is at or below its allowed
           # severity. The readonly job runs this through field_test; the full run
           # never did, so a plant here was graded by nothing.
-          $bc = (.\tools\benign_corpus_check.ps1 -Mode Report -Report $rep.FullName) -join "`n"
+          # The grader prints with Write-Host (the Information stream), so capture
+          # every stream, as the readonly job does for field_test; a plain
+          # assignment captured nothing and the assertion below threw on a run
+          # whose grader had in fact reported "observed 17 of 56".
+          $bc = (& .\tools\benign_corpus_check.ps1 -Mode Report -Report $rep.FullName *>&1 | ForEach-Object { "$_" }) -join "`n"
+          $bcRc = $LASTEXITCODE
           Write-Host $bc
-          if ($LASTEXITCODE -ne 0) { throw 'benign_corpus_check -Mode Report failed on the full-run report' }
+          if ($bcRc -ne 0) { throw 'benign_corpus_check -Mode Report failed on the full-run report' }
           if ($bc -notmatch 'observed (\d+) of') { throw 'the corpus grader did not report what it observed' }
+          foreach ($id in 'adfs-present', 'aadconnect-present') { if ($bc -notmatch ('\[OK\s*\] ' + $id + ':')) { throw ("the corpus grader did not grade {0} OK on this report" -f $id) } }
 
       - name: Remove the planted ADFS and Azure AD Connect footprints
         if: always()
