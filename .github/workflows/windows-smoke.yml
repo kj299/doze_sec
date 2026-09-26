@@ -2465,6 +2465,25 @@ jobs:
           & sc.exe create dzsmoke_probe_residue binPath= 'C:\Windows\System32\cmd.exe /c rem dz_probe' start= demand | Out-Null
           & sc.exe delete dzsmoke_probe_residue | Out-Null
 
+      - name: Plant a pending reboot (exit code 4 is the code of every run on the owner's laptop; CI must take that path)
+        shell: powershell
+        run: |
+          # The audit's exit handler deleted its RunOnce resume entry only on exit
+          # 0/2/8. A run that COMPLETED with a reboot pending exits 4 and left the
+          # entry behind -- the audit would launch itself with -resume at the next
+          # logon. The owner's laptop has had a reboot pending for every field run,
+          # so 4 is the path a person takes and the path this job never took: a
+          # clean runner exits 2 or 8. Windows records a pending reboot in
+          # PendingFileRenameOperations (Session Manager consumes it at boot; the
+          # runner is ephemeral and never boots again), and the bat's Section 1
+          # check reads exactly that value. Touches: registry:HKLM\SYSTEM\
+          # CurrentControlSet\Control\Session Manager\PendingFileRenameOperations.
+          $k = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager'
+          $cur = (Get-ItemProperty -LiteralPath $k -Name PendingFileRenameOperations -EA SilentlyContinue).PendingFileRenameOperations
+          if ($cur) { Write-Host ("PendingFileRenameOperations already set ({0} entries) -- the runner has a pending reboot of its own; the plant is unnecessary" -f @($cur).Count); exit 0 }
+          Set-ItemProperty -LiteralPath $k -Name PendingFileRenameOperations -Type MultiString -Value @('\??\C:\dz_ci_pending_rename.tmp', '')
+          Write-Host 'planted PendingFileRenameOperations: the audit must now report a pending reboot and exit 4'
+
       - name: Run the full audit; fail on hang (timeout), fatal error, or early exit
         shell: cmd
         run: |
@@ -2472,6 +2491,12 @@ jobs:
           set RC=%ERRORLEVEL%
           echo doze_sec.bat exit code: %RC%
           if "%RC%"=="1" ( echo FATAL ERROR exit code 1 & exit /b 1 )
+          rem THE PENDING-REBOOT PATH. The step above planted PendingFileRenameOperations,
+          rem so this run must read "Reboot pending" and exit 4 -- unless the ledger
+          rem carries a CRITICAL, which outranks it (8 on a clean runner is its own
+          rem failure and is asserted elsewhere). The RC == REPRC comparison below
+          rem still holds at 4: the exit handler prints the same code it returns.
+          if not "%RC%"=="4" ( echo EXPECTED EXIT CODE 4 WITH A PENDING REBOOT PLANTED, GOT %RC% & exit /b 1 )
           set "REP="
           for %%R in ("C:\SecurityAudit\SecurityReport_*.txt") do set "REP=%%R"
           if not defined REP ( echo NO REPORT PRODUCED & exit /b 1 )
@@ -2521,6 +2546,34 @@ jobs:
           echo Completed end-to-end through Section 18 and the exit handler.
           exit /b 0
 
+      - name: The resume entry pointed at the bat, the planted reboot reached the ledger, and the entry is gone after the exit-4 run
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $rep = Get-ChildItem 'C:\SecurityAudit\SecurityReport_*.txt' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $text = [IO.File]::ReadAllText($rep.FullName)
+          # THE RESUME ENTRY MUST POINT AT THE BAT. cmd's shift moves %0 too, and the bat
+          # expanded %~f0 after its parse loop, so the value it wrote on the owner's
+          # 2026-09-26 run was "<checkout>\-noVtSelf" -resume: a file that does not
+          # exist. INIT 8 prints the reg add it ran with every %VAR% expanded; on this
+          # job the old code printed a path ending in \-dnsprobe. Same regex as
+          # tests\field_test.ps1, which asserts it on every machine.
+          $m = [regex]::Match($text, '(?m)^\s*Command: reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce" /v "(\*[^"]+_resume)" /t REG_SZ /d "\\"([^"]*?)\\" -resume" /f')
+          if (-not $m.Success) { throw 'the report has no INIT 8 "Command: reg add ... RunOnce ... -resume" line' }
+          Write-Host ("INIT 8 wrote value {0} = {1}" -f $m.Groups[1].Value, $m.Groups[2].Value)
+          if ($m.Groups[1].Value -ne '*WIN11_SecurityAudit_resume') { throw ("the audit names its resume value '{0}', not '*WIN11_SecurityAudit_resume' -- update the proofs" -f $m.Groups[1].Value) }
+          if ($m.Groups[2].Value -notmatch '\\doze_sec\.bat$') { throw ("the resume entry would run '{0}', not the bat -- %0 read after the parse loop's shift" -f $m.Groups[2].Value) }
+          # THE PLANT WAS SEEN: Section 1 raised the REBOOT row from PendingFileRenameOperations.
+          $led = Get-ChildItem 'C:\SecurityAudit\SecurityReport_*.ledger' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $led) { throw 'no ledger beside the report' }
+          if (-not (Select-String -LiteralPath $led.FullName -Pattern '\|REBOOT\|' -Quiet)) { throw 'the planted pending reboot did not reach the ledger -- exit 4 came from somewhere else' }
+          if ($text -notmatch 'PendingFileRenameOperations is set') { throw 'Section 1 did not report PendingFileRenameOperations' }
+          # THE ENTRY IS GONE AFTER A COMPLETED RUN, WHATEVER THE CODE. Deleted only on
+          # 0/2/8 until 2026-09-26; on the owner's laptop (always 4) it survived every run.
+          $ro = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce' -EA SilentlyContinue
+          if ($ro -and ($ro.PSObject.Properties.Name -contains '*WIN11_SecurityAudit_resume')) { throw 'the RunOnce resume entry survived a completed exit-4 run' }
+          Write-Host 'RunOnce resume entry: pointed at the bat during the run, absent after the exit-4 run.'
+
       - name: Upload the audit artifacts for inspection
         if: always()
         uses: actions/upload-artifact@v4
@@ -2558,13 +2611,20 @@ jobs:
           # The proof lines must have actually executed -- not skipped -- on this elevated runner.
           foreach ($must in @('RunOnce resume key: absent after the run', 'boot configuration (bcdedit /enum {bootmgr}): unchanged',
                               'report carries the READ-ONLY banner', 'report carries no TEST RUN banner',
-                              'read-only skip declared: boot menu left as found', 'no known benign look-alike is reported above')) {
+                              'read-only skip declared: boot menu left as found', 'no known benign look-alike is reported above',
+                              'RunOnce proof targets the value the audit writes (*WIN11_SecurityAudit_resume)',
+                              'RunOnce resume path ends in \doze_sec.bat')) {
             if ($out -notmatch [regex]::Escape($must)) { throw ("field_test output lacks the proof line: {0}" -f $must) }
           }
           if ($out -match '\[FAIL') { throw 'field_test printed a FAIL line' }
           # Independent check, not trusting the script under test: the key is really absent.
+          # The value is named after the bat's SCRIPT_NAME, not its file name. This
+          # line (and field_test itself) looked for '*doze_sec_resume' -- a value the
+          # audit never writes -- so it could never have fired. Pinned by name, and
+          # field_test now cross-checks the name against the INIT 8 line the report
+          # prints, so a rename fails loudly instead of passing vacuously.
           $ro = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce' -EA SilentlyContinue
-          if ($ro -and ($ro.PSObject.Properties.Name -contains '*doze_sec_resume')) { throw 'RunOnce resume value exists after a -readonly run' }
+          if ($ro -and ($ro.PSObject.Properties.Name -contains '*WIN11_SecurityAudit_resume')) { throw 'RunOnce resume value exists after a -readonly run' }
           Write-Host 'read-only field test: proven on this runner.'
 
       # The report prints ~176 " Command: <X>" lines -- "here is how to check

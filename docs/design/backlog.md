@@ -405,3 +405,16 @@ only unraised gaps), or (b) keep `[SKIPPED]` + raise and change the section
 verdict text to "review [WARNING]/[SKIPPED] entries above". Either touches
 all 25 sites at once; `verdict_audit`'s inverse rule already accepts both.
 Decide when an elevated field run shows one, not before.
+
+## A shipped list whose content changes should bump its `# Last verified` date (deferred)
+
+The elevated field run of 2026-09-25 12:51 replaced the runtime copy of
+`ttp_manifest.txt` "same date, content differs": the release changed the
+file's content without moving its `# Last verified by doze_sec:` header, so
+the seed step's tie rule (ties go to the shipped file) did the right thing
+only by luck of the rule's direction. A content change to a shipped list is a
+new verification and should carry a new date, and a lint (`lint_docs_drift`
+or a small check beside `threat_list_seed`) could compare each shipped list's
+header date against its last content-changing commit. Not built yet: the
+rule as it stands is safe (the shipped file wins a tie), and the cost is one
+`replaced` line in the provenance paragraph the first run after a release.

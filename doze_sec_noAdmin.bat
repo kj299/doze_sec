@@ -92,6 +92,17 @@ set "C_DIM=%ESC%[2m"
 set "SCRIPT_VERSION=7.3-noAdmin"
 set "SCRIPT_NAME=WIN11_SecurityAudit"
 set "SCRIPT_PATH=%~dp0%~nx0"
+:: SCRIPT_DIR / SCRIPT_FILE are captured HERE, before the switch-parsing loop,
+:: and every later site uses them. cmd.exe's `shift` moves %0 along with the
+:: other arguments, so after the loop %0 is the LAST SWITCH typed: `%~f0` then
+:: resolves that word against the current directory. The RunOnce resume entry
+:: was written that way and pointed at "<checkout>\-noVtSelf" -resume on the
+:: owner's 2026-09-26 run -- a file that does not exist, so no interrupted run
+:: could ever have resumed -- and SCRIPT_DIR was the current directory, so the
+:: tools\ folder was found only when run from the checkout. tools\lint_arg0.ps1
+:: fails on any %~...0 after the first shift.
+set "SCRIPT_DIR=%~dp0"
+set "SCRIPT_FILE=%~nx0"
 :: Set UPDATE_URL to your GitHub raw base URL to enable self-update checks.
 :: Leave as-is to skip the update check (placeholder is detected and skipped).
 set "UPDATE_URL=https://raw.githubusercontent.com/kj299/doze_sec/main"
@@ -105,6 +116,7 @@ set "SKIP_THREAT_UPDATE=0"
 set "SKIP_SRP=0"
 set "NETWORK_AVAIL=0"
 set "SAFE_MODE=0"
+set "RUNONCE_CREATED=0"
 set "SKIP_DEFRAG=no"
 set "SMART_WARN=0"
 set "FREE_BEFORE=0"
@@ -210,7 +222,7 @@ echo   WIN11 SECURITY FORENSIC AUDIT  v%SCRIPT_VERSION%
 echo   SENTINEL-X CTI Integration
 echo  ====================================================================%C_RESET%
 echo.
-echo  %C_BOLD%USAGE:%C_RESET%  %C_CYAN%%~nx0%C_RESET% [switches]
+echo  %C_BOLD%USAGE:%C_RESET%  %C_CYAN%%SCRIPT_FILE%%C_RESET% [switches]
 echo.
 echo  %C_BOLD%SWITCHES:%C_RESET%
 echo.
@@ -290,19 +302,19 @@ echo  %C_BOLD%EXAMPLES:%C_RESET%
 echo.
 echo    Run as Administrator (full audit):
 echo      Right-click ^> Run as administrator
-echo      %~nx0
+echo      %SCRIPT_FILE%
 echo.
 echo    Run without admin (partial audit):
-echo      %~nx0 -noAdmin
+echo      %SCRIPT_FILE% -noAdmin
 echo.
 echo    Run without admin + refresh threat intel:
-echo      %~nx0 -noAdmin -updateTTP
+echo      %SCRIPT_FILE% -noAdmin -updateTTP
 echo.
 echo    Run on unsupported OS for research:
-echo      %~nx0 -dev
+echo      %SCRIPT_FILE% -dev
 echo.
 echo    Combine switches:
-echo      %~nx0 -noAdmin -nosrp -sdu
+echo      %SCRIPT_FILE% -noAdmin -nosrp -sdu
 echo.
 echo  %C_BOLD%AUDIT SECTIONS (18 total):%C_RESET%
 echo.
@@ -396,7 +408,7 @@ endlocal & exit /b 0
 :: ====================================================================
 :: Prevent running from TEMP - TEMP is one of the first paths wiped by
 :: cleanup operations and can cause the script to self-delete mid-run.
-set "SCRIPT_DIR=%~dp0"
+rem SCRIPT_DIR was captured before the switch-parsing loop (see the note there).
 set "SCRIPT_DIR_TRIMMED=%SCRIPT_DIR:~0,-1%"
 
 if /i "%SCRIPT_DIR_TRIMMED%"=="%TEMP%" goto :err_tempdir
@@ -778,7 +790,7 @@ echo %C_GREEN%[INIT 7/14]%C_RESET% Fresh run. Proceeding with full pre-flight.
 :: ====================================================================
 echo %C_GREEN%[INIT 8/14]%C_RESET% Creating RunOnce resume entry...
 echo --- [INIT 8/14] RunOnce Resume Key --->> "%REPORT%"
-echo  Command: reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /t REG_SZ /d "\"%~f0\" -resume" /f>> "%REPORT%"
+echo  Command: reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /t REG_SZ /d "\"%SCRIPT_PATH%\" -resume" /f>> "%REPORT%"
 echo  If this run is interrupted (reboot/crash), Windows will automatically>> "%REPORT%"
 echo  re-run the script with the -resume switch on next login.>> "%REPORT%"
 echo  Key: HKCU\...\RunOnce  Value: *%SCRIPT_NAME%_resume>> "%REPORT%"
@@ -789,13 +801,14 @@ if "%READONLY_MODE%"=="1" (
     echo %C_GREEN%[INIT 8/14]%C_RESET% Read-only mode - RunOnce key not created.
     goto :runonce_done
 )
-reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /t REG_SZ /d "\"%~f0\" -resume" /f >nul 2>&1
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /t REG_SZ /d "\"%SCRIPT_PATH%\" -resume" /f >nul 2>&1
 if %errorlevel% equ 0 (
     echo  [OK] RunOnce key created successfully.>> "%REPORT%"
-    echo %C_GREEN%[INIT 8/14]%C_RESET% RunOnce key created - auto-deleted on clean exit.
+    set "RUNONCE_CREATED=1"
+    echo %C_GREEN%[INIT 8/14]%C_RESET% RunOnce key created - removed when the audit ends.
     echo [TEMPORARY] RunOnce resume key created.>> "%CHANGELOG%"
     echo             Key: HKCU\...\RunOnce\*%SCRIPT_NAME%_resume>> "%CHANGELOG%"
-    echo             Status: AUTO-DELETED at end of audit on clean exit.>> "%CHANGELOG%"
+    echo             Status: removed when the audit ends, whatever its exit code. It survives only a run that never reached its exit handler.>> "%CHANGELOG%"
     echo             Manual undo if needed: reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /f>> "%CHANGELOG%"
     echo.>> "%CHANGELOG%"
 ) else (
@@ -1094,7 +1107,7 @@ if "%WIN_GEN%"=="Win7" (
 
 echo  Creating... (can take 30-60 seconds)
 del "%TEMP%\dz_srp_created.txt" 2>nul
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\srp_check.ps1" -Description "Pre-WIN11-Security-Audit-v%SCRIPT_VERSION%" -MarkerFile "%TEMP%\dz_srp_created.txt">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\srp_check.ps1" -Description "Pre-WIN11-Security-Audit-v%SCRIPT_VERSION%" -MarkerFile "%TEMP%\dz_srp_created.txt">> "%REPORT%" 2>&1
 
 rem Log the restore point to the changelog ONLY if one was actually created.
 rem srp_check.ps1 writes the marker only when Get-ComputerRestorePoint's max
@@ -4814,11 +4827,14 @@ if "%EXIT_CODE%"=="6" echo  STATUS: Partial audit in non-admin mode. Re-run as a
 if "%EXIT_CODE%"=="8" echo  STATUS: Audit complete -- CRITICAL findings present. Review [CRITICAL] items NOW.>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
-:: Delete RunOnce key on clean exit (0=success, 2=warning, 6=partial, 8=critical all count as "completed")
-if "%EXIT_CODE%"=="0" reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /f >nul 2>&1
-if "%EXIT_CODE%"=="2" reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /f >nul 2>&1
-if "%EXIT_CODE%"=="6" reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /f >nul 2>&1
-if "%EXIT_CODE%"=="8" reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /f >nul 2>&1
+:: Delete the RunOnce resume entry on EVERY exit that reaches this block. Every
+:: path that gets here is a run that ENDED; the entry exists to restart a run
+:: that did not (reboot or crash mid-run), and that is the only run it must
+:: outlive. This used to run only for exit 0/2/8 (noAdmin: 0/2/6/8): a run that
+:: completed with a reboot pending (exit 4 -- every run on the owner's laptop)
+:: or a VirusTotal self-check failure (7) left the entry behind, and the audit
+:: would have launched itself with -resume at the next logon.
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /f >nul 2>&1
 
 :: Clean up temp PS1 file
 if exist "%PSRUN%" del "%PSRUN%" >nul 2>&1
@@ -4868,6 +4884,7 @@ if "%SCRIPT_CHANGED%"=="1" (
 ) else (
     echo.
     echo  No system changes were made by this audit run.
+    if "%RUNONCE_CREATED%"=="1" echo  The temporary RunOnce resume entry from INIT 8 was created and removed at exit.
     echo.
 )
 
@@ -4914,7 +4931,7 @@ echo   machine is sound.>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
 echo %C_CYAN%Generating HTML report...%C_RESET%
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\report_html.ps1" -Report "%REPORT%" -HtmlPath "%REPORT_HTML%" -RemediationPath "%REMEDIATION%" 2>&1
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\report_html.ps1" -Report "%REPORT%" -HtmlPath "%REPORT_HTML%" -RemediationPath "%REMEDIATION%" 2>&1
 if exist "%REPORT_HTML%" (
     echo %C_GREEN%[OK]%C_RESET% HTML report: %REPORT_HTML%
 ) else (

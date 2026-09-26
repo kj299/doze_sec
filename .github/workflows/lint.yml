@@ -385,6 +385,22 @@ jobs:
       - name: Run tools/lint_orphan_else.ps1
         run: pwsh -NoProfile -File tools/lint_orphan_else.ps1
 
+  arg0-after-shift-lint:
+    name: "Batch lint: no %0-derived path after the parse loop's shift"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # cmd's `shift` moves %0 too. After the switch-parsing loop, %0 is the
+      # last switch typed, and %~f0 resolved it against the current directory:
+      # the RunOnce resume entry pointed at "<checkout>\-noVtSelf" -resume on
+      # the owner's 2026-09-26 run, so no interrupted run could ever resume,
+      # and SCRIPT_DIR was the current directory. No report line and no test
+      # could see it: everyone runs the bat from its own directory.
+      - name: Run tools/lint_arg0.ps1
+        run: pwsh -NoProfile -File tools/lint_arg0.ps1
+      - name: The lint must fail on a re-introduced %~f0 after the shift
+        run: pwsh -NoProfile -File tools/lint_arg0.ps1 -SelfTest
+
   ps51-portability-lint:
     name: "5.1 portability: no source that parses on 5.1 and means something else"
     runs-on: ubuntu-latest
