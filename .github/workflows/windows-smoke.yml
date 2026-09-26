@@ -89,6 +89,64 @@ jobs:
           Write-Host "scheduled_tasks_full OK (all three modes)"
           exit 0
 
+      # Corpus [appdata-signed-tasks]: per-user updaters (Brave, Chrome, Zoom,
+      # Teams) register tasks whose binary lives under %AppData%; validly signed
+      # ones are INFO, anything else CRITICAL. The rule was only ever a field
+      # promise. Plant both halves: a copy of a signed binary (a catalog
+      # signature verifies by hash, so the copy stays Valid; an embedded one
+      # travels with the file) and the same copy with bytes appended, whose
+      # hash matches no catalog. Touches: task:dz_ci_appdata_signed,
+      # task:dz_ci_appdata_unsigned, file:%APPDATA%\dz_ci_updater\ -- all removed
+      # in finally. Runner only; a person's machine never runs this step.
+      - name: scheduled_tasks_full.ps1 -- a validly-signed per-user updater under AppData is INFO; an unsigned one is CRITICAL
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = Join-Path $env:APPDATA 'dz_ci_updater'
+          $good = Join-Path $dir 'updater.exe'
+          $bad  = Join-Path $dir 'updater_broken.exe'
+          $marker = Join-Path $env:TEMP 'dz_susptask_crit.txt'
+          $tasks = @('dz_ci_appdata_signed', 'dz_ci_appdata_unsigned')
+          try {
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            $tried = @()
+            $src = $null
+            foreach ($cand in @((Join-Path $PSHOME 'powershell.exe'), 'C:\Program Files\PowerShell\7\pwsh.exe', (Join-Path $env:SystemRoot 'System32\notepad.exe'))) {
+              if (-not (Test-Path -LiteralPath $cand)) { $tried += ("{0}: absent" -f $cand); continue }
+              Copy-Item -LiteralPath $cand -Destination $good -Force
+              $s = Get-AuthenticodeSignature -LiteralPath $good
+              $tried += ("{0}: {1}/{2}" -f $cand, $s.Status, $s.SignatureType)
+              if ($s.Status -eq 'Valid') { $src = $cand; break }
+            }
+            if (-not $src) { throw ("no candidate stays Valid once copied under AppData -- the plant cannot be built; tried: " + ($tried -join '; ')) }
+            Write-Host ("signed twin: {0} (copy of {1})" -f $good, $src)
+            [IO.File]::Copy($good, $bad, $true)
+            $fs = [IO.File]::Open($bad, 'Append'); $fs.Write((New-Object byte[] 16), 0, 16); $fs.Close()
+            $sb = Get-AuthenticodeSignature -LiteralPath $bad
+            Write-Host ("unsigned twin: {0} reads {1}" -f $bad, $sb.Status)
+            if ($sb.Status -eq 'Valid') { throw 'appending bytes did not invalidate the signature -- the unsigned twin is not unsigned' }
+            $trig = New-ScheduledTaskTrigger -Once -At (Get-Date).AddYears(1)
+            Register-ScheduledTask -TaskName $tasks[0] -Action (New-ScheduledTaskAction -Execute $good) -Trigger $trig -Force | Out-Null
+            Register-ScheduledTask -TaskName $tasks[1] -Action (New-ScheduledTaskAction -Execute $bad)  -Trigger $trig -Force | Out-Null
+            Remove-Item $marker -Force -EA SilentlyContinue
+            $out = (.\tools\scheduled_tasks_full.ps1 -Mode Suspicious) -join "`n"
+            Write-Host ($out -split "`n" | Where-Object { $_ -match 'dz_ci_updater|validly-signed|suspicious locations' })
+            $infoLine = ($out -split "`n" | Where-Object { $_ -match '^\[INFO\] \d+ validly-signed task\(s\) under %AppData%' } | Select-Object -First 1)
+            if (-not $infoLine) { throw 'the signed per-user updater was not reported as INFO (corpus: appdata-signed-tasks)' }
+            if ($out -notmatch [regex]::Escape($good)) { throw 'the INFO block does not name the signed updater path' }
+            if ($out -notmatch '\[signer: ') { throw 'the INFO block does not name the signer' }
+            if (-not ($out -match '\[CRITICAL\][^\n]*suspicious locations' -and $out -match 'updater_broken\.exe')) { throw 'the unsigned twin under AppData was NOT reported CRITICAL -- the signature gate no longer bites' }
+            foreach ($l in ($out -split "`n" | Where-Object { $_ -match '^\[(WARNING|CRITICAL)\]' })) { if ($l -match 'dz_ci_updater\\updater\.exe') { throw ("the SIGNED updater appears in a finding line: " + $l) } }
+            if (-not (Test-Path $marker)) { throw 'the unsigned twin raised no marker' }
+            if ((Get-Content $marker).Trim() -ne 'CRITICAL') { throw ("expected the marker to read CRITICAL, got {0}" -f (Get-Content $marker)) }
+          } finally {
+            foreach ($tn in $tasks) { Unregister-ScheduledTask -TaskName $tn -Confirm:$false -EA SilentlyContinue }
+            Remove-Item $dir -Recurse -Force -EA SilentlyContinue
+            Remove-Item $marker -Force -EA SilentlyContinue
+          }
+          Write-Host 'scheduled_tasks_full: signed under AppData is INFO, unsigned under AppData is CRITICAL'
+          exit 0
+
       - name: browser_extensions.ps1 -SelfTest (a store install is graded on provenance)
         shell: powershell
         run: |
@@ -1202,8 +1260,9 @@ jobs:
           $st = (.\tools\cross_api_check.ps1 -SelfTest) -join "`n"
           if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'cross_api_check.ps1 -SelfTest failed' }
           $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($nst -lt 24) { throw "cross_api_check self-test ran only $nst case(s)" }
+          if ($nst -lt 28) { throw "cross_api_check self-test ran only $nst case(s)" }
           if ($st -notmatch 'TaskCache unreadable as a standard user is DEFERRED') { throw 'cross_api_check self-test no longer covers the standard-user TaskCache deferral' }
+          if ($st -notmatch 'GONE at the final liveness check is a race') { throw 'cross_api_check self-test no longer covers the process race (corpus: cross-api-race)' }
           Write-Host "cross_api_check -SelfTest OK ($nst cases)"
           $md = Join-Path $env:TEMP ("dz_ca_ci_{0}" -f $PID)
           New-Item -ItemType Directory -Path $md -Force | Out-Null
@@ -1487,9 +1546,11 @@ jobs:
           $md = Join-Path $env:TEMP ("dz_mi_ci_{0}" -f $PID)
           New-Item -ItemType Directory -Path $md -Force | Out-Null
           $staged = "C:\Users\Public\dz_ci_probe_mod.dll"
+          $unsigned = 'C:\dz_ci_mod\dz_ci_unsigned_mod.dll'
           $sig = '[DllImport("kernel32", CharSet=CharSet.Unicode)] public static extern IntPtr LoadLibraryW(string p); [DllImport("kernel32")] public static extern bool FreeLibrary(IntPtr h);'
           Add-Type -Name DzK -Namespace DzCi -MemberDefinition $sig | Out-Null
           $h = [IntPtr]::Zero
+          $h2 = [IntPtr]::Zero
           try {
             # Clean runner first: a healthy box loads everything from signed
             # system locations, so any CRITICAL here is a false positive.
@@ -1509,18 +1570,38 @@ jobs:
             Copy-Item "$env:SystemRoot\System32\version.dll" $staged -Force
             $h = [DzCi.DzK]::LoadLibraryW($staged)
             if ($h -eq [IntPtr]::Zero) { throw 'could not load the staged probe DLL' }
+            # Corpus [module-unsigned-other]: an UNSIGNED module in an ordinary
+            # (non-core) process from an ordinary path is counted, never raised.
+            # The rule was a field promise; this plants it beside the staging
+            # plant so both halves are asserted from one run. The copy has 16
+            # bytes appended, so its hash matches no catalog and it reads as
+            # unsigned; the PE loader ignores trailing bytes. Touches:
+            # file:C:\dz_ci_mod\dz_ci_unsigned_mod.dll (root folder: not a staging
+            # path, not AppData), removed in finally.
+            New-Item -ItemType Directory -Path 'C:\dz_ci_mod' -Force | Out-Null
+            [IO.File]::Copy("$env:SystemRoot\System32\version.dll", $unsigned, $true)
+            $fs = [IO.File]::Open($unsigned, 'Append'); $fs.Write((New-Object byte[] 16), 0, 16); $fs.Close()
+            $us = Get-AuthenticodeSignature -LiteralPath $unsigned
+            Write-Host ("unsigned plant reads {0}" -f $us.Status)
+            if ($us.Status -eq 'Valid') { throw 'appending bytes did not invalidate the signature -- the unsigned plant is not unsigned' }
+            $h2 = [DzCi.DzK]::LoadLibraryW($unsigned)
+            if ($h2 -eq [IntPtr]::Zero) { throw 'could not load the unsigned probe DLL' }
             $md2 = Join-Path $md 'staged'
             New-Item -ItemType Directory -Path $md2 -Force | Out-Null
             $out2 = (.\tools\module_inspect.ps1 -MarkerDir $md2) -join "`n"
-            Write-Host ($out2 -split "`n" | Where-Object { $_ -match 'dz_ci_probe_mod' })
+            Write-Host ($out2 -split "`n" | Where-Object { $_ -match 'dz_ci_probe_mod|dz_ci_unsigned_mod|unsigned module\(s\) loaded outside' })
             if ($out2 -notmatch 'dz_ci_probe_mod\.dll') { throw 'staged module not reported' }
             if ($out2 -notmatch 'staging path') { throw 'staged module not attributed to the staging path' }
             $m = Join-Path $md2 'dz_module.txt'
             if (-not (Test-Path $m)) { throw 'staged module wrote no marker' }
             if ((Get-Content $m).Trim() -ne 'CRITICAL') { throw ("expected CRITICAL, got {0}" -f (Get-Content $m)) }
+            if ($out2 -notmatch '(?m)^\[INFO\] \d+ unique unsigned module\(s\) loaded outside the core security processes') { throw 'the unsigned-outside-core count line is missing (corpus: module-unsigned-other)' }
+            foreach ($l in ($out2 -split "`n" | Where-Object { $_ -match '^\[(WARNING|CRITICAL)\]|^  ' })) { if ($l -match 'dz_ci_unsigned_mod') { throw ("an unsigned module in an ordinary process was raised or itemised as a finding: " + $l) } }
           } finally {
             if ($h -ne [IntPtr]::Zero) { [void][DzCi.DzK]::FreeLibrary($h) }
+            if ($h2 -ne [IntPtr]::Zero) { [void][DzCi.DzK]::FreeLibrary($h2) }
             Remove-Item $staged -Force -EA SilentlyContinue
+            Remove-Item 'C:\dz_ci_mod' -Recurse -Force -EA SilentlyContinue
             Remove-Item $md -Recurse -Force -EA SilentlyContinue
           }
           Write-Host "module_inspect.ps1 OK"
@@ -2270,6 +2351,47 @@ jobs:
           Write-Host "logon_persistence OK (incl. bare Notify DllName resolution)"
           exit 0
 
+      # Corpus [screensaver-default]: ScreenSaverIsSecure=0 is what Windows
+      # leaves behind whenever someone picks a screensaver and does not tick
+      # "On resume, display logon screen" -- the default, INFO, never raised.
+      # The rule was a field promise. Plant a real Microsoft screensaver plus
+      # the default flag and assert the INFO shape. ScreenSaveActive and the
+      # timeout are NOT touched: the plant needs no screensaver to fire, and a
+      # runner has no lock screen either way. Touches: registry:HKCU\Control
+      # Panel\Desktop\SCRNSAVE.EXE, \ScreenSaverIsSecure -- restored in finally.
+      - name: logon_persistence.ps1 -- ScreenSaverIsSecure=0 with a Microsoft screensaver is INFO
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $desk = 'HKCU:\Control Panel\Desktop'
+          $scr = $null
+          foreach ($c in 'scrnsave.scr', 'ssText3d.scr', 'Bubbles.scr', 'Ribbons.scr') {
+            $p = Join-Path ([Environment]::GetFolderPath('System')) $c
+            if (Test-Path -LiteralPath $p) { $scr = $p; break }
+          }
+          if (-not $scr) { throw 'no Microsoft screensaver binary under System32 -- the plant cannot be built' }
+          $hadScr = (Get-ItemProperty -Path $desk -Name 'SCRNSAVE.EXE' -EA SilentlyContinue).'SCRNSAVE.EXE'
+          $hadSec = (Get-ItemProperty -Path $desk -Name 'ScreenSaverIsSecure' -EA SilentlyContinue).ScreenSaverIsSecure
+          Remove-Item "$env:TEMP\dz_logon_*.txt" -Force -EA SilentlyContinue
+          try {
+            Set-ItemProperty -Path $desk -Name 'SCRNSAVE.EXE' -Value $scr -Type String -Force
+            Set-ItemProperty -Path $desk -Name 'ScreenSaverIsSecure' -Value '0' -Type String -Force
+            $out = (.\tools\logon_persistence.ps1) -join "`n"
+            $lines = @($out -split "`n" | Where-Object { $_ -match 'Screensaver|ScreenSaverIsSecure' })
+            Write-Host $lines
+            if ($out -notmatch [regex]::Escape('[OK] Screensaver is a Microsoft-signed system binary')) { throw 'a Microsoft screensaver was not graded OK' }
+            if ($out -notmatch '(?m)^\[INFO\] ScreenSaverIsSecure=0') { throw 'ScreenSaverIsSecure=0 was not reported as INFO (corpus: screensaver-default)' }
+            foreach ($l in $lines) { if ($l -match '^\[(WARNING|CRITICAL)\]') { throw ("the Windows default screensaver state was raised as a finding: " + $l) } }
+            $bad = Get-ChildItem "$env:TEMP\dz_logon_*.txt" -EA SilentlyContinue | Where-Object { (Get-Content -LiteralPath $_.FullName -Raw) -match 'WARNING|CRITICAL' }
+            if ($bad) { $bad | ForEach-Object { Write-Host ("{0}: {1}" -f $_.Name, (Get-Content -LiteralPath $_.FullName -Raw)) }; throw 'a logon-persistence marker carries a severity after planting only the default screensaver state' }
+          } finally {
+            if ($null -ne $hadScr) { Set-ItemProperty -Path $desk -Name 'SCRNSAVE.EXE' -Value $hadScr -Force } else { Remove-ItemProperty -Path $desk -Name 'SCRNSAVE.EXE' -EA SilentlyContinue }
+            if ($null -ne $hadSec) { Set-ItemProperty -Path $desk -Name 'ScreenSaverIsSecure' -Value $hadSec -Force } else { Remove-ItemProperty -Path $desk -Name 'ScreenSaverIsSecure' -EA SilentlyContinue }
+            Remove-Item "$env:TEMP\dz_logon_*.txt" -Force -EA SilentlyContinue
+          }
+          Write-Host 'logon_persistence: the default screensaver state is INFO'
+          exit 0
+
       - name: INIT-path extractions (self_update_check / disk_info / smart_health)
         shell: powershell
         run: |
@@ -2433,6 +2555,23 @@ jobs:
       # call from cmd with a dummy token and assert all four binaries resolve
       # (the dummy key then 401s and exits 2, which is fine -- resolution
       # happens before any network call).
+      # Corpus [vt-low-credibility]: this tool needs a VirusTotal token and -vt
+      # (which -readonly refuses), so it had never run anywhere in CI and its
+      # credibility tiers were a field promise. The judgement is now a pure
+      # function; -SelfTest returns before any token read or network call.
+      - name: vt_ip_check.ps1 -SelfTest (a single non-top-tier engine is INFO, not a finding)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $st = (.\tools\vt_ip_check.ps1 -SelfTest) -join "`n"
+          Write-Host $st
+          if ($LASTEXITCODE -ne 0) { throw 'vt_ip_check.ps1 -SelfTest failed' }
+          $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($n -lt 9) { throw "vt_ip_check self-test ran only $n case(s)" }
+          if ($st -notmatch 'one non-top-tier engine: LOW credibility') { throw 'vt_ip_check self-test no longer covers the LOW-credibility twin' }
+          Write-Host "vt_ip_check -SelfTest OK ($n cases)"
+          exit 0
+
       - name: vt_self_check.ps1 resolves comma-bound -Binaries from cmd
         shell: cmd
         run: |
@@ -2487,6 +2626,27 @@ jobs:
           if ($cur) { Write-Host ("PendingFileRenameOperations already set ({0} entries) -- the runner has a pending reboot of its own; the plant is unnecessary" -f @($cur).Count); exit 0 }
           Set-ItemProperty -LiteralPath $k -Name PendingFileRenameOperations -Type MultiString -Value @('\??\C:\dz_ci_pending_rename.tmp', '')
           Write-Host 'planted PendingFileRenameOperations: the audit must now report a pending reboot and exit 4'
+
+      # Corpus [adfs-present] / [aadconnect-present]: Section 17 prints
+      # "[INFO] ADFS detected" when the service adfssrv OR the key
+      # HKLM\SOFTWARE\Microsoft\ADFS exists, and "[INFO] Azure AD Connect
+      # detected" for ADSync OR HKLM\SOFTWARE\Microsoft\Azure AD Connect.
+      # Installed software is attack surface, not compromise: INFO, never
+      # raised. Both were field promises. Plant the registry footprint only --
+      # an EMPTY key each, never a service, because a fake adfssrv with a
+      # cmd.exe image path would also be graded by the service checks and is
+      # not the benign twin. Touches: registry:HKLM\SOFTWARE\Microsoft\ADFS,
+      # registry:HKLM\SOFTWARE\Microsoft\Azure AD Connect (removed by the
+      # cleanup step below, which runs even when the audit fails).
+      - name: Plant the ADFS and Azure AD Connect registry footprints (installed software is INFO, not a finding)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($k in 'HKLM:\SOFTWARE\Microsoft\ADFS', 'HKLM:\SOFTWARE\Microsoft\Azure AD Connect') {
+            if (Test-Path -LiteralPath $k) { throw ("{0} already exists on this runner -- the plant would not be a plant; inspect the image" -f $k) }
+            New-Item -Path $k -Force | Out-Null
+          }
+          Write-Host 'planted two empty keys: ADFS and Azure AD Connect'
 
       - name: Run the full audit; fail on hang (timeout), fatal error, or early exit
         shell: cmd
@@ -2583,6 +2743,29 @@ jobs:
           $ro = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce' -EA SilentlyContinue
           if ($ro -and ($ro.PSObject.Properties.Name -contains '*WIN11_SecurityAudit_resume')) { throw 'the RunOnce resume entry survived a completed exit-4 run' }
           Write-Host 'RunOnce resume entry: pointed at the bat during the run, absent after the exit-4 run.'
+          # THE PLANTED FOOTPRINTS ARE INFO, NEVER A FINDING (corpus adfs-present /
+          # aadconnect-present).
+          foreach ($needle in 'ADFS detected', 'Azure AD Connect detected') {
+            $hits = @($text -split "`n" | Where-Object { $_ -match [regex]::Escape($needle) })
+            if (-not @($hits | Where-Object { $_ -match '^\s*\[INFO\]' }).Count) { throw ("'{0}' was not printed as [INFO] -- the planted footprint was missed or graded differently" -f $needle) }
+            foreach ($hl in $hits) { if ($hl -match '^\s*\[(WARNING|CRITICAL)\]') { throw ("installed software raised as a finding: " + $hl) } }
+            Write-Host ("planted footprint reported: " + (@($hits | Where-Object { $_ -match '^\s*\[INFO\]' })[0]).Trim())
+          }
+          # And the corpus grader agrees, on the real report of a real run: every
+          # catalogued benign twin this runner shows is at or below its allowed
+          # severity. The readonly job runs this through field_test; the full run
+          # never did, so a plant here was graded by nothing.
+          $bc = (.\tools\benign_corpus_check.ps1 -Mode Report -Report $rep.FullName) -join "`n"
+          Write-Host $bc
+          if ($LASTEXITCODE -ne 0) { throw 'benign_corpus_check -Mode Report failed on the full-run report' }
+          if ($bc -notmatch 'observed (\d+) of') { throw 'the corpus grader did not report what it observed' }
+
+      - name: Remove the planted ADFS and Azure AD Connect footprints
+        if: always()
+        shell: powershell
+        run: |
+          foreach ($k in 'HKLM:\SOFTWARE\Microsoft\ADFS', 'HKLM:\SOFTWARE\Microsoft\Azure AD Connect') { Remove-Item -LiteralPath $k -Recurse -Force -EA SilentlyContinue }
+          Write-Host 'removed the two planted keys'
 
       - name: Upload the audit artifacts for inspection
         if: always()
