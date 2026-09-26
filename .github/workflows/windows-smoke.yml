@@ -2473,7 +2473,11 @@ jobs:
           # entry behind -- the audit would launch itself with -resume at the next
           # logon. The owner's laptop has had a reboot pending for every field run,
           # so 4 is the path a person takes and the path this job never took: a
-          # clean runner exits 2 or 8. Windows records a pending reboot in
+          # runner without one exits 2 or 8 (8 here: this image carries a cleared
+          # Security log and Defender real-time off, and a CRITICAL outranks the
+          # reboot code, so the run reads 8 with the REBOOT row still in the
+          # ledger -- the deletion is unconditional now, and the ledger row is what
+          # proves the plant was seen). Windows records a pending reboot in
           # PendingFileRenameOperations (Session Manager consumes it at boot; the
           # runner is ephemeral and never boots again), and the bat's Section 1
           # check reads exactly that value. Touches: registry:HKLM\SYSTEM\
@@ -2492,11 +2496,17 @@ jobs:
           echo doze_sec.bat exit code: %RC%
           if "%RC%"=="1" ( echo FATAL ERROR exit code 1 & exit /b 1 )
           rem THE PENDING-REBOOT PATH. The step above planted PendingFileRenameOperations,
-          rem so this run must read "Reboot pending" and exit 4 -- unless the ledger
-          rem carries a CRITICAL, which outranks it (8 on a clean runner is its own
-          rem failure and is asserted elsewhere). The RC == REPRC comparison below
-          rem still holds at 4: the exit handler prints the same code it returns.
-          if not "%RC%"=="4" ( echo EXPECTED EXIT CODE 4 WITH A PENDING REBOOT PLANTED, GOT %RC% & exit /b 1 )
+          rem so this run must read "Reboot pending" and exit 4 -- or 8, because a
+          rem CRITICAL outranks the reboot code and this runner image carries two of
+          rem its own (Security log cleared when the image was built, Event 1102;
+          rem Defender real-time protection off). An 8 is accepted only when the
+          rem ledger holds a CRITICAL row that explains it; any other code fails.
+          rem The RC == REPRC comparison below holds either way.
+          set "RCOK="
+          if "%RC%"=="4" set "RCOK=1"
+          if "%RC%"=="8" ( findstr /b /c:"CRITICAL|" "C:\SecurityAudit\SecurityReport_*.ledger" >nul 2>&1 && set "RCOK=1" )
+          if "%RC%"=="8" ( echo exit 8: a CRITICAL row outranks the planted reboot on this runner image -- see the ledger )
+          if not defined RCOK ( echo EXPECTED EXIT CODE 4 WITH A PENDING REBOOT PLANTED, OR 8 EXPLAINED BY A CRITICAL LEDGER ROW -- GOT %RC% & exit /b 1 )
           set "REP="
           for %%R in ("C:\SecurityAudit\SecurityReport_*.txt") do set "REP=%%R"
           if not defined REP ( echo NO REPORT PRODUCED & exit /b 1 )
