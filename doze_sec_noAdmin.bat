@@ -93,14 +93,18 @@ set "SCRIPT_VERSION=7.3-noAdmin"
 set "SCRIPT_NAME=WIN11_SecurityAudit"
 set "SCRIPT_PATH=%~dp0%~nx0"
 :: SCRIPT_DIR / SCRIPT_FILE are captured HERE, before the switch-parsing loop,
-:: and every later site uses them. cmd.exe's `shift` moves %0 along with the
-:: other arguments, so after the loop %0 is the LAST SWITCH typed: `%~f0` then
-:: resolves that word against the current directory. The RunOnce resume entry
-:: was written that way and pointed at "<checkout>\-noVtSelf" -resume on the
-:: owner's 2026-09-26 run -- a file that does not exist, so no interrupted run
-:: could ever have resumed -- and SCRIPT_DIR was the current directory, so the
-:: tools\ folder was found only when run from the checkout. tools\lint_arg0.ps1
-:: fails on any %~...0 after the first shift.
+:: and every later site uses them. cmd.exe's `shift` moves argument zero along
+:: with the other arguments, so after the loop argument zero is the LAST SWITCH
+:: typed, and the f0 / dp0 / nx0 modifiers resolve that word against the
+:: current directory. The RunOnce resume entry was written that way and pointed
+:: at "<checkout>\-noVtSelf" -resume on the owner's 2026-09-26 run -- a file
+:: that does not exist, so no interrupted run could ever have resumed -- and
+:: SCRIPT_DIR was the current directory, so the tools\ folder was found only
+:: when run from the checkout. tools\lint_arg0.ps1 fails on any tilde-modified
+:: argument zero after the first shift. (No percent signs in this comment on
+:: purpose: cmd expands them even in a comment, and an invalid modifier such
+:: as a literal tilde-dots-zero aborts the whole script at parse time -- it
+:: did, on CI, the first time this note was written.)
 set "SCRIPT_DIR=%~dp0"
 set "SCRIPT_FILE=%~nx0"
 :: Set UPDATE_URL to your GitHub raw base URL to enable self-update checks.

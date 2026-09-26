@@ -37,7 +37,17 @@ function Get-Arg0Defects {
     for ($i = 0; $i -lt $Lines.Count; $i++) {
         $l = $Lines[$i]
         $t = $l.TrimStart()
-        if ($t -match '^(::|[Rr][Ee][Mm]\b)') { continue }
+        if ($t -match '^(::|[Rr][Ee][Mm]\b)') {
+            # cmd expands percent-variables in a comment line too, at parse time.
+            # A valid %~dp0 in a comment merely expands; an INVALID modifier
+            # (the first draft of the bat's note wrote "%~...0") aborts the
+            # WHOLE script before any line runs: "The following usage of the
+            # path operator in batch-parameter substitution is invalid" and
+            # the read-only CI job exited 255 with no report. Keep the tilde
+            # out of comments altogether; there is no reason for it there.
+            if ($l -match '%~') { $bad += ("{0}:{1}: percent-tilde inside a comment -- cmd expands it at parse time and an invalid modifier aborts the whole script; describe the modifier in words" -f $Name, ($i + 1)) }
+            continue
+        }
         if (-not $shifted) {
             if ($t -match '^[Ss][Hh][Ii][Ff][Tt](\s|$)') { $shifted = $true }
             continue
@@ -73,17 +83,21 @@ if ($SelfTest) {
     if ($firstShift -lt 0) { Write-Host '[FAIL] doze_sec.bat has no shift line -- the mutation case cannot run'; exit 1 }
     $mut = [System.Collections.Generic.List[string]]$lines
     $mut.Insert($lines.Count - 1, 'reg add "HKCU\x" /v y /d "\"%~f0\" -resume" /f')
-    $mut.Insert($lines.Count - 1, 'rem a %~dp0 in a comment is not a defect')
+    $mut.Insert($lines.Count - 1, 'rem a plain %CD% in a comment is not a defect')
     $mut.Insert($firstShift, 'set "BEFORE=%~dp0"')
+    $mut.Insert($firstShift, ':: an invalid %~...0 in a comment aborts cmd at parse time')
     $d = @(Get-Arg0Defects -Lines $mut.ToArray() -Name 'mutated.bat')
-    if ($d.Count -ne 1) { $fails += ("mutated copy: expected exactly 1 defect (the %~f0 after the shift), got {0}: {1}" -f $d.Count, ($d -join ' | ')) }
-    elseif ($d[0] -notmatch "'%~f0' after the first shift") { $fails += ("mutated copy: wrong defect reported: {0}" -f $d[0]) }
+    if ($d.Count -ne 2) { $fails += ("mutated copy: expected exactly 2 defects (the %~f0 after the shift, the percent-tilde in a comment), got {0}: {1}" -f $d.Count, ($d -join ' | ')) }
+    else {
+        if (-not ($d | Where-Object { $_ -match "'%~f0' after the first shift" })) { $fails += ("mutated copy: the %~f0 after the shift was not reported: {0}" -f ($d -join ' | ')) }
+        if (-not ($d | Where-Object { $_ -match 'percent-tilde inside a comment' })) { $fails += ("mutated copy: the percent-tilde in a comment was not reported: {0}" -f ($d -join ' | ')) }
+    }
     # 3. the same token BEFORE the first shift is fine
     $pre = @('@echo off', 'set "P=%~f0"', 'set "D=%~dp0"', ':loop', 'if "%~1"=="" goto :done', 'shift', 'goto :loop', ':done', 'echo %P%')
     $d = @(Get-Arg0Defects -Lines $pre -Name 'pre.bat')
     if ($d.Count -ne 0) { $fails += ("tokens before the first shift were reported: {0}" -f ($d -join ' | ')) }
     if ($fails.Count) { Write-Host ("[FAIL] lint_arg0 self-test: {0} problem(s):" -f $fails.Count); $fails | ForEach-Object { Write-Host ("  - " + $_) }; exit 1 }
-    Write-Host '[OK] lint_arg0 self-test: shipped bats clean; a %~f0 after the shift is caught; a rem and a pre-shift token are not.'
+    Write-Host '[OK] lint_arg0 self-test: shipped bats clean; a %~f0 after the shift and a percent-tilde in a comment are caught; a plain comment and a pre-shift token are not.'
     exit 0
 }
 

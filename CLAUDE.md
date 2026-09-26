@@ -721,7 +721,12 @@ added, extend the helpers-ps51 job to execute it.
   when run from the checkout. Nothing could see it: everyone runs the bat
   from its own directory. Capture `SCRIPT_PATH` / `SCRIPT_DIR` /
   `SCRIPT_FILE` BEFORE the loop and use only those after it; enforced by
-  `tools\lint_arg0.ps1`. Two lessons rode along. The read-only proof for that
+  `tools\lint_arg0.ps1`. And keep `%~` out of comments entirely: cmd expands
+  percent-variables in a `::` or `rem` line at parse time, and an INVALID
+  modifier there ("%~...0", written in the first draft of the note
+  explaining this) aborts the whole script before any line runs -- the
+  read-only CI job exited 255 with no report. The same lint rejects it.
+  Two lessons rode along. The read-only proof for that
   entry looked up `*doze_sec_resume`, a value named after the bat FILE, while
   the audit names it after `SCRIPT_NAME` -- a proof that names its target
   wrongly is a permanent all-clear, so `field_test` now reads the name from
