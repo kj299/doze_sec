@@ -112,6 +112,21 @@ setlocal enabledelayedexpansion
 set "SCRIPT_VERSION=7.3"
 set "SCRIPT_NAME=WIN11_SecurityAudit"
 set "SCRIPT_PATH=%~dp0%~nx0"
+:: SCRIPT_DIR / SCRIPT_FILE are captured HERE, before the switch-parsing loop,
+:: and every later site uses them. cmd.exe's `shift` moves argument zero along
+:: with the other arguments, so after the loop argument zero is the LAST SWITCH
+:: typed, and the f0 / dp0 / nx0 modifiers resolve that word against the
+:: current directory. The RunOnce resume entry was written that way and pointed
+:: at "<checkout>\-noVtSelf" -resume on the owner's 2026-09-26 run -- a file
+:: that does not exist, so no interrupted run could ever have resumed -- and
+:: SCRIPT_DIR was the current directory, so the tools\ folder was found only
+:: when run from the checkout. tools\lint_arg0.ps1 fails on any tilde-modified
+:: argument zero after the first shift. (No percent signs in this comment on
+:: purpose: cmd expands them even in a comment, and an invalid modifier such
+:: as a literal tilde-dots-zero aborts the whole script at parse time -- it
+:: did, on CI, the first time this note was written.)
+set "SCRIPT_DIR=%~dp0"
+set "SCRIPT_FILE=%~nx0"
 :: Set UPDATE_URL to your GitHub raw base URL to enable self-update checks.
 :: Leave as-is to skip the update check (placeholder is detected and skipped).
 set "UPDATE_URL=https://raw.githubusercontent.com/kj299/doze_sec/main"
@@ -158,6 +173,7 @@ set "READONLY_MODE=0"
 set "IOC_HITS=0"
 set "NETWORK_AVAIL=0"
 set "SAFE_MODE=0"
+set "RUNONCE_CREATED=0"
 set "SKIP_DEFRAG=no"
 set "SMART_WARN=0"
 set "FREE_BEFORE=0"
@@ -200,7 +216,7 @@ goto :parse_args
 shift
 if "%~1"=="" (
     echo  [ERROR] -importTTP requires a file path argument.
-    echo  Example: %~nx0 -importTTP C:\path\to\ttp_feed.txt
+    echo  Example: %SCRIPT_FILE% -importTTP C:\path\to\ttp_feed.txt
     exit /b 1
 )
 set "IMPORT_TTP_FILE=%~1"
@@ -211,7 +227,7 @@ goto :parse_args
 shift
 if "%~1"=="" (
     echo  [ERROR] -ctiSkill requires a file path argument.
-    echo  Example: %~nx0 -updateTTP -ctiSkill C:\path\to\threat-intel\standalone\cyber-threat-intel-prompt.md
+    echo  Example: %SCRIPT_FILE% -updateTTP -ctiSkill C:\path\to\threat-intel\standalone\cyber-threat-intel-prompt.md
     exit /b 1
 )
 set "CTI_SKILL_SWITCH=%~1"
@@ -251,7 +267,7 @@ echo   WIN11 SECURITY FORENSIC AUDIT  v%SCRIPT_VERSION%
 echo   SENTINEL-X CTI Integration
 echo  ====================================================================%C_RESET%
 echo.
-echo  %C_BOLD%USAGE:%C_RESET%  %C_CYAN%%~nx0%C_RESET% [switches]
+echo  %C_BOLD%USAGE:%C_RESET%  %C_CYAN%%SCRIPT_FILE%%C_RESET% [switches]
 echo.
 echo  %C_BOLD%SWITCHES:%C_RESET%
 echo.
@@ -359,13 +375,13 @@ echo  %C_BOLD%EXAMPLES:%C_RESET%
 echo.
 echo    Run as Administrator (full audit):
 echo      Right-click ^> Run as administrator
-echo      %~nx0
+echo      %SCRIPT_FILE%
 echo.
 echo    Run on unsupported OS for research:
-echo      %~nx0 -dev
+echo      %SCRIPT_FILE% -dev
 echo.
 echo    Combine switches:
-echo      %~nx0 -nosrp -sdu
+echo      %SCRIPT_FILE% -nosrp -sdu
 echo.
 echo  %C_BOLD%AUDIT SECTIONS (18 total):%C_RESET%
 echo.
@@ -508,11 +524,11 @@ if not exist "%OUTDIR%\ThreatLists" mkdir "%OUTDIR%\ThreatLists" 2>nul
 :: an -updateTTP refresh newer than the release is kept. Copy-if-missing alone
 :: left a per-user copy of ioc_registry.txt behind the |BadValue column, and it
 :: reported UAC ON and LSASS PPL ON as registry IOCs (2026-09-24).
-if exist "%~dp0tools\threat_list_seed.ps1" (
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\threat_list_seed.ps1" -ShippedDir "%~dp0ThreatLists" -RuntimeDir "%OUTDIR%\ThreatLists" >nul 2>&1
+if exist "%SCRIPT_DIR%tools\threat_list_seed.ps1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\threat_list_seed.ps1" -ShippedDir "%SCRIPT_DIR%ThreatLists" -RuntimeDir "%OUTDIR%\ThreatLists" >nul 2>&1
 ) else (
     for %%f in (ioc_processes.txt ioc_named_pipes.txt ioc_services.txt ioc_registry.txt ioc_file_paths.txt ioc_scheduled_tasks.txt ioc_domains.txt ioc_hashes.txt ioc_lolbins.txt ttp_manifest.txt) do (
-        if not exist "%OUTDIR%\ThreatLists\%%f" if exist "%~dp0ThreatLists\%%f" copy /y "%~dp0ThreatLists\%%f" "%OUTDIR%\ThreatLists\" >nul 2>&1
+        if not exist "%OUTDIR%\ThreatLists\%%f" if exist "%SCRIPT_DIR%ThreatLists\%%f" copy /y "%SCRIPT_DIR%ThreatLists\%%f" "%OUTDIR%\ThreatLists\" >nul 2>&1
     )
 )
 :: Compute today's date as locale-independent yyyyMMdd via PowerShell.
@@ -551,7 +567,7 @@ if %errorlevel% neq 0 (
     echo  Or run: npm install -g @anthropic-ai/claude-code
     echo.
     echo  Tip: pre-stage TTP rows in a pipe-delimited file and use
-    echo       %~nx0 -importTTP ^<file^>  to skip the Claude CLI dependency.
+    echo       %SCRIPT_FILE% -importTTP ^<file^>  to skip the Claude CLI dependency.
     echo.
     echo  Falling back to existing TTP checks.
     goto :skip_ttp_update
@@ -585,14 +601,14 @@ if not defined CTI_SKILL_PATH if defined DOZESEC_CTI_SKILL (
 )
 if not defined CTI_SKILL_PATH (
     for %%P in (
-        "%~dp0..\threat-intel\standalone\cyber-threat-intel-prompt.md"
-        "%~dp0..\prompts\threat-intel\standalone\cyber-threat-intel-prompt.md"
-        "%~dp0..\skills\threat-intel\standalone\cyber-threat-intel-prompt.md"
-        "%~dp0threat-intel\standalone\cyber-threat-intel-prompt.md"
-        "%~dp0..\threat-intel\cyber_threat_skill.yaml"
-        "%~dp0..\prompts\threat-intel\cyber_threat_skill.yaml"
-        "%~dp0..\skills\threat-intel\cyber_threat_skill.yaml"
-        "%~dp0threat-intel\cyber_threat_skill.yaml"
+        "%SCRIPT_DIR%..\threat-intel\standalone\cyber-threat-intel-prompt.md"
+        "%SCRIPT_DIR%..\prompts\threat-intel\standalone\cyber-threat-intel-prompt.md"
+        "%SCRIPT_DIR%..\skills\threat-intel\standalone\cyber-threat-intel-prompt.md"
+        "%SCRIPT_DIR%threat-intel\standalone\cyber-threat-intel-prompt.md"
+        "%SCRIPT_DIR%..\threat-intel\cyber_threat_skill.yaml"
+        "%SCRIPT_DIR%..\prompts\threat-intel\cyber_threat_skill.yaml"
+        "%SCRIPT_DIR%..\skills\threat-intel\cyber_threat_skill.yaml"
+        "%SCRIPT_DIR%threat-intel\cyber_threat_skill.yaml"
     ) do (
         if not defined CTI_SKILL_PATH if exist "%%~fP" (
             set "CTI_SKILL_PATH=%%~fP"
@@ -612,7 +628,7 @@ if not defined CTI_SKILL_PATH (
     echo           - ..\skills\threat-intel\standalone\cyber-threat-intel-prompt.md
     echo           - .\threat-intel\standalone\cyber-threat-intel-prompt.md
     echo           - the same four roots with the legacy cyber_threat_skill.yaml ^(pre-1.2.0^)
-    echo           ^(relative to: %~dp0^)
+    echo           ^(relative to: %SCRIPT_DIR%^)
     echo.
     echo  Tip: use the self-contained standalone\cyber-threat-intel-prompt.md.
     echo       Do NOT point at spec.yaml alone -- it omits the SKILL workflow
@@ -654,7 +670,7 @@ echo  [OK] CTI skill: %CTI_SKILL_PATH%  ^(source: %CTI_SKILL_SOURCE%^)
 :: configured deliberately.
 if /i "%CTI_SKILL_SOURCE%"=="interactive prompt" (
     echo  Tip: persist this for future runs:  setx DOZESEC_CTI_SKILL "%CTI_SKILL_PATH%"
-    echo       or per-run:                    %~nx0 -updateTTP -ctiSkill "%CTI_SKILL_PATH%"
+    echo       or per-run:                    %SCRIPT_FILE% -updateTTP -ctiSkill "%CTI_SKILL_PATH%"
 )
 
 :: Collect existing IOC entries for deduplication
@@ -662,10 +678,10 @@ if /i "%CTI_SKILL_SOURCE%"=="interactive prompt" (
 for /f "usebackq delims=" %%g in (`powershell -NoProfile -Command "[guid]::NewGuid().ToString('N')"`) do set "IOC_GUID=%%g"
 if not defined IOC_GUID set "IOC_GUID=%RANDOM%%RANDOM%%RANDOM%"
 set "EXISTING_IOCS=%TEMP%\existing_iocs_%IOC_GUID%.txt"
-if exist "%~dp0ThreatLists" (
-    type "%~dp0ThreatLists\ioc_processes.txt" 2>nul | findstr /v /r "^#" > "%EXISTING_IOCS%" 2>nul
-    type "%~dp0ThreatLists\ioc_named_pipes.txt" 2>nul | findstr /v /r "^#" >> "%EXISTING_IOCS%" 2>nul
-    type "%~dp0ThreatLists\ttp_manifest.txt" 2>nul | findstr /v /r "^#" >> "%EXISTING_IOCS%" 2>nul
+if exist "%SCRIPT_DIR%ThreatLists" (
+    type "%SCRIPT_DIR%ThreatLists\ioc_processes.txt" 2>nul | findstr /v /r "^#" > "%EXISTING_IOCS%" 2>nul
+    type "%SCRIPT_DIR%ThreatLists\ioc_named_pipes.txt" 2>nul | findstr /v /r "^#" >> "%EXISTING_IOCS%" 2>nul
+    type "%SCRIPT_DIR%ThreatLists\ttp_manifest.txt" 2>nul | findstr /v /r "^#" >> "%EXISTING_IOCS%" 2>nul
 )
 
 echo  [*] Querying CTI skill for latest Windows endpoint TTPs...
@@ -714,7 +730,7 @@ if not errorlevel 1 (
     echo  [ERROR] Claude Code CLI rejected the request citing CLAUDE_CODE_SESSION_ACCESS_TOKEN.
     echo          This script uses stdin ^(the documented headless context path^), so this
     echo          shouldn't happen with current Claude Code releases. To proceed:
-    echo            %~nx0 -importTTP ^<file^>
+    echo            %SCRIPT_FILE% -importTTP ^<file^>
     echo          ^(skip the CLI entirely; same sanitizer + IOC merge pipeline^)
     del "%TTP_OUTPUT%" >nul 2>&1
     goto :skip_ttp_update
@@ -722,7 +738,7 @@ if not errorlevel 1 (
 findstr /i /c:"please run /login" /c:"not authenticated" /c:"not logged in" "%TTP_OUTPUT%" >nul 2>&1
 if not errorlevel 1 (
     echo  [ERROR] Claude Code CLI is not authenticated. Run `claude` interactively
-    echo          first to log in, or use:  %~nx0 -importTTP ^<file^>  instead.
+    echo          first to log in, or use:  %SCRIPT_FILE% -importTTP ^<file^>  instead.
     del "%TTP_OUTPUT%" >nul 2>&1
     goto :skip_ttp_update
 )
@@ -802,8 +818,8 @@ echo :: --- Update: %date% %time% --->> "%TTP_BLOCKS%"
 :: `for /f ... do (...)` loop that lived here previously is a CMD-escape
 :: minefield (see PR #80 commit msg) and was the fix-it-once-and-it-breaks-
 :: somewhere-else pattern the PowerShell helper exists to escape.
-:: NOTE: this runs before the main setup block sets %SCRIPT_DIR% and %PWSH%,
-:: so use %~dp0 and plain `powershell` here.
+:: NOTE: this runs before the main setup block sets %PWSH%, so use plain
+:: `powershell` here. SCRIPT_DIR is already set (captured before the parse loop).
 :: Write IOC + manifest merges ONLY to the audit's runtime ThreatLists at
 :: %OUTDIR%\ThreatLists (seeded just above), so the next IOC sweep sees them
 :: immediately. The repo's shipped ThreatLists/ is a hand-curated baseline and
@@ -811,8 +827,8 @@ echo :: --- Update: %date% %time% --->> "%TTP_BLOCKS%"
 :: the checkout, which dirtied `git pull` and let non-discriminating CTI-AUTO
 :: indicators leak into the committed baseline. Curation now lives upstream
 :: (the threat-intel skill), not in -updateTTP's runtime output.
-if exist "%~dp0tools\ttp_merge.ps1" (
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\ttp_merge.ps1" -TtpOutput "%TTP_OUTPUT%" -BlocksFile "%TTP_BLOCKS%" -ThreatListsDir "%OUTDIR%\ThreatLists"
+if exist "%SCRIPT_DIR%tools\ttp_merge.ps1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\ttp_merge.ps1" -TtpOutput "%TTP_OUTPUT%" -BlocksFile "%TTP_BLOCKS%" -ThreatListsDir "%OUTDIR%\ThreatLists"
 ) else (
     echo  [WARN] tools\ttp_merge.ps1 not found -- TTP detection blocks, IOC merge, and ttp_manifest.txt update all skipped.
 )
@@ -832,7 +848,7 @@ if exist "%TTP_OUTPUT%" del "%TTP_OUTPUT%" >nul 2>&1
 :: ====================================================================
 :: Prevent running from TEMP - TEMP is one of the first paths wiped by
 :: cleanup operations and can cause the script to self-delete mid-run.
-set "SCRIPT_DIR=%~dp0"
+rem SCRIPT_DIR was captured before the switch-parsing loop (see the note there).
 set "SCRIPT_DIR_TRIMMED=%SCRIPT_DIR:~0,-1%"
 
 if /i "%SCRIPT_DIR_TRIMMED%"=="%TEMP%" goto :err_tempdir
@@ -1201,7 +1217,7 @@ echo %C_GREEN%[INIT 7/14]%C_RESET% Fresh run. Proceeding with full pre-flight.
 :: ====================================================================
 echo %C_GREEN%[INIT 8/14]%C_RESET% Creating RunOnce resume entry...
 echo --- [INIT 8/14] RunOnce Resume Key --->> "%REPORT%"
-echo  Command: reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /t REG_SZ /d "\"%~f0\" -resume" /f>> "%REPORT%"
+echo  Command: reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /t REG_SZ /d "\"%SCRIPT_PATH%\" -resume" /f>> "%REPORT%"
 echo  If this run is interrupted (reboot/crash), Windows will automatically>> "%REPORT%"
 echo  re-run the script with the -resume switch on next login.>> "%REPORT%"
 echo  Key: HKCU\...\RunOnce  Value: *%SCRIPT_NAME%_resume>> "%REPORT%"
@@ -1212,13 +1228,14 @@ if "%READONLY_MODE%"=="1" (
     echo %C_GREEN%[INIT 8/14]%C_RESET% Read-only mode - RunOnce key not created.
     goto :runonce_done
 )
-reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /t REG_SZ /d "\"%~f0\" -resume" /f >nul 2>&1
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /t REG_SZ /d "\"%SCRIPT_PATH%\" -resume" /f >nul 2>&1
 if %errorlevel% equ 0 (
     echo  [OK] RunOnce key created successfully.>> "%REPORT%"
-    echo %C_GREEN%[INIT 8/14]%C_RESET% RunOnce key created - auto-deleted on clean exit.
+    set "RUNONCE_CREATED=1"
+    echo %C_GREEN%[INIT 8/14]%C_RESET% RunOnce key created - removed when the audit ends.
     echo [TEMPORARY] RunOnce resume key created.>> "%CHANGELOG%"
     echo             Key: HKCU\...\RunOnce\*%SCRIPT_NAME%_resume>> "%CHANGELOG%"
-    echo             Status: AUTO-DELETED at end of audit on clean exit.>> "%CHANGELOG%"
+    echo             Status: removed when the audit ends, whatever its exit code. It survives only a run that never reached its exit handler.>> "%CHANGELOG%"
     echo             Manual undo if needed: reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /f>> "%CHANGELOG%"
     echo.>> "%CHANGELOG%"
 ) else (
@@ -1498,7 +1515,7 @@ if "%WIN_GEN%"=="Win7" (
 
 echo  Creating... (can take 30-60 seconds)
 del "%TEMP%\dz_srp_created.txt" 2>nul
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\srp_check.ps1" -Description "Pre-WIN11-Security-Audit-v%SCRIPT_VERSION%" -MarkerFile "%TEMP%\dz_srp_created.txt">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\srp_check.ps1" -Description "Pre-WIN11-Security-Audit-v%SCRIPT_VERSION%" -MarkerFile "%TEMP%\dz_srp_created.txt">> "%REPORT%" 2>&1
 
 rem Log the restore point to the changelog ONLY if one was actually created.
 rem srp_check.ps1 writes the marker only when Get-ComputerRestorePoint's max
@@ -4898,10 +4915,14 @@ if "%EXIT_CODE%"=="5" echo  STATUS: Script ran from TEMP directory. Move script 
 if "%EXIT_CODE%"=="8" echo  STATUS: Audit complete -- CRITICAL findings present. Review [CRITICAL] items NOW.>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
-:: Delete RunOnce key on clean exit (0=success, 2=warning, 8=critical all count as "completed")
-if "%EXIT_CODE%"=="0" reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /f >nul 2>&1
-if "%EXIT_CODE%"=="2" reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /f >nul 2>&1
-if "%EXIT_CODE%"=="8" reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /f >nul 2>&1
+:: Delete the RunOnce resume entry on EVERY exit that reaches this block. Every
+:: path that gets here is a run that ENDED; the entry exists to restart a run
+:: that did not (reboot or crash mid-run), and that is the only run it must
+:: outlive. This used to run only for exit 0/2/8 (noAdmin: 0/2/6/8): a run that
+:: completed with a reboot pending (exit 4 -- every run on the owner's laptop)
+:: or a VirusTotal self-check failure (7) left the entry behind, and the audit
+:: would have launched itself with -resume at the next logon.
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /f >nul 2>&1
 
 :: Clean up temp PS1 file
 if exist "%PSRUN%" del "%PSRUN%" >nul 2>&1
@@ -4957,6 +4978,7 @@ if "%SCRIPT_CHANGED%"=="1" (
 ) else (
     echo.
     echo  No system changes were made by this audit run.
+    if "%RUNONCE_CREATED%"=="1" echo  The temporary RunOnce resume entry from INIT 8 was created and removed at exit.
     echo.
 )
 
@@ -5003,7 +5025,7 @@ echo   machine is sound.>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
 echo %C_CYAN%Generating HTML report...%C_RESET%
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\report_html.ps1" -Report "%REPORT%" -HtmlPath "%REPORT_HTML%" -RemediationPath "%REMEDIATION%" 2>&1
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\report_html.ps1" -Report "%REPORT%" -HtmlPath "%REPORT_HTML%" -RemediationPath "%REMEDIATION%" 2>&1
 if exist "%REPORT_HTML%" (
     echo %C_GREEN%[OK]%C_RESET% HTML report: %REPORT_HTML%
 ) else (

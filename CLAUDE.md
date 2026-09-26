@@ -711,6 +711,31 @@ added, extend the helpers-ps51 job to execute it.
 
 ## Other cmd.exe traps already documented in-code
 
+- **`shift` moves `%0` too.** After a `:parse_args` loop that shifts once per
+  switch, `%0` is the LAST SWITCH typed, and `%~f0` / `%~dp0` / `%~nx0`
+  resolve that word against the current directory. The RunOnce resume entry
+  was written from `%~f0` after the loop and pointed at
+  `"<checkout>\-noVtSelf" -resume` on the owner's 2026-09-26 run -- a file
+  that does not exist, so no interrupted run could ever have resumed -- and
+  `SCRIPT_DIR=%~dp0` was the current directory, so `tools\` was found only
+  when run from the checkout. Nothing could see it: everyone runs the bat
+  from its own directory. Capture `SCRIPT_PATH` / `SCRIPT_DIR` /
+  `SCRIPT_FILE` BEFORE the loop and use only those after it; enforced by
+  `tools\lint_arg0.ps1`. And keep `%~` out of comments entirely: cmd expands
+  percent-variables in a `::` or `rem` line at parse time, and an INVALID
+  modifier there ("%~...0", written in the first draft of the note
+  explaining this) aborts the whole script before any line runs -- the
+  read-only CI job exited 255 with no report. The same lint rejects it.
+  Two lessons rode along. The read-only proof for that
+  entry looked up `*doze_sec_resume`, a value named after the bat FILE, while
+  the audit names it after `SCRIPT_NAME` -- a proof that names its target
+  wrongly is a permanent all-clear, so `field_test` now reads the name from
+  the bat and cross-checks it against the `Command:` line the report prints.
+  And the entry was deleted only on exit 0/2/8, so a run that completed with
+  a reboot pending (exit 4, every run on the owner's laptop) left it behind:
+  delete on every exit that reaches the handler; the entry must outlive only
+  a run that never got there. CI plants `PendingFileRenameOperations` so a
+  runner takes the exit-4 path a person's machine takes.
 - Inside blocks use delayed expansion (`!var!`); `%var%` expands at
   block-parse time (see comments near the `errorlevel` checks).
 - `endlocal` and `exit /b %EXIT_CODE%` must stay on one line so the value

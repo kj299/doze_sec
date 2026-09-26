@@ -47,7 +47,15 @@ if ($NoConsoleLog) { $batArgs += '-noConsoleLog' }
 if (-not $OutDir) {
     if ($batArgs -contains '-noAdmin') { $OutDir = Join-Path $env:USERPROFILE 'SecurityAudit' } else { $OutDir = 'C:\SecurityAudit' }
 }
-$scriptName = [IO.Path]::GetFileNameWithoutExtension($BatPath)
+# The value is named after the bat's INTERNAL script name (SCRIPT_NAME,
+# WIN11_SecurityAudit), not its file name. This used to build
+# "*doze_sec_resume" from the file name, a value the audit never writes, so
+# "RunOnce resume key: absent after the run" passed on every machine and every
+# runner whatever the audit had done. Read the name from the bat and refuse to
+# run without it -- never default a proof's target.
+$nameLine = Select-String -LiteralPath $BatPath -Pattern '^set "SCRIPT_NAME=([^"]+)"' | Select-Object -First 1
+if (-not $nameLine) { Write-Host ('[FAIL] {0} has no set "SCRIPT_NAME=..." line -- the RunOnce proof would look for a value the audit never writes' -f (Split-Path -Leaf $BatPath)); exit 1 }
+$scriptName = $nameLine.Matches[0].Groups[1].Value
 $runOnceKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce'
 $runOnceVal = "*{0}_resume" -f $scriptName
 
@@ -113,6 +121,20 @@ else {
     Check ($text -match 'READ-ONLY RUN -- this audit makes no changes') 'report carries the READ-ONLY banner' 'the -readonly switch did not take effect'
     Check ($text -match '(?m)^\s*EXIT CODE:') 'report has an EXIT CODE line (the audit completed)' 'no EXIT CODE line -- the audit aborted'
     Check ($text -match '\[18/18\]') 'report reached section [18/18]' 'the audit did not reach the last section'
+    # The RunOnce proof must be looking at the value the audit really writes,
+    # and that value must point at the bat. INIT 8 prints its own reg add,
+    # with every %VAR% expanded; read the name and the path back out of it.
+    # Both are what the proof above cannot see: it only asks whether a value
+    # named $runOnceVal exists, and the audit's path was "<cwd>\<last
+    # switch>" on every switched run for as long as the bat expanded %~f0
+    # after its parse loop (cmd's shift moves %0 too).
+    $cmdLine = [regex]::Match($text, '(?m)^\s*Command: reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce" /v "(\*[^"]+_resume)" /t REG_SZ /d "\\"([^"]*?)\\" -resume" /f')
+    Check $cmdLine.Success 'report prints the INIT 8 RunOnce command (the value name and path the audit uses)' 'no INIT 8 "Command: reg add ... RunOnce ... -resume" line -- the proof cannot verify what it is looking for'
+    if ($cmdLine.Success) {
+        Check ($cmdLine.Groups[1].Value -eq $runOnceVal) ("RunOnce proof targets the value the audit writes ({0})" -f $runOnceVal) ("the audit writes '{0}' but the proof looked for '{1}' -- a value the audit never writes" -f $cmdLine.Groups[1].Value, $runOnceVal)
+        $batLeaf = Split-Path -Leaf $BatPath
+        Check ($cmdLine.Groups[2].Value -match ('\\' + [regex]::Escape($batLeaf) + '$')) ("RunOnce resume path ends in \{0}" -f $batLeaf) ("the resume entry would run '{0}', not the bat -- %0 read after the parse loop's shift" -f $cmdLine.Groups[2].Value)
+    }
     $skips = @(
         @{ Needle = 'RunOnce resume key not created';                       Label = 'RunOnce resume key not created' },
         @{ Needle = 'network check not performed';                          Label = 'network check not performed' },

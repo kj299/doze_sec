@@ -6,6 +6,41 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Baseline run 2026-09-26 14:22: the resume entry pointed at a file that does not exist
+The first non-read-only field run (`-baseline -dnsprobe`) scored four of six
+predictions and found three defects in one mechanism, the RunOnce resume
+entry. (1) Section 5 printed the value the audit had just written:
+`*WIN11_SecurityAudit_resume = "C:\...\doze_sec\-noVtSelf" -resume`. The
+bat expanded `%~f0` AFTER its switch-parsing loop, and cmd's `shift` moves
+`%0` along with the other arguments, so `%0` was the last switch typed and
+`%~f0` resolved it against the current directory. No interrupted run given a
+switch could ever have resumed; `SCRIPT_DIR=%~dp0`, set after the same loop,
+was the current directory, so `tools\` was found only when the bat was run
+from its own checkout -- which is the only way anyone, including CI, has
+ever run it. Both bats now capture `SCRIPT_PATH` / `SCRIPT_DIR` /
+`SCRIPT_FILE` before the loop; `tools/lint_arg0.ps1` fails on any `%~...0`
+after the first `shift` (46 sites in the code that shipped). (2) The exit
+handler deleted the entry only on exit 0/2/8 (noAdmin 0/2/6/8), so a run
+that COMPLETED with a reboot pending (exit 4 -- every run on the owner's
+laptop) left it behind; harmless only because of (1), and dangerous the
+moment (1) was fixed alone. It is now deleted on every exit that reaches the
+handler; the entry outlives only a run that never got there, which is what
+it is for. The console summary no longer says "No system changes were made"
+without naming the temporary entry it created and removed. (3) The proof
+`RunOnce resume key: absent after the run` in `tests\field_test.ps1`, and
+the CI job's "independent" check, looked for `*doze_sec_resume` -- a value
+named after the bat FILE; the audit names it after `SCRIPT_NAME`. The proof
+had passed on every machine and every runner without ever looking at the
+real value. `field_test` now reads the name from the bat, refuses to run
+without it, and cross-checks both the name and the path against the INIT 8
+`Command:` line the report prints, so a wrong name or a `<cwd>\<switch>` path
+is a FAIL on every machine. The full-run CI job now plants
+`PendingFileRenameOperations` so the runner takes the exit-4 path the owner's
+laptop takes, and asserts the entry named the bat during the run and is gone
+after it. Also from the run: the DNS probe resolved all nine names to public
+addresses, the baseline saved 1258 records, and the update check reported
+`404 even with token` (a PAT without Contents:read on this repository).
+
 ### Standard-user confirmation run 2026-09-25 08:46: the field test itself had never run as a standard user
 Six of seven predictions held: exit code 6 (reboot pending), six ledger rows
 with six printed finding lines, Sections 16 and 17 PARTIAL with the Security
