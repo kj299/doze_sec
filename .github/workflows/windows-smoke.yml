@@ -133,12 +133,19 @@ jobs:
             Write-Host ($out -split "`n" | Where-Object { $_ -match 'dz_ci_updater|validly-signed|suspicious locations' })
             $infoLine = ($out -split "`n" | Where-Object { $_ -match '^\[INFO\] \d+ validly-signed task\(s\) under %AppData%' } | Select-Object -First 1)
             if (-not $infoLine) { throw 'the signed per-user updater was not reported as INFO (corpus: appdata-signed-tasks)' }
-            if ($out -notmatch [regex]::Escape($good)) { throw 'the INFO block does not name the signed updater path' }
-            if ($out -notmatch '\[signer: ') { throw 'the INFO block does not name the signer' }
-            if (-not ($out -match '\[CRITICAL\][^\n]*suspicious locations' -and $out -match 'updater_broken\.exe')) { throw 'the unsigned twin under AppData was NOT reported CRITICAL -- the signature gate no longer bites' }
-            foreach ($l in ($out -split "`n" | Where-Object { $_ -match '^\[(WARNING|CRITICAL)\]' })) { if ($l -match 'dz_ci_updater\\updater\.exe') { throw ("the SIGNED updater appears in a finding line: " + $l) } }
+            # The INFO line names TASK names; the indented line under it names the
+            # task path and the signer (the tool prints task identity, not the exe).
+            if ($infoLine -notmatch 'dz_ci_appdata_signed') { throw ("the INFO line does not name the signed task: " + $infoLine) }
+            $signerLine = ($out -split "`n" | Where-Object { $_ -match '\\dz_ci_appdata_signed\s+\[signer: ' } | Select-Object -First 1)
+            if (-not $signerLine) { throw 'the INFO block has no "[signer: ...]" line for the signed task' }
+            if ($signerLine -match '\[signer: \]') { throw ("the signer is empty: " + $signerLine) }
+            if (-not ($out -match '\[CRITICAL\][^\n]*suspicious locations[^\n]*dz_ci_appdata_unsigned' -and $out -match 'updater_broken\.exe')) { throw 'the unsigned twin under AppData was NOT reported CRITICAL -- the signature gate no longer bites' }
+            foreach ($l in ($out -split "`n" | Where-Object { $_ -match '^\[(WARNING|CRITICAL)\]' })) { if ($l -match 'dz_ci_appdata_signed') { throw ("the SIGNED task appears in a finding line: " + $l) } }
+            # The marker carries the COUNT of flagged tasks (the bat reads it with
+            # set /p as a number), so it must be a positive integer here.
             if (-not (Test-Path $marker)) { throw 'the unsigned twin raised no marker' }
-            if ((Get-Content $marker).Trim() -ne 'CRITICAL') { throw ("expected the marker to read CRITICAL, got {0}" -f (Get-Content $marker)) }
+            $mv = (Get-Content $marker).Trim()
+            if ($mv -notmatch '^\d+$' -or [int]$mv -lt 1) { throw ("expected the marker to hold a count of at least 1, got '{0}'" -f $mv) }
           } finally {
             foreach ($tn in $tasks) { Unregister-ScheduledTask -TaskName $tn -Confirm:$false -EA SilentlyContinue }
             Remove-Item $dir -Recurse -Force -EA SilentlyContinue
