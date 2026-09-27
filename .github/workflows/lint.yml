@@ -346,6 +346,16 @@ jobs:
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
           n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 28 ] || { echo "only $n case(s)"; exit 1; }
+      - name: defender_core_check -- another antivirus in control is INFO; real-time off with no other AV is CRITICAL
+        run: |
+          out=$(pwsh -NoProfile -File tools/defender_core_check.ps1 -SelfTest); echo "$out"
+          for n in "Passive Mode with real-time OFF: INFO 'another antivirus product is in control'" \
+                   'EMPTY mode with real-time OFF is not passive: CRITICAL' \
+                   'passive mode does not excuse an explicit DisableRealtimeMonitoring policy: still CRITICAL' \
+                   'Normal mode with real-time OFF: CRITICAL'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 16 ] || { echo "only $n case(s)"; exit 1; }
       - name: vt_ip_check -- a single non-top-tier VirusTotal engine is INFO, not a finding
         run: |
           out=$(pwsh -NoProfile -File tools/vt_ip_check.ps1 -SelfTest); echo "$out"

@@ -6,6 +6,35 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Defender core check extracted; passive mode self-tested; the dashboard stops re-measuring it
+The Section 9 Defender core block (real-time, antivirus, tamper protection,
+signature age, the `Get-MpPreference` disable flags, and the passive-mode
+judgement that suppresses the real-time and antivirus CRITICALs when
+`AMRunningMode` says another product is in control) was staged inline in both
+bats. It is now `tools/defender_core_check.ps1`: the same lines, the marker
+idiom, a pure `Get-DefenderCoreReport` and a 16-case `-SelfTest` covering
+Passive Mode, EDR Block Mode and SxS Passive Mode (INFO, nothing raised for
+the flags they explain), an EMPTY mode (not passive: CRITICAL, fail closed),
+an explicit `DisableRealtimeMonitoring` under passive mode (still CRITICAL),
+tamper protection and signature age under passive mode (still WARNING), and
+both query failures (`[SKIPPED]`, nothing invented). `[defender-passive-mode]`
+was the last corpus entry with no test; it now has one. The
+`ForceDefenderPassiveMode` experiment the owner asked for runs as a declared
+CI step: Microsoft documents that passive mode requires Defender for Endpoint
+onboarding, so the expected outcome on a runner is no flip, printed as a
+`[ SKIP ]` with the reason; a flip would be asserted and promote the entry.
+Two dashboard defects found on the way are fixed: the real-time tile called
+`Get-MpComputerStatus` a second time with no passive handling, so a
+passive-mode machine read `[ CRIT ] Real-time protection DISABLED` on the
+dashboard while Section 9 printed `[INFO]`; and the remediation script keyed
+off that tile text, so it would have re-enabled Defender real-time protection
+on a machine where another antivirus owns protection. The tile now states the
+verdict Section 9 reached through a state file (`mode|realtime|graded`, the
+`PROCPATH_STATE` idiom; a missing verdict reads NOT graded), and the fix
+triggers off that state. `tests/assert_printed_findings_raised.ps1` gains the
+Section 9 real-time contract, which the runner (real-time off since the image
+was built) exercises on every full run.
+
 ### Field-only corpus proofs: seven benign twins get a test
 `tests/benign_corpus.txt` had eight entries whose only proof was a `field:`
 reason -- a promise that the tool handles the benign state, exercised by

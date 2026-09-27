@@ -45,7 +45,14 @@ $script:Contracts = @(
     @{ Name      = 'System-process name outside its canonical directory'
        Signature = '^\s*\[WARNING\] Process \S+ \(PID \d+\) runs from .*\(T1036 masquerading\)'
        Section   = '4'
-       Technique = 'T1036' }
+       Technique = 'T1036' },
+    # Section 9's Defender core block, extracted to tools\defender_core_check.ps1
+    # (marker idiom). The runner image ships with real-time protection off, so
+    # the full-run job exercises this on the real path.
+    @{ Name      = 'Defender real-time protection off with no other antivirus in control'
+       Signature = '^\s*\[CRITICAL\] Defender real-time protection is OFF \(T1562.001\)'
+       Section   = '9'
+       Technique = 'T1562.001' }
 )
 
 function Get-UnraisedContracts {

@@ -517,7 +517,11 @@ when they are two measurements.** So a tile states a verdict the section
 already reached: the tool writes it to a `-StateFile`, the bat reads it into a
 variable (`PROCPATH_STATE`, the idiom `DNSPROBE_STATE` already used), and the
 dashboard prints that. Every such line names the scope it covers, and a missing
-verdict reads "NOT graded", never `PASS`.
+verdict reads "NOT graded", never `PASS`. The Defender real-time tile was the
+third instance: it re-measured with no passive-mode handling, read CRIT while
+Section 9 printed INFO, and the remediation keyed off its text -- it now
+reads Section 9's state file (`DEFCORE_MODE|RT|GRADED`) and the fix triggers
+off that state.
 
 Two mechanics that bite when a verdict crosses into cmd. A value that becomes
 part of an `echo` into `%PSRUN%` is **shell syntax**: `&`, `|`, `>`, `^`, `%`

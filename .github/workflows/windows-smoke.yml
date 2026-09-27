@@ -1141,6 +1141,112 @@ jobs:
           Write-Host "edr_presence.ps1 OK"
           exit 0
 
+      # Section 9's Defender core block, extracted from the bats. The passive-mode
+      # judgement (AMRunningMode not 'Normal' => another antivirus owns protection,
+      # so Defender's own real-time flags are INFO, not CRITICAL) was the last
+      # benign twin in the corpus with no test: a second antivirus cannot be
+      # installed on a runner. The self-test drives the pure report function
+      # with injected status objects; the live run grades this runner's real
+      # state, which ships with real-time protection OFF (every full-run report
+      # since the image was built shows the CRITICAL).
+      - name: defender_core_check.ps1 -SelfTest + live (passive mode is INFO, not a finding; the runner's real state graded)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $st = (.\tools\defender_core_check.ps1 -SelfTest) -join "`n"
+          if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'defender_core_check.ps1 -SelfTest failed' }
+          $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($n -lt 16) { throw "defender_core_check self-test ran only $n case(s)" }
+          foreach ($must in 'Passive Mode with real-time OFF: INFO', 'EMPTY mode with real-time OFF is not passive', 'passive mode does not excuse an explicit DisableRealtimeMonitoring') {
+            if ($st -notmatch [regex]::Escape($must)) { throw ("defender_core_check self-test no longer covers: {0}" -f $must) }
+          }
+          Write-Host "defender_core_check -SelfTest OK ($n cases)"
+          $md = Join-Path $env:TEMP ("dz_dc_ci_{0}" -f $PID)
+          New-Item -ItemType Directory -Path $md -Force | Out-Null
+          try {
+            $out = (.\tools\defender_core_check.ps1 -MarkerDir $md) -join "`n"
+            Write-Host $out
+            if (-not $out) { throw 'defender_core_check produced no output -- nothing was graded' }
+            if ($out -match 'null-valued expression|InvalidOperation|CommandNotFoundException|ParameterBindingException') { throw 'defender_core_check wrote PowerShell errors into its own output' }
+            # The marker must agree with the highest tag printed (a finding that is
+            # printed but not raised is the defect class this repo fears most).
+            $top = 'OK'
+            if ($out -match '(?m)^\[WARNING\]') { $top = 'WARNING' }
+            if ($out -match '(?m)^\[CRITICAL\]') { $top = 'CRITICAL' }
+            $mk = Join-Path $md 'dz_defcore.txt'
+            $mv = if (Test-Path $mk) { (Get-Content $mk).Trim() } else { 'OK' }
+            if ($mv -ne $top) { throw ("marker says '{0}' but the highest printed tag is '{1}'" -f $mv, $top) }
+            $sf = Join-Path $md 'dz_defcore_state.txt'
+            if (-not (Test-Path $sf)) { throw 'no state file for the dashboard tile' }
+            $state = (Get-Content $sf).Trim()
+            Write-Host ("state line: {0}" -f $state)
+            if ($state -notmatch '^[A-Za-z ]+\|[01]\|[01]$') { throw ("state line is not mode|realtime|graded: '{0}'" -f $state) }
+            $f = $state.Split('|')
+            if ($f[2] -ne '1') { throw 'Defender status could not be queried on the runner -- the live half graded nothing' }
+            # Consistency between the state line and the printed verdict.
+            if ($f[1] -eq '0' -and $f[0] -match 'Normal' -and $out -notmatch '\[CRITICAL\] Defender real-time protection is OFF') { throw 'state says real-time off in Normal mode but no CRITICAL was printed' }
+            if ($f[1] -eq '1' -and $out -match '\[CRITICAL\] Defender real-time protection is OFF') { throw 'state says real-time on but the CRITICAL was printed' }
+          } finally { Remove-Item $md -Recurse -Force -EA SilentlyContinue }
+          Write-Host 'defender_core_check.ps1 OK'
+          exit 0
+
+      # THE EXPERIMENT (owner's request, 2026-09-27). Microsoft documents the
+      # ForceDefenderPassiveMode policy value for Server SKUs -- and windows-latest
+      # is a Server SKU -- but also states that "Microsoft Defender Antivirus can
+      # run in passive mode only when the device is onboarded to Microsoft
+      # Defender for Endpoint" (learn.microsoft.com/defender-endpoint/edr-block-
+      # mode-faqs). A runner is not onboarded, so the expected outcome is NO flip.
+      # The step sets the value, reads AMRunningMode before and after, runs the
+      # tool with the value in place, and DECLARES the outcome either way: a
+      # flip promotes the corpus entry to a plant (and is asserted here); no
+      # flip is a declared [ SKIP ] with the documented reason, never a vacuous
+      # pass. WinDefend / MsMpEng are never stopped or modified (Microsoft:
+      # "don't disable, stop, or modify associated services"). Touches:
+      # registry:HKLM\SOFTWARE\Policies\Microsoft\Windows Advanced Threat
+      # Protection\ForceDefenderPassiveMode -- restored or removed in finally.
+      - name: ForceDefenderPassiveMode experiment -- does the policy flip AMRunningMode on an un-onboarded Server runner?
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $k = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Advanced Threat Protection'
+          $hadKey = Test-Path -LiteralPath $k
+          $prior = $null
+          if ($hadKey) { $prior = (Get-ItemProperty -LiteralPath $k -Name ForceDefenderPassiveMode -EA SilentlyContinue).ForceDefenderPassiveMode }
+          $st0 = $null; try { $st0 = Get-MpComputerStatus -EA Stop } catch {}
+          $before = if ($st0) { [string]$st0.AMRunningMode } else { '<Get-MpComputerStatus failed>' }
+          $svc0 = if ($st0) { [string]$st0.AMServiceEnabled } else { '?' }
+          Write-Host ("before: AMRunningMode='{0}' AMServiceEnabled={1} (policy value present: {2})" -f $before, $svc0, ($null -ne $prior))
+          $md = Join-Path $env:TEMP ("dz_dcx_ci_{0}" -f $PID)
+          New-Item -ItemType Directory -Path $md -Force | Out-Null
+          try {
+            if (-not $hadKey) { New-Item -Path $k -Force | Out-Null }
+            Set-ItemProperty -LiteralPath $k -Name ForceDefenderPassiveMode -Value 1 -Type DWord -Force
+            Start-Sleep -Seconds 10
+            $st1 = $null; try { $st1 = Get-MpComputerStatus -EA Stop } catch {}
+            $after = if ($st1) { [string]$st1.AMRunningMode } else { '<Get-MpComputerStatus failed>' }
+            $svc1 = if ($st1) { [string]$st1.AMServiceEnabled } else { '?' }
+            Write-Host ("after : AMRunningMode='{0}' AMServiceEnabled={1}" -f $after, $svc1)
+            if ($svc0 -ne $svc1) { throw ("AMServiceEnabled changed from {0} to {1} -- the policy value touched more than the mode" -f $svc0, $svc1) }
+            $out = (.\tools\defender_core_check.ps1 -MarkerDir $md) -join "`n"
+            Write-Host ($out -split "`n" | Where-Object { $_ -match 'another antivirus|real-time protection|\[SKIPPED\]|\[OK\]' })
+            $flipped = ($st1 -and $after -ne '' -and $after -notmatch 'Normal')
+            if ($flipped) {
+              if ($out -notmatch '\[INFO\] Defender is running in .* -- another antivirus product is in control') { throw 'passive mode engaged but the tool did not print the INFO line (corpus: defender-passive-mode)' }
+              if ($out -match '\[CRITICAL\] Defender real-time protection is OFF') { throw 'passive mode engaged but the real-time CRITICAL still fired' }
+              $mk = Join-Path $md 'dz_defcore.txt'
+              if ((Test-Path $mk) -and (Get-Content $mk).Trim() -eq 'CRITICAL') { throw 'passive mode engaged but the marker reads CRITICAL' }
+              Write-Host ("PROMOTE: passive mode engaged on this runner (AMRunningMode='{0}') -- move [defender-passive-mode] to a ci: plant proof" -f $after)
+            } else {
+              Write-Host ("[ SKIP ] passive mode did not engage (before='{0}', after='{1}') -- Microsoft: passive mode requires Defender for Endpoint onboarding; the corpus entry keeps its field: reason and its self-test proof" -f $before, $after)
+            }
+          } finally {
+            if ($hadKey) {
+              if ($null -ne $prior) { Set-ItemProperty -LiteralPath $k -Name ForceDefenderPassiveMode -Value $prior -Type DWord -Force } else { Remove-ItemProperty -LiteralPath $k -Name ForceDefenderPassiveMode -EA SilentlyContinue }
+            } else { Remove-Item -LiteralPath $k -Recurse -Force -EA SilentlyContinue }
+            Remove-Item $md -Recurse -Force -EA SilentlyContinue
+          }
+          exit 0
+
       - name: report_safety.ps1 -SelfTest + live (Tier 0 preamble + coverage framing)
         shell: powershell
         run: |
