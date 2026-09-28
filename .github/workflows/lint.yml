@@ -340,10 +340,21 @@ jobs:
                    'the hidden-service line states how it was established' \
                    'no readable code, standard user: WARNING unprobed' \
                    'TaskCache unreadable as a standard user is DEFERRED (the token, not the machine)' \
-                   'TaskCache unreadable while ELEVATED is a raised gap (WARNING), never a deferral'; do
+                   'TaskCache unreadable while ELEVATED is a raised gap (WARNING), never a deferral' \
+                   'a disagreeing PID that is GONE at the final liveness check is a race, not a hit' \
+                   'a disagreeing PID that is STILL ALIVE is the hidden process'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
-          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 24 ] || { echo "only $n case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 28 ] || { echo "only $n case(s)"; exit 1; }
+      - name: vt_ip_check -- a single non-top-tier VirusTotal engine is INFO, not a finding
+        run: |
+          out=$(pwsh -NoProfile -File tools/vt_ip_check.ps1 -SelfTest); echo "$out"
+          for n in 'one non-top-tier engine: LOW credibility, [INFO], does not count toward IOC_HITS' \
+                   'one engine, but top-tier: boosted to MED, [WARNING], counts' \
+                   'five malicious: HIGH, [CRITICAL]'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 9 ] || { echo "only $n case(s)"; exit 1; }
       - name: verdict_audit -- a raised finding must be printed, or at least declared SKIPPED
         run: |
           out=$(pwsh -NoProfile -File tools/verdict_audit.ps1 -SelfTest); echo "$out"

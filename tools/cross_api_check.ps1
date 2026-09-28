@@ -210,6 +210,40 @@ function Get-ServiceCrossCheckReport {
     return @{ Lines = @($out.ToArray()); Sev = $sev }
 }
 
+# ---- Process race verdict (pure) -------------------------------------------
+# A PID that still disagrees across the three views after the settle re-check
+# is re-probed ONCE for liveness. Gone now = an ordinary start/exit race that
+# only looked like concealment (the three reads are sequential); still alive =
+# a live process missing from an authoritative view, the rootkit shape. The
+# corpus entry [cross-api-race] catalogues the benign half; timing cannot be
+# planted on a runner, so the judgement lives here where a self-test can reach it.
+function Get-ProcessRaceVerdict {
+    param([bool]$StillAlive, [string]$ProcId, [string]$Name, [bool]$InNet, [bool]$InWmi, [bool]$InTasklist)
+    if ($StillAlive) {
+        return @{ Kind = 'hidden'; Line = ("PID {0} ({1}) -- .NET:{2} WMI:{3} tasklist:{4}" -f $ProcId, $Name, $InNet, $InWmi, $InTasklist) }
+    }
+    return @{ Kind = 'raced'; Line = '' }
+}
+
+function Get-ProcessRaceReport {
+    param([string[]]$Hits, [int]$Raced, [int]$Total)
+    $out = New-Object System.Collections.Generic.List[string]
+    $sev = 'OK'
+    if ($Hits.Count -gt 0) {
+        [void]$out.Add('[CRITICAL] Process visible to some enumeration APIs but not others -- process-hiding rootkit indicator (T1014):')
+        foreach ($h in $Hits) { [void]$out.Add("  $h") }
+        # The consequence, not a second finding.
+        [void]$out.Add('[INFO] A live process has no legitimate reason to be missing from one authoritative view of the system.')
+        $sev = 'CRITICAL'
+    } else {
+        [void]$out.Add("[OK] Process lists agree across .NET, WMI and tasklist ($Total processes; transient start/exit differences resolved on re-check).")
+    }
+    if ($Raced -gt 0) {
+        [void]$out.Add("[INFO] $Raced process(es) disagreed across APIs but had exited by the final re-check -- ordinary start/exit races, not concealment.")
+    }
+    return @{ Lines = @($out.ToArray()); Sev = $sev }
+}
+
 if ($SelfTest) {
     $fails = 0
     function T { param([string]$Name, [bool]$Ok, [string]$Got)
@@ -268,6 +302,19 @@ if ($SelfTest) {
     $v = Get-TaskViewVerdict -What 'Task Scheduler' -IsElevated $false
     T 'Task Scheduler not enumerable as a standard user is DEFERRED too' ($v.Deferred -and $v.Sev -eq 'OK') ($v.Sev)
     T 'a deferral never carries a severity tag (nothing for the ledger to count)' (((Get-TaskViewVerdict -What 'x' -IsElevated $false).Line) -notmatch '^\[(WARNING|CRITICAL)\]') ''
+
+    # The process race: [cross-api-race] in the corpus. A process that started
+    # or exited between the three sequential reads disagrees across them and
+    # looked identical to a hiding rootkit; the closing liveness probe is what
+    # separates them, and timing cannot be planted on a runner.
+    $v = Get-ProcessRaceVerdict -StillAlive $false -ProcId '4242' -Name 'conhost' -InNet $true -InWmi $false -InTasklist $false
+    T 'a disagreeing PID that is GONE at the final liveness check is a race, not a hit' ($v.Kind -eq 'raced' -and -not $v.Line) ($v.Kind + '/' + $v.Line)
+    $v = Get-ProcessRaceVerdict -StillAlive $true -ProcId '4242' -Name 'dz_hidden' -InNet $true -InWmi $false -InTasklist $true
+    T 'a disagreeing PID that is STILL ALIVE is the hidden process, and the line names the views' ($v.Kind -eq 'hidden' -and $v.Line -eq 'PID 4242 (dz_hidden) -- .NET:True WMI:False tasklist:True') $v.Line
+    $r = Get-ProcessRaceReport -Hits @() -Raced 2 -Total 285
+    T 'races only: OK line with the count, the INFO race line, no [CRITICAL]' ($r.Sev -eq 'OK' -and (($r.Lines -join "`n") -match '\[OK\] Process lists agree across \.NET, WMI and tasklist \(285 processes') -and (($r.Lines -join "`n") -match '\[INFO\] 2 process\(es\) disagreed across APIs but had exited by the final re-check') -and (($r.Lines -join "`n") -notmatch '\[CRITICAL\]')) ($r.Lines -join ' | ')
+    $r = Get-ProcessRaceReport -Hits @('PID 4242 (dz_hidden) -- .NET:True WMI:False tasklist:True') -Raced 0 -Total 285
+    T 'one live hit: CRITICAL (T1014) naming the PID, no OK line, no race line' ($r.Sev -eq 'CRITICAL' -and (($r.Lines -join "`n") -match '\[CRITICAL\] Process visible to some enumeration APIs but not others.*\(T1014\):\n  PID 4242 \(dz_hidden\)') -and (($r.Lines -join "`n") -notmatch '\[OK\]') -and (($r.Lines -join "`n") -notmatch 'had exited')) ($r.Lines -join ' | ')
 
     if ($fails) { Write-Output "[FAIL] $fails cross_api_check self-test expectation(s) unmet"; exit 1 }
     Write-Output '[OK] cross_api_check self-test: a service the SCM refuses to a standard user is stated as not enumerable, one the SCM has never heard of is the hidden service, and only the latter is CRITICAL.'
@@ -342,26 +389,14 @@ if (-not $pOk -or $setNet.Count -eq 0 -or $setWmi.Count -eq 0 -or $setTl.Count -
                 # still disagrees.
                 $stillAlive = $false
                 try { if ([System.Diagnostics.Process]::GetProcessById($procId)) { $stillAlive = $true } } catch {}
-                if ($stillAlive) {
-                    $realHits += ("PID {0} ({1}) -- .NET:{2} WMI:{3} tasklist:{4}" -f $procId, $nm, $n2, $w2, $t2)
-                } else {
-                    $raced++
-                }
+                $rv = Get-ProcessRaceVerdict -StillAlive $stillAlive -ProcId $procId -Name $nm -InNet $n2 -InWmi $w2 -InTasklist $t2
+                if ($rv.Kind -eq 'hidden') { $realHits += $rv.Line } else { $raced++ }
             }
         }
     }
-    if ($realHits.Count -gt 0) {
-        "[CRITICAL] Process visible to some enumeration APIs but not others -- process-hiding rootkit indicator (T1014):"
-        foreach ($h in $realHits) { "  $h" }
-        # The consequence, not a second finding.
-        '[INFO] A live process has no legitimate reason to be missing from one authoritative view of the system.'
-        $sev = Get-MaxSev $sev 'CRITICAL'
-    } else {
-        "[OK] Process lists agree across .NET, WMI and tasklist ($($setNet.Count) processes; transient start/exit differences resolved on re-check)."
-    }
-    if ($raced -gt 0) {
-        "[INFO] $raced process(es) disagreed across APIs but had exited by the final re-check -- ordinary start/exit races, not concealment."
-    }
+    $rr = Get-ProcessRaceReport -Hits @($realHits) -Raced $raced -Total $setNet.Count
+    $rr.Lines
+    $sev = Get-MaxSev $sev $rr.Sev
 }
 
 # ---- 2. Services: SCM vs WMI vs raw registry ------------------------------

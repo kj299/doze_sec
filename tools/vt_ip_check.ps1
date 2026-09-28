@@ -29,14 +29,76 @@
 #
 # Usage:
 #   pwsh -NoProfile -ExecutionPolicy Bypass -File vt_ip_check.ps1 [-MaxIps N]
+#   pwsh -NoProfile -ExecutionPolicy Bypass -File vt_ip_check.ps1 -SelfTest   (no token, no network)
 
 param(
     [int]$MaxIps = 10,
     [int]$SleepSeconds = 16,
-    [int]$TimeoutSeconds = 30
+    [int]$TimeoutSeconds = 30,
+    [switch]$SelfTest
 )
 
 $ErrorActionPreference = 'Continue'
+
+# Top-tier AV/EDR engines: a hit from any of these boosts credibility one tier.
+# Curated based on industry FP rates + research reputation; not exhaustive.
+$topTier = @('Kaspersky','ESET','BitDefender','Sophos','Microsoft','McAfee',
+             'CrowdStrike-Falcon','Symantec','TrendMicro','Avast','AVG',
+             'GData','F-Secure','Emsisoft','MalwareBytes','SentinelOne',
+             'Fortinet','Webroot','VirusTotal') | ForEach-Object { $_.ToLower() }
+
+# Credibility tier (pure): weighted combination of malicious + suspicious
+# counts, malicious at twice the weight; a curated top-tier engine flagging
+# the IP boosts one tier. HIGH -> [CRITICAL], MED -> [WARNING], LOW -> [INFO];
+# only MED and HIGH count toward IOC_HITS. The corpus entry
+# [vt-low-credibility] catalogues the LOW half: a single non-top-tier engine is
+# usually a false positive and is context, never a finding. This tool needs a
+# VirusTotal token and -vt (which -readonly refuses), so it never runs in CI;
+# the judgement lives here so -SelfTest can, without a token or the network.
+function Get-VtCredibility {
+    param([int]$Malicious, [int]$Suspicious, [bool]$TopTierHit)
+    $score = ($Malicious * 2) + $Suspicious
+    $tier = 'LOW'
+    if ($score -ge 10) { $tier = 'HIGH' }       # e.g. 5 malicious, or 3 malicious + 4 suspicious
+    elseif ($score -ge 4) { $tier = 'MED' }     # e.g. 2 malicious, or 1 malicious + 2 suspicious, or 4 suspicious
+    if ($TopTierHit) {
+        if ($tier -eq 'LOW') { $tier = 'MED' }
+        elseif ($tier -eq 'MED') { $tier = 'HIGH' }
+    }
+    $prefix = switch ($tier) {
+        'HIGH' { '[CRITICAL]' }
+        'MED'  { '[WARNING]' }
+        default { '[INFO]' }
+    }
+    return @{ Tier = $tier; Prefix = $prefix; Counts = ($tier -eq 'HIGH' -or $tier -eq 'MED') }
+}
+
+if ($SelfTest) {
+    $fails = 0
+    function T { param([string]$Name, [bool]$Ok, [string]$Got)
+        if ($Ok) { Write-Output "[OK]   $Name" } else { Write-Output "[FAIL] $Name$(if($Got){": $Got"})"; $script:fails++ }
+    }
+    $c = Get-VtCredibility -Malicious 1 -Suspicious 0 -TopTierHit $false
+    T 'one non-top-tier engine: LOW credibility, [INFO], does not count toward IOC_HITS' ($c.Tier -eq 'LOW' -and $c.Prefix -eq '[INFO]' -and -not $c.Counts) ($c.Tier + '/' + $c.Prefix)
+    $c = Get-VtCredibility -Malicious 0 -Suspicious 3 -TopTierHit $false
+    T 'three suspicious-only non-top-tier engines: still LOW' ($c.Tier -eq 'LOW' -and -not $c.Counts) $c.Tier
+    $c = Get-VtCredibility -Malicious 1 -Suspicious 0 -TopTierHit $true
+    T 'one engine, but top-tier: boosted to MED, [WARNING], counts' ($c.Tier -eq 'MED' -and $c.Prefix -eq '[WARNING]' -and $c.Counts) ($c.Tier + '/' + $c.Prefix)
+    $c = Get-VtCredibility -Malicious 2 -Suspicious 0 -TopTierHit $false
+    T 'two malicious: MED' ($c.Tier -eq 'MED' -and $c.Counts) $c.Tier
+    $c = Get-VtCredibility -Malicious 0 -Suspicious 4 -TopTierHit $false
+    T 'four suspicious: MED (suspicious weighs half of malicious)' ($c.Tier -eq 'MED') $c.Tier
+    $c = Get-VtCredibility -Malicious 5 -Suspicious 0 -TopTierHit $false
+    T 'five malicious: HIGH, [CRITICAL]' ($c.Tier -eq 'HIGH' -and $c.Prefix -eq '[CRITICAL]' -and $c.Counts) ($c.Tier + '/' + $c.Prefix)
+    $c = Get-VtCredibility -Malicious 2 -Suspicious 0 -TopTierHit $true
+    T 'MED with a top-tier hit: boosted to HIGH' ($c.Tier -eq 'HIGH') $c.Tier
+    $c = Get-VtCredibility -Malicious 5 -Suspicious 5 -TopTierHit $true
+    T 'HIGH stays HIGH (no tier above it)' ($c.Tier -eq 'HIGH') $c.Tier
+    T 'the top-tier list holds the curated engines (lower-cased, as the live loop compares them)' (($topTier -contains 'kaspersky') -and ($topTier -contains 'crowdstrike-falcon') -and (@($topTier | Where-Object { $_ -cne $_.ToLower() }).Count -eq 0)) ''
+    if ($fails) { Write-Output "[FAIL] $fails vt_ip_check self-test expectation(s) unmet"; exit 1 }
+    Write-Output '[OK] vt_ip_check self-test: a single non-top-tier engine is INFO and never counted; malicious weighs twice suspicious; a top-tier engine boosts one tier.'
+    exit 0
+}
 
 $tokenFile = Join-Path $env:USERPROFILE '.vt_token'
 if (-not (Test-Path $tokenFile)) {
@@ -49,13 +111,6 @@ if (-not $token) {
     '[INFO] VT IP check skipped -- .vt_token is empty.'
     return
 }
-
-# Top-tier AV/EDR engines: a hit from any of these boosts credibility one tier.
-# Curated based on industry FP rates + research reputation; not exhaustive.
-$topTier = @('Kaspersky','ESET','BitDefender','Sophos','Microsoft','McAfee',
-             'CrowdStrike-Falcon','Symantec','TrendMicro','Avast','AVG',
-             'GData','F-Secure','Emsisoft','MalwareBytes','SentinelOne',
-             'Fortinet','Webroot','VirusTotal') | ForEach-Object { $_.ToLower() }
 
 # Filter out non-routable / uninteresting addresses
 function Test-PublicIp {
@@ -181,24 +236,11 @@ foreach ($ip in $ips) {
             }
         }
 
-        # Credibility tier: weighted combination of malicious + suspicious counts.
-        # Malicious carries more weight than suspicious (2:1).
-        $score = ($mal * 2) + $sus
-        $tier = 'LOW'
-        if ($score -ge 10) { $tier = 'HIGH' }       # e.g. 5 malicious, or 3 malicious + 4 suspicious
-        elseif ($score -ge 4) { $tier = 'MED' }     # e.g. 2 malicious, or 1 malicious + 2 suspicious, or 4 suspicious
-        # Boost one tier if any top-tier engine flagged (malicious OR suspicious)
-        if ($topTierHit) {
-            if ($tier -eq 'LOW') { $tier = 'MED' }
-            elseif ($tier -eq 'MED') { $tier = 'HIGH' }
-        }
-
-        # Map tier to output prefix
-        $prefix = switch ($tier) {
-            'HIGH' { '[CRITICAL]' }
-            'MED'  { '[WARNING]' }
-            default { '[INFO]' }
-        }
+        # Credibility tier (Get-VtCredibility, above): weighted counts, boosted
+        # one tier by a top-tier engine.
+        $cred = Get-VtCredibility -Malicious $mal -Suspicious $sus -TopTierHit $topTierHit
+        $tier = $cred.Tier
+        $prefix = $cred.Prefix
 
         # Build summary line
         $boostNote = if ($topTierHit) { ' (top-tier engine flagged: tier boosted)' } else { '' }
@@ -220,7 +262,7 @@ foreach ($ip in $ips) {
         }
 
         # Count toward IOC_HITS only at MED or HIGH credibility
-        if ($tier -eq 'HIGH' -or $tier -eq 'MED') { $malCount++ }
+        if ($cred.Counts) { $malCount++ }
     } catch {
         $statusCode = $null
         try { $statusCode = [int]$_.Exception.Response.StatusCode } catch {}

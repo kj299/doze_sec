@@ -66,35 +66,35 @@ note      = Sysmon is opt-in tooling; its absence is the consumer default. Repor
 [defender-passive-mode]
 class     = QUIET
 maxsev    = INFO
-proof     = field:requires a second registered antivirus product owning real-time protection; cannot be planted on a runner without installing one
+proof     = field:requires a second registered antivirus product owning real-time protection; cannot be planted on a runner without installing one (the only input is Get-MpComputerStatus.AMRunningMode; see docs/design/backlog.md for the ForceDefenderPassiveMode experiment)
 signature = another antivirus product is in control
 note      = With a third-party AV installed, Defender runs in passive/EDR-block mode and its own real-time flags legitimately read as disabled. Verify: Get-MpComputerStatus AMRunningMode, and that the other product is running and current.
 
 [screensaver-default]
 class     = QUIET
 maxsev    = INFO
-proof     = field:ScreenSaverIsSecure=0 is the Windows default on every fresh profile; the CI step only asserts no CRITICAL on a clean runner
+proof     = ci:ScreenSaverIsSecure=0 with a Microsoft screensaver is INFO; field:ScreenSaverIsSecure=0 is the Windows default on every fresh profile, planted in CI with a real System32 screensaver
 signature = ScreenSaverIsSecure=0
 note      = The screensaver not requiring a password on resume is the Windows default, not a compromise indicator. Hardening: tick "On resume, display logon screen".
 
 [appdata-signed-tasks]
 class     = QUIET
 maxsev    = INFO
-proof     = field:needs a validly Authenticode-signed per-user updater under %AppData% (Brave, Chrome, Zoom, Teams); nothing signed to plant on a runner
+proof     = ci:a validly-signed per-user updater under AppData is INFO; field:the real instances are Brave, Chrome, Zoom and Teams updaters; CI plants a copied signed binary and an appended-bytes unsigned twin
 signature = validly-signed task\(s\) under %AppData%
 note      = Per-user updaters register scheduled tasks whose binary lives under %AppData%. Validly signed ones are legitimate. Verify: Get-AuthenticodeSignature on the task's action path.
 
 [adfs-present]
 class     = QUIET
 maxsev    = INFO
-proof     = field:ADFS is a server role; not installable on the audit's target platform in CI
+proof     = ci:Plant the ADFS and Azure AD Connect registry footprints; field:ADFS itself is a server role; CI plants its registry footprint (an empty HKLM\SOFTWARE\Microsoft\ADFS key), which is what the check reads
 signature = ADFS detected -- GoldenSAML attack surface
 note      = Installed software is attack surface, not compromise. Keep patched and monitored.
 
 [aadconnect-present]
 class     = QUIET
 maxsev    = INFO
-proof     = field:Azure AD Connect is a domain-joined server product; not plantable in CI
+proof     = ci:Plant the ADFS and Azure AD Connect registry footprints; field:Azure AD Connect itself is a domain-joined server product; CI plants its registry footprint (an empty HKLM\SOFTWARE\Microsoft\Azure AD Connect key)
 signature = Azure AD Connect detected
 note      = Installed software is attack surface, not compromise. Keep patched and monitored.
 
@@ -108,7 +108,7 @@ note      = At admin (not SYSTEM) privilege some task security descriptors are u
 [cross-api-race]
 class     = QUIET
 maxsev    = INFO
-proof     = field:a process must start and exit between two enumerations; timing cannot be planted reliably
+proof     = ci:cross_api_check.ps1 -SelfTest; field:a process must start and exit between two enumerations, which cannot be planted reliably; the verdict is the pure Get-ProcessRaceVerdict / Get-ProcessRaceReport, self-tested both ways
 signature = disagreed across APIs but had exited by the final re-check
 note      = A process that exits between the .NET, WMI and tasklist enumerations shows up in some and not others. The liveness re-check distinguishes that from concealment.
 
@@ -129,7 +129,7 @@ note      = VBS off is the state of most consumer hardware; optional hardening, 
 [module-unsigned-other]
 class     = QUIET
 maxsev    = INFO
-proof     = field:legitimate third-party software loads unsigned DLLs into its own processes; the module_inspect CI step only asserts no CRITICAL on a clean runner
+proof     = ci:module_inspect.ps1 (injection detection; staged DLL must be caught); field:legitimate third-party software loads unsigned DLLs into its own processes; CI loads an appended-bytes copy of version.dll from C:\dz_ci_mod into an ordinary process and asserts it is counted, never raised
 signature = unsigned module\(s\) loaded outside the core security processes
 note      = Unsigned DLLs in ordinary third-party processes are common and are counted, not itemised; only lsass/winlogon/services are held to the signed-only bar.
 
@@ -201,7 +201,7 @@ note      = A sideloaded or non-store extension that holds no risky permission i
 [vt-low-credibility]
 class     = QUIET
 maxsev    = INFO
-proof     = field:needs a VirusTotal token and -vt, which -readonly refuses; single-engine hits are noise
+proof     = ci:vt_ip_check.ps1 -SelfTest; field:the live lookup needs a VirusTotal token and -vt, which -readonly refuses; the tier rule is the pure Get-VtCredibility, self-tested
 signature = LOW-credibility hits \(1 engine, non-top-tier\)
 note      = One non-top-tier engine flagging an IP is usually a false positive; reported as INFO only.
 

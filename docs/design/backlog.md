@@ -418,3 +418,22 @@ or a small check beside `threat_list_seed`) could compare each shipped list's
 header date against its last content-changing commit. Not built yet: the
 rule as it stands is safe (the shipped file wins a tie), and the cost is one
 `replaced` line in the provenance paragraph the first run after a release.
+
+## Defender passive mode: the one benign twin still without a test (deferred experiment)
+
+`[defender-passive-mode]` in the corpus is the last entry whose proof is
+field-only. The Section 9 block reads one input, `Get-MpComputerStatus`'s
+`AMRunningMode`, and treats anything not matching `Normal` as another AV
+being in control (INFO; the real-time and antivirus CRITICALs are gated on
+it, tamper/signature/`Get-MpPreference` checks still fire). A second
+registered AV cannot be installed on a runner. Microsoft documents the
+`ForceDefenderPassiveMode` policy (`HKLM\SOFTWARE\Policies\Microsoft\Windows
+Advanced Threat Protection`, DWORD `ForceDefenderPassiveMode` = 1) for Server
+SKUs, and windows-latest IS a Server SKU (ProductType 3), but whether the
+mode flips without MDE onboarding or a restart is unknown. The experiment: a
+CI step that sets the value, reads `AMRunningMode` back, and prints it. If it
+reads `Passive Mode`, promote the entry to a `ci:` proof by running the
+Section 9 block (extracted to a tool, or the full-run job with the policy
+planted) and asserting the INFO line and no real-time CRITICAL; if not, the
+step must fail loudly rather than pass on an unplanted state, so it is not
+built until the outcome is known.

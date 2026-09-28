@@ -6,6 +6,27 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Field-only corpus proofs: seven benign twins get a test
+`tests/benign_corpus.txt` had eight entries whose only proof was a `field:`
+reason -- a promise that the tool handles the benign state, exercised by
+nothing. Seven now have a real proof. Planted on the runner, each with its
+malign twin where the rule has one: the Windows default screensaver state
+(`ScreenSaverIsSecure=0` with a real System32 screensaver, INFO); a validly
+signed per-user updater under `%AppData%` beside the same file with bytes
+appended (INFO / CRITICAL); the ADFS and Azure AD Connect registry footprints
+in the full-run job (INFO, graded by `benign_corpus_check -Mode Report` on the
+real report, which the full run never ran before); an unsigned DLL loaded
+from an ordinary path into an ordinary process beside the existing staging
+plant (counted, never raised). Isolated into pure functions with self-tests
+where timing or a token made a plant impossible: the process-race verdict in
+`cross_api_check` (`Get-ProcessRaceVerdict` / `Get-ProcessRaceReport`, four
+cases) and the VirusTotal credibility tiers in `vt_ip_check`
+(`Get-VtCredibility`, nine cases, `-SelfTest` runs without a token or the
+network -- the tool had never run in CI at all). The eighth,
+`[defender-passive-mode]`, stays field-only: its only input is
+`AMRunningMode`, which needs a second registered antivirus; the backlog
+records the `ForceDefenderPassiveMode` experiment that might change that.
+
 ### Baseline run 2026-09-26 14:22: the resume entry pointed at a file that does not exist
 The first non-read-only field run (`-baseline -dnsprobe`) scored four of six
 predictions and found three defects in one mechanism, the RunOnce resume
