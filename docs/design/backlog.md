@@ -419,21 +419,20 @@ header date against its last content-changing commit. Not built yet: the
 rule as it stands is safe (the shipped file wins a tie), and the cost is one
 `replaced` line in the provenance paragraph the first run after a release.
 
-## Defender passive mode: the one benign twin still without a test (deferred experiment)
+## Defender passive mode: extracted and self-tested; the experiment is a declared CI step
 
-`[defender-passive-mode]` in the corpus is the last entry whose proof is
-field-only. The Section 9 block reads one input, `Get-MpComputerStatus`'s
-`AMRunningMode`, and treats anything not matching `Normal` as another AV
-being in control (INFO; the real-time and antivirus CRITICALs are gated on
-it, tamper/signature/`Get-MpPreference` checks still fire). A second
-registered AV cannot be installed on a runner. Microsoft documents the
-`ForceDefenderPassiveMode` policy (`HKLM\SOFTWARE\Policies\Microsoft\Windows
-Advanced Threat Protection`, DWORD `ForceDefenderPassiveMode` = 1) for Server
-SKUs, and windows-latest IS a Server SKU (ProductType 3), but whether the
-mode flips without MDE onboarding or a restart is unknown. The experiment: a
-CI step that sets the value, reads `AMRunningMode` back, and prints it. If it
-reads `Passive Mode`, promote the entry to a `ci:` proof by running the
-Section 9 block (extracted to a tool, or the full-run job with the policy
-planted) and asserting the INFO line and no real-time CRITICAL; if not, the
-step must fail loudly rather than pass on an unplanted state, so it is not
-built until the outcome is known.
+The Section 9 Defender core block now lives in `tools/defender_core_check.ps1`
+with the passive-mode judgement in a pure function and a self-test, so
+`[defender-passive-mode]` carries a `ci:` proof. Microsoft's documentation
+(read 2026-09-27) says passive mode is available only on devices onboarded to
+Defender for Endpoint, so the `ForceDefenderPassiveMode` policy value is not
+expected to flip an un-onboarded runner. The helpers job runs the experiment
+anyway and declares the outcome: a flip promotes the entry to a plant and is
+asserted; no flip prints `[ SKIP ]` with the reason. Check the step's output
+on any run for the actual `AMRunningMode` before/after.
+
+Remaining second measurement on the dashboard: the real-time tile now reads
+the Section 9 state file, but the tamper-protection and signature-age tiles
+still call `Get-MpComputerStatus` themselves. Move them onto the same state
+line (add tamper and age fields) when a field report shows them disagreeing
+with Section 9.

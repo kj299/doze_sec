@@ -91,7 +91,6 @@ $script:KnownMutating = @(
 # Printed lines that describe a check rather than invoke it. Legitimate prose;
 # each must match something, or the entry is stale and this fails.
 $script:KnownDescriptive = @(
-    @{ Match = 'powershell evaluates';        Why = 'prose: names the two cmdlets the Defender block evaluates' },
     @{ Match = 'powershell reads VBAWarnings';Why = 'prose: names the values read per Office application' },
     @{ Match = 'select_lines.ps1';            Why = 'abbreviated pipeline: the printed pattern list ends in an ellipsis' },
     @{ Match = 'findstr /i vpn-client-names'; Why = 'abbreviated: stands in for the generated VPN name list' }

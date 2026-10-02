@@ -139,6 +139,9 @@ set "VT_CHECK=0"
 set "DNS_PROBE=0"
 set "DNSPROBE_STATE="
 set "PROCPATH_STATE="
+set "DEFCORE_MODE=unknown"
+set "DEFCORE_RT=0"
+set "DEFCORE_GRADED=0"
 set "PROCPATH_CLEAN="
 set "PROCPATH_BAD=0"
 set "PROCPATH_TOTAL=0"
@@ -2247,38 +2250,39 @@ echo check existed, "RealTimeProtectionEnabled : False" and "IsTamperProtected :
 echo were printed into the report and reached no verdict at all -- the>> "%REPORT%"
 echo section could still say CLEAN on a machine whose antivirus had been switched>> "%REPORT%"
 echo off, which is the first thing an intruder does after gaining admin.>> "%REPORT%"
-echo  Command: powershell evaluates Get-MpComputerStatus + Get-MpPreference>> "%REPORT%"
-echo $ok=$true; try{$st=Get-MpComputerStatus -EA Stop}catch{$ok=$false} > "%PSRUN%"
-echo $pf=$true; try{$pr=Get-MpPreference -EA Stop}catch{$pf=$false} >> "%PSRUN%"
-echo $mode='' >> "%PSRUN%"
-echo if($ok){ try{$mode=[string]$st.AMRunningMode}catch{} } >> "%PSRUN%"
-echo $passive = ($mode -ne '' -and $mode -notmatch 'Normal') >> "%PSRUN%"
-echo if(-not $ok){ >> "%PSRUN%"
-echo   '[SKIPPED] Get-MpComputerStatus failed -- Defender core status NOT evaluated. Either a third-party AV owns protection or Defender itself is disabled; confirm manually which one it is.' >> "%PSRUN%"
-echo } else { >> "%PSRUN%"
-echo   if($passive){ '[INFO] Defender is running in ' + $mode + ' -- another antivirus product is in control, so Defender own real-time flags are EXPECTED to read as disabled. Verify that other product is running and current.' } >> "%PSRUN%"
-echo   if(-not $st.AMServiceEnabled){ '[WARNING] Defender antimalware service is not enabled (T1562.001).' } >> "%PSRUN%"
-echo   if(-not $passive){ >> "%PSRUN%"
-echo     if(-not $st.RealTimeProtectionEnabled){ '[CRITICAL] Defender real-time protection is OFF (T1562.001) -- files are not scanned as they are written or run. Fix: Set-MpPreference -DisableRealtimeMonitoring $false' } >> "%PSRUN%"
-echo     if(-not $st.AntivirusEnabled){ '[CRITICAL] Defender antivirus is OFF (T1562.001) and no other AV reported control of this machine.' } >> "%PSRUN%"
-echo     if(-not $st.AntispywareEnabled){ '[WARNING] Defender antispyware protection is off.' } >> "%PSRUN%"
-echo     if(-not $st.OnAccessProtectionEnabled){ '[WARNING] Defender on-access protection is off -- files are not scanned when opened.' } >> "%PSRUN%"
-echo   } >> "%PSRUN%"
-echo   if(-not $st.IsTamperProtected){ '[WARNING] Tamper Protection is OFF -- an attacker who gains admin can silently disable Defender and its logging. Fix: Windows Security ^> Virus ^& threat protection ^> Manage settings ^> Tamper Protection On' } >> "%PSRUN%"
-echo   $age = $null >> "%PSRUN%"
-echo   try{ $age = ((Get-Date) - $st.AntivirusSignatureLastUpdated).TotalDays }catch{} >> "%PSRUN%"
-echo   if($null -ne $age -and $age -gt 7){ '[WARNING] Defender signatures are ' + [int]$age + ' day(s) old -- updates are not arriving, which is itself a tampering indicator.' } >> "%PSRUN%"
-echo } >> "%PSRUN%"
-echo if($pf){ >> "%PSRUN%"
-echo   if($pr.DisableRealtimeMonitoring){ '[CRITICAL] DisableRealtimeMonitoring is SET (T1562.001) -- real-time monitoring was explicitly turned off.' } >> "%PSRUN%"
-echo   if($pr.DisableBehaviorMonitoring){ '[WARNING] DisableBehaviorMonitoring is set -- behavioural detection is off.' } >> "%PSRUN%"
-echo   if($pr.DisableScriptScanning){ '[WARNING] DisableScriptScanning is set -- malicious scripts are not scanned.' } >> "%PSRUN%"
-echo   if($pr.DisableIOAVProtection){ '[WARNING] DisableIOAVProtection is set -- downloaded files are not scanned.' } >> "%PSRUN%"
-echo   if($pr.DisableBlockAtFirstSeen){ '[WARNING] DisableBlockAtFirstSeen is set -- cloud first-sight blocking is off.' } >> "%PSRUN%"
-echo } else { >> "%PSRUN%"
-echo   '[SKIPPED] Get-MpPreference failed -- the Defender disable flags were NOT evaluated.' >> "%PSRUN%"
-echo } >> "%PSRUN%"
-call :dz_ps_scan 9 T1562.001 "Defender core protection disabled, passive without a replacement, or tampered with"
+echo  Command: powershell -File tools\defender_core_check.ps1   [evaluates Get-MpComputerStatus + Get-MpPreference]>> "%REPORT%"
+del "%TEMP%\dz_defcore.txt" 2>nul
+del "%TEMP%\dz_defcore_state.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\defender_core_check.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\defender_core_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo  [SKIPPED] tools\defender_core_check.ps1 not found -- Defender core status NOT evaluated.>> "%REPORT%"
+    call :dz_finding WARNING 9 T1562.001 "Defender core status not evaluated - tools\defender_core_check.ps1 missing"
+)
+if exist "%TEMP%\dz_defcore.txt" (
+    set "_DCSEV="
+    set /p _DCSEV=<"%TEMP%\dz_defcore.txt"
+    call :dz_finding !_DCSEV! 9 T1562.001 "Defender core protection disabled, passive without a replacement, or tampered with"
+    del "%TEMP%\dz_defcore.txt" 2>nul
+)
+:: Carry this check's verdict to the summary dashboard (the PROCPATH_STATE /
+:: DNSPROBE_STATE idiom): the real-time tile states what Section 9 found instead
+:: of calling Get-MpComputerStatus a second time. The old tile had no
+:: passive-mode handling and read CRIT on a machine where another antivirus
+:: owns protection, while this section printed INFO; the remediation script
+:: then keyed off that tile text. State line: mode|realtime|graded, the mode
+:: reduced to letters and spaces by the tool, every field always present.
+set "DEFCORE_MODE=unknown"
+set "DEFCORE_RT=0"
+set "DEFCORE_GRADED=0"
+set "DEFCORE_LINE="
+if exist "%TEMP%\dz_defcore_state.txt" set /p DEFCORE_LINE=<"%TEMP%\dz_defcore_state.txt"
+if defined DEFCORE_LINE for /f "tokens=1,2,3 delims=|" %%a in ("%DEFCORE_LINE%") do (
+    set "DEFCORE_MODE=%%a"
+    set "DEFCORE_RT=%%b"
+    set "DEFCORE_GRADED=%%c"
+)
+del "%TEMP%\dz_defcore_state.txt" 2>nul
 
 del "%TEMP%\dz_defexcl_hit.txt" 2>nul
 echo.>> "%REPORT%"
@@ -4431,9 +4435,11 @@ echo. >> "%PSRUN%"
 
 :: ===== WINDOWS DEFENDER ==============================================
 echo sec 'WINDOWS DEFENDER  (Section 9)' >> "%PSRUN%"
+echo $dcMode='%DEFCORE_MODE%';$dcRt='%DEFCORE_RT%';$dcGraded='%DEFCORE_GRADED%';$dcPassive=($dcMode -ne '' -and $dcMode -ne 'unknown' -and $dcMode -notmatch 'Normal') >> "%PSRUN%"
 echo if($isAdmin -eq '1'){ >> "%PSRUN%"
+echo if($dcGraded -ne '1'){ck 'INFO' 'Real-time protection: NOT graded -- Section 9 could not query Defender' 'Get-MpComputerStatus failed in Section 9: a third-party AV may own protection, or Defender is disabled. Confirm which manually.'}elseif($dcPassive){ck 'INFO' ('Defender in '+$dcMode+' -- another antivirus product is in control (Section 9)') 'Defender real-time flags read off by design while another product is primary. Verify that product is running and current.'}elseif($dcRt -eq '1'){ck 'PASS' 'Real-time protection enabled'}else{ck 'CRIT' 'Real-time protection DISABLED' 'Run: Set-MpPreference -DisableRealtimeMonitoring $false'} >> "%PSRUN%"
 echo $mp=Get-MpComputerStatus -EA SilentlyContinue >> "%PSRUN%"
-echo if($mp){if($mp.RealTimeProtectionEnabled){ck 'PASS' 'Real-time protection enabled'}else{ck 'CRIT' 'Real-time protection DISABLED' 'Run: Set-MpPreference -DisableRealtimeMonitoring $false'};if($mp.IsTamperProtected){ck 'PASS' 'Tamper protection enabled'}else{ck 'WARN' 'Tamper protection disabled' 'Enable via Windows Security ^> Virus and threat protection settings'};$age=$mp.AntivirusSignatureAge;if($age -lt 3){ck 'PASS' "Signatures current ($age days old)"}elseif($age -lt 7){ck 'WARN' "Signatures aging: $age days old" 'Run: Update-MpSignature'}else{ck 'CRIT' "Signatures OUTDATED: $age days old" 'Run: Update-MpSignature or Windows Update now'}}else{ck 'INFO' 'Cannot query Defender - third-party AV or WMI issue'} >> "%PSRUN%"
+echo if($mp){if($mp.IsTamperProtected){ck 'PASS' 'Tamper protection enabled'}else{ck 'WARN' 'Tamper protection disabled' 'Enable via Windows Security ^> Virus and threat protection settings'};$age=$mp.AntivirusSignatureAge;if($age -lt 3){ck 'PASS' "Signatures current ($age days old)"}elseif($age -lt 7){ck 'WARN' "Signatures aging: $age days old" 'Run: Update-MpSignature'}else{ck 'CRIT' "Signatures OUTDATED: $age days old" 'Run: Update-MpSignature or Windows Update now'}}else{ck 'INFO' 'Cannot query Defender for tamper protection and signature age - third-party AV or WMI issue'} >> "%PSRUN%"
 echo $mpp=Get-MpPreference -EA SilentlyContinue;if($mpp){$ep=@($mpp.ExclusionPath^|Where-Object{$_});$epr=@($mpp.ExclusionProcess^|Where-Object{$_});if($ep.Count -gt 0){ck 'WARN' "Defender path exclusions configured: $($ep.Count) paths" 'Exclusions hide malware from Defender. Verify each is legitimate. See Section 9.'}else{ck 'PASS' 'No Defender path exclusions configured'};if($epr.Count -gt 0){ck 'WARN' "Defender process exclusions configured: $($epr.Count)" 'Verify each is legitimate. See Section 9.'}else{ck 'PASS' 'No Defender process exclusions configured'}} >> "%PSRUN%"
 echo }else{ >> "%PSRUN%"
 echo ck 'INFO' 'Defender status check deferred (requires admin)' >> "%PSRUN%"
@@ -4623,7 +4629,7 @@ echo if(led 'WARNING' '13' 'T1546.008' 'Sticky Keys'^){ addfix 'Disable the Shif
 echo if($joined -match 'portproxy tunnel rules are ACTIVE'){ addfix 'Review netsh portproxy rules (LISTS ONLY -- reset would delete WSL/dev forwards too)' 'netsh interface portproxy show all; Write-Host ''Delete ONLY the rule you do not recognise: netsh interface portproxy delete v4tov4 listenport=^<port^> listenaddress=^<addr^>. WSL2 and Hyper-V port forwarding look identical to this IOC.''' '' } >> "%PSRUN%"
 echo if($joined -match 'WMI EventFilter subscriptions present'){ addfix 'Review non-default WMI EventFilter subscriptions (LISTS ONLY -- deletion is manual on purpose)' 'Get-CimInstance -Namespace root/subscription -ClassName __EventFilter -EA SilentlyContinue ^| Where-Object { $_.Name -notin @(''SCM Event Log Filter'',''BVTFilter'') } ^| Format-List Name,Query; Write-Host ''Review each filter above. A permanent WMI subscription is normal for management agents (ConfigMgr, Dell/HP/Lenovo, EDR). Delete one only after you know what registered it: Get-CimInstance -Namespace root/subscription -ClassName __EventFilter ^| Where-Object Name -eq ^<name^> ^| Remove-CimInstance''' '' } >> "%PSRUN%"
 echo if($joined -match 'Accessibility binary signature INVALID'){ addfix 'Restore corrupted system binaries' "sfc /scannow; DISM /Online /Cleanup-Image /RestoreHealth" '' } >> "%PSRUN%"
-echo if($joined -match 'Real-time protection DISABLED'){ addfix 'Re-enable Defender real-time protection' "Set-MpPreference -DisableRealtimeMonitoring `$false" '' } >> "%PSRUN%"
+echo if(led 'CRITICAL' '9' 'T1562.001' 'Defender core protection disabled'){ addfix 'Re-enable Defender real-time protection' "Set-MpPreference -DisableRealtimeMonitoring `$false" '' } >> "%PSRUN%"
 echo if($joined -match 'Signatures OUTDATED^|Signatures aging'){ addfix 'Update Defender signatures' "Update-MpSignature" '' } >> "%PSRUN%"
 echo if($joined -match 'Tamper protection disabled'){ addfix 'Enable Defender tamper protection (via Windows Security UI)' "Write-Host 'Tamper Protection is UI-managed. Open: Windows Security > Virus and threat protection > Manage settings > Tamper Protection > On'" '' } >> "%PSRUN%"
 rem ASR: the finding is report-only (Section 9, raised via :dz_ps_scan), so it

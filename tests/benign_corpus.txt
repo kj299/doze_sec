@@ -66,9 +66,9 @@ note      = Sysmon is opt-in tooling; its absence is the consumer default. Repor
 [defender-passive-mode]
 class     = QUIET
 maxsev    = INFO
-proof     = field:requires a second registered antivirus product owning real-time protection; cannot be planted on a runner without installing one (the only input is Get-MpComputerStatus.AMRunningMode; see docs/design/backlog.md for the ForceDefenderPassiveMode experiment)
+proof     = ci:defender_core_check.ps1 -SelfTest; field:the live state needs a second registered antivirus owning protection, and Microsoft documents that Defender runs in passive mode only on devices onboarded to Defender for Endpoint, so neither a runner nor the ForceDefenderPassiveMode policy value can show it; the judgement is the pure Get-DefenderCoreReport, self-tested for Passive Mode, EDR Block Mode and SxS Passive Mode, and the CI experiment step reports what the policy value did
 signature = another antivirus product is in control
-note      = With a third-party AV installed, Defender runs in passive/EDR-block mode and its own real-time flags legitimately read as disabled. Verify: Get-MpComputerStatus AMRunningMode, and that the other product is running and current.
+note      = With a third-party AV installed, Defender runs in passive mode and its own real-time flags legitimately read as disabled. AMRunningMode is Defender's own statement of who is in control: Normal (active), Passive Mode and EDR Block Mode (Defender for Endpoint onboarded, another product primary), SxS Passive Mode (a client with a third-party antivirus, limited periodic scanning); anything not Normal and not EMPTY is passive, and an empty answer is graded as active (fail closed). Passive mode suppresses only the real-time/antivirus/antispyware/on-access flags; an explicit DisableRealtimeMonitoring policy, tamper protection off and stale signatures are still findings. Verify: Get-MpComputerStatus | select AMRunningMode, and that the other product is running and current.
 
 [screensaver-default]
 class     = QUIET
