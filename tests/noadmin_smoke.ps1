@@ -143,9 +143,19 @@ function Assert-LedgerConsistency {
     Assert ($ftMax.Success -and $ftMax.Groups[1].Value -eq $lgMax) `
         ("{0}: footer LEDGER MAXSEV ({1}) matches ledger contents" -f $Label, $lgMax) `
         ("{0}: footer LEDGER MAXSEV '{1}' disagrees with ledger '{2}'" -f $Label, $ftMax.Groups[1].Value, $lgMax)
-    Assert (-not ($Text -match 'a raise is missing|an in-section raise is missing')) `
+    $alarmLines = @(($Text -split "`r?`n") | Where-Object { $_ -match 'a raise is missing|an in-section raise is missing' })
+    Assert ($alarmLines.Count -eq 0) `
         ("{0}: no ledger-divergence alarm fired" -f $Label) `
         ("{0}: a ledger-divergence alarm fired under non-admin deferral" -f $Label)
+    if ($alarmLines.Count) {
+        # A REGRESS that does not quote what it matched sends the reader to an
+        # artifact the next machine may not be able to fetch. Quote the alarm
+        # and its two inputs: the report's own [CRITICAL] lines (the census)
+        # and the dashboard's CRITICAL tiles.
+        foreach ($al in $alarmLines) { Write-Host ("               alarm: {0}" -f $al.Trim()) }
+        foreach ($cl in @(($Text -split "`r?`n") | Where-Object { $_ -match '^\[CRITICAL\]' })) { Write-Host ("               census: {0}" -f $cl.Trim()) }
+        foreach ($tl in @(($Text -split "`r?`n") | Where-Object { $_ -match '\[!! CRITICAL !!\]' })) { Write-Host ("               dashboard: {0}" -f $tl.Trim()) }
+    }
     # THE INVERSE of "printed but not raised": every ledger row must be
     # visible in its section as a [CRITICAL]/[WARNING] line. The standard-user
     # field run 2026-09-24 21:03 carried two rows -- "records missing with no
