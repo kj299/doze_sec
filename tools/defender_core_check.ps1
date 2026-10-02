@@ -27,7 +27,8 @@
 #
 # Output goes to the report; the highest severity goes to the marker
 # dz_defcore.txt (the bat raises it into the ledger), and one line goes to
-# the state file for the dashboard tile:  <mode>|<realtime 0/1>|<graded 0/1>
+# the state file for the dashboard tiles:
+#   <mode>|<realtime 0/1>|<graded 0/1>|<tamper 0/1>|<signature age days, -1 unknown>
 # -- the tile states the verdict this section reached instead of calling
 # Get-MpComputerStatus a second time (a tile that re-measures is a second
 # opinion, not a summary; the old tile had no passive handling at all and
@@ -69,11 +70,15 @@ function Get-MaxSev {
 # The state line the dashboard reads. The mode becomes part of an `echo` into
 # the bat's staged PowerShell, so it is reduced to letters and spaces and capped.
 function Get-DefenderStateLine {
-    param([string]$Mode, [bool]$RealTime, [bool]$Graded)
+    param([string]$Mode, [bool]$RealTime, [bool]$Graded, [bool]$Tamper = $false, [int]$SigAgeDays = -1)
     $m = ($Mode -replace '[^A-Za-z ]', '').Trim()
     if ($m.Length -gt 32) { $m = $m.Substring(0, 32) }
     if (-not $m) { $m = 'unknown' }
-    return ('{0}|{1}|{2}' -f $m, $(if ($RealTime) { '1' } else { '0' }), $(if ($Graded) { '1' } else { '0' }))
+    # Five fields, every one always present (cmd's for /f leaves the literal
+    # token text in a variable when a field is missing): mode | real-time 0/1 |
+    # graded 0/1 | tamper protection 0/1 | signature age in whole days, -1 when
+    # Defender did not report one.
+    return ('{0}|{1}|{2}|{3}|{4}' -f $m, $(if ($RealTime) { '1' } else { '0' }), $(if ($Graded) { '1' } else { '0' }), $(if ($Tamper) { '1' } else { '0' }), $SigAgeDays)
 }
 
 # Pure. $Status / $Pref are whatever Get-MpComputerStatus / Get-MpPreference
@@ -91,6 +96,8 @@ function Get-DefenderCoreReport {
     $mode = ''
     $passive = $false
     $rt = $false
+    $tamper = $false
+    $ageDays = -1
     $findings = 0
     if ($StatusOk) {
         try { $mode = [string]$Status.AMRunningMode } catch { $mode = '' }
@@ -118,11 +125,13 @@ function Get-DefenderCoreReport {
                 [void]$out.Add('[WARNING] Defender on-access protection is off -- files are not scanned when opened.'); $sev = Get-MaxSev $sev 'WARNING'; $findings++
             }
         }
+        $tamper = [bool]$Status.IsTamperProtected
         if (-not $Status.IsTamperProtected) {
             [void]$out.Add('[WARNING] Tamper Protection is OFF -- an attacker who gains admin can silently disable Defender and its logging. Fix: Windows Security > Virus & threat protection > Manage settings > Tamper Protection On'); $sev = Get-MaxSev $sev 'WARNING'; $findings++
         }
         $age = $null
         try { $age = ($Now - [datetime]$Status.AntivirusSignatureLastUpdated).TotalDays } catch { $age = $null }
+        if ($null -ne $age) { $ageDays = [int][math]::Floor([double]$age); if ($ageDays -lt 0) { $ageDays = 0 } }
         if ($null -ne $age -and $age -gt 7) {
             [void]$out.Add('[WARNING] Defender signatures are ' + [int]$age + ' day(s) old -- updates are not arriving, which is itself a tampering indicator.'); $sev = Get-MaxSev $sev 'WARNING'; $findings++
         }
@@ -155,7 +164,7 @@ function Get-DefenderCoreReport {
             [void]$out.Add('[OK] Defender core protection on: real-time, antivirus, on-access and tamper protection enabled; signatures current; no disable flags set.')
         }
     }
-    return @{ Lines = @($out.ToArray()); Sev = $sev; Mode = $mode; Passive = $passive; RealTime = $rt; Graded = $StatusOk; State = (Get-DefenderStateLine -Mode $mode -RealTime $rt -Graded $StatusOk) }
+    return @{ Lines = @($out.ToArray()); Sev = $sev; Mode = $mode; Passive = $passive; RealTime = $rt; Graded = $StatusOk; State = (Get-DefenderStateLine -Mode $mode -RealTime $rt -Graded $StatusOk -Tamper $tamper -SigAgeDays $ageDays) }
 }
 
 if ($SelfTest) {
@@ -189,16 +198,18 @@ if ($SelfTest) {
     $r = Get-DefenderCoreReport -StatusOk $true -Status (St -AgeDays 3) -PrefOk $true -Pref (Pr) -Now $now
     T 'signatures 3 days old: nothing raised, the OK line prints' ($r.Sev -eq 'OK' -and (& $j $r) -match '^\[OK\] Defender core protection on:' -and (& $j $r) -notmatch '\[WARNING\]') (& $j $r)
     $r = Get-DefenderCoreReport -StatusOk $false -Status $null -PrefOk $true -Pref (Pr) -Now $now
-    T 'Get-MpComputerStatus failed: [SKIPPED], not graded, no severity invented, state says ungraded' ($r.Sev -eq 'OK' -and (-not $r.Graded) -and (& $j $r) -match '^\[SKIPPED\] Get-MpComputerStatus failed' -and $r.State -eq 'unknown|0|0') ((& $j $r) + ' / ' + $r.State)
+    T 'Get-MpComputerStatus failed: [SKIPPED], not graded, no severity invented, state says ungraded' ($r.Sev -eq 'OK' -and (-not $r.Graded) -and (& $j $r) -match '^\[SKIPPED\] Get-MpComputerStatus failed' -and $r.State -eq 'unknown|0|0|0|-1') ((& $j $r) + ' / ' + $r.State)
     $r = Get-DefenderCoreReport -StatusOk $true -Status (St) -PrefOk $false -Pref $null -Now $now
     T 'Get-MpPreference failed: the flags are declared [SKIPPED], the status half still grades' ($r.Sev -eq 'OK' -and (& $j $r) -match '\[SKIPPED\] Get-MpPreference failed' -and (& $j $r) -notmatch '^\[OK\]') (& $j $r)
     $r = Get-DefenderCoreReport -StatusOk $true -Status (St -Svc $false) -PrefOk $true -Pref (Pr -Bm $true) -Now $now
     T 'service not enabled + behaviour monitoring disabled: two WARNINGs, Sev WARNING' ($r.Sev -eq 'WARNING' -and (& $j $r) -match 'antimalware service is not enabled' -and (& $j $r) -match 'DisableBehaviorMonitoring is set') (& $j $r)
     $r = Get-DefenderCoreReport -StatusOk $true -Status (St -Mode 'Passive Mode' -Rt $false -Av $false) -PrefOk $true -Pref (Pr) -Now $now
-    T 'state line for the tile: mode, real-time flag, graded' ($r.State -eq 'Passive Mode|0|1') $r.State
+    T 'state line for the tile: mode, real-time, graded, tamper, signature age' ($r.State -eq 'Passive Mode|0|1|1|1') $r.State
     $r = Get-DefenderCoreReport -StatusOk $true -Status (St) -PrefOk $true -Pref (Pr) -Now $now
-    T 'state line, all good: Normal|1|1' ($r.State -eq 'Normal|1|1') $r.State
-    T 'a mode with shell-significant characters is sanitised before it reaches the bat' ((Get-DefenderStateLine -Mode 'Passive & Mode | x %y% !z!' -RealTime $false -Graded $true) -eq 'Passive  Mode  x y z|0|1') (Get-DefenderStateLine -Mode 'Passive & Mode | x %y% !z!' -RealTime $false -Graded $true)
+    T 'state line, all good: Normal|1|1|1|1' ($r.State -eq 'Normal|1|1|1|1') $r.State
+    $r = Get-DefenderCoreReport -StatusOk $true -Status (St -Tp $false -AgeDays 9) -PrefOk $true -Pref (Pr) -Now $now
+    T 'state line carries tamper OFF and the signature age the section graded: Normal|1|1|0|9' ($r.State -eq 'Normal|1|1|0|9') $r.State
+    T 'a mode with shell-significant characters is sanitised before it reaches the bat' ((Get-DefenderStateLine -Mode 'Passive & Mode | x %y% !z!' -RealTime $false -Graded $true) -eq 'Passive  Mode  x y z|0|1|0|-1') (Get-DefenderStateLine -Mode 'Passive & Mode | x %y% !z!' -RealTime $false -Graded $true)
     T 'Get-MaxSev never lowers a CRITICAL' ((Get-MaxSev 'CRITICAL' 'WARNING') -eq 'CRITICAL') ''
     if ($fails) { Write-Output "[FAIL] $fails defender_core_check self-test expectation(s) unmet"; exit 1 }
     Write-Output '[OK] defender_core_check self-test: another antivirus in control is INFO and suppresses only the flags it explains; real-time off with no other product, an empty mode, or an explicit disable policy is CRITICAL.'

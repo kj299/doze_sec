@@ -6,6 +6,19 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Defender dashboard: no tile re-measures
+The tamper-protection and signature-age tiles still called
+`Get-MpComputerStatus` themselves after the real-time tile moved onto Section
+9's state line, and the signature tile graded on its own thresholds (CRIT at
+7 days, WARN at 3) while the section raises one WARNING past 7 days -- two
+rules for one fact. The state line now carries five fields
+(`mode|realtime|graded|tamper|sigage`), every tile states what Section 9
+graded, a section that could not query Defender reads NOT graded on every
+Defender tile, and the signature and tamper remediation fixes trigger off
+that state instead of the tile text. The experiment step prints the prior
+`ForceDefenderPassiveMode` value, not only its presence: the first run showed
+the runner image already carried one.
+
 ### Defender core check extracted; passive mode self-tested; the dashboard stops re-measuring it
 The Section 9 Defender core block (real-time, antivirus, tamper protection,
 signature age, the `Get-MpPreference` disable flags, and the passive-mode

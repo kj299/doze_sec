@@ -162,6 +162,8 @@ set "PROCPATH_STATE="
 set "DEFCORE_MODE=unknown"
 set "DEFCORE_RT=0"
 set "DEFCORE_GRADED=0"
+set "DEFCORE_TAMPER=0"
+set "DEFCORE_SIGAGE=-1"
 set "PROCPATH_CLEAN="
 set "PROCPATH_BAD=0"
 set "PROCPATH_TOTAL=0"
@@ -2610,12 +2612,16 @@ if exist "%TEMP%\dz_defcore.txt" (
 set "DEFCORE_MODE=unknown"
 set "DEFCORE_RT=0"
 set "DEFCORE_GRADED=0"
+set "DEFCORE_TAMPER=0"
+set "DEFCORE_SIGAGE=-1"
 set "DEFCORE_LINE="
 if exist "%TEMP%\dz_defcore_state.txt" set /p DEFCORE_LINE=<"%TEMP%\dz_defcore_state.txt"
-if defined DEFCORE_LINE for /f "tokens=1,2,3 delims=|" %%a in ("%DEFCORE_LINE%") do (
+if defined DEFCORE_LINE for /f "tokens=1,2,3,4,5 delims=|" %%a in ("%DEFCORE_LINE%") do (
     set "DEFCORE_MODE=%%a"
     set "DEFCORE_RT=%%b"
     set "DEFCORE_GRADED=%%c"
+    set "DEFCORE_TAMPER=%%d"
+    set "DEFCORE_SIGAGE=%%e"
 )
 del "%TEMP%\dz_defcore_state.txt" 2>nul
 
@@ -4576,10 +4582,10 @@ echo. >> "%PSRUN%"
 
 :: ===== WINDOWS DEFENDER ==============================================
 echo sec 'WINDOWS DEFENDER  (Section 9)' >> "%PSRUN%"
-echo $dcMode='%DEFCORE_MODE%';$dcRt='%DEFCORE_RT%';$dcGraded='%DEFCORE_GRADED%';$dcPassive=($dcMode -ne '' -and $dcMode -ne 'unknown' -and $dcMode -notmatch 'Normal') >> "%PSRUN%"
+echo $dcMode='%DEFCORE_MODE%';$dcRt='%DEFCORE_RT%';$dcGraded='%DEFCORE_GRADED%';$dcTamper='%DEFCORE_TAMPER%';$dcSigAge=[int]'%DEFCORE_SIGAGE%';$dcPassive=($dcMode -ne '' -and $dcMode -ne 'unknown' -and $dcMode -notmatch 'Normal') >> "%PSRUN%"
+echo $dcTamperOff=$(if($dcGraded -eq '1' -and $dcTamper -ne '1'){'yes'}else{'no'});$dcSigOld=$(if($dcGraded -eq '1' -and $dcSigAge -gt 7){'yes'}else{'no'}) >> "%PSRUN%"
 echo if($dcGraded -ne '1'){ck 'INFO' 'Real-time protection: NOT graded -- Section 9 could not query Defender' 'Get-MpComputerStatus failed in Section 9: a third-party AV may own protection, or Defender is disabled. Confirm which manually.'}elseif($dcPassive){ck 'INFO' ('Defender in '+$dcMode+' -- another antivirus product is in control (Section 9)') 'Defender real-time flags read off by design while another product is primary. Verify that product is running and current.'}elseif($dcRt -eq '1'){ck 'PASS' 'Real-time protection enabled'}else{ck 'CRIT' 'Real-time protection DISABLED' 'Run: Set-MpPreference -DisableRealtimeMonitoring $false'} >> "%PSRUN%"
-echo $mp=Get-MpComputerStatus -EA SilentlyContinue >> "%PSRUN%"
-echo if($mp){if($mp.IsTamperProtected){ck 'PASS' 'Tamper protection enabled'}else{ck 'WARN' 'Tamper protection disabled' 'Enable via Windows Security ^> Virus and threat protection settings'};$age=$mp.AntivirusSignatureAge;if($age -lt 3){ck 'PASS' "Signatures current ($age days old)"}elseif($age -lt 7){ck 'WARN' "Signatures aging: $age days old" 'Run: Update-MpSignature'}else{ck 'CRIT' "Signatures OUTDATED: $age days old" 'Run: Update-MpSignature or Windows Update now'}}else{ck 'INFO' 'Cannot query Defender for tamper protection and signature age - third-party AV or WMI issue'} >> "%PSRUN%"
+echo if($dcGraded -ne '1'){ck 'INFO' 'Tamper protection and signature age: NOT graded -- Section 9 could not query Defender'}else{if($dcTamper -eq '1'){ck 'PASS' 'Tamper protection enabled'}else{ck 'WARN' 'Tamper protection disabled' 'Enable via Windows Security ^> Virus and threat protection settings'};if($dcSigAge -lt 0){ck 'INFO' 'Signature age: not reported by Defender (Section 9)'}elseif($dcSigAge -gt 7){ck 'WARN' "Signatures are $dcSigAge days old -- updates are not arriving (Section 9)" 'Run: Update-MpSignature'}else{ck 'PASS' "Signatures current ($dcSigAge days old)"}} >> "%PSRUN%"
 echo $mpp=Get-MpPreference -EA SilentlyContinue;if($mpp){$ep=@($mpp.ExclusionPath^|Where-Object{$_});$epr=@($mpp.ExclusionProcess^|Where-Object{$_});if($ep.Count -gt 0){ck 'WARN' "Defender path exclusions configured: $($ep.Count) paths" 'Exclusions hide malware from Defender. Verify each is legitimate. See Section 9.'}else{ck 'PASS' 'No Defender path exclusions configured'};if($epr.Count -gt 0){ck 'WARN' "Defender process exclusions configured: $($epr.Count)" 'Verify each is legitimate. See Section 9.'}else{ck 'PASS' 'No Defender process exclusions configured'}} >> "%PSRUN%"
 echo. >> "%PSRUN%"
 
@@ -4732,8 +4738,8 @@ echo if($joined -match 'portproxy tunnel rules are ACTIVE'){ addfix 'Review nets
 echo if($joined -match 'WMI EventFilter subscriptions present'){ addfix 'Review non-default WMI EventFilter subscriptions (LISTS ONLY -- deletion is manual on purpose)' 'Get-CimInstance -Namespace root/subscription -ClassName __EventFilter -EA SilentlyContinue ^| Where-Object { $_.Name -notin @(''SCM Event Log Filter'',''BVTFilter'') } ^| Format-List Name,Query; Write-Host ''Review each filter above. A permanent WMI subscription is normal for management agents (ConfigMgr, Dell/HP/Lenovo, EDR). Delete one only after you know what registered it: Get-CimInstance -Namespace root/subscription -ClassName __EventFilter ^| Where-Object Name -eq ^<name^> ^| Remove-CimInstance''' '' } >> "%PSRUN%"
 echo if($joined -match 'Accessibility binary signature INVALID'){ addfix 'Restore corrupted system binaries' "sfc /scannow; DISM /Online /Cleanup-Image /RestoreHealth" '' } >> "%PSRUN%"
 echo if(led 'CRITICAL' '9' 'T1562.001' 'Defender core protection disabled'){ addfix 'Re-enable Defender real-time protection' "Set-MpPreference -DisableRealtimeMonitoring `$false" '' } >> "%PSRUN%"
-echo if($joined -match 'Signatures OUTDATED^|Signatures aging'){ addfix 'Update Defender signatures' "Update-MpSignature" '' } >> "%PSRUN%"
-echo if($joined -match 'Tamper protection disabled'){ addfix 'Enable Defender tamper protection (via Windows Security UI)' "Write-Host 'Tamper Protection is UI-managed. Open: Windows Security > Virus and threat protection > Manage settings > Tamper Protection > On'" '' } >> "%PSRUN%"
+echo if($dcSigOld -match 'yes'){ addfix 'Update Defender signatures' "Update-MpSignature" '' } >> "%PSRUN%"
+echo if($dcTamperOff -match 'yes'){ addfix 'Enable Defender tamper protection (via Windows Security UI)' "Write-Host 'Tamper Protection is UI-managed. Open: Windows Security > Virus and threat protection > Manage settings > Tamper Protection > On'" '' } >> "%PSRUN%"
 rem ASR: the finding is report-only (Section 9, raised via :dz_ps_scan), so it
 rem was unreachable by the prose triggers -- this is the case that motivated
 rem ledger coverage. Add-MpPreference APPENDS; Set-MpPreference would replace

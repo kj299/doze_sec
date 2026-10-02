@@ -431,8 +431,10 @@ anyway and declares the outcome: a flip promotes the entry to a plant and is
 asserted; no flip prints `[ SKIP ]` with the reason. Check the step's output
 on any run for the actual `AMRunningMode` before/after.
 
-Remaining second measurement on the dashboard: the real-time tile now reads
-the Section 9 state file, but the tamper-protection and signature-age tiles
-still call `Get-MpComputerStatus` themselves. Move them onto the same state
-line (add tamper and age fields) when a field report shows them disagreeing
-with Section 9.
+Every Defender tile now reads the Section 9 state line
+(`mode|realtime|graded|tamper|sigage`); the Defender exclusion tiles still
+call `Get-MpPreference` themselves, graded by the separate exclusions check
+in Section 9 -- the next candidate for the state-file idiom if a field report
+shows them disagreeing. First experiment run (2026-10-02): `AMRunningMode`
+read `Normal` before and after the policy value; the runner image already
+carried a `ForceDefenderPassiveMode` value of its own.
