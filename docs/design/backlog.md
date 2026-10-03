@@ -414,7 +414,7 @@ driver_audit 372; hosts_check 492/498; log_gap_check 129/274/315;
 module_inspect 579/592; persistence_extra 478/548/591/614/776; startup_eval
 223/235/303; doze_sec.bat / doze_sec_noAdmin.bat (defender_core_check not found).
 
-## A shipped list whose content changes should bump its `# Last verified` date (deferred)
+## A shipped list whose content changes should bump its `# Last verified` date -- DONE 2026-10-03 (`tools/lint_threat_list_dates.ps1`: a digest of the entries in the header; `-Stamp` re-verifies)
 
 The elevated field run of 2026-09-25 12:51 replaced the runtime copy of
 `ttp_manifest.txt` "same date, content differs": the release changed the

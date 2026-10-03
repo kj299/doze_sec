@@ -1,4 +1,4 @@
-# Last verified by doze_sec: 2026-06-06 10:20:37
+# Last verified by doze_sec: 2026-06-06 10:20:37 sha256:63F73F0AF6A3686C
 # SENTINEL-X CTI -- Malicious Process Names
 # Updated: 2026-03-29 | Source: MDDR 2024-2025, CISA, Mandiant, CrowdStrike
 # Format: one process name per line (matched case-insensitive via findstr /i)
