@@ -2593,7 +2593,7 @@ del "%TEMP%\dz_defcore_state.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\defender_core_check.ps1" (
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\defender_core_check.ps1">> "%REPORT%" 2>&1
 ) else (
-    echo  [SKIPPED] tools\defender_core_check.ps1 not found -- Defender core status NOT evaluated.>> "%REPORT%"
+    echo  [WARNING] tools\defender_core_check.ps1 not found -- Defender core status NOT evaluated.>> "%REPORT%"
     call :dz_finding WARNING 9 T1562.001 "Defender core status not evaluated - tools\defender_core_check.ps1 missing"
 )
 if exist "%TEMP%\dz_defcore.txt" (

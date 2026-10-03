@@ -287,6 +287,44 @@ if ($glossBad.Count) {
 }
 "[OK] No tool tags a gloss as a finding (checked $(@(Get-ChildItem -LiteralPath (Join-Path $Root 'tools') -Filter '*.ps1').Count) tools for adjacent severity-tagged lines)."
 
+# ---- Rule: [SKIPPED] is never raised ---------------------------------------
+# Vocabulary decision 2026-10-03. A check that could not run and raises that
+# as a finding (a view an administrator should have been able to open, an
+# input that is simply absent) prints [WARNING] ... NOT performed, so the
+# section verdict's "review [WARNING] entries above" points at a visible line
+# and the summary's warning-line count agrees with the findings counted.
+# [SKIPPED] is reserved for gaps that raise nothing (block_sev, verdict_audit
+# and the coverage block all treat it as not-a-finding). A [SKIPPED] literal
+# followed within three lines by a raise is the old shape -- 27 sites on
+# 2026-10-03, three of which a hand survey had missed -- and the lint fails on it so it cannot come back one site at a
+# time. Deferrals ([DEFERRED - ADMIN REQUIRED]) raise nothing and are not
+# touched by this rule.
+$raisedSkip = @()
+$raiseRx = "Get-MaxSev[^\r\n]*'(WARNING|CRITICAL)'|\\$\w*[sS]ev\s*=\s*'(WARNING|CRITICAL)'|Write-Marker[^\r\n]*-Sev\s+'(WARNING|CRITICAL)'|Sev\s*=\s*'(WARNING|CRITICAL)'"
+foreach ($tf in (Get-ChildItem -LiteralPath (Join-Path $Root 'tools') -Filter '*.ps1')) {
+    $tl = [IO.File]::ReadAllLines($tf.FullName)
+    for ($i = 0; $i -lt $tl.Count; $i++) {
+        $ln = $tl[$i].TrimStart()
+        if ($ln.StartsWith('#')) { continue }
+        if ($ln -notmatch "^(['`"]|return @\{|\[void\]\$\w+\.Add\(['`"])\[SKIPPED\]" -and $ln -notmatch "Line\s*=\s*['`"]\[SKIPPED\]") { continue }
+        $win = ($tl[$i..([Math]::Min($tl.Count - 1, $i + 3))] -join "`n")
+        if ($win -match $raiseRx) {
+            $raisedSkip += ("{0}:{1}: a [SKIPPED] line that is raised -- a raised gap prints [WARNING] ... NOT performed; [SKIPPED] is reserved for gaps that raise nothing: {2}" -f $tf.Name, ($i + 1), $ln.Substring(0, [Math]::Min(90, $ln.Length)))
+        }
+    }
+}
+if ($raisedSkip.Count) {
+    ''
+    "[FAIL] $($raisedSkip.Count) [SKIPPED] line(s) are raised into the ledger:"
+    foreach ($g in $raisedSkip) { "  - $g" }
+    '  The section verdict says "review [WARNING] entries above" and the summary'
+    '  counts warning lines; a raised [SKIPPED] is invisible to both. Tag it'
+    '  [WARNING] and keep the NOT-performed wording (the coverage block counts'
+    '  raised gaps by that phrase).'
+    exit 1
+}
+"[OK] No tool raises a [SKIPPED] line (a raised gap prints [WARNING] ... NOT performed)."
+
 if ($failures.Count -eq 0) {
     '[OK] Every check that prints a severity also raises it into the findings ledger.'
     exit 0

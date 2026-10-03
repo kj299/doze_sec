@@ -480,7 +480,7 @@ try {
         $old[$key] = $detail
     }
 } catch {
-    "[SKIPPED] Baseline unreadable: $($_.Exception.Message)"
+    "[WARNING] Baseline unreadable: $($_.Exception.Message)"
     Write-Marker -Name 'baseline' -Sev 'WARNING'
     return
 }

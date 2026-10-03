@@ -89,7 +89,7 @@ function Get-AuditRowVerdict {
         return @{ Line = "[OK] $Name auditing is ON -- feeds $Feeds."; Sev = 'OK' }
     }
     if ($Setting -and $Setting -notmatch '^(No Auditing|Failure)$') {
-        return @{ Line = "[SKIPPED] $Name auditing state could not be read -- auditpol reported '$Setting', which this check cannot classify (localized Windows). Verify manually: auditpol /get /subcategory:$Guid"; Sev = 'WARNING' }
+        return @{ Line = "[WARNING] $Name auditing state could not be read -- auditpol reported '$Setting', which this check cannot classify (localized Windows). Verify manually: auditpol /get /subcategory:$Guid"; Sev = 'WARNING' }
     }
     $shown = if ($Setting) { $Setting } else { '(not set)' }
     return @{ Line = "[WARNING] $Name auditing is OFF [$shown] -- a clean result for the $Feeds may only mean these events are not being recorded (T1562.002)."; Sev = 'WARNING' }
@@ -151,10 +151,10 @@ if ($SelfTest) {
     $v = Get-AuditRowVerdict -Name 'Process Creation (4688)' -Setting '' -Feeds $feeds
     T 'an empty setting is OFF and shown as (not set)' ($v.Sev -eq 'WARNING' -and $v.Line -match '\[\(not set\)\]') $v.Line
     $v = Get-AuditRowVerdict -Name 'Process Creation (4688)' -Setting 'Erfolg' -Feeds $feeds -Guid '{0CCE922B-69AE-11D9-BED3-505054503030}'
-    T 'a localized setting (Erfolg) is SKIPPED, never reported as OFF' ($v.Sev -eq 'WARNING' -and $v.Line -match '^\[SKIPPED\].*cannot classify \(localized Windows\)' -and $v.Line -notmatch 'auditing is OFF') $v.Line
-    T '...and the SKIPPED line hands the reader the exact auditpol command' ($v.Line -match 'auditpol /get /subcategory:\{0CCE922B-69AE-11D9-BED3-505054503030\}') $v.Line
+    T 'a localized setting (Erfolg) is a raised gap ([WARNING] not classified), never reported as OFF' ($v.Sev -eq 'WARNING' -and $v.Line -match '^\[WARNING\].*cannot classify \(localized Windows\)' -and $v.Line -notmatch 'auditing is OFF') $v.Line
+    T '...and the gap line hands the reader the exact auditpol command' ($v.Line -match 'auditpol /get /subcategory:\{0CCE922B-69AE-11D9-BED3-505054503030\}') $v.Line
     $v = Get-AuditRowVerdict -Name 'Logon (4624/4625)' -Setting 'Keine Uberwachung' -Feeds $feeds
-    T 'a localized OFF is also SKIPPED: the tool does not guess which language means off' ($v.Line -match '^\[SKIPPED\]') $v.Line
+    T 'a localized OFF is also a raised gap: the tool does not guess which language means off' ($v.Line -match '^\[WARNING\]') $v.Line
 
     $c = Get-CmdLineVerdict -Value 1
     T 'cmdline DWORD 1 is ENABLED' ($c.Sev -eq 'OK') $c.Line
@@ -217,7 +217,7 @@ try {
 } catch { $apOk = $false }
 
 if (-not $apOk) {
-    '[SKIPPED] auditpol could not be queried -- audit-policy visibility NOT verified (needs admin).'
+    '[WARNING] auditpol could not be queried -- audit-policy visibility NOT verified (needs admin).'
     $sev = 'WARNING'
 } else {
     foreach ($s in $subs) {

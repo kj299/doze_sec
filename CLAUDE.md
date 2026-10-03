@@ -247,6 +247,18 @@ code in none of them.** Section 13 read ISSUES FOUND only because BitLocker
 (T1486) happened to raise. This is the ASR-block story repeating in a new check.
 
 So: **`[CRITICAL]` and `[WARNING]` are the report's entire severity vocabulary.**
+**And `[SKIPPED]` is never raised** (decided 2026-10-03). A check that could
+not run and raises that as a finding -- a view an administrator should have
+been able to open, an input that is simply absent -- prints
+`[WARNING] ... NOT performed`, so the section verdict's "review [WARNING]
+entries above" points at a visible line and the summary's warning-line count
+agrees with the findings counted. 27 sites in ten tools used to print
+`[SKIPPED]` and raise WARNING in the next line; the reader was sent to look
+for a WARNING that was not there. `[SKIPPED]` is reserved for gaps that raise
+nothing; `[DEFERRED - ADMIN REQUIRED]` for a standard-user token's gaps. The
+coverage block counts raised gaps by their NOT-performed phrase ("Gaps
+RAISED"), so they do not vanish from coverage when they stop being
+`[SKIPPED]`. `lint_unraised_findings` fails on a raised `[SKIPPED]`.
 `tools/lint_report_echo.ps1` fails on `[WARN]`/`[CRIT]`/`[ERROR]`/`[FAIL]`/
 `[DANGER]`/`[ALERT]` written into `%REPORT%` **or `%PSRUN%`** — a staged block's
 output is report text. Console-only `echo [WARN] ...` status lines are untouched

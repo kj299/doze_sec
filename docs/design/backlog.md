@@ -389,22 +389,30 @@ is also what a parent that has since exited looks like) and a benign twin for
 that case pinned in the self-test. Build it when a field run or the harness
 can show the exited-parent shape; do not build it on the assumption.
 
-## Raised gaps: `[SKIPPED]` or `[WARNING]`? (vocabulary decision, deferred)
+## Raised gaps: DECIDED 2026-10-03 -- a raised gap prints `[WARNING]`
 
-A structural survey (2026-09-25) found 25 sites in ten tools where a
-`[SKIPPED] ... NOT performed` line is followed by a severity raise: a blind
-spot the tool raises on purpose, because a view an administrator cannot open
-is itself an anomaly. On a standard-user token those needs-admin gaps are now
-deferrals (#220). What remains open is the ELEVATED shape: the section then
-reads "ISSUES FOUND -- review [WARNING] entries above" while the only
-non-OK line is tagged `[SKIPPED]`, and the ledger message names the finding
-the check would have made rather than the gap it hit. Two consistent
-choices: (a) a raised gap prints a `[WARNING]` tag (the rule "raising is
-printing" made literal; the coverage note's `[SKIPPED]` count then covers
-only unraised gaps), or (b) keep `[SKIPPED]` + raise and change the section
-verdict text to "review [WARNING]/[SKIPPED] entries above". Either touches
-all 25 sites at once; `verdict_audit`'s inverse rule already accepts both.
-Decide when an elevated field run shows one, not before.
+Option (a) was chosen: a check that could not run and raises that as a
+finding prints `[WARNING] ... NOT performed`; `[SKIPPED]` is reserved for
+gaps that raise nothing, `[DEFERRED - ADMIN REQUIRED]` for standard-user
+deferrals. 27 sites in ten tools changed; the coverage block gained a "Gaps
+RAISED" count by phrase; `lint_unraised_findings` fails on a raised
+`[SKIPPED]`. See CLAUDE.md, "One severity vocabulary".
+
+## The ledger row of a raised gap names the hypothetical finding, not the gap (deferred)
+
+Deferred from the same decision. When `log_gap_check` cannot read a log
+while elevated, the row reads "Event-log records missing with no clear
+event"; when `cross_api_check` cannot enumerate the Task Scheduler, the row
+reads "Cross-API disagreement or hidden task - rootkit indicator". The
+printed `[WARNING]` line now names the gap, but the adjudication worksheet
+and the HTML findings index show the row. Fix shape: the tool writes a
+second marker (`dz_<name>_gap.txt`) when its raise is a gap, and the bat's
+`:dz_finding` call site picks a gap wording for that row. Sites (tool:line
+as of 2026-10-03): audit_policy_check 92/220; baseline_diff 483;
+cbs_integrity_check 350/421/423; cross_api_check 352/422/523/577/595;
+driver_audit 372; hosts_check 492/498; log_gap_check 129/274/315;
+module_inspect 579/592; persistence_extra 478/548/591/614/776; startup_eval
+223/235/303; doze_sec.bat / doze_sec_noAdmin.bat (defender_core_check not found).
 
 ## A shipped list whose content changes should bump its `# Last verified` date (deferred)
 

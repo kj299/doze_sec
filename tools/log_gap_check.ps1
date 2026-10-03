@@ -126,7 +126,7 @@ function Get-UnlistableLogVerdict {
     if (-not $IsElevated -and $Name -eq 'Security') {
         return @{ Deferred = $true; Sev = 'OK'; Line = "[DEFERRED - ADMIN REQUIRED] Log 'Security' needs administrator rights -- gap check NOT performed for it; re-run as administrator." }
     }
-    return @{ Deferred = $false; Sev = 'WARNING'; Line = "[SKIPPED] Log '$Name' could not be read -- gap check NOT performed for it (the Security log needs administrator rights)." }
+    return @{ Deferred = $false; Sev = 'WARNING'; Line = "[WARNING] Log '$Name' could not be read -- gap check NOT performed for it (the Security log needs administrator rights)." }
 }
 
 function Get-RolloverVerdict {
@@ -210,7 +210,7 @@ if ($SelfTest) {
     $v = Get-UnlistableLogVerdict -Name 'Security' -IsElevated $false
     RT 'unlistable: Security as a standard user is DEFERRED (the token, not the machine) -- no raise' ($v.Deferred -and $v.Sev -eq 'OK' -and $v.Line -match "^\[DEFERRED - ADMIN REQUIRED\] Log 'Security'") ("sev=$($v.Sev) line=$($v.Line)")
     $v = Get-UnlistableLogVerdict -Name 'Security' -IsElevated $true
-    RT 'unlistable: Security while ELEVATED is a raised gap (WARNING), never a deferral' ((-not $v.Deferred) -and $v.Sev -eq 'WARNING' -and $v.Line -match '^\[SKIPPED\]') ("sev=$($v.Sev)")
+    RT 'unlistable: Security while ELEVATED is a raised gap (WARNING), never a deferral' ((-not $v.Deferred) -and $v.Sev -eq 'WARNING' -and $v.Line -match '^\[WARNING\]') ("sev=$($v.Sev)")
     $v = Get-UnlistableLogVerdict -Name 'System' -IsElevated $false
     RT 'unlistable: System as a standard user is a raised gap -- users can read System, so its absence is not the token' ((-not $v.Deferred) -and $v.Sev -eq 'WARNING') ("sev=$($v.Sev)")
     if ($script:rtFails -gt 0) { "[CRITICAL] $($script:rtFails) retention/rollover case(s) failed."; exit 2 }
@@ -271,7 +271,7 @@ foreach ($name in $LogNames) {
 
     $gap = Get-RecordGap $oldest $cfg.RecordCount $newest
     if ($gap -lt 0) {
-        "[SKIPPED] Log '$name': record accounting unavailable (RecordCount or record ids unreadable) -- gap check NOT performed for it."
+        "[WARNING] Log '$name': record accounting unavailable (RecordCount or record ids unreadable) -- gap check NOT performed for it."
         $sev = Get-MaxSev $sev 'WARNING'
     } elseif ($gap -gt 0) {
         $s = if ($isSecurity) { 'CRITICAL' } else { 'WARNING' }
@@ -312,7 +312,7 @@ foreach ($name in $LogNames) {
 }
 
 if ($inspected -eq 0) {
-    '[SKIPPED] No event logs could be inspected -- the gap check verified nothing.'
+    '[WARNING] No event logs could be inspected -- the gap check verified nothing.'
     $sev = Get-MaxSev $sev 'WARNING'
 } else {
     "[INFO] $inspected event log(s) inspected for missing-record gaps."

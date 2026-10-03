@@ -489,13 +489,13 @@ if (-not $Path) {
 
 if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
     # Not "clean": the file could not be read, so nothing was checked.
-    "[SKIPPED] HOSTS file not found at $Path -- DNS-hijack check NOT performed."
+    "[WARNING] HOSTS file not found at $Path -- DNS-hijack check NOT performed."
     Write-Marker -Sev 'WARNING'
     return
 }
 $lines = $null
 try { $lines = Get-Content -LiteralPath $Path -EA Stop } catch {
-    "[SKIPPED] HOSTS file could not be read ($($_.Exception.Message)) -- DNS-hijack check NOT performed."
+    "[WARNING] HOSTS file could not be read ($($_.Exception.Message)) -- DNS-hijack check NOT performed."
     Write-Marker -Sev 'WARNING'
     return
 }
