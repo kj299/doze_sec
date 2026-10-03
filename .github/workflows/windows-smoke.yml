@@ -210,8 +210,22 @@ jobs:
           $lines | Set-Content -LiteralPath $r -Encoding UTF8
           .\tools\top_findings.ps1 -Report $r
           if (-not (Select-String -LiteralPath $r -Pattern 'TOP FINDINGS' -Quiet)) { Write-Host "top_findings did not prepend its block"; exit 1 }
-          .\tools\report_format.ps1 -Report $r | Out-Null
-          Write-Host "top_findings + report_format OK"
+          # wevtutil /f:text leaves NUL-terminated fields in event text (Event 7045's
+          # "Service Account:", Defender 1116's "Level:"); a field report carried 100.
+          # report_format strips them and reports the count for the summary line.
+          Add-Content -LiteralPath $r -Value ('Service Account:  LocalSystem' + [char]0) -Encoding UTF8
+          Add-Content -LiteralPath $r -Value ('  Level: Information' + [char]0 + [char]0) -Encoding UTF8
+          $before = @([IO.File]::ReadAllBytes($r) | Where-Object { $_ -eq 0 }).Count
+          if ($before -ne 3) { throw "the sample should carry 3 NUL bytes before report_format, has $before" }
+          $cf = Join-Path $env:TEMP 'dz_ci_report_nul.txt'
+          Remove-Item $cf -Force -EA SilentlyContinue
+          .\tools\report_format.ps1 -Report $r -NulCountFile $cf | Out-Null
+          if ([IO.File]::ReadAllBytes($r) -contains [byte]0) { throw 'report_format left NUL bytes in the report' }
+          if (-not (Test-Path $cf)) { throw 'report_format wrote no NUL count file' }
+          $cnt = (Get-Content $cf).Trim()
+          if ($cnt -ne '3') { throw "report_format counted '$cnt' NUL bytes, expected 3" }
+          if (-not (Select-String -LiteralPath $r -Pattern 'Service Account:  LocalSystem$' -Quiet)) { throw 'the text around the stripped NUL was damaged' }
+          Write-Host "top_findings + report_format OK (3 NUL bytes stripped and counted)"
           exit 0
 
       - name: report_html.ps1 surfaces a Findings Index with section links
@@ -3177,6 +3191,12 @@ jobs:
           $ro = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce' -EA SilentlyContinue
           if ($ro -and ($ro.PSObject.Properties.Name -contains '*WIN11_SecurityAudit_resume')) { throw 'the RunOnce resume entry survived a completed exit-4 run' }
           Write-Host 'RunOnce resume entry: pointed at the bat during the run, absent after the exit-4 run.'
+          # THE REPORT IS PLAIN TEXT. wevtutil /f:text leaves NUL-terminated fields in
+          # the Section 16 event blocks; report_format strips them and the summary
+          # declares the count. A NUL in the final report is a regression.
+          if ([IO.File]::ReadAllBytes($rep.FullName) -contains [byte]0) { throw 'the final report contains NUL bytes -- report_format did not strip the wevtutil text' }
+          $hyg = [regex]::Match($text, '(?m)^\s*REPORT HYGIENE: (\d+) NUL bytes removed')
+          if ($hyg.Success) { Write-Host ("report hygiene: {0} NUL byte(s) removed by report_format" -f $hyg.Groups[1].Value); if ([int]$hyg.Groups[1].Value -lt 1) { throw 'the hygiene line reads 0 -- it must not print for 0' } } else { Write-Host 'report hygiene: no NUL bytes in this run (no line printed)' }
           # THE PLANTED FOOTPRINTS ARE INFO, NEVER A FINDING (corpus adfs-present /
           # aadconnect-present).
           foreach ($needle in 'ADFS detected', 'Azure AD Connect detected') {

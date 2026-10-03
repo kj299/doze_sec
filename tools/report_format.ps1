@@ -19,12 +19,24 @@
 # input bytes for CRLF vs LF and writing accordingly. Without this guard
 # WriteAllLines would silently downgrade Windows CRLF reports to LF.
 #
+# NUL BYTES. `wevtutil qe ... /f:text` prints some message fields with their
+# NUL terminator still attached ("Service Account:  LocalSystem\0" in Event
+# 7045, "Level: Information\0" in Defender 1116/1117), and the bats append
+# that text to the report as-is. A field report carried 100 of them, and
+# grep then called the report binary. Every NUL is removed here, once, for
+# every event-log block present and future, and the COUNT is written to
+# -NulCountFile (always, even 0) so the bat can declare what was removed in
+# the summary -- a sanitiser that says nothing is a sanitiser nobody can
+# audit. This runs before top_findings and report_html, so both see clean
+# text; the summary block is appended after it.
+#
 # Usage:
-#   pwsh -NoProfile -ExecutionPolicy Bypass -File report_format.ps1 -Report <path>
+#   pwsh -NoProfile -ExecutionPolicy Bypass -File report_format.ps1 -Report <path> [-NulCountFile <path>]
 
 param(
     [Parameter(Mandatory=$true)]
-    [string]$Report
+    [string]$Report,
+    [string]$NulCountFile = ''
 )
 
 $ErrorActionPreference = 'Continue'
@@ -34,6 +46,13 @@ if (-not (Test-Path -LiteralPath $Report)) { return }
 # Detect line-ending style from the raw bytes BEFORE Get-Content strips \r.
 $rawBytes = [System.IO.File]::ReadAllBytes($Report)
 $rawText = [System.Text.Encoding]::UTF8.GetString($rawBytes)
+# Strip NUL characters (see the header) and count them for the summary.
+$nulCount = 0
+foreach ($b in $rawBytes) { if ($b -eq 0) { $nulCount++ } }
+if ($nulCount -gt 0) { $rawText = $rawText.Replace([string][char]0, '') }
+if ($NulCountFile) {
+    try { [System.IO.File]::WriteAllText($NulCountFile, [string]$nulCount) } catch {}
+}
 $useCRLF = ($rawText -match "`r`n")
 $nl = if ($useCRLF) { "`r`n" } else { "`n" }
 
