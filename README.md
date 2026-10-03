@@ -243,7 +243,7 @@ Full tactic-by-tactic and threat-class coverage matrices — including explicit 
 | 1 | Fatal pre-flight error - audit did not run | Both |
 | 2 | Warning - issues found (review report) | Both |
 | 3 | Unsupported OS (use `-dev` to override) | Both |
-| 4 | Reboot pending | Both |
+| 4 | Reboot pending (Section 1 lists what is queued and whether the flag predates the last boot) | Both |
 | 5 | Running from TEMP directory (move script) | Both |
 | 6 | Partial audit - non-admin, checks deferred | noAdmin only |
 | 7 | Pre-flight VT integrity check FAILED (script-critical binary flagged) | Both |

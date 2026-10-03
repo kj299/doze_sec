@@ -6,6 +6,37 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Section 1 names what is pending
+Every run on the owner's laptop exits 4 with "Reboot the system then re-run
+the audit", and the 2026-10-03 report proved (WinInit Event 12) a boot on
+2026-10-02 after which `PendingFileRenameOperations` was still set. The
+check tested only that the value existed, printed nothing of what it held
+or when it was written, and its `catch{}` turned an unreadable key into
+`[OK] No pending reboot detected`. `tools/pending_reboot_check.ps1` replaces
+the inline block in both bats: it reads the Windows Update and Component
+Based Servicing flags and `PendingFileRenameOperations` (+ `...2`), parses
+the REG_MULTI_SZ into `delete:` / `rename: a -> b` operations (Microsoft's
+MoveFileEx contract; a missing source is said), prints them indented
+beneath ONE `[WARNING] Reboot pending: ...` line that ends with a colon so
+`top_findings` carries them, and reads each flag key's RegQueryInfoKey
+last-write time against `LastBootUpTime`: written AFTER the boot is fresh (a
+Restart will apply it); written BEFORE is stale (it survived a restart --
+re-created by a component, or never processed because Fast Startup's "Shut
+down" hibernates the kernel and does not run the queue; the report names
+`HiberbootEnabled` and says Restart, not Shut down). The bats read the age
+from a state file: a stale queue changes the `[EXIT 4]` lines and the
+summary STATUS from "reboot and re-run" to "restarting again is unlikely to
+clear it; review the queued operations". A flag that cannot be read is a
+declared gap (`dz_reboot_gap.txt`, its own ledger row), never an all-clear.
+The REBOOT row text and exit code are unchanged. `top_findings` keyed its
+Windows Update note on `WindowsUpdate requires a reboot`, which the bat
+never printed; fixed, and the PendingFileRenameOperations note now explains
+the listing. Self-test 26 cases; the helpers job appends a rename to the
+runner's queue and asserts it is listed by path and reads fresh (restored
+in finally); the full-run plant appends instead of skipping so the
+post-run step can assert the listing; a printed-findings contract for
+Section 1 / REBOOT; corpus entry `[pending-reboot-flags]`.
+
 ### The baseline diff knows what changes by design
 The 2026-10-03 elevated field run's one unpredicted ledger row was
 `WARNING|17|BASELINE`, built from ten `[WARNING]` lines that were all

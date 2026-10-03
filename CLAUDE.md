@@ -691,7 +691,13 @@ of the entries and `tools/lint_threat_list_dates.ps1` fails when they drift
 flagged `HKLM\...\PortProxy\v4tov4\tcp [EXISTS]` while Section 3 of the same
 report said `[OK] No netsh portproxy rules.` Windows leaves that key behind,
 empty, once the rules are gone. A key-existence IOC now requires the key to
-hold at least one value or subkey, and the finding says how many.
+hold at least one value or subkey, and the finding says how many. **And a
+flag's existence is not its freshness.** Section 1 read "PendingFileRenameOperations
+exists" as "reboot and re-run" on a laptop whose System log proved a boot
+after the flag was written; `tools/pending_reboot_check.ps1` now lists what
+the flag holds and reads the key's last-write time against the boot time,
+and says Restart, not Shut down (Fast Startup never runs the queue). When a
+check reads a flag, print its contents and when it was written.
 
 **"Not on disk" is not "unbacked".** The first field run with Word open
 produced fourteen `[WARNING] ... reflective or unbacked load ... (T1055)` lines

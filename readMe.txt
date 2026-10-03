@@ -102,7 +102,7 @@ EXIT CODES
       from the release folder. Never a security finding - only "could not run."
   2   Warning - audit complete but issues found (review report)
   3   Unsupported OS - use -dev to override
-  4   Reboot pending - reboot the system, then re-run
+  4   Reboot pending - Section 1 lists what is queued and whether it predates the last boot; Restart, not Shut down
   5   Ran from TEMP directory - move the script and re-run
   6   Partial audit - non-admin mode, some checks deferred
   7   Pre-flight VT integrity check failed - script-critical binary flagged

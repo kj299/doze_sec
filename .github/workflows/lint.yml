@@ -389,6 +389,18 @@ jobs:
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
           n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 31 ] || { echo "only $n case(s)"; exit 1; }
+      - name: pending_reboot_check -- a pending reboot names what is queued and whether the flag predates the last boot; an unreadable flag is a gap
+        run: |
+          out=$(pwsh -NoProfile -File tools/pending_reboot_check.ps1 -SelfTest); echo "$out"
+          for n in 'written before the boot: STALE' \
+                   'written after the boot: fresh' \
+                   'a dangling last entry (odd length' \
+                   'a registry read failure is a declared gap' \
+                   'a single WARNING line even with three flags' \
+                   'nothing pending: the OK line'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 26 ] || { echo "only $n case(s)"; exit 1; }
       - name: lsa_protection_check -- the boot event is the fact, the registry value the intent; unknown is a raised gap
         run: |
           out=$(pwsh -NoProfile -File tools/lsa_protection_check.ps1 -SelfTest); echo "$out"
