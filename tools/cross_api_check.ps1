@@ -331,6 +331,7 @@ if ($Elevated -lt 0) {
 
 $sev = 'OK'
 
+$gapSev = 'OK'
 # ---- 1. Processes: three independent enumerations -------------------------
 '--- [T1014] Process enumeration cross-check (.NET vs WMI vs tasklist) ---'
 $pOk = $true
@@ -350,7 +351,7 @@ try {
 
 if (-not $pOk -or $setNet.Count -eq 0 -or $setWmi.Count -eq 0 -or $setTl.Count -eq 0) {
     '[WARNING] One or more process enumerations failed -- cross-check NOT performed.'
-    $sev = Get-MaxSev $sev 'WARNING'
+    $gapSev = Get-MaxSev $gapSev 'WARNING'
 } else {
     # Union of PIDs seen anywhere; a PID missing from any one view is a candidate.
     $allPids = @{}
@@ -420,7 +421,7 @@ try {
 
 if (-not $sOk -or $svcReg.Count -eq 0) {
     '[WARNING] Service enumeration or registry read failed -- cross-check NOT performed.'
-    $sev = Get-MaxSev $sev 'WARNING'
+    $gapSev = Get-MaxSev $gapSev 'WARNING'
 } else {
     $hidden = @()
     foreach ($n in $svcReg.Keys) {
@@ -521,7 +522,7 @@ if (-not $tOk -or $treeTasks.Count -eq 0) {
         $deferred++
     } else {
         '[WARNING] TaskCache registry or Task Scheduler unavailable (needs admin) -- task cross-check NOT performed.'
-        $sev = Get-MaxSev $sev $tv.Sev
+        $gapSev = Get-MaxSev $gapSev $tv.Sev
     }
 } else {
     $noSd = @()
@@ -575,7 +576,7 @@ if (-not $tOk -or $treeTasks.Count -eq 0) {
     if ($inspected -ge 10 -and $noSd.Count -gt [int]($inspected * 0.25)) {
         $sdSuppressed = $true
         "[WARNING] $($noSd.Count) of $inspected tasks matched the hidden-task rule -- implausibly many, treated as a platform/permissions artifact rather than a compromise. Hidden-task check NOT performed."
-        $sev = Get-MaxSev $sev 'WARNING'
+        $gapSev = Get-MaxSev $gapSev 'WARNING'
         $noSd = @()
     }
     if (-not $liveOk) {
@@ -593,7 +594,7 @@ if (-not $tOk -or $treeTasks.Count -eq 0) {
             $deferred++
         } else {
             '[WARNING] Task Scheduler could not be enumerated, so the hidden-task (Tarrask) check could NOT run -- it requires both signals: a missing security descriptor AND absence from the scheduler. A stopped or tampered Schedule service is itself worth investigating.'
-            $sev = Get-MaxSev $sev $tv.Sev
+            $gapSev = Get-MaxSev $gapSev $tv.Sev
         }
     }
     if ($sdOnly -gt 0) {
@@ -621,4 +622,7 @@ if (-not $tOk -or $treeTasks.Count -eq 0) {
 }
 
 Write-Marker -Name 'crossapi' -Sev $sev
+# A gap is its own row: the bat raises dz_crossapi_gap.txt with gap wording, so a
+# view this token could not open never files as "rootkit indicator".
+if ($gapSev -ne 'OK') { Write-Marker -Name 'crossapi_gap' -Sev $gapSev }
 if ($deferred -gt 0) { Write-Marker -Name 'crossapi_deferred' -Sev ([string]$deferred) }

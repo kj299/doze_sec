@@ -611,6 +611,7 @@ $script:VfsMap = New-VfsMap -EnvMap @{
 '--- [T1055/T1574] Loaded-module inspection (what is running INSIDE processes) ---'
 
 $sev = 'OK'
+$gapSev = 'OK'
 $modOwners = @{}     # module path -> list of process names that loaded it
 $modAllVirt = @{}    # module path -> every loading process is virtualization-hosted
 $denied = 0
@@ -667,7 +668,7 @@ foreach ($p in (Get-Process -EA SilentlyContinue)) {
 
 if ($modOwners.Count -eq 0) {
     '[WARNING] No process modules could be enumerated -- injection check NOT performed.'
-    Write-Marker -Name 'module' -Sev 'WARNING'
+    Write-Marker -Name 'module_gap' -Sev 'WARNING'
     return
 }
 
@@ -687,7 +688,7 @@ try {
 if ($lsassDenied) {
     $lv = Get-LsassDenialVerdict -IsElevated ($Elevated -eq 1) -LsaState $lsaState
     $lv.Line
-    if ($lv.Deferred) { Write-Marker -Name 'module_deferred' -Sev '1' } else { $sev = Get-MaxSev $sev $lv.Sev }
+    if ($lv.Deferred) { Write-Marker -Name 'module_deferred' -Sev '1' } else { $gapSev = Get-MaxSev $gapSev $lv.Sev }
 }
 
 $findings = @()
@@ -792,7 +793,9 @@ if ($note.Count -gt 0) {
     "[INFO]   example: $($note[0].Path)  [loaded by: $($note[0].Owners)]"
 }
 
-if ($findings.Count -eq 0) {
+if ($findings.Count -eq 0 -and $gapSev -ne 'OK') {
+    "[INFO] $checked unique loaded module(s) inspected across $procCount process(es) -- no finding among THOSE; the gap raised above is not covered by this count."
+} elseif ($findings.Count -eq 0) {
     # Qualify the all-clear when the cap truncated the walk: "none from a
     # staging path" must not be read as covering modules that were never
     # examined. (Staged paths are inspected first, so a cap hit now means the
@@ -815,3 +818,4 @@ if ($denied -gt 0) {
 }
 
 Write-Marker -Name 'module' -Sev $sev
+if ($gapSev -ne 'OK') { Write-Marker -Name 'module_gap' -Sev $gapSev }

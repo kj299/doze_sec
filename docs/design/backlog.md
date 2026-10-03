@@ -398,7 +398,7 @@ deferrals. 27 sites in ten tools changed; the coverage block gained a "Gaps
 RAISED" count by phrase; `lint_unraised_findings` fails on a raised
 `[SKIPPED]`. See CLAUDE.md, "One severity vocabulary".
 
-## The ledger row of a raised gap names the hypothetical finding, not the gap (deferred)
+## The ledger row of a raised gap names the hypothetical finding, not the gap -- DONE 2026-10-03 (`dz_<name>_gap.txt` + a gap-worded row in both bats; `lint_unraised_findings` enforces it)
 
 Deferred from the same decision. When `log_gap_check` cannot read a log
 while elevated, the row reads "Event-log records missing with no clear

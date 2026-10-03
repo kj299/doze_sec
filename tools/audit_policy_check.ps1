@@ -89,7 +89,7 @@ function Get-AuditRowVerdict {
         return @{ Line = "[OK] $Name auditing is ON -- feeds $Feeds."; Sev = 'OK' }
     }
     if ($Setting -and $Setting -notmatch '^(No Auditing|Failure)$') {
-        return @{ Line = "[WARNING] $Name auditing state could not be read -- auditpol reported '$Setting', which this check cannot classify (localized Windows). Verify manually: auditpol /get /subcategory:$Guid"; Sev = 'WARNING' }
+        return @{ Line = "[WARNING] $Name auditing state could not be read -- auditpol reported '$Setting', which this check cannot classify (localized Windows). Verify manually: auditpol /get /subcategory:$Guid"; Sev = 'WARNING'; Gap = $true }
     }
     $shown = if ($Setting) { $Setting } else { '(not set)' }
     return @{ Line = "[WARNING] $Name auditing is OFF [$shown] -- a clean result for the $Feeds may only mean these events are not being recorded (T1562.002)."; Sev = 'WARNING' }
@@ -167,6 +167,7 @@ if ($SelfTest) {
     $c = Get-CmdLineVerdict -Value 'yes'
     T 'cmdline junk text is DISABLED, not enabled by accident' ($c.Sev -eq 'WARNING') $c.Line
 
+    T 'the cannot-classify row is flagged as a GAP (it feeds the auditpol_gap marker, never the finding row)' ((Get-AuditRowVerdict -Name 'Logon' -Setting 'Erfolg' -Feeds 'x').Gap -eq $true -and -not (Get-AuditRowVerdict -Name 'Logon' -Setting 'No Auditing' -Feeds 'x').Gap) ''
     if ($fails) { Write-Output "[FAIL] $fails audit_policy_check self-test expectation(s) unmet"; exit 1 }
     Write-Output '[OK] audit_policy_check self-test: real auditpol rows parse by GUID under any header, Success and Failure is ON, a localized setting is stated as unread rather than reported OFF.'
     exit 0
@@ -175,6 +176,7 @@ if ($SelfTest) {
 '--- [T1562.002/DS0026] Audit-policy visibility (are the events even being logged?) ---'
 $sev = 'OK'
 
+$gapSev = 'OK'
 # Subcategories whose absence blinds a detection the audit actually performs.
 # GUIDs are locale-independent; names are for the report only.
 $subs = @(
@@ -218,7 +220,7 @@ try {
 
 if (-not $apOk) {
     '[WARNING] auditpol could not be queried -- audit-policy visibility NOT verified (needs admin).'
-    $sev = 'WARNING'
+    $gapSev = 'WARNING'
 } else {
     foreach ($s in $subs) {
         $set = $rows[$s.Guid.ToLower().Trim('{','}')]
@@ -229,7 +231,7 @@ if (-not $apOk) {
         # be a fabricated finding, so Get-AuditRowVerdict reports it as unread.
         $v = Get-AuditRowVerdict -Name $s.Name -Setting ([string]$set) -Feeds $s.Feeds -Guid $s.Guid
         $v.Line
-        if ($v.Sev -ne 'OK') { $sev = 'WARNING' }
+        if ($v.Sev -ne 'OK') { if ($v.Gap) { $gapSev = 'WARNING' } else { $sev = 'WARNING' } }
     }
 }
 
@@ -244,3 +246,5 @@ $cv.Line
 if ($cv.Sev -ne 'OK') { $sev = 'WARNING' }
 
 Write-Marker -Name 'auditpol' -Sev $sev
+# A gap is its own row: the bat raises dz_auditpol_gap.txt with gap wording.
+if ($gapSev -ne 'OK') { Write-Marker -Name 'auditpol_gap' -Sev $gapSev }

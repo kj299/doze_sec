@@ -6,6 +6,31 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### The ledger row of a raised gap names the gap
+The second half of the 2026-10-03 vocabulary decision. A tool that could
+not run raised WARNING through its one severity marker, and the bat's
+`:dz_finding` call site has one fixed message per marker, so the ledger row
+named the finding the check WOULD have made: `log_gap` that cannot read a
+log elevated filed "Event-log records missing with no clear event";
+`cross_api` that cannot enumerate the Task Scheduler filed "Cross-API
+disagreement or hidden task - rootkit indicator"; `hosts_check` on a missing
+HOSTS file filed "Non-standard entries found in HOSTS"; the LSA tool's
+UNKNOWN filed "LSASS PPL not enabled". The printed line named the gap since
+#226, but the adjudication worksheet, the HTML findings index and the
+remediation `led` triggers read the row. Eleven tools now keep two
+severities -- what they observed (`dz_<name>.txt`) and what they could not
+(`dz_<name>_gap.txt`) -- and both bats raise the gap marker as its own row
+with gap wording under the same section and technique (16 markers, 32 call
+sites), so verdicts, counts and contracts are unchanged and no `led`
+trigger can fire on a gap. A gap-only run no longer prints the all-clear
+line (driver, startup folder, module inspection). `lint_unraised_findings`
+now requires the gap marker wherever a gap line is printed and its read in
+both bats (10 tools on the tree before this change; the eleventh, `baseline_diff`, escaped the rule because its gap line carried no NOT-performed phrase, and now carries one); the
+helpers job plants three gaps (missing HOSTS file, empty CBS directory, a
+log that does not exist) and asserts the gap marker, no finding marker and
+no all-clear line; the full-run job asserts every finding-worded row has a
+non-gap finding line in its section.
+
 ### A shipped threat list's content change carries a new verified date
 `ThreatLists/ttp_manifest.txt` changed content in three commits while its
 `# Last verified by doze_sec:` header stayed at 2026-06-06; the 12:51 field

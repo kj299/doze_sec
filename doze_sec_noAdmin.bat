@@ -1491,6 +1491,7 @@ echo --- HOSTS File (graded by effect: blackholed security domains, redirects, l
 echo  Command: powershell -File tools\hosts_check.ps1>> "%REPORT%"
 type "%WINDIR%\System32\drivers\etc\hosts">> "%REPORT%" 2>&1
 del "%TEMP%\dz_hosts.txt" 2>nul
+del "%TEMP%\dz_hosts_gap.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\hosts_check.ps1" (
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\hosts_check.ps1">> "%REPORT%" 2>&1
 ) else (
@@ -1501,6 +1502,13 @@ if exist "%TEMP%\dz_hosts.txt" (
     set /p _HOSTSSEV=<"%TEMP%\dz_hosts.txt"
     call :dz_finding !_HOSTSSEV! 3 T1071.004 "Non-standard entries found in HOSTS"
     del "%TEMP%\dz_hosts.txt" 2>nul
+)
+if exist "%TEMP%\dz_hosts_gap.txt" (
+    rem A gap is its own row: the tool could not perform (part of) this check.
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_hosts_gap.txt"
+    call :dz_finding !_GAPSEV! 3 T1071.004 "HOSTS file NOT checked - missing or unreadable"
+    del "%TEMP%\dz_hosts_gap.txt" 2>nul
 )
 
 echo.>> "%REPORT%"
@@ -1724,6 +1732,7 @@ del "%TEMP%\dz_lsa_state.txt" 2>nul
 del "%TEMP%\dz_lsa_lines.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\lsa_protection_check.ps1" "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\lsa_protection_check.ps1" -Mode Measure>> "%REPORT%" 2>&1
 del "%TEMP%\dz_module.txt" 2>nul
+del "%TEMP%\dz_module_gap.txt" 2>nul
 del "%TEMP%\dz_module_deferred.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\module_inspect.ps1" (
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\module_inspect.ps1">> "%REPORT%" 2>&1
@@ -1735,6 +1744,13 @@ if exist "%TEMP%\dz_module.txt" (
     set /p _MODSEV=<"%TEMP%\dz_module.txt"
     call :dz_finding !_MODSEV! 4 T1055 "Suspicious DLL loaded inside a running process"
     del "%TEMP%\dz_module.txt" 2>nul
+)
+if exist "%TEMP%\dz_module_gap.txt" (
+    rem A gap is its own row: the tool could not perform (part of) this check.
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_module_gap.txt"
+    call :dz_finding !_GAPSEV! 4 T1055 "Loaded-module inspection NOT performed or partial - enumeration failed, or lsass unreadable with LSA Protection off or unknown"
+    del "%TEMP%\dz_module_gap.txt" 2>nul
 )
 if exist "%TEMP%\dz_module_deferred.txt" (
     rem The tool DEFERRED the lsass check this token cannot perform: a standard
@@ -1807,7 +1823,9 @@ echo  Command: powershell -File tools\startup_eval.ps1>> "%REPORT%"
 echo  Evaluates the Startup folder dumps above ^(T1547.001^) and AppCert DLLs>> "%REPORT%"
 echo  ^(T1546.009^) -- the uncovered sibling of AppInit_DLLs.>> "%REPORT%"
 del "%TEMP%\dz_startup_folder.txt" 2>nul
+del "%TEMP%\dz_startup_folder_gap.txt" 2>nul
 del "%TEMP%\dz_appcert.txt" 2>nul
+del "%TEMP%\dz_appcert_gap.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\startup_eval.ps1" (
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\startup_eval.ps1">> "%REPORT%" 2>&1
 ) else (
@@ -1819,11 +1837,25 @@ if exist "%TEMP%\dz_startup_folder.txt" (
     call :dz_finding !_SSEV! 5 T1547.001 "Suspicious item in a Startup folder"
     del "%TEMP%\dz_startup_folder.txt" 2>nul
 )
+if exist "%TEMP%\dz_startup_folder_gap.txt" (
+    rem A gap is its own row: the tool could not perform (part of) this check.
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_startup_folder_gap.txt"
+    call :dz_finding !_GAPSEV! 5 T1547.001 "Startup folder check NOT performed - folder paths unresolved or unreadable"
+    del "%TEMP%\dz_startup_folder_gap.txt" 2>nul
+)
 if exist "%TEMP%\dz_appcert.txt" (
     set "_ASEV="
     set /p _ASEV=<"%TEMP%\dz_appcert.txt"
     call :dz_finding !_ASEV! 5 T1546.009 "AppCert DLL registered - loads into every CreateProcess caller"
     del "%TEMP%\dz_appcert.txt" 2>nul
+)
+if exist "%TEMP%\dz_appcert_gap.txt" (
+    rem A gap is its own row: the tool could not perform (part of) this check.
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_appcert_gap.txt"
+    call :dz_finding !_GAPSEV! 5 T1546.009 "AppCertDlls check NOT performed - key unreadable"
+    del "%TEMP%\dz_appcert_gap.txt" 2>nul
 )
 
 echo.>> "%REPORT%"
@@ -1833,11 +1865,16 @@ echo  Netsh helpers ^(T1546.007^), print processors ^(T1547.012^), port monitors
 echo  ^(T1547.010^), BITS jobs ^(T1197^), PowerShell profiles ^(T1546.013^) and time>> "%REPORT%"
 echo  providers ^(T1547.003^) -- subsystem load points nothing audited before.>> "%REPORT%"
 del "%TEMP%\dz_netsh.txt" 2>nul
+del "%TEMP%\dz_netsh_gap.txt" 2>nul
 del "%TEMP%\dz_printproc.txt" 2>nul
+del "%TEMP%\dz_printproc_gap.txt" 2>nul
 del "%TEMP%\dz_portmon.txt" 2>nul
+del "%TEMP%\dz_portmon_gap.txt" 2>nul
 del "%TEMP%\dz_bits.txt" 2>nul
+del "%TEMP%\dz_bits_gap.txt" 2>nul
 del "%TEMP%\dz_psprofile.txt" 2>nul
 del "%TEMP%\dz_timeprov.txt" 2>nul
+del "%TEMP%\dz_timeprov_gap.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\persistence_extra.ps1" (
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\persistence_extra.ps1">> "%REPORT%" 2>&1
 ) else (
@@ -1849,11 +1886,25 @@ if exist "%TEMP%\dz_netsh.txt" (
     call :dz_finding !_NSHSEV! 5 T1546.007 "Netsh helper DLL is not Microsoft-signed - loads whenever netsh.exe runs"
     del "%TEMP%\dz_netsh.txt" 2>nul
 )
+if exist "%TEMP%\dz_netsh_gap.txt" (
+    rem A gap is its own row: the tool could not perform (part of) this check.
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_netsh_gap.txt"
+    call :dz_finding !_GAPSEV! 5 T1546.007 "Netsh helper check NOT performed - key unreadable"
+    del "%TEMP%\dz_netsh_gap.txt" 2>nul
+)
 if exist "%TEMP%\dz_printproc.txt" (
     set "_PPRSEV="
     set /p _PPRSEV=<"%TEMP%\dz_printproc.txt"
     call :dz_finding !_PPRSEV! 5 T1547.012 "Print processor DLL is not Microsoft-signed - loaded by the SYSTEM spooler"
     del "%TEMP%\dz_printproc.txt" 2>nul
+)
+if exist "%TEMP%\dz_printproc_gap.txt" (
+    rem A gap is its own row: the tool could not perform (part of) this check.
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_printproc_gap.txt"
+    call :dz_finding !_GAPSEV! 5 T1547.012 "Print processor check NOT performed or partial - key or driver value unreadable"
+    del "%TEMP%\dz_printproc_gap.txt" 2>nul
 )
 if exist "%TEMP%\dz_portmon.txt" (
     set "_PMNSEV="
@@ -1861,11 +1912,25 @@ if exist "%TEMP%\dz_portmon.txt" (
     call :dz_finding !_PMNSEV! 5 T1547.010 "Port monitor DLL is not Microsoft-signed - loaded by the SYSTEM spooler"
     del "%TEMP%\dz_portmon.txt" 2>nul
 )
+if exist "%TEMP%\dz_portmon_gap.txt" (
+    rem A gap is its own row: the tool could not perform (part of) this check.
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_portmon_gap.txt"
+    call :dz_finding !_GAPSEV! 5 T1547.010 "Port monitor check NOT performed or partial - key or driver value unreadable"
+    del "%TEMP%\dz_portmon_gap.txt" 2>nul
+)
 if exist "%TEMP%\dz_bits.txt" (
     set "_BTSSEV="
     set /p _BTSSEV=<"%TEMP%\dz_bits.txt"
     call :dz_finding !_BTSSEV! 5 T1197 "BITS job with a notify command line or an unusually long lifetime"
     del "%TEMP%\dz_bits.txt" 2>nul
+)
+if exist "%TEMP%\dz_bits_gap.txt" (
+    rem A gap is its own row: the tool could not perform (part of) this check.
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_bits_gap.txt"
+    call :dz_finding !_GAPSEV! 5 T1197 "BITS job check NOT performed or partial - module unavailable or job properties unreadable"
+    del "%TEMP%\dz_bits_gap.txt" 2>nul
 )
 if exist "%TEMP%\dz_psprofile.txt" (
     set "_PRFSEV="
@@ -1878,6 +1943,13 @@ if exist "%TEMP%\dz_timeprov.txt" (
     set /p _TMPSEV=<"%TEMP%\dz_timeprov.txt"
     call :dz_finding !_TMPSEV! 5 T1547.003 "Time provider DLL is not Microsoft-signed - loaded by W32Time as SYSTEM"
     del "%TEMP%\dz_timeprov.txt" 2>nul
+)
+if exist "%TEMP%\dz_timeprov_gap.txt" (
+    rem A gap is its own row: the tool could not perform (part of) this check.
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_timeprov_gap.txt"
+    call :dz_finding !_GAPSEV! 5 T1547.003 "Time provider check NOT performed or partial - key or driver value unreadable"
+    del "%TEMP%\dz_timeprov_gap.txt" 2>nul
 )
 
 echo.>> "%REPORT%"
@@ -2703,6 +2775,7 @@ echo.>> "%REPORT%"
 echo --- Credential Protection State (evaluated) --->> "%REPORT%"
 del "%TEMP%\dz_wdigest_hit.txt" 2>nul
 del "%TEMP%\dz_lsa.txt" 2>nul
+del "%TEMP%\dz_lsa_gap.txt" 2>nul
 del "%TEMP%\dz_ntlm_hit.txt" 2>nul
 echo $lsa='HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' > "%PSRUN%"
 echo $wd=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' -Name UseLogonCredential -EA SilentlyContinue).UseLogonCredential;if($wd -eq 1){'[CRITICAL] WDigest ENABLED -- plaintext passwords cached in RAM (T1003.001)';Set-Content -LiteralPath "$env:TEMP\dz_wdigest_hit.txt" -Value hit}else{'[OK] WDigest not caching plaintext credentials.'} >> "%PSRUN%"
@@ -2723,6 +2796,13 @@ if exist "%TEMP%\dz_lsa.txt" (
     set /p _LSASEV=<"%TEMP%\dz_lsa.txt"
     call :dz_finding !_LSASEV! 12 T1003.001 "LSASS PPL not enabled - LSASS memory dumpable"
     del "%TEMP%\dz_lsa.txt" 2>nul
+)
+if exist "%TEMP%\dz_lsa_gap.txt" (
+    rem A gap is its own row: the tool could not perform (part of) this check.
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_lsa_gap.txt"
+    call :dz_finding !_GAPSEV! 12 T1003.001 "LSA Protection state NOT determined - registry and boot event unreadable, or the measurement is missing"
+    del "%TEMP%\dz_lsa_gap.txt" 2>nul
 )
 :: Carry the LSA Protection verdict to the dashboard (the DEFCORE_* idiom). The
 :: tile used to read the registry AGAIN and graded an explicit RunAsPPL=0 as
@@ -2900,6 +2980,7 @@ echo  record ^(T1554^). A logged entry is HISTORY, so a file is only reported wh
 echo  it was never repaired AND still fails verification now.>> "%REPORT%"
 if "%IS_ADMIN%"=="0" goto :sec13_cbs_noadmin
 del "%TEMP%\dz_cbs.txt" 2>nul
+del "%TEMP%\dz_cbs_gap.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\cbs_integrity_check.ps1" (
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\cbs_integrity_check.ps1">> "%REPORT%" 2>&1
 ) else (
@@ -2910,6 +2991,13 @@ if exist "%TEMP%\dz_cbs.txt" (
     set /p _CBSSEV=<"%TEMP%\dz_cbs.txt"
     call :dz_finding !_CBSSEV! 13 T1554 "Windows servicing recorded a corrupt system binary that was never repaired"
     del "%TEMP%\dz_cbs.txt" 2>nul
+)
+if exist "%TEMP%\dz_cbs_gap.txt" (
+    rem A gap is its own row: the tool could not perform (part of) this check.
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_cbs_gap.txt"
+    call :dz_finding !_GAPSEV! 13 T1554 "System-file integrity NOT checked - CBS log missing or unreadable"
+    del "%TEMP%\dz_cbs_gap.txt" 2>nul
 )
 goto :sec13_cbs_done
 :sec13_cbs_noadmin
@@ -3276,6 +3364,7 @@ echo  or shrinking a log so ordinary activity rolls it over, leaves no event at>
 echo  all -- and every event-based check above then reads a truncated log and>> "%REPORT%"
 echo  reports clean. This asks whether each log's own record numbering adds up.>> "%REPORT%"
 del "%TEMP%\dz_loggap.txt" 2>nul
+del "%TEMP%\dz_loggap_gap.txt" 2>nul
 del "%TEMP%\dz_loggap_deferred.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\log_gap_check.ps1" (
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\log_gap_check.ps1">> "%REPORT%" 2>&1
@@ -3287,6 +3376,13 @@ if exist "%TEMP%\dz_loggap.txt" (
     set /p _LGSEV=<"%TEMP%\dz_loggap.txt"
     call :dz_finding !_LGSEV! 16 T1070.001 "Event-log records missing with no clear event, or retention set to self-erase"
     del "%TEMP%\dz_loggap.txt" 2>nul
+)
+if exist "%TEMP%\dz_loggap_gap.txt" (
+    rem A gap is its own row: the tool could not perform (part of) this check.
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_loggap_gap.txt"
+    call :dz_finding !_GAPSEV! 16 T1070.001 "Event-log gap check NOT performed for one or more logs"
+    del "%TEMP%\dz_loggap_gap.txt" 2>nul
 )
 if exist "%TEMP%\dz_loggap_deferred.txt" (
     rem The tool DEFERRED a check this token cannot perform. Counted as
@@ -3315,6 +3411,7 @@ echo  Verifies process-creation / logon / account auditing and command-line>> "%
 echo  logging are ON. When they are OFF, a CLEAN event result above may only>> "%REPORT%"
 echo  mean the events were never recorded -- not that nothing happened.>> "%REPORT%"
 del "%TEMP%\dz_auditpol.txt" 2>nul
+del "%TEMP%\dz_auditpol_gap.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\audit_policy_check.ps1" (
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\audit_policy_check.ps1">> "%REPORT%" 2>&1
 ) else (
@@ -3325,6 +3422,13 @@ if exist "%TEMP%\dz_auditpol.txt" (
     set /p _APSEV=<"%TEMP%\dz_auditpol.txt"
     call :dz_finding !_APSEV! 16 T1562.002 "Security auditing gaps - event-based checks may be blind"
     del "%TEMP%\dz_auditpol.txt" 2>nul
+)
+if exist "%TEMP%\dz_auditpol_gap.txt" (
+    rem A gap is its own row: the tool could not perform (part of) this check.
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_auditpol_gap.txt"
+    call :dz_finding !_GAPSEV! 16 T1562.002 "Audit-policy state NOT determined - auditpol unreadable or localized"
+    del "%TEMP%\dz_auditpol_gap.txt" 2>nul
 )
 if exist "%TEMP%\dz_ev1102_hit.txt" (
     call :dz_finding CRITICAL 16 T1070.001 "Security event log was cleared - evidence destruction"
@@ -3401,6 +3505,7 @@ echo.>> "%REPORT%"
 echo --- Event-Log Gaps ^(records missing with NO clear event^) --->> "%REPORT%"
 echo  Command: powershell -File tools\log_gap_check.ps1>> "%REPORT%"
 del "%TEMP%\dz_loggap.txt" 2>nul
+del "%TEMP%\dz_loggap_gap.txt" 2>nul
 del "%TEMP%\dz_loggap_deferred.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\log_gap_check.ps1" (
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\log_gap_check.ps1">> "%REPORT%" 2>&1
@@ -3412,6 +3517,13 @@ if exist "%TEMP%\dz_loggap.txt" (
     set /p _LGSEV=<"%TEMP%\dz_loggap.txt"
     call :dz_finding !_LGSEV! 16 T1070.001 "Event-log records missing with no clear event, or retention set to self-erase"
     del "%TEMP%\dz_loggap.txt" 2>nul
+)
+if exist "%TEMP%\dz_loggap_gap.txt" (
+    rem A gap is its own row: the tool could not perform (part of) this check.
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_loggap_gap.txt"
+    call :dz_finding !_GAPSEV! 16 T1070.001 "Event-log gap check NOT performed for one or more logs"
+    del "%TEMP%\dz_loggap_gap.txt" 2>nul
 )
 if exist "%TEMP%\dz_loggap_deferred.txt" (
     rem The tool DEFERRED a check this token cannot perform. Counted as
@@ -3729,6 +3841,7 @@ echo  Reads processes, services and scheduled tasks through independent APIs and
 echo  flags disagreement -- the one positive rootkit signal a user-mode tool can>> "%REPORT%"
 echo  get. Also detects Tarrask-style hidden tasks ^(missing SD^).>> "%REPORT%"
 del "%TEMP%\dz_crossapi.txt" 2>nul
+del "%TEMP%\dz_crossapi_gap.txt" 2>nul
 del "%TEMP%\dz_crossapi_deferred.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\cross_api_check.ps1" (
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\cross_api_check.ps1">> "%REPORT%" 2>&1
@@ -3740,6 +3853,13 @@ if exist "%TEMP%\dz_crossapi.txt" (
     set /p _CASEV=<"%TEMP%\dz_crossapi.txt"
     call :dz_finding !_CASEV! 17 T1014 "Cross-API disagreement or hidden task - rootkit indicator"
     del "%TEMP%\dz_crossapi.txt" 2>nul
+)
+if exist "%TEMP%\dz_crossapi_gap.txt" (
+    rem A gap is its own row: the tool could not perform (part of) this check.
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_crossapi_gap.txt"
+    call :dz_finding !_GAPSEV! 17 T1014 "Cross-API or hidden-task check NOT performed - an enumeration failed or was implausible"
+    del "%TEMP%\dz_crossapi_gap.txt" 2>nul
 )
 if exist "%TEMP%\dz_crossapi_deferred.txt" (
     rem The tool DEFERRED a check this token cannot perform. Counted as
@@ -3760,6 +3880,7 @@ rem without remembering a flag; -baseline captures/refreshes one.
 echo.>> "%REPORT%"
 set "BASELINE_FILE=%OUTDIR%\baseline.snapshot"
 del "%TEMP%\dz_baseline.txt" 2>nul
+del "%TEMP%\dz_baseline_gap.txt" 2>nul
 if "%BASELINE_SKIP%"=="1" (
     echo  [INFO] Baseline analysis skipped ^(-noBaseline^).>> "%REPORT%"
 ) else (
@@ -3778,6 +3899,13 @@ if exist "%TEMP%\dz_baseline.txt" (
     set /p _BLSEV=<"%TEMP%\dz_baseline.txt"
     call :dz_finding !_BLSEV! 17 BASELINE "State changed since the saved baseline - review new/changed items"
     del "%TEMP%\dz_baseline.txt" 2>nul
+)
+if exist "%TEMP%\dz_baseline_gap.txt" (
+    rem A gap is its own row: the tool could not perform (part of) this check.
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_baseline_gap.txt"
+    call :dz_finding !_GAPSEV! 17 BASELINE "Baseline comparison NOT performed - snapshot unreadable"
+    del "%TEMP%\dz_baseline_gap.txt" 2>nul
 )
 
 :: ---- Section 17/18 verdict -----------------------------------------------
@@ -4247,6 +4375,7 @@ echo  Enumerates loaded + on-disk drivers and judges each by SHA256 ^(known-bad^
 echo  filename, and Authenticode -- so a renamed or relocated vulnerable driver>> "%REPORT%"
 echo  cannot evade by name alone ^(the old 12-name Test-Path scan could^).>> "%REPORT%"
 del "%TEMP%\dz_driver.txt" 2>nul
+del "%TEMP%\dz_driver_gap.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\driver_audit.ps1" (
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\driver_audit.ps1">> "%REPORT%" 2>&1
 ) else (
@@ -4257,6 +4386,13 @@ if exist "%TEMP%\dz_driver.txt" (
     set /p _DRVSEV=<"%TEMP%\dz_driver.txt"
     call :dz_finding !_DRVSEV! 18 T1562.001 "Known-bad or unsigned kernel driver present (BYOVD / EDR-kill risk)"
     del "%TEMP%\dz_driver.txt" 2>nul
+)
+if exist "%TEMP%\dz_driver_gap.txt" (
+    rem A gap is its own row: the tool could not perform (part of) this check.
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_driver_gap.txt"
+    call :dz_finding !_GAPSEV! 18 T1562.001 "Loaded-driver audit NOT performed - driver enumeration failed"
+    del "%TEMP%\dz_driver_gap.txt" 2>nul
 )
 
 :: --- [CTI] Suspicious Service Creation - Event 7045 Anomalies ---

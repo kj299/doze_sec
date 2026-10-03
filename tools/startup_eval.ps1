@@ -213,6 +213,7 @@ function Resolve-Shortcut {
 # ---- 1. Startup folders (T1547.001) --------------------------------------
 '--- [T1547.001] Startup folder contents (evaluated) ---'
 $startupSev = 'OK'
+$startupGap = 'OK'
 $folders = @()
 foreach ($sf in @('Startup', 'CommonStartup')) {
     $path = $null
@@ -221,7 +222,7 @@ foreach ($sf in @('Startup', 'CommonStartup')) {
 }
 if (-not $folders.Count) {
     '[WARNING] Could not resolve the Startup folder paths -- check NOT performed.'
-    $startupSev = 'WARNING'
+    $startupGap = 'WARNING'
 } else {
     foreach ($folder in $folders) {
         if (-not (Test-Path -LiteralPath $folder)) {
@@ -233,7 +234,7 @@ if (-not $folders.Count) {
         try { $items = @(Get-ChildItem -LiteralPath $folder -File -Force -EA Stop) } catch { $enumOk = $false }
         if (-not $enumOk) {
             "[WARNING] Could not enumerate $folder -- check NOT performed."
-            $startupSev = Get-MaxSev $startupSev 'WARNING'
+            $startupGap = Get-MaxSev $startupGap 'WARNING'
             continue
         }
         # desktop.ini is folder metadata, not an autorun.
@@ -286,13 +287,15 @@ if (-not $folders.Count) {
         }
     }
 }
-if ($startupSev -eq 'OK') { '[OK] No suspicious Startup-folder autoruns.' }
+if ($startupSev -eq 'OK' -and $startupGap -eq 'OK') { '[OK] No suspicious Startup-folder autoruns.' }
 Write-Marker -Name 'startup_folder' -Sev $startupSev
+if ($startupGap -ne 'OK') { Write-Marker -Name 'startup_folder_gap' -Sev $startupGap }
 
 # ---- 2. AppCert DLLs (T1546.009) -----------------------------------------
 ''
 '--- [T1546.009] AppCert DLLs (load into every CreateProcess caller) ---'
 $appcertSev = 'OK'
+$appcertGap = 'OK'
 $acKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\AppCertDlls'
 $acOk = $true
 $acProps = $null
@@ -301,7 +304,7 @@ try {
 } catch { $acOk = $false }
 if (-not $acOk) {
     '[WARNING] AppCertDlls key could not be read -- check NOT performed.'
-    $appcertSev = 'WARNING'
+    $appcertGap = 'WARNING'
 } elseif (-not $acProps) {
     '[OK] AppCertDlls not present or empty (stock Windows).'
 } else {
@@ -326,3 +329,4 @@ if (-not $acOk) {
     if (-not $any) { '[OK] AppCertDlls not present or empty (stock Windows).' }
 }
 Write-Marker -Name 'appcert' -Sev $appcertSev
+if ($appcertGap -ne 'OK') { Write-Marker -Name 'appcert_gap' -Sev $appcertGap }
