@@ -89,6 +89,14 @@ $whyTable = [ordered]@{
     'sshd.*[Rr]unning|OpenSSH Server.*RUNNING' = 'OpenSSH Server is running on Windows. Verify authorized_keys lists are legit; check sshd_config for password-auth and root-login policy.'
     'cert-(invalid|expired|revoked)' = 'Authenticode signing cert failed validation. Stolen-cert malware (3CX, CCleaner) is the canonical scenario.'
     'unsigned bad-path|trusted-signer bad-path|unexpected-signer bad-path' = 'Service binary in an adversary-favored path (\Temp\, \AppData\, \Downloads\, \Public\). Investigate service install timestamp + parent process.'
+    # Section 17 baseline diff. The reason in parentheses on the line says why
+    # the change was or was not forgiven; the was/now lines beneath a CHANGED
+    # item are the evidence.
+    'NEW listening port since baseline' = 'A process accepts connections that was not listening when the baseline was saved. Read the owner and bind address after the arrow: a loopback-only bind (127.0.0.1 / ::1) is unreachable from the network; a bind to 0.0.0.0 or :: by a process you do not recognise is how an implant takes calls. Section 3 lists the connection.'
+    'NEW (local administrator|root CA certificate) since baseline' = 'A new local administrator or root CA is never routine: one is a takeover, the other is how TLS interception is installed. Remove it unless you added it yourself.'
+    'NEW (service|scheduled task|kernel driver|autorun/persistence value) since baseline' = 'Something registered to run since the baseline was saved. The reason in parentheses says why it was not forgiven (unsigned, staging path, suspicious argument, a COM-handler task outside the Windows paths). A validly signed install you recognise is noise; an unsigned binary, a staging path or a suspicious argument is persistence matching no signature.'
+    'CHANGED (service|scheduled task|kernel driver|autorun/persistence value) since baseline' = 'A registered item points somewhere else than when the baseline was saved. Compare the was/now lines beneath it: a path that differs only in a version segment, with the new binary validly signed, is an update; a new directory, a new signer, an unsigned binary, a changed start mode or a changed argument is a replaced binary or a repointed command.'
+    'CHANGED listening port since baseline' = 'A listener changed owner or moved from loopback to a network-reachable address. Read was/now: the same port now bound to 0.0.0.0 or :: is reachable from outside; a new owner outside the system RPC processes is a process taking over a port.'
 }
 
 function Get-WhyMatters {

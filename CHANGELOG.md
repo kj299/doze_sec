@@ -6,6 +6,46 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### The baseline diff knows what changes by design
+The 2026-10-03 elevated field run's one unpredicted ledger row was
+`WARNING|17|BASELINE`, built from ten `[WARNING]` lines that were all
+updates and installs: three `OneDrive Startup Task-<SID>` CHANGED where only
+the version directory moved (the action is an UNQUOTED path with spaces, so
+`Get-BinPath` took `C:\Program` as the binary, found nothing, and the
+signature check never ran -- the sibling service with a quoted path read
+INFO); `GoogleChromeElevationService` and the Codex MSIX service CHANGED by a
+version segment (validly signed, but the rule forgave Microsoft alone); NEW
+`ZoomVDIMGMTTaskUser` (a Zoom-signed install); two NEW `\SoftLanding\` tasks
+with an empty action (Windows' own COM-handler tasks, no executable to grade);
+NEW `tcp/49670` for `jhi_service` bound to `[::1]` only; and
+`Winlogon\LastLogOffEndTimePerfCounter`, a counter Windows rewrites at every
+logoff, snapshotted as a persistence value. Every raise was right by the
+rules and wrong about the machine. `tools/baseline_diff.ps1` now: walks an
+unquoted action's space-separated prefixes to the first file that exists (as
+CreateProcess does) before sign-checking; grades CHANGED records by the
+CURRENT binary's signer, so a validly signed non-Microsoft binary whose
+record differs only in a version-shaped path segment is `[INFO] ... validly
+signed by <CN> -- version bump` (a changed start mode, directory, argument or
+hash is not a bump and stays WARNING naming the signer; unsigned stays
+WARNING; RUN values are never downgraded); reads a NEW task/service/driver/
+autorun validly signed by a non-Microsoft publisher, clean arguments, no
+staging path, as `[INFO] ... a new install, not an update; confirm it is one
+you made`; reads a NEW task with no executable action as a COM-handler task,
+INFO under `\Microsoft\Windows\` and `\SoftLanding\`, WARNING anywhere else;
+records each listener's bind address (`<owner> bind=<address>`), reads a
+loopback-only listener as INFO whatever the owner or range, compares PORT
+records by owner so a baseline saved before the field existed causes no
+CHANGED storm, and raises a listener that moves from loopback to a
+network-reachable address; and excludes the two Winlogon logon/logoff perf
+counters from the snapshot by exact name, declared once when the snapshot is
+saved. WARNING lines now carry the reason in parentheses like INFO lines do,
+and `top_findings` has analyst notes for every baseline line (they read "No
+specific analyst note mapped" before). Self-test 27 -> 72 cases, the ten
+field lines pinned verbatim in both directions; the helpers job opens a
+loopback listener and an all-interfaces listener during the diff and asserts
+INFO and WARNING respectively, and asserts the snapshot's PORT records carry
+a bind and hold no Winlogon counter; four corpus entries.
+
 ### The ledger row of a raised gap names the gap
 The second half of the 2026-10-03 vocabulary decision. A tool that could
 not run raised WARNING through its one severity marker, and the bat's

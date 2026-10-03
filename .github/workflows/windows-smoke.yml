@@ -1505,7 +1505,7 @@ jobs:
           Write-Host "report_safety.ps1 OK (incl. missing-helper skips and anchored counting)"
           exit 0
 
-      - name: baseline_diff.ps1 -SelfTest + live (save/diff round-trip; new item must be detected)
+      - name: baseline_diff.ps1 -SelfTest + live (save/diff round-trip; new item must be detected; a loopback-only listener is INFO, an all-interfaces one WARNING)
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -1513,7 +1513,7 @@ jobs:
           $st = (.\tools\baseline_diff.ps1 -SelfTest) -join "`n"
           if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'baseline_diff.ps1 -SelfTest failed' }
           $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($nst -lt 27) { throw "baseline_diff self-test ran only $nst case(s)" }
+          if ($nst -lt 70) { throw "baseline_diff self-test ran only $nst case(s)" }
           Write-Host "baseline_diff -SelfTest OK ($nst cases)"
           $md = Join-Path $env:TEMP ("dz_bl_ci_{0}" -f $PID)
           New-Item -ItemType Directory -Path $md -Force | Out-Null
@@ -1529,10 +1529,20 @@ jobs:
             Write-Host $save
             if (-not (Test-Path $snap)) { throw 'baseline snapshot not written' }
             if ($save -notmatch 'not proof the current state is clean') { throw 'save output missing the honest-limitation note' }
+            # The Winlogon logon/logoff counters are excluded by name, and the
+            # exclusion is declared, not silent.
+            if ($save -notmatch 'Excluded by design: Winlogon LastLogOffEndTimePerfCounter and LastLogOnEndTimePerfCounter') { throw 'save output did not declare the Winlogon counter exclusion' }
             # Snapshot must be deterministic: re-saving yields identical records
             # (header carries the timestamp, so compare only record lines).
             $recs1 = @(Get-Content $snap | Where-Object { $_ -notmatch '^#' })
             if ($recs1.Count -lt 10) { throw ("snapshot suspiciously small: {0} records" -f $recs1.Count) }
+            if (@($recs1 | Where-Object { $_ -match '^RUN\|.*\\Winlogon\\LastLog(Off|On)EndTimePerfCounter\|' }).Count) { throw 'a Winlogon logon/logoff counter was snapshotted as a persistence value' }
+            # PORT records carry the bind address, so loopback-only can be told
+            # from network-reachable at diff time.
+            $portRecs = @($recs1 | Where-Object { $_ -match '^PORT\|' })
+            if ($portRecs.Count -eq 0) { throw 'snapshot holds no PORT records' }
+            $noBind = @($portRecs | Where-Object { $_ -notmatch ' bind=\S+$' })
+            if ($noBind.Count) { throw ("PORT record(s) without a bind address: {0}" -f ($noBind -join '; ')) }
             # Plant a NEW autorun and confirm the diff reports it as NEW+WARNING.
             if (-not (Test-Path $runKey)) { New-Item -Path $runKey -Force | Out-Null }
             Set-ItemProperty -Path $runKey -Name 'dz_ci_baseline_probe' -Value 'C:\Windows\Temp\dz_ci_probe.exe' -Force
@@ -1553,7 +1563,24 @@ jobs:
             # is LOLBin persistence rendered as a Windows-update notice in the
             # check that exists to catch implants matching no signature.
             & sc.exe create dz_selftest_ci_lolbin binPath= 'C:\Windows\System32\rundll32.exe C:\ProgramData\dz_selftest_ci_stage\x.dll,Run' start= demand | Out-Null
+            # Two listeners the baseline has not seen, owned by this
+            # powershell (not a system RPC owner, so the owner rule cannot
+            # forgive either): one bound to loopback only (INFO -- unreachable
+            # from the network; the owner's jhi_service on [::1] was WARNING
+            # on 2026-10-03), one bound to every address (WARNING).
+            $lb  = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0); $lb.Start()
+            $any = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Any, 0);      $any.Start()
+            $lbPort = $lb.LocalEndpoint.Port; $anyPort = $any.LocalEndpoint.Port
+            Write-Host ("planted listeners: loopback tcp/{0}, all-interfaces tcp/{1}" -f $lbPort, $anyPort)
             $diff2 = (.\tools\baseline_diff.ps1 -Mode Diff -Path $snap -MarkerDir $md) -join "`n"
+            $lbLine  = @(($diff2 -split "`n") | Where-Object { $_ -match ('since baseline.*\btcp/{0}\b' -f $lbPort) })
+            $anyLine = @(($diff2 -split "`n") | Where-Object { $_ -match ('since baseline.*\btcp/{0}\b' -f $anyPort) })
+            Write-Host ($lbLine + $anyLine)
+            if ($lbLine.Count -ne 1) { throw ("loopback listener tcp/{0}: expected one diff line, got {1}" -f $lbPort, $lbLine.Count) }
+            if ($lbLine[0] -notmatch '^\[INFO\] NEW listening port since baseline \(loopback-only listener, unreachable from the network\)') { throw ("loopback-only listener was not INFO: " + $lbLine[0]) }
+            if ($lbLine[0] -notmatch 'bind=127\.0\.0\.1') { throw ("the bind address is missing from the line: " + $lbLine[0]) }
+            if ($anyLine.Count -ne 1) { throw ("all-interfaces listener tcp/{0}: expected one diff line, got {1}" -f $anyPort, $anyLine.Count) }
+            if ($anyLine[0] -notmatch '^\[WARNING\] NEW listening port since baseline \(new listener\)') { throw ("all-interfaces listener by powershell was not WARNING: " + $anyLine[0]) }
             Write-Host ($diff2 -split "`n" | Where-Object { $_ -match 'dz_selftest_ci_lolbin' })
             if ($diff2 -notmatch 'dz_selftest_ci_lolbin') { throw 'new LOLBin-hosted service missing from the diff entirely' }
             $line = (($diff2 -split "`n") | Where-Object { $_ -match 'dz_selftest_ci_lolbin' } | Select-Object -First 1)
@@ -1562,9 +1589,11 @@ jobs:
           } finally {
             & sc.exe delete dz_selftest_ci_lolbin 2>&1 | Out-Null
             Remove-ItemProperty -Path $runKey -Name 'dz_ci_baseline_probe' -EA SilentlyContinue
+            if ($lb)  { try { $lb.Stop() }  catch {} }
+            if ($any) { try { $any.Stop() } catch {} }
             Remove-Item $md -Recurse -Force -EA SilentlyContinue
           }
-          Write-Host "baseline_diff.ps1 OK (incl. signed-LOLBin service not downgraded)"
+          Write-Host "baseline_diff.ps1 OK (incl. signed-LOLBin service not downgraded; loopback listener INFO, all-interfaces WARNING)"
           exit 0
 
       - name: cross_api_check.ps1 -SelfTest + live (rootkit discrepancy; race-tolerance + Tarrask logic)

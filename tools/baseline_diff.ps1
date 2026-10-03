@@ -52,6 +52,30 @@
 #     with a suspicious argument stays WARNING: the arguments are graded first.
 #   * Any NEW admin or root CA is WARNING -- those are never routine.
 #   * REMOVED items are reported [INFO]: uninstalls are normal.
+#   * Five more classes, every one taken verbatim from a real report (2026-10-03)
+#     that raised ten WARNING lines of updates and installs:
+#     - a CHANGED binary validly signed by a NON-Microsoft publisher whose
+#       record differs only in a version-shaped path segment (Chrome's
+#       elevation service, an MSIX package directory) is [INFO] naming the
+#       signer -- a version bump. A changed start mode, argument, directory or
+#       hash is not a bump and stays WARNING, with the signer named.
+#     - a NEW task/service/driver/autorun validly signed by a non-Microsoft
+#       publisher, clean arguments, no staging path, is [INFO] naming the
+#       signer: a new install, which the owner is told to confirm.
+#     - a NEW task with NO executable action is a COM-handler task: [INFO]
+#       under the Windows-owned task paths (\Microsoft\Windows\, \SoftLanding\),
+#       WARNING anywhere else (inspect its CLSID).
+#     - a NEW listener bound to loopback only (127.0.0.1 / ::1) is [INFO]
+#       whatever the owner or range: it is unreachable from the network. The
+#       snapshot now records the bind address; a listener that MOVES from
+#       loopback to a network-reachable address is WARNING.
+#     - the Winlogon logon/logoff perf counters are rewritten at every logon
+#       and are not persistence values: excluded from the snapshot by name,
+#       declared once when the snapshot is saved.
+#     An unquoted task action with spaces in its path ("C:\Program Files\...\x.exe
+#     /arg") used to defeat the signature check entirely (Get-BinPath took the
+#     first token); it now walks the space-separated prefixes the way
+#     CreateProcess does and sign-checks the first file that exists.
 # Get-AddedVerdict / Get-ChangedVerdict hold these rules; -SelfTest pins them.
 #
 # MARKER: writes the severity word to $env:TEMP\dz_baseline.txt; the caller
@@ -102,34 +126,129 @@ function CleanField {
     return (($s -replace '[|\r\n]', ' ').Trim())
 }
 
+# Expand the forms a service ImagePath / driver PathName / task action takes
+# into a path Test-Path can see: %var%, \??\, \SystemRoot, surrounding quotes.
+function Resolve-BinPath {
+    param([string]$Raw)
+    if (-not $Raw) { return '' }
+    $p = [Environment]::ExpandEnvironmentVariables($Raw.Trim().Trim('"'))
+    $p = $p -replace '^\\\?\?\\', '' -replace '^\\SystemRoot', $env:SystemRoot
+    if ($p -match '^"') { $p = $p.Trim('"') }
+    return $p
+}
+
+# The common name out of a certificate subject ('CN=Google LLC, O=Google LLC,
+# L=Mountain View, ...' -> 'Google LLC'). Falls back to the whole subject.
+function Get-SubjectCN {
+    param([string]$Subject)
+    if (-not $Subject) { return '' }
+    if ($Subject -match '(?:^|,\s*)CN=(.+?)(?:,\s*[A-Za-z]+=|$)') { return (CleanField ($Matches[1].Trim().Trim('"'))) }
+    return (CleanField $Subject)
+}
+
+# Signature facts for one binary. Valid: the Authenticode chain verifies.
+# CN: the signer's common name, '' when the file is unsigned, absent or
+# unreadable -- "could not check" belongs with unsigned (the proc_path_grade
+# rule). Microsoft: Valid and the subject names Microsoft/Windows.
+function Get-SignerInfo {
+    param([string]$FilePath)
+    $r = @{ Valid = $false; Subject = ''; CN = ''; Microsoft = $false }
+    if (-not $FilePath) { return $r }
+    $p = Resolve-BinPath $FilePath
+    if (-not $p -or -not (Test-Path -LiteralPath $p -PathType Leaf)) { return $r }
+    $sig = $null
+    try { $sig = Get-AuthenticodeSignature -FilePath $p -EA Stop } catch {}
+    if (-not $sig -or $sig.Status -ne 'Valid' -or -not $sig.SignerCertificate) { return $r }
+    $r.Valid = $true
+    $r.Subject = [string]$sig.SignerCertificate.Subject
+    $r.CN = Get-SubjectCN $r.Subject
+    $r.Microsoft = ($r.Subject -match '\bMicrosoft\b|\bWindows\b')
+    return $r
+}
+
 # Is this binary validly signed by Microsoft? Used to keep Windows Update noise
 # out of the NEW-item findings without silencing third-party additions.
 function Test-MsSigned {
     param([string]$FilePath)
-    if (-not $FilePath) { return $false }
-    $p = [Environment]::ExpandEnvironmentVariables($FilePath.Trim().Trim('"'))
-    $p = $p -replace '^\\\?\?\\', '' -replace '^\\SystemRoot', $env:SystemRoot
-    if ($p -match '^"') { $p = $p.Trim('"') }
-    if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { return $false }
-    $sig = $null
-    try { $sig = Get-AuthenticodeSignature -FilePath $p -EA Stop } catch {}
-    if (-not $sig -or $sig.Status -ne 'Valid') { return $false }
-    return ($sig.SignerCertificate.Subject -match '\bMicrosoft\b|\bWindows\b')
+    return [bool](Get-SignerInfo $FilePath).Microsoft
 }
 
-# Pull the first plausible executable path out of a service ImagePath /
-# scheduled-task action so signature checks have something to work with.
+# Pull the executable path out of a service ImagePath / scheduled-task action
+# so signature checks have something to work with. An UNQUOTED action whose
+# path contains spaces ("C:\Program Files\Microsoft OneDrive\<ver>\
+# OneDriveLauncher.exe /startInstances") has no delimiter between path and
+# arguments; CreateProcess tries each space-separated prefix and runs the
+# first file that exists, so the signature check has to find the binary the
+# same way. Taking the first token ("C:\Program") found nothing, the
+# signature check never ran, and three OneDrive tasks were WARNING for a
+# version bump their sibling service (quoted path) read as INFO. -Exists is
+# the file probe, injectable so the walk can be pinned without a disk.
 function Get-BinPath {
-    param([string]$Raw)
+    param([string]$Raw, [scriptblock]$Exists = $null)
     if (-not $Raw) { return '' }
     $s = $Raw.Trim()
     if ($s.StartsWith('"')) {
         $end = $s.IndexOf('"', 1)
         if ($end -gt 1) { return $s.Substring(1, $end - 1) }
     }
+    if ($null -eq $Exists) { $Exists = { param([string]$p) Test-Path -LiteralPath $p -PathType Leaf } }
+    $tok = @($s -split ' ')
+    $max = [Math]::Min($tok.Count, 16)
+    for ($i = 1; $i -le $max; $i++) {
+        $cand = ($tok[0..($i - 1)] -join ' ')
+        if ($cand -notmatch '\.(exe|sys|dll)$') { continue }
+        $hit = $false
+        try { $hit = [bool](& $Exists (Resolve-BinPath $cand)) } catch { $hit = $false }
+        if ($hit) { return $cand }
+    }
     $m = [regex]::Match($s, '^[^\s]+\.(exe|sys|dll)', 'IgnoreCase')
     if ($m.Success) { return $m.Value }
     return $s
+}
+
+# Does the record differ from its baseline only in a version-shaped segment?
+# A version is digits-dot-digits (2 to 4 parts) sitting inside a path segment
+# -- between backslashes or underscores, or after a 'v', as in
+# \Chrome\Application\154.0.8037.98\, \OneDrive\26.173.0906.0008\,
+# OpenAI.Codex_26.930.2377.0_x64__<id>, Platform\4.18.25070.5-0\. A number
+# that is an ARGUMENT (-server 10.0.0.2) sits after a space and is not masked,
+# so a changed argument is never read as a version bump; neither is a changed
+# start mode, directory or hash.
+$script:VersionRx = '(?<=[\\_v-])\d+(\.\d+){1,3}(?=[\\_-])'
+function Test-VersionBumpOnly {
+    param([string]$Old, [string]$New)
+    if ($Old -eq $New) { return $false }
+    $a = $Old -replace $script:VersionRx, '<v>'
+    $b = $New -replace $script:VersionRx, '<v>'
+    return ($a -eq $b)
+}
+
+# Winlogon values that Windows rewrites at every logon and logoff. They are
+# counters, not persistence, and snapshotting them made every run after a
+# logoff report a CHANGED autorun. Exact names under the Winlogon key only.
+$script:ExcludedRunValues = @('LastLogOffEndTimePerfCounter', 'LastLogOnEndTimePerfCounter')
+function Test-ExcludedRunValue {
+    param([string]$Key, [string]$Name)
+    if ($Key -notmatch '\\Winlogon$') { return $false }
+    return ($script:ExcludedRunValues -contains $Name)
+}
+
+# PORT detail is '<owner> bind=<local address>'. The bind address is recorded
+# so a loopback-only listener can be told from one reachable over the network;
+# the owner alone decides whether two records are "the same" so a baseline
+# saved before the bind field existed does not report every port as CHANGED.
+$script:LoopbackRx = '^(127\.0\.0\.1|::1|\[::1\])$'
+function Get-PortBind  { param([string]$Detail) if ($Detail -match '(?:^|\s)bind=(\S+)') { return $Matches[1] }; return '' }
+function Get-PortOwner { param([string]$Detail) return (($Detail -replace '(?:^|\s)bind=\S+', '').Trim()) }
+# Is a record CHANGED? Everything but PORT compares the whole detail. PORT
+# compares the owner, and the bind address only when BOTH sides carry one
+# (a listener that moved from loopback to 0.0.0.0 is a change worth seeing).
+function Test-RecordChanged {
+    param([string]$Cat, [string]$Old, [string]$New)
+    if ($Cat -ne 'PORT') { return ($Old -ne $New) }
+    if ((Get-PortOwner $Old) -ne (Get-PortOwner $New)) { return $true }
+    $ob = Get-PortBind $Old; $nb = Get-PortBind $New
+    return ([bool]($ob -and $nb -and $ob -ne $nb))
 }
 
 # Argument-content test for signed LOLBin hosts. Patterns are deliberately the
@@ -185,21 +304,40 @@ $script:StagingRx = '\\Temp\\|\\Downloads\\|\\Users\\Public\\'
 
 function Get-CatLabel { param([string]$Cat) $l = $script:CatLabel[$Cat]; if ($l) { return $l }; return $Cat }
 
-# A record present now and absent from the baseline.
+# The task folders Windows itself populates with COM-handler tasks (no
+# executable action; the handler is a CLSID). SoftLanding is the Windows
+# feature-promotion scheduler, which creates per-user Deferral/Trigger tasks.
+$script:WindowsTaskPathRx = '^\\(Microsoft\\Windows|SoftLanding)\\'
+
+# A record present now and absent from the baseline. -Signer is the common
+# name the binary is validly signed with ('' = unsigned, absent, unreadable);
+# -MsSigned says that signer is Microsoft.
 function Get-AddedVerdict {
-    param([string]$Cat, [string]$Id, [string]$Detail, [bool]$MsSigned)
+    param([string]$Cat, [string]$Id, [string]$Detail, [bool]$MsSigned, [string]$Signer = '')
     if ($script:BinaryCats -contains $Cat) {
         # The arguments are graded FIRST: a Microsoft signature on the host
         # binary is not a clean bill of health (rundll32 <staging>\x.dll).
         if (Test-SuspiciousArgs $Detail) { return @{ Sev = 'WARNING'; Why = 'suspicious arguments' } }
         if ($Detail -match $script:StagingRx) { return @{ Sev = 'WARNING'; Why = 'runs from a staging path' } }
+        if ($Cat -eq 'TASK' -and -not $Detail.Trim()) {
+            # No executable to grade: a COM-handler task. Routine only where
+            # Windows creates them; anywhere else the CLSID is the thing to read.
+            if ($Id -match $script:WindowsTaskPathRx) { return @{ Sev = 'INFO'; Why = 'COM-handler task, no executable action, under a Windows-owned task path' } }
+            return @{ Sev = 'WARNING'; Why = 'COM-handler task outside the Windows task paths -- inspect its CLSID' }
+        }
         if ($MsSigned) { return @{ Sev = 'INFO'; Why = 'Microsoft-signed, likely a Windows update' } }
-        return @{ Sev = 'WARNING'; Why = 'not validly Microsoft-signed' }
+        if ($Signer) { return @{ Sev = 'INFO'; Why = ('validly signed by {0} -- a new install, not an update; confirm it is one you made' -f $Signer) } }
+        return @{ Sev = 'WARNING'; Why = 'not validly signed' }
     }
     if ($Cat -eq 'PORT') {
         $port = 0
         if ($Id -match '^tcp/(\d+)$') { $port = [int]$Matches[1] }
-        if ($port -ge $script:DynamicPortFloor -and $Detail -match $script:DynamicPortOwner) {
+        # Loopback only: nothing off the machine can reach it, whoever owns it
+        # (jhi_service on [::1] in the dynamic range was a WARNING).
+        if ((Get-PortBind $Detail) -match $script:LoopbackRx) {
+            return @{ Sev = 'INFO'; Why = 'loopback-only listener, unreachable from the network' }
+        }
+        if ($port -ge $script:DynamicPortFloor -and (Get-PortOwner $Detail) -match $script:DynamicPortOwner) {
             return @{ Sev = 'INFO'; Why = 'dynamic RPC range, system-owned -- reassigned on every boot' }
         }
         return @{ Sev = 'WARNING'; Why = 'new listener' }
@@ -207,21 +345,40 @@ function Get-AddedVerdict {
     return @{ Sev = 'WARNING'; Why = 'never routine' }
 }
 
-# A record present in both, with different detail.
+# A record present in both, with different detail. -SignerNow is the common
+# name the CURRENT binary is validly signed with ('' = unsigned, absent,
+# unreadable); the old binary is gone, so the old signer cannot be known.
 function Get-ChangedVerdict {
-    param([string]$Cat, [string]$Id, [string]$Old, [string]$New, [bool]$MsSignedNow)
+    param([string]$Cat, [string]$Id, [string]$Old, [string]$New, [bool]$MsSignedNow, [string]$SignerNow = '')
     if ($script:BinaryCats -contains $Cat) {
         if (Test-SuspiciousArgs $New) { return @{ Sev = 'WARNING'; Why = 'suspicious arguments' } }
         if ($New -match $script:StagingRx) { return @{ Sev = 'WARNING'; Why = 'now runs from a staging path' } }
-        if ($Cat -ne 'RUN' -and $MsSignedNow) { return @{ Sev = 'INFO'; Why = 'Microsoft-signed, likely a Windows update' } }
+        if ($Cat -ne 'RUN') {
+            if ($MsSignedNow) { return @{ Sev = 'INFO'; Why = 'Microsoft-signed, likely a Windows update' } }
+            if ($SignerNow) {
+                # A non-Microsoft publisher's update moves the binary to a new
+                # version directory and changes nothing else. Anything else
+                # that differs -- start mode, arguments, directory, hash -- is
+                # not a bump, and the signer is named so the reader can judge.
+                if (Test-VersionBumpOnly -Old $Old -New $New) { return @{ Sev = 'INFO'; Why = ('validly signed by {0} -- version bump' -f $SignerNow) } }
+                return @{ Sev = 'WARNING'; Why = ('binary or command changed (now signed by {0})' -f $SignerNow) }
+            }
+        }
         return @{ Sev = 'WARNING'; Why = 'binary or command changed' }
     }
     if ($Cat -eq 'PORT') {
-        # Same port, different owner: only quiet when the new owner is still a
-        # system process in the dynamic range (svchost -> lsass on reboot).
         $port = 0
         if ($Id -match '^tcp/(\d+)$') { $port = [int]$Matches[1] }
-        if ($port -ge $script:DynamicPortFloor -and $New -match $script:DynamicPortOwner) {
+        $nb = Get-PortBind $New
+        if ((Get-PortOwner $Old) -eq (Get-PortOwner $New)) {
+            # Same owner: the bind address moved.
+            if ($nb -match $script:LoopbackRx) { return @{ Sev = 'INFO'; Why = 'listener now bound to loopback only' } }
+            return @{ Sev = 'WARNING'; Why = 'listener moved from loopback to a network-reachable address' }
+        }
+        if ($nb -match $script:LoopbackRx) { return @{ Sev = 'INFO'; Why = 'loopback-only listener, unreachable from the network' } }
+        # Same port, different owner: only quiet when the new owner is still a
+        # system process in the dynamic range (svchost -> lsass on reboot).
+        if ($port -ge $script:DynamicPortFloor -and (Get-PortOwner $New) -match $script:DynamicPortOwner) {
             return @{ Sev = 'INFO'; Why = 'dynamic RPC range, system-owned' }
         }
         return @{ Sev = 'WARNING'; Why = 'listener owner changed' }
@@ -300,8 +457,95 @@ if ($SelfTest) {
     foreach ($r in $real) { T ("owner's real autorun has no suspicious arguments: " + $r.Substring(0, [Math]::Min(60, $r.Length))) (-not (Test-SuspiciousArgs $r)) '' }
     T 'a hidden-window launcher IS suspicious here (baseline records have no updater exemption)' (Test-SuspiciousArgs 'powershell -w hidden -File x.ps1') ''
 
+    # ---- what changes by design: the ten lines of the 2026-10-03 report ----
+    # Get-BinPath on an UNQUOTED path with spaces (the OneDrive task action).
+    $od  = 'C:\Program Files\Microsoft OneDrive\26.173.0906.0008\OneDriveLauncher.exe'
+    $odOld = 'C:\Program Files\Microsoft OneDrive\26.163.0823.0004\OneDriveLauncher.exe /startInstances'
+    $odNew = $od + ' /startInstances'
+    # The probe reads a script-scoped value (no GetNewClosure -- see CLAUDE.md).
+    $script:dzProbeHit = $od
+    $probe = { param([string]$p) $p -eq $script:dzProbeHit }
+    $got = Get-BinPath -Raw $odNew -Exists $probe
+    T 'Get-BinPath walks an unquoted path with spaces to the first file that exists (OneDrive task action, verbatim)' ($got -eq $od) ("got=" + $got)
+    $got = Get-BinPath -Raw 'C:\Windows\System32\x.exe /a /b' -Exists { param([string]$p) $false }
+    T 'Get-BinPath keeps the first-token behaviour when no prefix exists' ($got -eq 'C:\Windows\System32\x.exe') ("got=" + $got)
+    $got = Get-BinPath -Raw ('"' + $od + '" /startInstances') -Exists { param([string]$p) $false }
+    T 'Get-BinPath takes a quoted path whole without probing' ($got -eq $od) ("got=" + $got)
+    $got = Get-BinPath -Raw 'C:\Program Files\Vendor\tool.exe -server 10.0.0.1 -log C:\Program Files\Vendor\x.dll' -Exists { param([string]$p) $p -eq 'C:\Program Files\Vendor\tool.exe' }
+    T 'Get-BinPath stops at the first existing prefix, not a later .dll argument' ($got -eq 'C:\Program Files\Vendor\tool.exe') ("got=" + $got)
+    T 'Get-SubjectCN takes the common name out of a full subject' ((Get-SubjectCN 'CN=Google LLC, O=Google LLC, L=Mountain View, S=California, C=US') -eq 'Google LLC') (Get-SubjectCN 'CN=Google LLC, O=Google LLC, L=Mountain View, S=California, C=US')
+    T 'Get-SubjectCN keeps a comma inside a quoted CN' ((Get-SubjectCN 'CN="Zoom Video Communications, Inc.", O="Zoom Video Communications, Inc.", C=US') -eq 'Zoom Video Communications, Inc.') (Get-SubjectCN 'CN="Zoom Video Communications, Inc.", O="Zoom Video Communications, Inc.", C=US')
+
+    # CHANGED: version bumps of validly signed non-Microsoft binaries (verbatim).
+    $v = Get-ChangedVerdict -Cat 'TASK' -Id '\OneDrive Startup Task-S-1-5-21-3734314744-1054637183-1240667225-1001' -Old $odOld -New $odNew -MsSignedNow $true -SignerNow 'Microsoft Corporation'
+    T 'CHANGED OneDrive startup task (unquoted path, Microsoft-signed once found) is INFO' ($v.Sev -eq 'INFO') ("sev=" + $v.Sev)
+    $chOld = '"C:\Program Files\Google\Chrome\Application\154.0.8037.58\elevation_service.exe" start=Manual'
+    $chNew = '"C:\Program Files\Google\Chrome\Application\154.0.8037.98\elevation_service.exe" start=Manual'
+    $v = Get-ChangedVerdict -Cat 'SVC' -Id 'GoogleChromeElevationService' -Old $chOld -New $chNew -MsSignedNow $false -SignerNow 'Google LLC'
+    T 'CHANGED service validly signed by a non-Microsoft publisher, version segment only, is INFO naming the signer (Chrome elevation service, verbatim)' ($v.Sev -eq 'INFO' -and $v.Why -match 'Google LLC' -and $v.Why -match 'version bump') ($v.Sev + '/' + $v.Why)
+    $cxOld = '"C:\Program Files\WindowsApps\OpenAI.Codex_26.924.2738.0_x64__2p2nqsd0c76g0\app\resources\codex-windows-sandbox-service.exe" start=Auto'
+    $cxNew = '"C:\Program Files\WindowsApps\OpenAI.Codex_26.930.2377.0_x64__2p2nqsd0c76g0\app\resources\codex-windows-sandbox-service.exe" start=Auto'
+    $v = Get-ChangedVerdict -Cat 'SVC' -Id 'CodexSandboxService.OpenAI.Codex' -Old $cxOld -New $cxNew -MsSignedNow $false -SignerNow 'OpenAI OpCo, LLC'
+    T 'CHANGED MSIX package directory version (signed, non-Microsoft) is INFO (Codex sandbox service, verbatim)' ($v.Sev -eq 'INFO' -and $v.Why -match 'version bump') ($v.Sev + '/' + $v.Why)
+    $v = Get-ChangedVerdict -Cat 'SVC' -Id 'GoogleChromeElevationService' -Old $chOld -New $chNew -MsSignedNow $false -SignerNow ''
+    T 'CHANGED service version bump whose new binary is NOT validly signed stays WARNING' ($v.Sev -eq 'WARNING') ("sev=" + $v.Sev)
+    $v = Get-ChangedVerdict -Cat 'SVC' -Id 'GoogleChromeElevationService' -Old $chOld -New '"C:\Users\u\AppData\Local\Vendor\elevation_service.exe" start=Manual' -MsSignedNow $false -SignerNow 'Google LLC'
+    T 'CHANGED service whose signed binary moved to a different directory is WARNING naming the signer' ($v.Sev -eq 'WARNING' -and $v.Why -match 'Google LLC') ($v.Sev + '/' + $v.Why)
+    $v = Get-ChangedVerdict -Cat 'SVC' -Id 'GoogleChromeElevationService' -Old $chOld -New ($chNew -replace 'start=Manual$', 'start=Auto') -MsSignedNow $false -SignerNow 'Google LLC'
+    T 'CHANGED service with a version bump AND a start-mode change is WARNING (not a bump)' ($v.Sev -eq 'WARNING') ("sev=" + $v.Sev)
+    $v = Get-ChangedVerdict -Cat 'TASK' -Id '\Vendor\Agent' -Old '"C:\Program Files\Vendor\agent.exe" -server 10.0.0.1' -New '"C:\Program Files\Vendor\agent.exe" -server 10.0.0.2' -MsSignedNow $false -SignerNow 'Vendor Inc'
+    T 'CHANGED signed task whose ARGUMENT changed (an address, not a path version) is WARNING' ($v.Sev -eq 'WARNING') ("sev=" + $v.Sev)
+    $v = Get-ChangedVerdict -Cat 'DRV' -Id 'vendrv' -Old 'C:\Windows\System32\drivers\vendrv.sys sha256=AAAA' -New 'C:\Windows\System32\drivers\vendrv.sys sha256=BBBB' -MsSignedNow $false -SignerNow 'Vendor Inc'
+    T 'CHANGED non-Microsoft driver hash (same path) is WARNING naming the signer -- a hash is not a version bump' ($v.Sev -eq 'WARNING' -and $v.Why -match 'Vendor Inc') ($v.Sev + '/' + $v.Why)
+    $v = Get-ChangedVerdict -Cat 'RUN' -Id 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\BraveUpdate' -Old '"C:\Users\u\AppData\Local\BraveSoftware\Update\1.3.361.151\BraveUpdateCore.exe"' -New '"C:\Users\u\AppData\Local\BraveSoftware\Update\1.3.370.12\BraveUpdateCore.exe"' -MsSignedNow $false -SignerNow 'Brave Software, Inc.'
+    T 'CHANGED autorun value stays WARNING for a signed version bump (persistence content changed)' ($v.Sev -eq 'WARNING') ("sev=" + $v.Sev)
+    T 'Test-VersionBumpOnly: identical records are not a bump' (-not (Test-VersionBumpOnly -Old $chOld -New $chOld)) ''
+    T 'Test-VersionBumpOnly: Defender platform directory (4.18.24090.11-0 -> 4.18.25070.5-0)' (Test-VersionBumpOnly -Old 'C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.24090.11-0\MsMpEng.exe start=Auto' -New 'C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.25070.5-0\MsMpEng.exe start=Auto') ''
+
+    # NEW: signed installs, COM-handler tasks, loopback listeners (verbatim).
+    $v = Get-AddedVerdict -Cat 'TASK' -Id '\ZoomVDIMGMTTaskUser' -Detail '"C:\Program Files\ZoomVDIPluginManagement\ZoomVDIPluginManagement.exe" -BackendMode' -MsSigned $false -Signer 'Zoom Video Communications, Inc.'
+    T 'NEW task validly signed by a non-Microsoft publisher is INFO naming the signer (Zoom VDI, verbatim)' ($v.Sev -eq 'INFO' -and $v.Why -match 'Zoom Video Communications' -and $v.Why -match 'confirm') ($v.Sev + '/' + $v.Why)
+    $v = Get-AddedVerdict -Cat 'TASK' -Id '\ZoomVDIMGMTTaskUser' -Detail '"C:\Program Files\ZoomVDIPluginManagement\ZoomVDIPluginManagement.exe" -BackendMode' -MsSigned $false -Signer ''
+    T 'NEW task whose binary is not validly signed is WARNING' ($v.Sev -eq 'WARNING') ("sev=" + $v.Sev)
+    $v = Get-AddedVerdict -Cat 'SVC' -Id 'helper' -Detail 'C:\Users\Public\helper.exe start=Auto' -MsSigned $false -Signer 'Vendor Inc'
+    T 'NEW signed non-Microsoft service in a staging path is still WARNING (the signer does not rescue the path)' ($v.Sev -eq 'WARNING' -and $v.Why -match 'staging') ($v.Sev + '/' + $v.Why)
+    $v = Get-AddedVerdict -Cat 'TASK' -Id '\SoftLanding\S-1-5-21-3734314744-1054637183-1240667225-1001\SoftLandingDeferralTask-{fd0dce8d-c5fe-4ec7-b115-c0ed19f2d8f1}' -Detail '' -MsSigned $false
+    T 'NEW SoftLanding task with no executable action is INFO (COM-handler task, Windows-owned path, verbatim)' ($v.Sev -eq 'INFO' -and $v.Why -match 'COM-handler') ($v.Sev + '/' + $v.Why)
+    $v = Get-AddedVerdict -Cat 'TASK' -Id '\Microsoft\Windows\WindowsUpdate\Scheduled Start' -Detail '' -MsSigned $false
+    T 'NEW \Microsoft\Windows\ task with no executable action is INFO' ($v.Sev -eq 'INFO') ("sev=" + $v.Sev)
+    $v = Get-AddedVerdict -Cat 'TASK' -Id '\Updater' -Detail '' -MsSigned $false
+    T 'NEW COM-handler task OUTSIDE the Windows task paths is WARNING (inspect its CLSID)' ($v.Sev -eq 'WARNING' -and $v.Why -match 'CLSID') ($v.Sev + '/' + $v.Why)
+    $v = Get-AddedVerdict -Cat 'PORT' -Id 'tcp/49670' -Detail 'jhi_service bind=::1' -MsSigned $false
+    T 'NEW listener bound to [::1] only is INFO whatever the owner (jhi_service, verbatim)' ($v.Sev -eq 'INFO' -and $v.Why -match 'loopback') ($v.Sev + '/' + $v.Why)
+    $v = Get-AddedVerdict -Cat 'PORT' -Id 'tcp/4444' -Detail 'evil bind=127.0.0.1' -MsSigned $false
+    T 'NEW listener bound to 127.0.0.1 below the dynamic range is INFO (unreachable from the network)' ($v.Sev -eq 'INFO') ("sev=" + $v.Sev)
+    $v = Get-AddedVerdict -Cat 'PORT' -Id 'tcp/49670' -Detail 'jhi_service bind=0.0.0.0' -MsSigned $false
+    T 'NEW non-system listener in the dynamic range bound to 0.0.0.0 is WARNING' ($v.Sev -eq 'WARNING') ("sev=" + $v.Sev)
+    $v = Get-AddedVerdict -Cat 'PORT' -Id 'tcp/49670' -Detail 'evil bind=::' -MsSigned $false
+    T 'NEW listener bound to :: (every address) is WARNING' ($v.Sev -eq 'WARNING') ("sev=" + $v.Sev)
+    $v = Get-AddedVerdict -Cat 'PORT' -Id 'tcp/49670' -Detail 'svchost bind=::' -MsSigned $false
+    T 'the system-owner rule still reads the owner with a bind field present' ($v.Sev -eq 'INFO') ("sev=" + $v.Sev)
+    $v = Get-AddedVerdict -Cat 'PORT' -Id 'tcp/50000' -Detail 'pid=1234 bind=0.0.0.0' -MsSigned $false
+    T 'the netstat fallback with a network-reachable bind is WARNING' ($v.Sev -eq 'WARNING') ("sev=" + $v.Sev)
+    $v = Get-ChangedVerdict -Cat 'PORT' -Id 'tcp/8080' -Old 'agent bind=127.0.0.1' -New 'agent bind=0.0.0.0' -MsSignedNow $false
+    T 'CHANGED listener that moved from loopback to 0.0.0.0 is WARNING' ($v.Sev -eq 'WARNING' -and $v.Why -match 'network-reachable') ($v.Sev + '/' + $v.Why)
+    $v = Get-ChangedVerdict -Cat 'PORT' -Id 'tcp/8080' -Old 'agent bind=0.0.0.0' -New 'agent bind=127.0.0.1' -MsSignedNow $false
+    T 'CHANGED listener that moved to loopback only is INFO' ($v.Sev -eq 'INFO') ("sev=" + $v.Sev)
+    $v = Get-ChangedVerdict -Cat 'PORT' -Id 'tcp/49669' -Old 'jhi_service bind=::1' -New 'evil bind=::1' -MsSignedNow $false
+    T 'CHANGED owner of a loopback-only listener is INFO' ($v.Sev -eq 'INFO') ("sev=" + $v.Sev)
+    T 'a baseline saved before the bind field existed does not read every port as CHANGED' (-not (Test-RecordChanged -Cat 'PORT' -Old 'svchost' -New 'svchost bind=0.0.0.0')) ''
+    T 'a PORT whose owner changed is CHANGED' (Test-RecordChanged -Cat 'PORT' -Old 'svchost bind=::' -New 'lsass bind=::') ''
+    T 'a PORT whose bind moved (both sides recorded) is CHANGED' (Test-RecordChanged -Cat 'PORT' -Old 'agent bind=127.0.0.1' -New 'agent bind=0.0.0.0') ''
+    T 'a non-PORT record compares its whole detail' (Test-RecordChanged -Cat 'SVC' -Old 'a start=Auto' -New 'a start=Manual') ''
+
+    # RUN capture: the Winlogon counters are excluded by exact name.
+    T 'Winlogon LastLogOffEndTimePerfCounter is excluded from the snapshot' (Test-ExcludedRunValue -Key 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name 'LastLogOffEndTimePerfCounter') ''
+    T 'Winlogon LastLogOnEndTimePerfCounter is excluded from the snapshot' (Test-ExcludedRunValue -Key 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name 'LastLogOnEndTimePerfCounter') ''
+    T 'Winlogon Shell / Userinit are NOT excluded' (-not (Test-ExcludedRunValue -Key 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name 'Shell')) ''
+    T 'the same value name under a Run key is NOT excluded (the exclusion is key-scoped)' (-not (Test-ExcludedRunValue -Key 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'LastLogOffEndTimePerfCounter')) ''
+
     if ($fails) { Write-Output "[FAIL] $fails baseline_diff self-test expectation(s) unmet"; exit 1 }
-    Write-Output '[OK] baseline_diff self-test: update churn (signed replacements, dynamic RPC ports) is context; replaced unsigned binaries, new admins, new roots and suspicious arguments are findings.'
+    Write-Output '[OK] baseline_diff self-test: update churn (signed replacements and version bumps, dynamic RPC ports, loopback listeners, COM-handler tasks, logon counters) is context; replaced unsigned binaries, moved listeners, new admins, new roots and suspicious arguments are findings.'
     exit 0
 }
 
@@ -368,6 +612,7 @@ function Get-Snapshot {
                 # the snapshot too, so the diff could not report it as NEW
                 # either -- both the direct check and change detection missed it.
                 if ($psNoteProps -contains $p.Name) { continue }
+                if (Test-ExcludedRunValue -Key $k -Name $p.Name) { continue }
                 $recs.Add(('RUN|{0}\{1}|{2}' -f (CleanField $k), (CleanField $p.Name), (CleanField ([string]$p.Value))))
             }
         } catch {}
@@ -378,7 +623,8 @@ function Get-Snapshot {
         foreach ($c in (Get-NetTCPConnection -State Listen -EA Stop)) {
             $pname = ''
             try { $pname = (Get-Process -Id $c.OwningProcess -EA Stop).ProcessName } catch {}
-            $recs.Add(('PORT|tcp/{0}|{1}' -f (CleanField ([string]$c.LocalPort)), (CleanField $pname)))
+            $bind = CleanField ([string]$c.LocalAddress)
+            $recs.Add(('PORT|tcp/{0}|{1} bind={2}' -f (CleanField ([string]$c.LocalPort)), (CleanField $pname), ($bind -replace '\s', '')))
         }
     } catch {
         # Get-NetTCPConnection is absent on very old builds -- fall back to netstat
@@ -390,7 +636,9 @@ function Get-Snapshot {
                 $f = ($line -split '\s+') | Where-Object { $_ }
                 if ($f.Count -lt 5) { continue }
                 $lp = ($f[1] -split ':')[-1]
-                $recs.Add(('PORT|tcp/{0}|pid={1}' -f (CleanField $lp), (CleanField $f[4])))
+                $bind = ''
+                if ($f[1].Length -gt $lp.Length + 1) { $bind = $f[1].Substring(0, $f[1].Length - $lp.Length - 1).Trim('[', ']') }
+                $recs.Add(('PORT|tcp/{0}|pid={1} bind={2}' -f (CleanField $lp), (CleanField $f[4]), (CleanField $bind -replace '\s', '')))
             }
         } catch {}
     }
@@ -446,6 +694,7 @@ if ($Mode -eq 'Save') {
         '--- Baseline Snapshot (saved) ---'
         "[OK] Baseline saved: $Path"
         "[OK] $($snapshot.Count) state record(s) captured (drivers, services, tasks, autoruns, ports, admins, root CAs)."
+        "[INFO] Excluded by design: Winlogon $($script:ExcludedRunValues -join ' and ') -- Windows rewrites these counters at every logon and logoff; they are not persistence values."
         '[INFO] A baseline captured on an already-compromised machine records the implant as normal.'
         '[INFO] It detects CHANGE from this moment forward -- it is not proof the current state is clean.'
     } catch {
@@ -503,7 +752,7 @@ $added = @(); $changed = @(); $removed = @()
 
 foreach ($k in $new.Keys) {
     if ($old.ContainsKey($k)) {
-        if ($old[$k] -ne $new[$k]) { $changed += $k }
+        if (Test-RecordChanged -Cat ($k.Split('|')[0]) -Old $old[$k] -New $new[$k]) { $changed += $k }
     } else {
         $added += $k
     }
@@ -517,12 +766,18 @@ foreach ($k in $old.Keys) { if (-not $new.ContainsKey($k)) { $removed += $k } }
 # drivers would exhaust the budget and silently push an actual malicious new
 # autorun off the end of the report. Severity decides who gets printed, never
 # alphabetical luck.
-# Helper: is the binary behind a record's detail validly Microsoft-signed?
-function Test-RecordMsSigned {
+# Helper: who validly signed the binary behind a record's detail? Signer is
+# the common name ('' when unsigned, absent or unreadable); MsSigned says it
+# is Microsoft. Non-binary categories carry no signer.
+function Get-RecordSigner {
     param([string]$Cat, [string]$Detail)
-    if ($script:BinaryCats -notcontains $Cat) { return $false }
+    $r = @{ MsSigned = $false; Signer = '' }
+    if ($script:BinaryCats -notcontains $Cat) { return $r }
     $bin = Get-BinPath ($Detail -replace ' sha256=[0-9A-Fa-f]*$', '' -replace ' start=\w+$', '')
-    return (Test-MsSigned $bin)
+    $si = Get-SignerInfo $bin
+    $r.MsSigned = [bool]$si.Microsoft
+    if ($si.Valid) { $r.Signer = [string]$si.CN }
+    return $r
 }
 
 $addEval = @()
@@ -531,7 +786,8 @@ foreach ($k in ($added | Sort-Object)) {
     $id  = $k.Substring($cat.Length + 1)
     $lbl = Get-CatLabel $cat
     $detail = $new[$k]
-    $v = Get-AddedVerdict -Cat $cat -Id $id -Detail $detail -MsSigned (Test-RecordMsSigned -Cat $cat -Detail $detail)
+    $sg = Get-RecordSigner -Cat $cat -Detail $detail
+    $v = Get-AddedVerdict -Cat $cat -Id $id -Detail $detail -MsSigned $sg.MsSigned -Signer $sg.Signer
     if ($v.Sev -eq 'WARNING') { $sev = Get-MaxSev $sev 'WARNING' }
     $addEval += New-Object PSObject -Property @{ Lbl = $lbl; Id = $id; Detail = $detail; Sev = $v.Sev; Why = $v.Why }
 }
@@ -540,7 +796,9 @@ $infoAdds = @($addEval | Where-Object { $_.Sev -ne 'WARNING' })
 $n = 0
 foreach ($a in $warnAdds) {
     $n++
-    if ($n -le $MaxReport) { "[WARNING] NEW $($a.Lbl) since baseline: $($a.Id)  =>  $($a.Detail)" }
+    # The reason is printed on WARNING lines too, so a reader sees WHY this
+    # one was not forgiven (unsigned, staging path, suspicious argument).
+    if ($n -le $MaxReport) { "[WARNING] NEW $($a.Lbl) since baseline ($($a.Why)): $($a.Id)  =>  $($a.Detail)" }
 }
 if ($warnAdds.Count -gt $MaxReport) { "[INFO] ...and $($warnAdds.Count - $MaxReport) more new item(s) needing review, not listed (report cap $MaxReport)." }
 $n = 0
@@ -557,7 +815,8 @@ $chEval = @()
 foreach ($k in ($changed | Sort-Object)) {
     $cat = $k.Split('|')[0]
     $id  = $k.Substring($cat.Length + 1)
-    $v = Get-ChangedVerdict -Cat $cat -Id $id -Old $old[$k] -New $new[$k] -MsSignedNow (Test-RecordMsSigned -Cat $cat -Detail $new[$k])
+    $sg = Get-RecordSigner -Cat $cat -Detail $new[$k]
+    $v = Get-ChangedVerdict -Cat $cat -Id $id -Old $old[$k] -New $new[$k] -MsSignedNow $sg.MsSigned -SignerNow $sg.Signer
     if ($v.Sev -eq 'WARNING') { $sev = Get-MaxSev $sev 'WARNING' }
     $chEval += New-Object PSObject -Property @{ Lbl = (Get-CatLabel $cat); Id = $id; Key = $k; Sev = $v.Sev; Why = $v.Why }
 }
@@ -567,7 +826,7 @@ $chShown = 0
 foreach ($c in $warnCh) {
     $chShown++
     if ($chShown -le $MaxReport) {
-        "[WARNING] CHANGED $($c.Lbl) since baseline: $($c.Id)"
+        "[WARNING] CHANGED $($c.Lbl) since baseline ($($c.Why)): $($c.Id)"
         "          was: $($old[$c.Key])"
         "          now: $($new[$c.Key])"
     }
