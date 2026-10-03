@@ -427,6 +427,23 @@ header date against its last content-changing commit. Not built yet: the
 rule as it stands is safe (the shipped file wins a tie), and the cost is one
 `replaced` line in the provenance paragraph the first run after a release.
 
+## module_inspect raises the lsass-denied gap on a standard-user token (found 2026-10-03, deferred)
+
+`tools/module_inspect.ps1` prints `[WARNING] lsass module enumeration denied
+while LSA Protection is OFF -- lsass injection NOT checked` and raises
+WARNING whenever it cannot open lsass and `RunAsPPL` is not 1. A standard
+user can NEVER open lsass, so on that token the denial is the token, not the
+machine -- the deferral class CLAUDE.md names (a needs-admin skip on a
+standard-user token is `[DEFERRED - ADMIN REQUIRED]`, counted through a
+`dz_<name>_deferred.txt` marker, never a ledger row). The owner's laptop has
+`RunAsPPL=1`, so its standard-user runs take the `[OK] ... consistent with LSA
+Protection` branch and have not shown it; a laptop with LSA Protection off
+would carry a T1055 row for something the token cannot see. Fix: the
+`-Elevated` idiom (cross_api), deferral + count unelevated, unchanged
+elevated, self-test both ways, and the standard-user CI job asserts no T1055
+row from it. Found while checking which lines PR #226 retagged could print
+on the standard-user path; not fixed there to keep that PR to its decision.
+
 ## Defender passive mode: extracted and self-tested; the experiment is a declared CI step
 
 The Section 9 Defender core block now lives in `tools/defender_core_check.ps1`
@@ -440,9 +457,10 @@ asserted; no flip prints `[ SKIP ]` with the reason. Check the step's output
 on any run for the actual `AMRunningMode` before/after.
 
 Every Defender tile now reads the Section 9 state line
-(`mode|realtime|graded|tamper|sigage`); the Defender exclusion tiles still
-call `Get-MpPreference` themselves, graded by the separate exclusions check
-in Section 9 -- the next candidate for the state-file idiom if a field report
-shows them disagreeing. First experiment run (2026-10-02): `AMRunningMode`
+(`mode|realtime|graded|tamper|sigage`), and since 2026-10-03 the exclusion
+tiles read `graded|paths|processes|extensions` from
+`tools/defender_exclusions_check.ps1` too (the old tile re-measured, printed
+no tile when the query failed, and never showed extension exclusions). No
+Defender tile re-measures. First experiment run (2026-10-02): `AMRunningMode`
 read `Normal` before and after the policy value; the runner image already
 carried a `ForceDefenderPassiveMode` value of its own.

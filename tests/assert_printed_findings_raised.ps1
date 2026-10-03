@@ -52,6 +52,13 @@ $script:Contracts = @(
     @{ Name      = 'Defender real-time protection off with no other antivirus in control'
        Signature = '^\s*\[CRITICAL\] Defender real-time protection is OFF \(T1562.001\)'
        Section   = '9'
+       Technique = 'T1562.001' },
+    # Section 9's exclusion check, extracted to tools\defender_exclusions_check.ps1
+    # (marker idiom). The harness plants C:\dz_selftest_excl_dir, so the
+    # regression job exercises this on the real path.
+    @{ Name      = 'Defender exclusion configured'
+       Signature = '^\s*\[WARNING\] Exclusion (paths|processes|extensions) found'
+       Section   = '9'
        Technique = 'T1562.001' }
 )
 
