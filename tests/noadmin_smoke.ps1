@@ -304,6 +304,16 @@ try {
     Assert ($text1 -match '\[DEFERRED - ADMIN REQUIRED\] lsass modules are not readable from a standard-user token|\[OK\] lsass modules not enumerable -- consistent with LSA Protection') `
         'the lsass denial is declared: DEFERRED (LSA Protection off) or [OK] (LSA Protection on)' `
         'the lsass denial was neither deferred nor explained by LSA Protection'
+    if ($text1 -notmatch '\[DEFERRED - ADMIN REQUIRED\] lsass modules are not readable from a standard-user token|\[OK\] lsass modules not enumerable -- consistent with LSA Protection') {
+        # Quote the block so the failure diagnoses itself (the artifact that holds
+        # the report cannot be fetched from every machine; the #225 alarm quoting
+        # is what finally named the intermittent CRIT tile).
+        $mi = [regex]::Match($text1, '(?s)--- \[T1055/T1574\] Loaded-module inspection.*?(?=\r?\n\s*\[SECTION 4/18 RESULT|\r?\n\s*--- )')
+        $miLines = if ($mi.Success) { @($mi.Value -split "\r?\n" | Select-Object -First 40) } else { @('(no "--- [T1055/T1574] Loaded-module inspection" header in the report at all)') }
+        foreach ($ml in $miLines) { Write-Host ("               module_inspect: {0}" -f $ml.TrimEnd()) }
+        $t1055 = @($ledger1 | Where-Object { $_ -match '^\w+\|4\|T1055\|' })
+        foreach ($row in $t1055) { Write-Host ("               ledger: {0}" -f $row) }
+    }
     # The LSASS PPL tile states Section 12's verdict. It used to re-read
     # RunAsPPL and grade an explicit 0 as CRIT where the section raises
     # WARNING, which is what the intermittent ledger-divergence alarm of
