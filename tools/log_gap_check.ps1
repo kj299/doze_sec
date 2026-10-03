@@ -228,6 +228,7 @@ if ($Elevated -lt 0) {
 
 '--- [T1070.001] Event-log gap check (records missing with no clear event) ---'
 $sev = 'OK'
+$gapSev = 'OK'
 $inspected = 0
 $deferred = 0
 
@@ -242,7 +243,7 @@ foreach ($name in $LogNames) {
     if (-not $cfg) {
         $uv = Get-UnlistableLogVerdict -Name $name -IsElevated ($Elevated -eq 1)
         $uv.Line
-        if ($uv.Deferred) { $deferred++ } else { $sev = Get-MaxSev $sev $uv.Sev }
+        if ($uv.Deferred) { $deferred++ } else { $gapSev = Get-MaxSev $gapSev $uv.Sev }
         continue
     }
     $inspected++
@@ -272,7 +273,7 @@ foreach ($name in $LogNames) {
     $gap = Get-RecordGap $oldest $cfg.RecordCount $newest
     if ($gap -lt 0) {
         "[WARNING] Log '$name': record accounting unavailable (RecordCount or record ids unreadable) -- gap check NOT performed for it."
-        $sev = Get-MaxSev $sev 'WARNING'
+        $gapSev = Get-MaxSev $gapSev 'WARNING'
     } elseif ($gap -gt 0) {
         $s = if ($isSecurity) { 'CRITICAL' } else { 'WARNING' }
         "[$s] Event log '$name': $gap record(s) are missing from the middle of its numbering (oldest surviving #$oldest, newest #$newest, but only $($cfg.RecordCount) present). Normal rollover does NOT cause this -- dropping the oldest records lowers the count and raises the oldest number together. Selective deletion does (T1070.001), and it leaves no 1102 clear event."
@@ -313,10 +314,13 @@ foreach ($name in $LogNames) {
 
 if ($inspected -eq 0) {
     '[WARNING] No event logs could be inspected -- the gap check verified nothing.'
-    $sev = Get-MaxSev $sev 'WARNING'
+    $gapSev = Get-MaxSev $gapSev 'WARNING'
 } else {
     "[INFO] $inspected event log(s) inspected for missing-record gaps."
 }
 
 Write-Marker -Name 'loggap' -Sev $sev
+# A gap is its own row: a log this token could not read never files as "records
+# missing with no clear event"; the bat raises dz_loggap_gap.txt with gap wording.
+if ($gapSev -ne 'OK') { Write-Marker -Name 'loggap_gap' -Sev $gapSev }
 if ($deferred -gt 0) { Write-Marker -Name 'loggap_deferred' -Sev ([string]$deferred) }

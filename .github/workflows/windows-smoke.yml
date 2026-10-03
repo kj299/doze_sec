@@ -918,6 +918,18 @@ jobs:
             $src = Get-Content .\tools\log_gap_check.ps1 -Raw
             if ($src -notmatch 'not proof of deletion') { throw 'the "inconsistency, not proof" framing was removed' }
           } finally { Remove-Item $md -Recurse -Force -EA SilentlyContinue }
+          # A GAP IS ITS OWN ROW: a log that does not exist, on an ELEVATED token,
+          # is a raised gap -- dz_loggap_gap.txt, NO finding marker -- so the
+          # ledger row reads "gap check NOT performed", never "records missing".
+          $mdN = Join-Path $env:TEMP ("dz_lg_gap_{0}" -f $PID)
+          New-Item -ItemType Directory -Path $mdN -Force | Out-Null
+          try {
+            $outN = (.\tools\log_gap_check.ps1 -MarkerDir $mdN -LogNames @('DzNoSuchLog')) -join "`n"
+            Write-Host $outN
+            if ($outN -notmatch "\[WARNING\] Log 'DzNoSuchLog' could not be read -- gap check NOT performed") { throw 'a log that does not exist was not declared as a raised gap on the elevated token' }
+            if (-not (Test-Path (Join-Path $mdN 'dz_loggap_gap.txt'))) { throw 'the unreadable-log gap wrote no gap marker -- it would vanish from the ledger' }
+            if (Test-Path (Join-Path $mdN 'dz_loggap.txt')) { throw 'the unreadable-log gap wrote the FINDING marker -- its ledger row would claim records missing' }
+          } finally { Remove-Item $mdN -Recurse -Force -EA SilentlyContinue }
           Write-Host "log_gap_check.ps1 OK"
           exit 0
 
@@ -985,6 +997,19 @@ jobs:
             } finally {
               Remove-Item $fx, $mdF -Recurse -Force -EA SilentlyContinue
             }
+            # A GAP IS ITS OWN ROW: a CBS log that cannot be read writes
+            # dz_cbs_gap.txt and NO finding marker, so the ledger row reads
+            # "NOT checked", never "corrupt system binary"; no all-clear prints.
+            $mdG = Join-Path $env:TEMP ("dz_cbs_gap_md_{0}" -f $PID)
+            New-Item -ItemType Directory -Path $mdG -Force | Out-Null
+            try {
+              $outG = (.\tools\cbs_integrity_check.ps1 -Path (Join-Path $env:TEMP ("dz_no_such_cbs_{0}.log" -f $PID)) -MarkerDir $mdG) -join "`n"
+              Write-Host $outG
+              if ($outG -notmatch '\[WARNING\] CBS log\(s\) could not be read') { throw 'an unreadable CBS log was not declared as a raised gap' }
+              if (-not (Test-Path (Join-Path $mdG 'dz_cbs_gap.txt'))) { throw 'the unreadable-CBS gap wrote no gap marker -- it would vanish from the ledger' }
+              if (Test-Path (Join-Path $mdG 'dz_cbs.txt')) { throw 'the unreadable-CBS gap wrote the FINDING marker -- its ledger row would claim a corrupt binary' }
+              if ($outG -match '(?m)^\[OK\]') { throw 'a gap-only run printed an all-clear line' }
+            } finally { Remove-Item $mdG -Recurse -Force -EA SilentlyContinue }
             $m = Join-Path $md 'dz_cbs.txt'
             if (Test-Path $m) {
               $sev = (Get-Content $m).Trim()
@@ -1652,7 +1677,11 @@ jobs:
             # A raised gap prints [WARNING] (vocabulary decision 2026-10-03): the
             # degraded path says the check could NOT run and raises it.
             if ($t3 -notmatch '\[WARNING\][^\r\n]*hidden-task[^\r\n]*could NOT run') { throw 'degraded hidden-task path did not report itself as a raised gap ([WARNING] ... could NOT run)' }
-            if (-not (Test-Path (Join-Path $md4 'dz_crossapi.txt'))) { throw 'degraded hidden-task path raised no finding at all' }
+            # A GAP IS ITS OWN ROW (2026-10-03): the degraded path writes the GAP
+            # marker, never the finding marker, so its ledger row reads "check NOT
+            # performed", not "rootkit indicator".
+            if (-not (Test-Path (Join-Path $md4 'dz_crossapi_gap.txt'))) { throw 'degraded hidden-task path raised no gap at all -- it would vanish from the ledger' }
+            if (Test-Path (Join-Path $md4 'dz_crossapi.txt')) { throw 'degraded hidden-task path wrote the FINDING marker -- its ledger row would claim a rootkit indicator for a scheduler it could not open' }
           } finally {
             Remove-Item $tc -Recurse -Force -EA SilentlyContinue
             Remove-Item $md -Recurse -Force -EA SilentlyContinue
@@ -1733,7 +1762,17 @@ jobs:
           $bh = (.\tools\hosts_check.ps1 -Path $f -MarkerDir $md2) -join "`n"
           if ($bh -notmatch '\[WARNING\]') { throw 'a blackholed Windows Update domain was not raised' }
           if (-not (Test-Path (Join-Path $md2 'dz_hosts.txt'))) { throw 'blackhole finding wrote no marker -- it never reaches the ledger' }
-          Remove-Item $f, $md, $md2 -Recurse -Force -EA SilentlyContinue
+          # A GAP IS ITS OWN ROW: a missing HOSTS file writes dz_hosts_gap.txt and
+          # NO finding marker, so the ledger row reads "NOT checked", never
+          # "Non-standard entries found in HOSTS"; and no all-clear line prints.
+          $md3 = Join-Path $env:TEMP ("dz_hosts_ci3_{0}" -f $PID)
+          $gp = (.\tools\hosts_check.ps1 -Path (Join-Path $env:TEMP ("dz_no_such_hosts_{0}" -f $PID)) -MarkerDir $md3) -join "`n"
+          Write-Host $gp
+          if ($gp -notmatch '\[WARNING\] HOSTS file not found') { throw 'a missing HOSTS file was not declared as a raised gap' }
+          if (-not (Test-Path (Join-Path $md3 'dz_hosts_gap.txt'))) { throw 'the missing-HOSTS gap wrote no gap marker -- it would vanish from the ledger' }
+          if (Test-Path (Join-Path $md3 'dz_hosts.txt')) { throw 'the missing-HOSTS gap wrote the FINDING marker -- its ledger row would claim non-standard entries' }
+          if ($gp -match '(?m)^\[OK\]') { throw 'a gap-only run printed an all-clear line' }
+          Remove-Item $f, $md, $md2, $md3 -Recurse -Force -EA SilentlyContinue
           Write-Host "hosts_check OK ($n self-test cases)"
           exit 0
 
@@ -3065,6 +3104,31 @@ jobs:
             if ($wl.Success -and (-not $warnTile.Success -or $warnTile.Groups[1].Value -ne $wl.Groups[1].Value)) { throw ("Section 9 lists {0} {1} exclusion(s) but the dashboard tile disagrees" -f $wl.Groups[1].Value, $kind) }
             Write-Host ("Defender {0} exclusions: Section 9 and the dashboard agree" -f $kind)
           }
+          # A LEDGER ROW NAMES WHAT THE TOOL OBSERVED. A row worded as a finding
+          # must have a non-gap [CRITICAL]/[WARNING] line in its section; a
+          # section that printed only gap lines may carry only gap-worded rows
+          # (dz_<name>_gap.txt). The inverse of "printed but not raised".
+          $gapRx = 'NOT (performed|checked|verified|evaluated|audited|run|graded|calibrated|inspected|determined)\b|verified nothing|could NOT run|not audited\b'
+          $printedNonGap = @{}
+          $cur = 0
+          foreach ($ln in ($text -split "\r?\n")) {
+            $b = [regex]::Match($ln, '^\s*\[(\d{1,2})/18\]\s')
+            if ($b.Success) { $cur = [int]$b.Groups[1].Value; continue }
+            if ($cur -eq 0) { continue }
+            if ($ln -match '^\s*\[SECTION (\d{1,2})/18 RESULT:') { $cur = 0; continue }
+            if ($ln -match '^\s*\[(CRITICAL|WARNING)\]' -and $ln -notmatch $gapRx) { $printedNonGap[[string]$cur] = $true }
+          }
+          $badRows = @()
+          $gapRows = 0
+          foreach ($row in (Get-Content -LiteralPath $led.FullName)) {
+            $f = $row.Split('|')
+            if ($f.Length -lt 4) { continue }
+            if ($f[0] -notmatch '^(CRITICAL|WARNING)$' -or $f[1] -notmatch '^\d{1,2}$') { continue }
+            if ($f[3] -match $gapRx) { $gapRows++; continue }
+            if (-not $printedNonGap.ContainsKey($f[1])) { $badRows += $row }
+          }
+          if ($badRows.Count) { throw ("ledger row(s) worded as findings whose section printed only gap lines (the row names a finding the tool never made): " + ($badRows -join ' ; ')) }
+          Write-Host ("every finding-worded ledger row has a non-gap finding line in its section ({0} gap-worded row(s) on this runner)" -f $gapRows)
           # And the corpus grader agrees, on the real report of a real run: every
           # catalogued benign twin this runner shows is at or below its allowed
           # severity. The readonly job runs this through field_test; the full run

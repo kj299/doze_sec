@@ -468,6 +468,7 @@ $sys32 = Join-Path $env:SystemRoot 'System32'
 # ---- 1. Netsh helper DLLs (T1546.007) ------------------------------------
 '--- [T1546.007] Netsh helper DLLs (loaded every time netsh.exe runs) ---'
 $netshSev = 'OK'
+$netshGap = 'OK'
 $netshKey = 'HKLM:\SOFTWARE\Microsoft\Netsh'
 $nsProps = $null
 $nsOk = $true
@@ -476,7 +477,7 @@ try {
 } catch { $nsOk = $false }
 if (-not $nsOk) {
     '[WARNING] Netsh helper key could not be read -- check NOT performed.'
-    $netshSev = 'WARNING'
+    $netshGap = 'WARNING'
 } elseif (-not $nsProps) {
     '[OK] No netsh helper DLLs registered.'
 } else {
@@ -501,11 +502,13 @@ if (-not $nsOk) {
     if ($netshSev -eq 'OK') { "[OK] All $n registered netsh helper DLL(s) are validly Microsoft-signed." }
 }
 Write-Marker -Name 'netsh' -Sev $netshSev
+if ($netshGap -ne 'OK') { Write-Marker -Name 'netsh_gap' -Sev $netshGap }
 
 # ---- 2. Print processors (T1547.012) -------------------------------------
 ''
 '--- [T1547.012] Print processors (loaded by the SYSTEM print spooler) ---'
 $ppSev = 'OK'
+$ppGap = 'OK'
 $ppSearch = @(
     (Join-Path $sys32 'spool\prtprocs\x64'),
     (Join-Path $sys32 'spool\prtprocs\w32x86'),
@@ -546,18 +549,20 @@ try {
 } catch { $ppOk = $false }
 if (-not $ppOk) {
     '[WARNING] Print environments key could not be read -- print-processor check NOT performed.'
-    $ppSev = Get-MaxSev $ppSev 'WARNING'
+    $ppGap = Get-MaxSev $ppGap 'WARNING'
 } elseif ($ppSev -eq 'OK') {
     "[OK] All $ppCount registered print processor(s) are validly Microsoft-signed."
     # An all-clear may not cover entries the scan could not read.
-    if ($ppUnread -gt 0) { "[WARNING] $ppUnread print processor(s) had an unreadable driver value and were NOT checked -- a registry key name crafted to defeat enumeration is itself suspicious. Inspect them by hand." ; $ppSev = Get-MaxSev $ppSev 'WARNING' }
+    if ($ppUnread -gt 0) { "[WARNING] $ppUnread print processor(s) had an unreadable driver value and were NOT checked -- a registry key name crafted to defeat enumeration is itself suspicious. Inspect them by hand." ; $ppGap = Get-MaxSev $ppGap 'WARNING' }
 }
 Write-Marker -Name 'printproc' -Sev $ppSev
+if ($ppGap -ne 'OK') { Write-Marker -Name 'printproc_gap' -Sev $ppGap }
 
 # ---- 3. Port monitors (T1547.010) ----------------------------------------
 ''
 '--- [T1547.010] Print port monitors (loaded by the SYSTEM print spooler) ---'
 $pmSev = 'OK'
+$pmGap = 'OK'
 $monRoot = 'HKLM:\SYSTEM\CurrentControlSet\Control\Print\Monitors'
 $pmCount = 0
 $pmUnread = 0   # entries whose value could not be read -- must not be covered by an all-clear
@@ -589,18 +594,20 @@ try {
 } catch { $pmOk = $false }
 if (-not $pmOk) {
     '[WARNING] Print monitors key could not be read -- port-monitor check NOT performed.'
-    $pmSev = Get-MaxSev $pmSev 'WARNING'
+    $pmGap = Get-MaxSev $pmGap 'WARNING'
 } elseif ($pmSev -eq 'OK') {
     "[OK] All $pmCount registered port monitor(s) are validly Microsoft-signed."
     # An all-clear may not cover entries the scan could not read.
-    if ($pmUnread -gt 0) { "[WARNING] $pmUnread port monitor(s) had an unreadable driver value and were NOT checked -- a registry key name crafted to defeat enumeration is itself suspicious. Inspect them by hand." ; $pmSev = Get-MaxSev $pmSev 'WARNING' }
+    if ($pmUnread -gt 0) { "[WARNING] $pmUnread port monitor(s) had an unreadable driver value and were NOT checked -- a registry key name crafted to defeat enumeration is itself suspicious. Inspect them by hand." ; $pmGap = Get-MaxSev $pmGap 'WARNING' }
 }
 Write-Marker -Name 'portmon' -Sev $pmSev
+if ($pmGap -ne 'OK') { Write-Marker -Name 'portmon_gap' -Sev $pmGap }
 
 # ---- 4. BITS jobs (T1197) ------------------------------------------------
 ''
 '--- [T1197] BITS transfer jobs (notify command lines and long-lived jobs) ---'
 $bitsSev = 'OK'
+$bitsGap = 'OK'
 $jobs = $null
 $bitsOk = $true
 try {
@@ -612,7 +619,7 @@ try {
 } catch { $bitsOk = $false }
 if (-not $bitsOk) {
     '[WARNING] BITS module or service unavailable -- BITS job check NOT performed.'
-    $bitsSev = Get-MaxSev $bitsSev 'WARNING'
+    $bitsGap = Get-MaxSev $bitsGap 'WARNING'
 } elseif (-not $jobs -or $jobs.Count -eq 0) {
     '[OK] No BITS transfer jobs queued.'
 } else {
@@ -689,10 +696,11 @@ if (-not $bitsOk) {
         # arms above: an entry that could not be read is a GAP, and an all-clear
         # must never be read as covering it.
         "[WARNING] $bitsUnread BITS job(s) did not expose a NotifyCmdLine property and were NOT checked for command-line persistence."
-        $bitsSev = Get-MaxSev $bitsSev 'WARNING'
+        $bitsGap = Get-MaxSev $bitsGap 'WARNING'
     }
 }
 Write-Marker -Name 'bits' -Sev $bitsSev
+if ($bitsGap -ne 'OK') { Write-Marker -Name 'bits_gap' -Sev $bitsGap }
 
 # ---- 5. PowerShell profiles (T1546.013) ----------------------------------
 ''
@@ -743,6 +751,7 @@ Write-Marker -Name 'psprofile' -Sev $profSev
 ''
 '--- [T1547.003] W32Time time providers (loaded by the time service as SYSTEM) ---'
 $tpSev = 'OK'
+$tpGap = 'OK'
 $tpRoot = 'HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\TimeProviders'
 $tpCount = 0
 $tpUnread = 0   # entries whose value could not be read -- must not be covered by an all-clear
@@ -774,10 +783,11 @@ try {
 } catch { $tpOk = $false }
 if (-not $tpOk) {
     '[WARNING] W32Time TimeProviders key could not be read -- check NOT performed.'
-    $tpSev = Get-MaxSev $tpSev 'WARNING'
+    $tpGap = Get-MaxSev $tpGap 'WARNING'
 } elseif ($tpSev -eq 'OK') {
     "[OK] All $tpCount registered time provider(s) are validly Microsoft-signed."
     # An all-clear may not cover entries the scan could not read.
-    if ($tpUnread -gt 0) { "[WARNING] $tpUnread time provider(s) had an unreadable driver value and were NOT checked -- a registry key name crafted to defeat enumeration is itself suspicious. Inspect them by hand." ; $tpSev = Get-MaxSev $tpSev 'WARNING' }
+    if ($tpUnread -gt 0) { "[WARNING] $tpUnread time provider(s) had an unreadable driver value and were NOT checked -- a registry key name crafted to defeat enumeration is itself suspicious. Inspect them by hand." ; $tpGap = Get-MaxSev $tpGap 'WARNING' }
 }
 Write-Marker -Name 'timeprov' -Sev $tpSev
+if ($tpGap -ne 'OK') { Write-Marker -Name 'timeprov_gap' -Sev $tpGap }

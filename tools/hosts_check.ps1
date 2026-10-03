@@ -57,7 +57,7 @@ param(
 $ErrorActionPreference = 'Continue'
 
 function Write-Marker {
-    param([string]$Sev)
+    param([string]$Sev, [string]$Name = 'hosts')
     if ($Sev -eq 'OK') { return }
     # The marker IS the route to the findings ledger: a failed write here turns
     # a real finding into a CLEAN section. Create the directory rather than
@@ -66,7 +66,7 @@ function Write-Marker {
     if (-not (Test-Path -LiteralPath $MarkerDir)) {
         New-Item -ItemType Directory -Path $MarkerDir -Force -EA SilentlyContinue | Out-Null
     }
-    Set-Content -LiteralPath (Join-Path $MarkerDir 'dz_hosts.txt') -Value $Sev -Encoding ASCII
+    Set-Content -LiteralPath (Join-Path $MarkerDir ("dz_{0}.txt" -f $Name)) -Value $Sev -Encoding ASCII
 }
 
 # Security / update infrastructure. Blackholing any of these is defence
@@ -490,13 +490,13 @@ if (-not $Path) {
 if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
     # Not "clean": the file could not be read, so nothing was checked.
     "[WARNING] HOSTS file not found at $Path -- DNS-hijack check NOT performed."
-    Write-Marker -Sev 'WARNING'
+    Write-Marker -Name 'hosts_gap' -Sev 'WARNING'
     return
 }
 $lines = $null
 try { $lines = Get-Content -LiteralPath $Path -EA Stop } catch {
     "[WARNING] HOSTS file could not be read ($($_.Exception.Message)) -- DNS-hijack check NOT performed."
-    Write-Marker -Sev 'WARNING'
+    Write-Marker -Name 'hosts_gap' -Sev 'WARNING'
     return
 }
 

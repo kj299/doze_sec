@@ -258,7 +258,15 @@ for a WARNING that was not there. `[SKIPPED]` is reserved for gaps that raise
 nothing; `[DEFERRED - ADMIN REQUIRED]` for a standard-user token's gaps. The
 coverage block counts raised gaps by their NOT-performed phrase ("Gaps
 RAISED"), so they do not vanish from coverage when they stop being
-`[SKIPPED]`. `lint_unraised_findings` fails on a raised `[SKIPPED]`.
+`[SKIPPED]`. `lint_unraised_findings` fails on a raised `[SKIPPED]`. **And the ledger row
+names what the tool observed.** A raised gap used to travel through the
+tool's one severity marker, so the row said what the check WOULD have found
+("records missing with no clear event" for a log that could not be read).
+A tool keeps two severities and writes `dz_<name>_gap.txt` for the gap; the
+bat raises it as its own row, gap-worded, under the same section and
+technique, so no `led` trigger fires on a gap and a gap-only run never
+prints the all-clear line. The same lint requires the gap marker wherever a
+gap line is printed, and its read in both bats.
 `tools/lint_report_echo.ps1` fails on `[WARN]`/`[CRIT]`/`[ERROR]`/`[FAIL]`/
 `[DANGER]`/`[ALERT]` written into `%REPORT%` **or `%PSRUN%`** — a staged block's
 output is report text. Console-only `echo [WARN] ...` status lines are untouched

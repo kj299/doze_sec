@@ -261,7 +261,7 @@ if ($Mode -eq 'Measure') {
 # Report: print what Measure stored and raise its severity. No measurement here.
 if (-not (Test-Path -LiteralPath $StateFile)) {
     '[WARNING] LSA Protection state NOT evaluated -- the Section 4 measurement (tools\lsa_protection_check.ps1 -Mode Measure) left no state file. Verify: reg query HKLM\SYSTEM\CurrentControlSet\Control\Lsa /v RunAsPPL'
-    Write-Marker -Name 'lsa' -Sev 'WARNING'
+    Write-Marker -Name 'lsa_gap' -Sev 'WARNING'
     exit 0
 }
 $state = ''
@@ -272,8 +272,15 @@ $printed = $false
 if (Test-Path -LiteralPath $LinesFile) {
     try { $ls = @(Get-Content -LiteralPath $LinesFile -ErrorAction Stop); if ($ls.Count -gt 0) { $ls; $printed = $true } } catch {}
 }
+# A gap is its own row (dz_lsa_gap.txt, gap wording in the bat); a finding row
+# (off, pending) carries the stored severity. UNKNOWN is a gap, never "LSASS
+# PPL not enabled".
+$verdict = $(if ($f.Length -ge 1 -and $f[0]) { $f[0].Trim().ToLowerInvariant() } else { 'unknown' })
+$findSev = 'OK'; $gapSev = 'OK'
+if ($verdict -eq 'unknown') { $gapSev = 'WARNING' } elseif ($sev -ne 'OK') { $findSev = $sev }
 if (-not $printed) {
-    ('[WARNING] LSA Protection verdict {0} was measured but its report lines were lost -- treat as NOT evaluated and verify: reg query HKLM\SYSTEM\CurrentControlSet\Control\Lsa /v RunAsPPL' -f $(if ($f[0]) { $f[0] } else { 'unknown' }))
-    $sev = Get-MaxSev $sev 'WARNING'
+    ('[WARNING] LSA Protection verdict {0} was measured but its report lines were lost -- treat as NOT evaluated and verify: reg query HKLM\SYSTEM\CurrentControlSet\Control\Lsa /v RunAsPPL' -f $verdict)
+    $gapSev = 'WARNING'
 }
-Write-Marker -Name 'lsa' -Sev $sev
+if ($findSev -ne 'OK') { Write-Marker -Name 'lsa' -Sev $findSev }
+if ($gapSev -ne 'OK') { Write-Marker -Name 'lsa_gap' -Sev $gapSev }

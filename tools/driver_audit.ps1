@@ -72,6 +72,7 @@ if (-not $SelfTest) {
     '--- [T1562.001/T1068] Kernel driver audit (BYOVD by hash, unsigned by signature) ---'
 }
 $sev = 'OK'
+$gapSev = 'OK'
 # Defaulted rather than read straight from the environment so -SelfTest runs on
 # a box with no %SystemRoot% at all; the self-test overrides both anyway.
 $script:WinDir   = if ($env:SystemRoot) { $env:SystemRoot } else { 'C:\Windows' }
@@ -370,7 +371,7 @@ try {
     }
 } catch {
     '[WARNING] Win32_SystemDriver enumeration failed -- loaded-driver set not audited.'
-    $sev = Get-MaxSev $sev 'WARNING'
+    $gapSev = Get-MaxSev $gapSev 'WARNING'
 }
 # The loaded set above is the authoritative one (a BYOVD has to be loaded to
 # kill EDR). On-disk scanning targets where a driver is STAGED before loading:
@@ -442,9 +443,10 @@ if ($anyUnsigned) {
     Get-HvciNote -State (& $script:HvciProbe)
 }
 
-if ($sev -eq 'OK') {
+if ($sev -eq 'OK' -and $gapSev -eq 'OK') {
     "[OK] $checked kernel driver(s) audited -- none known-bad, all validly signed."
 } elseif ($missing -gt 0) {
     "[INFO] $missing driver(s) could not be examined because their files are absent; $checked were fully audited."
 }
 Write-Marker -Name 'driver' -Sev $sev
+if ($gapSev -ne 'OK') { Write-Marker -Name 'driver_gap' -Sev $gapSev }

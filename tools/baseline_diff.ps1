@@ -480,8 +480,9 @@ try {
         $old[$key] = $detail
     }
 } catch {
-    "[WARNING] Baseline unreadable: $($_.Exception.Message)"
-    Write-Marker -Name 'baseline' -Sev 'WARNING'
+    "[WARNING] Baseline unreadable: $($_.Exception.Message) -- baseline comparison NOT performed."
+    # A gap, not a changed-state finding: its own marker and its own ledger row.
+    Write-Marker -Name 'baseline_gap' -Sev 'WARNING'
     return
 }
 

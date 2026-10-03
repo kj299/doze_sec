@@ -348,7 +348,7 @@ if ($logs.Count -eq 0) {
     # Not an answer, and said so. A missing CBS directory on Windows is itself
     # unusual; treating it as clean would be the reassurance this repo bans.
     '[WARNING] No CBS log found under %SystemRoot%\Logs\CBS -- system-file integrity NOT checked. Reading it needs administrator rights on most builds.'
-    Write-Marker -Name 'cbs' -Sev 'WARNING'
+    Write-Marker -Name 'cbs_gap' -Sev 'WARNING'
     return
 }
 
@@ -422,7 +422,7 @@ if (($read + $partial) -eq 0) {
     } else {
         '[WARNING] CBS log(s) could not be read -- system-file integrity NOT checked.'
     }
-    Write-Marker -Name 'cbs' -Sev 'WARNING'
+    Write-Marker -Name 'cbs_gap' -Sev 'WARNING'
     return
 }
 

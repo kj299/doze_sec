@@ -325,6 +325,56 @@ if ($raisedSkip.Count) {
 }
 "[OK] No tool raises a [SKIPPED] line (a raised gap prints [WARNING] ... NOT performed)."
 
+# ---------------------------------------------------------------------------
+# A RAISED GAP IS ITS OWN ROW (vocabulary decision 2026-10-03, second half).
+# A gap used to travel through the tool's one severity marker, so the ledger
+# row named the finding the check WOULD have made ("records missing with no
+# clear event" for a log that could not be read). A tool that prints a gap
+# line -- a [WARNING] whose text says NOT performed / NOT checked / ... --
+# must write a second marker, dz_<name>_gap.txt, and every bat that reads the
+# tool's finding marker must read the gap marker too and raise it under gap
+# wording. Scoped to tools that define Write-Marker (the -MarkerFile tools
+# take their marker path from the bat and have no raised gaps); self-test
+# assertion lines (T '...') and regexes are not gap lines.
+$gapRx = 'NOT (performed|checked|verified|evaluated|audited|run|graded|calibrated|inspected|determined)\b|verified nothing|could NOT run|not audited\b'
+$gapDefects = @()
+$gapMarkers = @{}
+foreach ($tf in (Get-ChildItem -LiteralPath (Join-Path $Root 'tools') -Filter '*.ps1' | Sort-Object Name)) {
+    $txt = Get-Content -LiteralPath $tf.FullName -Raw
+    if ($txt -notmatch 'function\s+Write-Marker\b') { continue }
+    $lines = $txt -split "\r?\n"
+    $gapLines = 0
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $ln = $lines[$i]
+        if ($ln -match '^\s*#') { continue }
+        if ($ln -match "^\s*T\s+'" -or $ln -match '-match\s+[''"]' -or $ln -match '-notmatch\s+[''"]') { continue }
+        if ($ln -match '[''"]\[WARNING\][^''"]*' -and $ln -match $gapRx) { $gapLines++ }
+    }
+    foreach ($m in [regex]::Matches($txt, "Write-Marker[^\r\n]*-Name\s+'([A-Za-z0-9_]+_gap)'")) { $gapMarkers[$m.Groups[1].Value] = $tf.Name }
+    if ($gapLines -gt 0 -and $txt -notmatch "Write-Marker[^\r\n]*-Name\s+'[A-Za-z0-9_]+_gap'") {
+        $gapDefects += ("{0}: prints {1} raised-gap line(s) but writes no dz_<name>_gap.txt marker -- its gap would file as the finding it could not make" -f $tf.Name, $gapLines)
+    }
+}
+foreach ($bf in (Get-ChildItem -LiteralPath $Root -Filter '*.bat' -File | Sort-Object Name)) {
+    $bt = Get-Content -LiteralPath $bf.FullName -Raw
+    foreach ($gm in ($gapMarkers.Keys | Sort-Object)) {
+        $base = $gm -replace '_gap$', ''
+        if ($bt -match ('set /p \w+=<"%TEMP%\\dz_' + [regex]::Escape($base) + '\.txt"') -and $bt -notmatch ('if exist "%TEMP%\\dz_' + [regex]::Escape($gm) + '\.txt"')) {
+            $gapDefects += ("{0}: reads dz_{1}.txt but never dz_{2}.txt -- the gap {3} writes would vanish, or file under the finding row" -f $bf.Name, $base, $gm, $gapMarkers[$gm])
+        }
+    }
+}
+if ($gapDefects.Count) {
+    ''
+    "[FAIL] $($gapDefects.Count) raised gap(s) have no row of their own:"
+    foreach ($g in $gapDefects) { "  - $g" }
+    '  A gap line ([WARNING] ... NOT performed) feeds a separate severity and a'
+    '  separate marker (dz_<name>_gap.txt); both bats read it beside the finding'
+    '  marker and raise it with gap wording under the same section and technique.'
+    exit 1
+}
+"[OK] Every raised gap has its own marker and its own ledger row in both bats ($($gapMarkers.Count) gap marker(s))."
+
 if ($failures.Count -eq 0) {
     '[OK] Every check that prints a severity also raises it into the findings ledger.'
     exit 0
