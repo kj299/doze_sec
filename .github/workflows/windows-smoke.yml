@@ -1180,12 +1180,17 @@ jobs:
             if (-not (Test-Path $sf)) { throw 'no state file for the dashboard tile' }
             $state = (Get-Content $sf).Trim()
             Write-Host ("state line: {0}" -f $state)
-            if ($state -notmatch '^[A-Za-z ]+\|[01]\|[01]$') { throw ("state line is not mode|realtime|graded: '{0}'" -f $state) }
+            if ($state -notmatch '^[A-Za-z ]+\|[01]\|[01]\|[01]\|-?\d+$') { throw ("state line is not mode|realtime|graded|tamper|sigage: '{0}'" -f $state) }
             $f = $state.Split('|')
             if ($f[2] -ne '1') { throw 'Defender status could not be queried on the runner -- the live half graded nothing' }
             # Consistency between the state line and the printed verdict.
             if ($f[1] -eq '0' -and $f[0] -match 'Normal' -and $out -notmatch '\[CRITICAL\] Defender real-time protection is OFF') { throw 'state says real-time off in Normal mode but no CRITICAL was printed' }
             if ($f[1] -eq '1' -and $out -match '\[CRITICAL\] Defender real-time protection is OFF') { throw 'state says real-time on but the CRITICAL was printed' }
+            # The tamper and signature-age tiles now read these two fields too.
+            if ($f[3] -eq '0' -and $out -notmatch '\[WARNING\] Tamper Protection is OFF') { throw 'state says tamper protection off but no WARNING was printed' }
+            if ($f[3] -eq '1' -and $out -match '\[WARNING\] Tamper Protection is OFF') { throw 'state says tamper protection on but the WARNING was printed' }
+            if ([int]$f[4] -gt 7 -and $out -notmatch '\[WARNING\] Defender signatures are \d+ day') { throw 'state says signatures older than 7 days but no WARNING was printed' }
+            if ([int]$f[4] -ge 0 -and [int]$f[4] -le 7 -and $out -match '\[WARNING\] Defender signatures are') { throw 'state says signatures current but the age WARNING was printed' }
           } finally { Remove-Item $md -Recurse -Force -EA SilentlyContinue }
           Write-Host 'defender_core_check.ps1 OK'
           exit 0
@@ -1215,7 +1220,7 @@ jobs:
           $st0 = $null; try { $st0 = Get-MpComputerStatus -EA Stop } catch {}
           $before = if ($st0) { [string]$st0.AMRunningMode } else { '<Get-MpComputerStatus failed>' }
           $svc0 = if ($st0) { [string]$st0.AMServiceEnabled } else { '?' }
-          Write-Host ("before: AMRunningMode='{0}' AMServiceEnabled={1} (policy value present: {2})" -f $before, $svc0, ($null -ne $prior))
+          Write-Host ("before: AMRunningMode='{0}' AMServiceEnabled={1} (policy value present: {2}, prior value: {3})" -f $before, $svc0, ($null -ne $prior), $(if ($null -ne $prior) { [string]$prior } else { '<none>' }))
           $md = Join-Path $env:TEMP ("dz_dcx_ci_{0}" -f $PID)
           New-Item -ItemType Directory -Path $md -Force | Out-Null
           try {
