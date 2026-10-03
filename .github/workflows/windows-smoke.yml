@@ -1677,7 +1677,11 @@ jobs:
             # A raised gap prints [WARNING] (vocabulary decision 2026-10-03): the
             # degraded path says the check could NOT run and raises it.
             if ($t3 -notmatch '\[WARNING\][^\r\n]*hidden-task[^\r\n]*could NOT run') { throw 'degraded hidden-task path did not report itself as a raised gap ([WARNING] ... could NOT run)' }
-            if (-not (Test-Path (Join-Path $md4 'dz_crossapi.txt'))) { throw 'degraded hidden-task path raised no finding at all' }
+            # A GAP IS ITS OWN ROW (2026-10-03): the degraded path writes the GAP
+            # marker, never the finding marker, so its ledger row reads "check NOT
+            # performed", not "rootkit indicator".
+            if (-not (Test-Path (Join-Path $md4 'dz_crossapi_gap.txt'))) { throw 'degraded hidden-task path raised no gap at all -- it would vanish from the ledger' }
+            if (Test-Path (Join-Path $md4 'dz_crossapi.txt')) { throw 'degraded hidden-task path wrote the FINDING marker -- its ledger row would claim a rootkit indicator for a scheduler it could not open' }
           } finally {
             Remove-Item $tc -Recurse -Force -EA SilentlyContinue
             Remove-Item $md -Recurse -Force -EA SilentlyContinue
