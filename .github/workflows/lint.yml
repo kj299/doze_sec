@@ -304,10 +304,23 @@ jobs:
                    'NEW listener BELOW the dynamic range is WARNING even for svchost' \
                    'NEW service hosted by signed rundll32 pointed at ProgramData is WARNING' \
                    'NEW service whose Microsoft-signed binary sits in Users\Public is WARNING' \
-                   'NEW root CA is WARNING'; do
+                   'NEW root CA is WARNING' \
+                   'Get-BinPath walks an unquoted path with spaces to the first file that exists' \
+                   'CHANGED service validly signed by a non-Microsoft publisher, version segment only, is INFO naming the signer' \
+                   'CHANGED service version bump whose new binary is NOT validly signed stays WARNING' \
+                   'CHANGED signed task whose ARGUMENT changed (an address, not a path version) is WARNING' \
+                   'NEW task validly signed by a non-Microsoft publisher is INFO naming the signer' \
+                   'NEW task whose binary is not validly signed is WARNING' \
+                   'NEW SoftLanding task with no executable action is INFO' \
+                   'NEW COM-handler task OUTSIDE the Windows task paths is WARNING' \
+                   'NEW listener bound to [::1] only is INFO whatever the owner' \
+                   'NEW non-system listener in the dynamic range bound to 0.0.0.0 is WARNING' \
+                   'CHANGED listener that moved from loopback to 0.0.0.0 is WARNING' \
+                   'a baseline saved before the bind field existed does not read every port as CHANGED' \
+                   'Winlogon LastLogOffEndTimePerfCounter is excluded from the snapshot'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
-          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 27 ] || { echo "only $n case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 70 ] || { echo "only $n case(s)"; exit 1; }
       # T1036: the one real detection gap the 2026-09 retrospective found. The
       # benign twins are Windows' own casing, SysWOW64, wbem, the Defender
       # platform directory, and a path the tool could not read.

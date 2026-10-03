@@ -377,6 +377,34 @@ proof     = ci:baseline_diff.ps1 -SelfTest
 signature = NEW listening port since baseline \(dynamic RPC range, system-owned
 note      = The RPC endpoint mapper assigns svchost, lsass, wininit, services and spoolsv their listeners from the dynamic range (49152-65535) at boot, and the numbers differ from one boot to the next. Every reboot therefore produced NEW and REMOVED port records against the baseline, each NEW one a WARNING. A NEW listener at or above 49152 owned by one of those system processes is now [INFO]; a listener below 49152, or one owned by any other process (including the netstat fallback's pid=N form, which cannot prove an owner), stays WARNING. A real implant's listener is almost never in that range under that owner; if it is, Section 3's connection listing still shows it.
 
+[baseline-version-bump-signed]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:baseline_diff.ps1 -SelfTest
+signature = CHANGED (kernel driver|service|scheduled task) since baseline \(validly signed by .* -- version bump\)
+note      = A non-Microsoft publisher's update moves its binary into a new version directory and changes nothing else: Chrome's elevation service (154.0.8037.58 -> .98), an MSIX package directory (OpenAI.Codex_26.924.2738.0_x64__<id> -> _26.930.2377.0_), OneDrive's launcher task (an UNQUOTED path with spaces, which used to defeat the signature check entirely). The 2026-10-03 field run raised five such lines as WARNING while the sibling service with a quoted path read INFO. A CHANGED record whose CURRENT binary is validly signed and whose detail differs only in a version-shaped path segment is now [INFO] naming the signer, with was/now shown. A changed start mode, directory, argument or hash is not a bump and stays WARNING naming the signer; an unsigned binary stays WARNING; RUN values are never downgraded. Verify: compare the was/now lines; Get-AuthenticodeSignature on the new path should read Valid with the named CN.
+
+[baseline-new-signed-install]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:baseline_diff.ps1 -SelfTest
+signature = NEW (kernel driver|service|scheduled task|autorun/persistence value) since baseline \(validly signed by .* -- a new install
+note      = A task, service, driver or autorun registered since the baseline whose binary is validly signed by a non-Microsoft publisher, with clean arguments and no staging path, is an install (ZoomVDIMGMTTaskUser, 2026-10-03). It is [INFO] naming the signer and tells the owner to confirm it is one they made; a signature cannot prove intent, so the line is context, not clearance. Unsigned stays WARNING; a staging path stays WARNING whatever the signature; suspicious arguments are graded first.
+
+[baseline-loopback-port]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:baseline_diff.ps1 -SelfTest; ci:baseline_diff.ps1 -SelfTest + live
+signature = NEW listening port since baseline \(loopback-only listener
+note      = A listener bound to 127.0.0.1 or ::1 only cannot be reached from the network, whoever owns it and whatever the port: Intel's jhi_service on [::1]:49670 was a WARNING on 2026-10-03. The snapshot now records the bind address (owner bind=<address>) and the diff compares owners only, so a baseline saved before the field existed does not report every port as CHANGED. A listener that MOVES from loopback to 0.0.0.0 or :: is WARNING; a new listener bound to every address by a non-system process is WARNING. The helpers job opens one loopback and one all-interfaces listener and asserts INFO and WARNING respectively. Verify: Get-NetTCPConnection -State Listen -LocalPort <port>.
+
+[baseline-com-handler-task]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:baseline_diff.ps1 -SelfTest
+signature = NEW scheduled task since baseline \(COM-handler task, no executable action, under a Windows-owned task path\)
+note      = Windows creates scheduled tasks whose action is a COM handler (a CLSID), not an executable, so the record has nothing to sign-check: SoftLanding's per-user DeferralTask / TriggerTask (feature promotion) appeared as two NEW WARNING lines with an empty action on 2026-10-03. A task with no executable action under \Microsoft\Windows\ or \SoftLanding\ is [INFO]; the same shape anywhere else is WARNING ("inspect its CLSID"), because a COM-handler task is a documented persistence form (T1053.005 via a hijacked CLSID). Verify: (Get-ScheduledTask -TaskPath '<path>' -TaskName '<name>').Actions shows a ClassId and no Execute.
+
 [system-process-canonical-casing]
 class     = QUIET
 maxsev    = INFO

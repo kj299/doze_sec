@@ -610,7 +610,14 @@ what changes by design**: `baseline_diff` raised on every replaced
 Microsoft-signed driver after a Patch Tuesday and on every RPC dynamic-port
 reshuffle after a reboot. Routine churn is `[INFO]` with was/now shown; a
 replaced unsigned binary, a signed binary relocated to a staging path, a new
-admin or a new root CA is still the finding.
+admin or a new root CA is still the finding. The next field run raised ten
+more lines of churn the rules did not know: a validly signed non-Microsoft
+binary's version-directory bump, a signed new install, Windows' own COM-handler
+tasks (no executable action), a loopback-only listener, and a Winlogon logoff
+counter -- and three of them only because an UNQUOTED action path with spaces
+(`C:\Program Files\...\x.exe /arg`) defeated the signature check: the first
+token is not the binary; walk the prefixes to the first file that exists, as
+CreateProcess does. Pin every such line verbatim, in both directions.
 
 **A standard-user token is a different machine.** The first field run of
 `doze_sec_noAdmin.bat` reported Windows 11's own ZTHelper service as a hidden
