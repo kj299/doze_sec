@@ -1364,6 +1364,67 @@ jobs:
       # LSASS cannot be planted on a runner without a reboot, so the ON-by-event
       # path is proven by the self-test and by an EXPERIMENT below that is
       # declared either way: can a synthetic WinInit Event 12 be written here?
+      - name: pending_reboot_check.ps1 -SelfTest + live (the planted rename is listed by path; a queue written after boot is fresh; Fast Startup declared)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $st = (.\tools\pending_reboot_check.ps1 -SelfTest) -join "`n"
+          if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'pending_reboot_check.ps1 -SelfTest failed' }
+          $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($n -lt 26) { throw "pending_reboot_check self-test ran only $n case(s)" }
+          foreach ($must in 'written before the boot: STALE', 'a dangling last entry (odd length', 'a registry read failure is a declared gap', 'a single WARNING line even with three flags') {
+            if ($st -notmatch [regex]::Escape($must)) { throw ("pending_reboot_check self-test no longer covers: {0}" -f $must) }
+          }
+          Write-Host "pending_reboot_check -SelfTest OK ($n cases)"
+          $md = Join-Path $env:TEMP ("dz_rb_ci_{0}" -f $PID)
+          New-Item -ItemType Directory -Path $md -Force | Out-Null
+          function Invoke-Rb {
+            param([string]$Label)
+            foreach ($x in 'dz_reboot.txt', 'dz_reboot_gap.txt', 'dz_reboot_state.txt') { Remove-Item (Join-Path $md $x) -Force -EA SilentlyContinue }
+            $r = (.\tools\pending_reboot_check.ps1 -MarkerDir $md) -join "`n"
+            Write-Host ("--- {0} ---" -f $Label); Write-Host $r
+            if ($r -match 'null-valued expression|InvalidOperation|CommandNotFoundException|ParameterBindingException') { throw ("{0}: the tool wrote PowerShell errors" -f $Label) }
+            if (Test-Path (Join-Path $md 'dz_reboot_gap.txt')) { throw ("{0}: a runner's reboot flags are readable; the tool declared a gap" -f $Label) }
+            $sf = Join-Path $md 'dz_reboot_state.txt'
+            if (-not (Test-Path $sf)) { throw ("{0}: no state file" -f $Label) }
+            $state = (Get-Content $sf).Trim()
+            Write-Host ("state: {0}" -f $state)
+            if ($state -notmatch '^[01]\|(fresh|stale|mixed|unknown)\|\d+\|[01]\|[01]\|(0|1|unknown)$') { throw ("{0}: state line is not pending|age|ops|wu|cbs|faststartup: '{1}'" -f $Label, $state) }
+            $top = 'OK'
+            if ($r -match '(?m)^\[WARNING\]') { $top = 'WARNING' }
+            $mk = Join-Path $md 'dz_reboot.txt'
+            $mv = if (Test-Path $mk) { (Get-Content $mk).Trim() } else { 'OK' }
+            if ($mv -ne $top) { throw ("{0}: marker says '{1}' but the highest printed tag is '{2}'" -f $Label, $mv, $top) }
+            return @{ Text = $r; State = $state.Split('|') }
+          }
+          # Touches: registry:HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\PendingFileRenameOperations
+          # (appended to, restored in finally; Session Manager would consume it at a
+          # boot the ephemeral runner never has).
+          $k = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager'
+          $prior = (Get-ItemProperty -LiteralPath $k -Name PendingFileRenameOperations -EA SilentlyContinue).PendingFileRenameOperations
+          try {
+            $live = Invoke-Rb 'live'
+            if ($live.State[0] -eq '0' -and $live.Text -notmatch '(?m)^\[OK\] No pending reboot detected\.') { throw 'nothing pending but no [OK] line' }
+            $planted = @('\??\C:\dz_ci_pending_rename.tmp', '')
+            $val = if ($prior) { @($prior) + $planted } else { $planted }
+            Set-ItemProperty -LiteralPath $k -Name PendingFileRenameOperations -Type MultiString -Value $val
+            $p = Invoke-Rb 'planted'
+            if ($p.Text -notmatch '(?m)^\[WARNING\] Reboot pending: PendingFileRenameOperations is set \(\d+ queued file operation\(s\)\)') { throw 'the planted rename did not produce the finding line' }
+            if ($p.Text -notmatch '(?m)^    delete: C:\\dz_ci_pending_rename\.tmp \(source missing\)$') { throw 'the planted operation is not listed beneath the finding by path' }
+            if ($p.State[0] -ne '1' -or $p.State[1] -ne 'fresh') { throw ("the plant postdates the runner's boot: expected state 1|fresh, got {0}|{1}" -f $p.State[0], $p.State[1]) }
+            if ($p.Text -notmatch 'written AFTER the last boot: a Restart will run it') { throw 'the age line did not read AFTER the last boot' }
+            if ([int]$p.State[2] -lt 1) { throw 'the state line counts no queued operation' }
+            # The line order top_findings depends on: the first detail line directly
+            # follows the finding line.
+            $ls = $p.Text -split "`n"
+            $wi = [array]::IndexOf($ls, ($ls | Where-Object { $_ -match '^\[WARNING\] Reboot pending:' } | Select-Object -First 1))
+            if ($ls[$wi + 1] -notmatch '^    (delete|rename|flag): ') { throw ("the line after the finding is not a detail line: '{0}'" -f $ls[$wi + 1]) }
+          } finally {
+            if ($null -ne $prior) { Set-ItemProperty -LiteralPath $k -Name PendingFileRenameOperations -Type MultiString -Value @($prior) } else { Remove-ItemProperty -LiteralPath $k -Name PendingFileRenameOperations -EA SilentlyContinue }
+            Remove-Item $md -Recurse -Force -EA SilentlyContinue
+          }
+          Write-Host 'pending_reboot_check.ps1 OK (planted rename listed by path; fresh; markers and state agree)'
+
       - name: lsa_protection_check.ps1 -SelfTest + live (WinInit Event 12 this boot or RunAsPPL decides; neither is OFF, declared) + Event 12 write experiment
         shell: powershell
         run: |
@@ -2988,9 +3049,12 @@ jobs:
           # CurrentControlSet\Control\Session Manager\PendingFileRenameOperations.
           $k = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager'
           $cur = (Get-ItemProperty -LiteralPath $k -Name PendingFileRenameOperations -EA SilentlyContinue).PendingFileRenameOperations
-          if ($cur) { Write-Host ("PendingFileRenameOperations already set ({0} entries) -- the runner has a pending reboot of its own; the plant is unnecessary" -f @($cur).Count); exit 0 }
-          Set-ItemProperty -LiteralPath $k -Name PendingFileRenameOperations -Type MultiString -Value @('\??\C:\dz_ci_pending_rename.tmp', '')
-          Write-Host 'planted PendingFileRenameOperations: the audit must now report a pending reboot and exit 4'
+          # APPEND, never skip: the post-run step asserts the planted path is LISTED
+          # beneath the finding, which a runner's own entries could not satisfy.
+          $planted = @('\??\C:\dz_ci_pending_rename.tmp', '')
+          if ($cur) { Write-Host ("PendingFileRenameOperations already set ({0} entries) -- the runner has a pending reboot of its own; appending the plant" -f @($cur).Count); $planted = @($cur) + $planted }
+          Set-ItemProperty -LiteralPath $k -Name PendingFileRenameOperations -Type MultiString -Value $planted
+          Write-Host 'planted PendingFileRenameOperations: the audit must now report a pending reboot, list the planted path, and exit 4'
 
       # Corpus [adfs-present] / [aadconnect-present]: Section 17 prints
       # "[INFO] ADFS detected" when the service adfssrv OR the key
@@ -3103,6 +3167,11 @@ jobs:
           if (-not $led) { throw 'no ledger beside the report' }
           if (-not (Select-String -LiteralPath $led.FullName -Pattern '\|REBOOT\|' -Quiet)) { throw 'the planted pending reboot did not reach the ledger -- exit 4 came from somewhere else' }
           if ($text -notmatch 'PendingFileRenameOperations is set') { throw 'Section 1 did not report PendingFileRenameOperations' }
+          # WHAT IS PENDING IS NAMED. The old check only tested that the value existed;
+          # the owner's flag survived a boot and the advice was to reboot again.
+          if ($text -notmatch '(?m)^    delete: C:\\dz_ci_pending_rename\.tmp \(source missing\)') { throw 'Section 1 did not list the planted file operation beneath the finding' }
+          if ($text -notmatch '(?m)^\[INFO\] PendingFileRenameOperations: Session Manager key last written \S+, last boot \S+ -- written AFTER the last boot') { throw 'Section 1 did not say whether the flag was written before or after the last boot (the plant postdates the boot)' }
+          if ($text -notmatch '(?m)^\[EXIT 4\] A reboot is pending\. Restart the system -- not Shut down -- then re-run the audit\.') { throw 'the fresh-flag [EXIT 4] advice is missing' }
           # THE ENTRY IS GONE AFTER A COMPLETED RUN, WHATEVER THE CODE. Deleted only on
           # 0/2/8 until 2026-09-26; on the owner's laptop (always 4) it survived every run.
           $ro = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce' -EA SilentlyContinue

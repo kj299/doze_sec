@@ -38,6 +38,13 @@ $ErrorActionPreference = 'Stop'
 # Signature = a regex matching the line the check PRINTS into the report.
 # Section/Technique = the ledger coordinates it must then appear under.
 $script:Contracts = @(
+    # Section 1's pending-reboot check, extracted to tools\pending_reboot_check.ps1
+    # (marker idiom). The full-run job plants PendingFileRenameOperations, so
+    # it exercises this on the real path.
+    @{ Name      = 'Reboot pending (a flag is set; the queued operations are listed)'
+       Signature = '^\s*\[WARNING\] Reboot pending:'
+       Section   = '1'
+       Technique = 'REBOOT' },
     @{ Name      = 'Sticky Keys shortcut at the logon screen'
        Signature = '^\s*\[WARNING\].*Sticky Keys shortcut ENABLED'
        Section   = '13'

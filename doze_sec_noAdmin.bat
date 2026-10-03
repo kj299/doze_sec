@@ -60,7 +60,7 @@ exit /b %DOZE_EXIT_CODE%
 ::    1  Error (usually fatal - check console output)
 ::    2  Warning (audit complete but issues found - check report)
 ::    3  Unsupported OS (use -dev to override)
-::    4  Exit pending reboot (reboot then re-run)
+::    4  Exit pending reboot (Section 1 lists what is queued; Restart, not Shut down)
 ::    5  Script is running from the TEMP directory (not allowed)
 ::    6  Partial audit (non-admin mode, some checks deferred)
 ::    7  Pre-flight VT integrity check failed (script-critical binary flagged)
@@ -149,6 +149,7 @@ set "DEFEXCL_PATHS=0"
 set "DEFEXCL_PROCS=0"
 set "DEFEXCL_EXTS=0"
 set "PPL_STATE=ungraded"
+set "REBOOT_AGE=unknown"
 set "PROCPATH_CLEAN="
 set "PROCPATH_BAD=0"
 set "PROCPATH_TOTAL=0"
@@ -389,7 +390,7 @@ echo    0  Success -- all checks passed
 echo    1  Fatal error (check console output)
 echo    2  Warning -- audit complete but issues found
 echo    3  Unsupported OS (use -dev to override)
-echo    4  Reboot pending (reboot then re-run)
+echo    4  Reboot pending (Section 1 lists what is queued and whether it predates the last boot)
 echo    5  Script ran from TEMP directory (move and re-run)
 echo    6  Partial audit (non-admin mode, some checks deferred)
 echo    7  Pre-flight VT integrity check failed (script-critical binary)
@@ -1323,22 +1324,48 @@ echo Get-HotFix ^| Sort-Object InstalledOn -Descending -EA SilentlyContinue ^| S
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
-echo --- Pending Reboot Check --->> "%REPORT%"
+echo --- Pending Reboot Check (what is queued, and whether the flag predates the last boot) --->> "%REPORT%"
 echo  Command: powershell -Command "Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'"   [also CBS\RebootPending and PendingFileRenameOperations]>> "%REPORT%"
-echo $reboot=$false > "%PSRUN%"
-echo if(Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'){$reboot=$true; '[WARNING] Reboot pending: Windows Update requires a reboot -- audit results may be incomplete.'} >> "%PSRUN%"
-echo if(Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'){$reboot=$true; '[WARNING] Reboot pending: Component Based Servicing has a reboot queued -- audit results may be incomplete.'} >> "%PSRUN%"
-echo try{ $pnd=Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -Name PendingFileRenameOperations -EA Stop; if($pnd){$reboot=$true; '[WARNING] Reboot pending: PendingFileRenameOperations is set -- audit results may be incomplete.' }}catch{} >> "%PSRUN%"
-echo if(-not $reboot){'[OK] No pending reboot detected.'} >> "%PSRUN%"
-echo if($reboot){ New-Item "$env:TEMP\dz_reboot_needed.txt" -Force ^| Out-Null } >> "%PSRUN%"
-del "%TEMP%\dz_reboot_needed.txt" 2>nul
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
-if exist "%TEMP%\dz_reboot_needed.txt" (
-    echo [EXIT 4] A reboot is pending. Reboot the system then re-run the audit.>> "%REPORT%"
-    echo [EXIT 4] Results may be incomplete until the pending reboot is applied.>> "%REPORT%"
-    call :dz_finding WARNING 1 REBOOT "Reboot pending - audit results may be incomplete"
+echo  Command: reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager" /v PendingFileRenameOperations>> "%REPORT%"
+echo  Command: powershell -File tools\pending_reboot_check.ps1>> "%REPORT%"
+rem The tool prints every flag that is present, the queued file operations
+rem beneath the finding, and whether each flag was written before or after the
+rem last boot. A flag that predates the boot survived a restart, so "reboot and
+rem re-run" is not the advice; the state file's second field carries that age.
+del "%TEMP%\dz_reboot.txt" 2>nul
+del "%TEMP%\dz_reboot_gap.txt" 2>nul
+del "%TEMP%\dz_reboot_state.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\pending_reboot_check.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\pending_reboot_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo  [WARNING] tools\pending_reboot_check.ps1 not found -- pending-reboot check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 1 REBOOT "Pending-reboot check NOT performed - tool missing"
+)
+set "REBOOT_AGE=unknown"
+set "REBOOT_LINE="
+if exist "%TEMP%\dz_reboot_state.txt" set /p REBOOT_LINE=<"%TEMP%\dz_reboot_state.txt"
+if defined REBOOT_LINE for /f "tokens=2 delims=|" %%a in ("%REBOOT_LINE%") do set "REBOOT_AGE=%%a"
+del "%TEMP%\dz_reboot_state.txt" 2>nul
+if exist "%TEMP%\dz_reboot.txt" (
+    set "REBOOT_SEV="
+    set /p REBOOT_SEV=<"%TEMP%\dz_reboot.txt"
+    if "!REBOOT_AGE!"=="stale" (
+        echo [EXIT 4] A reboot is pending, but every flag predates the last boot: restarting again is unlikely to clear it.>> "%REPORT%"
+        echo [EXIT 4] Review the queued operations listed above. Results may be incomplete until they are applied.>> "%REPORT%"
+    ) else (
+        echo [EXIT 4] A reboot is pending. Restart the system -- not Shut down -- then re-run the audit.>> "%REPORT%"
+        echo [EXIT 4] Results may be incomplete until the pending reboot is applied.>> "%REPORT%"
+    )
+    call :dz_finding !REBOOT_SEV! 1 REBOOT "Reboot pending - audit results may be incomplete"
     if !EXIT_CODE! LSS 4 set "EXIT_CODE=4"
-    del "%TEMP%\dz_reboot_needed.txt" 2>nul
+    del "%TEMP%\dz_reboot.txt" 2>nul
+)
+if exist "%TEMP%\dz_reboot_gap.txt" (
+    rem A gap is its own row: the tool could not read (part of) the reboot flags.
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_reboot_gap.txt"
+    call :dz_finding !_GAPSEV! 1 REBOOT "Pending-reboot check NOT performed - registry unreadable"
+    del "%TEMP%\dz_reboot_gap.txt" 2>nul
 )
 
 echo.>> "%REPORT%"
@@ -5032,7 +5059,8 @@ if "%EXIT_CODE%"=="0" echo  STATUS: No issues in the checks that ran. NOT a proo
 if "%EXIT_CODE%"=="1" echo  STATUS: Fatal error. Check console output above for details.>> "%REPORT%"
 if "%EXIT_CODE%"=="2" echo  STATUS: Audit complete with warnings. Review [WARNING] items in report.>> "%REPORT%"
 if "%EXIT_CODE%"=="3" echo  STATUS: Unsupported OS. Use -dev switch to override.>> "%REPORT%"
-if "%EXIT_CODE%"=="4" echo  STATUS: Reboot pending. Reboot and re-run the audit.>> "%REPORT%"
+if "%EXIT_CODE%"=="4" if "%REBOOT_AGE%"=="stale" echo  STATUS: Reboot-pending flags that survived the last boot -- Section 1 lists what is queued.>> "%REPORT%"
+if "%EXIT_CODE%"=="4" if not "%REBOOT_AGE%"=="stale" echo  STATUS: Reboot pending. Restart, not Shut down, and re-run the audit.>> "%REPORT%"
 if "%EXIT_CODE%"=="5" echo  STATUS: Script ran from TEMP directory. Move script and re-run.>> "%REPORT%"
 if "%EXIT_CODE%"=="6" echo  STATUS: Partial audit in non-admin mode. Re-run as admin for full audit.>> "%REPORT%"
 if "%EXIT_CODE%"=="8" echo  STATUS: Audit complete -- CRITICAL findings present. Review [CRITICAL] items NOW.>> "%REPORT%"

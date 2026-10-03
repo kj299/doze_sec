@@ -270,6 +270,12 @@ proof     = ci:service_signature_check.ps1 -SelfTest
 signature = msix: signed by (Store|System)
 note      = MSIX/AppX packages are signed as a PACKAGE, not per inner file, so Get-AuthenticodeSignature on the inner .exe correctly returns NotSigned. Field false positive 2026-09-06: IntelGraphicsSoftwareService (Running, Auto) under C:\Program Files\WindowsApps\AppUp.IntelArcSoftware_...\VFS\ProgramFilesX64\ was reported unsigned. Get-AppxPackage SignatureKind is consulted instead; Microsoft documents that any value other than None means the package carries a trusted certificate. Developer/Enterprise, None, and an unresolvable package all remain findings, and a staging path still wins. Verify: Get-AppxPackage -AllUsers | Where-Object PackageFullName -eq '<name>' | Select-Object SignatureKind,Status
 
+[pending-reboot-flags]
+class     = ADVISE
+proof     = ci:pending_reboot_check.ps1 -SelfTest
+signature = Reboot pending: .* -- audit results may be incomplete:
+note      = A pending reboot is a WARNING by design (the audit may be incomplete), but on a real machine the flag is usually an installer or the Defender platform update mid-flow, and on the owner's laptop it survived a boot the System log proved -- "reboot and re-run" could not work. Since 2026-10 the finding lists what is queued beneath it (delete: / rename: / flag:) and an [INFO] line says whether each flag was written before or after the last boot. Written AFTER: a Restart will apply it. Written BEFORE: it survived a restart -- a component re-created it, or Fast Startup's "Shut down" never processed it (only Restart runs the queue). Verify: reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager" /v PendingFileRenameOperations, and read the listed paths: a Defender Platform folder, Config.Msi\*.rbf or an updater's temp file is routine; a path under Users\Public, Temp or AppData with an unfamiliar name is not.
+
 [ev104-smartcard]
 class     = ADVISE
 proof     = ci:Event 104 provider filter
