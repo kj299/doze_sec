@@ -374,6 +374,21 @@ function Get-SigVerdict {
 # injected, so it runs anywhere -- there is no Office on a CI runner and the
 # owner's machine is the only place the real path can be proven.
 # ---------------------------------------------------------------------------
+# PURE. Was a process's module list refused? A refusal is decided on EVIDENCE,
+# not on an exception: on the standard-user CI runner the .Modules getter
+# did not throw for the other users' processes, it returned an EMPTY list,
+# so the old `catch`-only rule counted zero refusals, never set the lsass
+# flag, and the whole lsass judgement below was dead there (Section 4 read
+# "179 unique module(s) across 148 process(es)" -- only the user's own
+# processes had contributed). Every live process has at least its own image
+# module, so an empty list is a refusal whatever the getter did.
+function Test-ModuleEnumerationRefused {
+    param($Mods, [bool]$Threw)
+    if ($Threw) { return $true }
+    if ($null -eq $Mods) { return $true }
+    return (@($Mods).Count -eq 0)
+}
+
 # PURE. lsass refused module enumeration: is that the protection working, the
 # token, or a gap? RunAsPPL 1 (enabled, UEFI-locked) and 2 (enabled without the
 # UEFI lock; Windows 11 22H2+) both mean LSA Protection is ON (Microsoft Learn,
@@ -550,6 +565,12 @@ if ($SelfTest) {
     T 'RunAsPPL=2 (enabled without the UEFI lock, Windows 11 22H2+) counts as ON: [OK], not a WARNING' ((-not $lv.Deferred) -and $lv.Sev -eq 'OK' -and $lv.Line -match '^\[OK\]') $lv.Line
     $lv = Get-LsassDenialVerdict -IsElevated $true -Ppl 'junk'
     T 'an unreadable RunAsPPL value is not ON: elevated it is the raised gap' ($lv.Sev -eq 'WARNING') $lv.Line
+    # Refusal is decided on evidence, not on an exception (the standard-user
+    # runner returned EMPTY module lists, not errors, for other users' processes).
+    T 'an empty module list is a refusal (every live process has its own image module)' (Test-ModuleEnumerationRefused -Mods @() -Threw $false) ''
+    T 'a null module list is a refusal' (Test-ModuleEnumerationRefused -Mods $null -Threw $false) ''
+    T 'a getter that threw is a refusal' (Test-ModuleEnumerationRefused -Mods $null -Threw $true) ''
+    T 'a non-empty module list is not a refusal' (-not (Test-ModuleEnumerationRefused -Mods @([pscustomobject]@{ FileName = 'C:\x.dll' }) -Threw $false)) ''
 
     if ($fails) { Write-Output "[FAIL] $fails module_inspect self-test expectation(s) unmet"; exit 1 }
     Write-Output '[OK] module_inspect self-test: Click-to-Run/MSIX virtual paths resolve or are stated as uncertain; a genuinely unbacked module still raises T1055.'
@@ -581,12 +602,13 @@ foreach ($p in (Get-Process -EA SilentlyContinue)) {
     $procCount++
     $pname = $p.ProcessName
     $mods = $null
-    try { $mods = $p.Modules } catch {
+    $threw = $false
+    try { $mods = $p.Modules } catch { $threw = $true }
+    if (Test-ModuleEnumerationRefused -Mods $mods -Threw $threw) {
         $denied++
         if ($pname -ieq 'lsass') { $lsassDenied = $true }
         continue
     }
-    if (-not $mods) { continue }
     $first = $true
     $procVirt = $false
     foreach ($m in $mods) {
@@ -759,7 +781,7 @@ if ($capped) {
     "[INFO] Module inspection stopped at the $MaxModules-file cap; $($modOwners.Count - $checked) unique module(s) were NOT checked."
 }
 if ($denied -gt 0) {
-    "[INFO] $denied process(es) refused module enumeration (protected or cross-architecture) -- normal on Windows, but those processes were not inspected."
+    "[INFO] $denied process(es) refused module enumeration (protected, another user's or SYSTEM's on a standard-user token, or cross-architecture) -- normal on Windows, but those processes were not inspected."
 }
 
 Write-Marker -Name 'module' -Sev $sev

@@ -35,7 +35,14 @@ the raised WARNING; `RunAsPPL=2` (enabled without the UEFI lock, Windows 11
 22H2+) now counts as ON instead of being graded as OFF. Self-test cases both
 ways; the standard-user CI job asserts the WARNING never prints there and one
 of the two declared branches does; corpus entry
-`[lsass-unreadable-from-standard-user]`.
+`[lsass-unreadable-from-standard-user]`. **And the denial itself was never
+detected on the standard-user runner**: the `.Modules` getter did not throw
+for other users' processes there, it returned an empty list, so the
+`catch`-only rule counted zero refusals and Section 4 read "179 unique
+module(s) across 148 process(es)" from the user's own processes alone, with
+no refused count printed. A refusal is now decided on evidence (a live
+process with no readable module), the refused count names the token as a
+cause, and the lsass branch runs where it never had.
 
 ### Defender exclusion tiles read Section 9's state line
 The three Section 9 exclusion blocks (paths, processes, extensions) lived
