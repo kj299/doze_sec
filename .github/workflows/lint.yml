@@ -366,6 +366,16 @@ jobs:
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
           n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 10 ] || { echo "only $n case(s)"; exit 1; }
+      - name: module_inspect -- lsass denied on a standard-user token is DEFERRED; elevated with LSA Protection off it is a raised gap
+        run: |
+          out=$(pwsh -NoProfile -File tools/module_inspect.ps1 -SelfTest); echo "$out"
+          for n in 'lsass denied, standard-user token, LSA Protection off: DEFERRED' \
+                   'lsass denied, ELEVATED, LSA Protection off: a raised gap (WARNING), never a deferral' \
+                   'RunAsPPL=2 (enabled without the UEFI lock, Windows 11 22H2+) counts as ON' \
+                   'an unreadable RunAsPPL value is not ON'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 31 ] || { echo "only $n case(s)"; exit 1; }
       - name: vt_ip_check -- a single non-top-tier VirusTotal engine is INFO, not a finding
         run: |
           out=$(pwsh -NoProfile -File tools/vt_ip_check.ps1 -SelfTest); echo "$out"

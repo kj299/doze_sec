@@ -1745,7 +1745,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'module_inspect self-test failed' }
           # Non-vacuity: a self-test that asserted nothing would exit 0 too.
           $n = @($out -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($n -lt 26) { throw "module_inspect self-test ran only $n case(s) -- it is not asserting what it claims" }
+          if ($n -lt 31) { throw "module_inspect self-test ran only $n case(s) -- it is not asserting what it claims" }
+          # The lsass denial is graded by TOKEN: a standard user can never open
+          # lsass, so with LSA Protection off it is DEFERRED there and a raised
+          # WARNING only elevated. A lost case here is a lost deferral guard.
+          foreach ($must in 'lsass denied, standard-user token, LSA Protection off: DEFERRED', 'lsass denied, ELEVATED, LSA Protection off: a raised gap (WARNING), never a deferral', 'RunAsPPL=2 (enabled without the UEFI lock, Windows 11 22H2+) counts as ON') {
+            if ($out -notmatch [regex]::Escape($must)) { throw ("module_inspect self-test no longer covers: {0}" -f $must) }
+          }
           # The staging-path rule pins the Adobe native addon a field run reported
           # as CRITICAL; a lost case here is a lost false-positive guard.
           if ($out -notmatch '\[OK\]   a Node native addon under node_modules') { throw 'the Adobe node_modules\public\ must-not-raise case did not run' }

@@ -292,6 +292,39 @@ try {
     Assert ($text1 -match '\[DEFERRED - ADMIN REQUIRED\] TaskCache registry or Task Scheduler not readable from a standard-user token') `
         'the TaskCache hidden-task check is declared DEFERRED on the standard-user path' `
         'the TaskCache hidden-task check was not declared DEFERRED (skipped silently, or raised as a rootkit indicator)'
+    # lsass can never be opened from a standard-user token; with LSA Protection
+    # off that denial printed [WARNING] and raised a T1055 row until 2026-10-03
+    # (found by reading which raised-gap lines this path could print, not by a
+    # field run: the owner's laptop has RunAsPPL=1 and takes the [OK] branch).
+    # The runner's RunAsPPL state is not pinned, so either declared branch is
+    # accepted; the raised WARNING never is.
+    Assert ($text1 -notmatch '\[WARNING\] lsass module enumeration denied') `
+        'the lsass denial is never raised as a finding on the standard-user path' `
+        'the lsass denial was raised as a WARNING on a standard-user run (the token, not the machine)'
+    Assert ($text1 -match '\[DEFERRED - ADMIN REQUIRED\] lsass modules are not readable from a standard-user token|\[OK\] lsass modules not enumerable -- consistent with LSA Protection') `
+        'the lsass denial is declared: DEFERRED (LSA Protection off) or [OK] (LSA Protection on)' `
+        'the lsass denial was neither deferred nor explained by LSA Protection'
+    if ($text1 -notmatch '\[DEFERRED - ADMIN REQUIRED\] lsass modules are not readable from a standard-user token|\[OK\] lsass modules not enumerable -- consistent with LSA Protection') {
+        # Quote the block so the failure diagnoses itself (the artifact that holds
+        # the report cannot be fetched from every machine; the #225 alarm quoting
+        # is what finally named the intermittent CRIT tile).
+        $mi = [regex]::Match($text1, '(?s)--- \[T1055/T1574\] Loaded-module inspection.*?(?=\r?\n\s*\[SECTION 4/18 RESULT|\r?\n\s*--- )')
+        $miLines = if ($mi.Success) { @($mi.Value -split "\r?\n" | Select-Object -First 40) } else { @('(no "--- [T1055/T1574] Loaded-module inspection" header in the report at all)') }
+        foreach ($ml in $miLines) { Write-Host ("               module_inspect: {0}" -f $ml.TrimEnd()) }
+        $t1055 = @($ledger1 | Where-Object { $_ -match '^\w+\|4\|T1055\|' })
+        foreach ($row in $t1055) { Write-Host ("               ledger: {0}" -f $row) }
+    }
+    # The LSASS PPL tile states Section 12's verdict. It used to re-read
+    # RunAsPPL and grade an explicit 0 as CRIT where the section raises
+    # WARNING, which is what the intermittent ledger-divergence alarm of
+    # 2026-10-02/03 was (runner images differ in whether the value is absent
+    # or an explicit 0). A CRIT tile with no CRITICAL row can never be right.
+    Assert ($text1 -notmatch '\[!! CRITICAL !!\]\s+LSASS PPL') `
+        'the LSASS PPL tile never out-grades Section 12 (no CRIT tile)' `
+        'the dashboard graded LSASS PPL as CRIT while Section 12 raises WARNING for it'
+    Assert ($text1 -match 'LSASS PPL[^\r\n]*Section 12') `
+        'the LSASS PPL tile names Section 12 as its source' `
+        'the LSASS PPL tile does not state the verdict Section 12 reached'
     Assert (-not @($ledger1 | Where-Object { $_ -match '^\w+\|16\|T1070\.001\|' }).Count) `
         'no T1070.001 row for a Security log the token cannot list' `
         ("a T1070.001 row was raised on a standard-user run with nothing printed: {0}" -f (($ledger1 | Where-Object { $_ -match '\|16\|T1070\.001\|' }) -join ' ; '))

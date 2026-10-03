@@ -439,6 +439,13 @@ proof     = ci:Create standard user, run the audit twice
 signature = \[DEFERRED - ADMIN REQUIRED\] TaskCache registry or Task Scheduler not readable from a standard-user token
 note      = The TaskCache registry (Schedule\TaskCache\Tree and \Tasks) is not readable from a standard-user token, so the Tarrask hidden-task check cannot run there. Until 2026-09-24 cross_api_check printed [SKIPPED] and raised WARNING, and the standard-user field run carried a ledger row reading "Cross-API disagreement or hidden task - rootkit indicator" for a view the token simply could not open. Unelevated it is now DEFERRED: named, counted, never a ledger row. Elevated, a TaskCache an administrator cannot read is still a raised gap.
 
+[lsass-unreadable-from-standard-user]
+class     = QUIET
+maxsev    = OK
+proof     = ci:Create standard user, run the audit twice; ci:module_inspect.ps1 -SelfTest
+signature = \[DEFERRED - ADMIN REQUIRED\] lsass modules are not readable from a standard-user token
+note      = A standard user can never open lsass, whatever the LSA Protection policy says. Until 2026-10-03 module_inspect printed the lsass denial as [WARNING] ... lsass injection NOT checked and raised a T1055 row on that token whenever RunAsPPL was not set -- the token, not the machine. The owner's laptop has RunAsPPL=1, so its standard-user runs took the [OK] branch and never showed it. Unelevated the denial is now DEFERRED and counted; elevated it stays a raised WARNING (an administrator who cannot read lsass with protection off is a real gap). RunAsPPL=2 (enabled without the UEFI lock, Windows 11 22H2+) now counts as ON too.
+
 [ifeo-subkey-unreadable-from-standard-user]
 class     = QUIET
 maxsev    = INFO

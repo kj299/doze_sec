@@ -68,11 +68,14 @@
 # path, not visible from outside" case is downgraded -- and it is downgraded to
 # STATED UNCERTAINTY, not to silence.
 #
-# LSASS AND PPL: when LSA Protection (RunAsPPL) is enabled, lsass module
+# LSASS AND PPL: when LSA Protection (RunAsPPL 1 or 2) is enabled, lsass module
 # enumeration is denied to everything -- including this tool. That is the
 # protection WORKING, not a coverage gap, so it is reported as [OK] with the
 # reason rather than as a failure. When PPL is OFF and enumeration still fails,
-# it is reported [SKIPPED] so the blindness is visible.
+# the token decides: a standard user can NEVER open lsass, so on that token the
+# denial is [DEFERRED - ADMIN REQUIRED] and counted through
+# dz_module_deferred.txt (never a ledger row -- the token, not the machine);
+# elevated, it is a raised [WARNING] so the blindness reaches the verdict.
 #
 # PERFORMANCE: the same DLL is loaded by dozens of processes, so module paths
 # are DEDUPLICATED and each unique file is Authenticode-checked exactly once,
@@ -91,10 +94,20 @@ param(
     [string]$MarkerDir = $env:TEMP,
     [int]$MaxModules = 2500,
     [int]$MaxReport = 25,
+    # Whether this process runs elevated. Read once from the token below;
+    # injectable so the self-test can grade both tokens. -1 = detect.
+    [int]$Elevated = -1,
     [switch]$SelfTest
 )
 
 $ErrorActionPreference = 'Continue'
+if ($Elevated -lt 0) {
+    $Elevated = 0
+    try {
+        $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+        if ((New-Object Security.Principal.WindowsPrincipal($id)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { $Elevated = 1 }
+    } catch {}
+}
 
 function Write-Marker {
     param([string]$Name, [string]$Sev)
@@ -361,6 +374,41 @@ function Get-SigVerdict {
 # injected, so it runs anywhere -- there is no Office on a CI runner and the
 # owner's machine is the only place the real path can be proven.
 # ---------------------------------------------------------------------------
+# PURE. Was a process's module list refused? A refusal is decided on EVIDENCE,
+# not on an exception: on the standard-user CI runner the .Modules getter
+# did not throw for the other users' processes, it returned an EMPTY list,
+# so the old `catch`-only rule counted zero refusals, never set the lsass
+# flag, and the whole lsass judgement below was dead there (Section 4 read
+# "179 unique module(s) across 148 process(es)" -- only the user's own
+# processes had contributed). Every live process has at least its own image
+# module, so an empty list is a refusal whatever the getter did.
+function Test-ModuleEnumerationRefused {
+    param($Mods, [bool]$Threw)
+    if ($Threw) { return $true }
+    if ($null -eq $Mods) { return $true }
+    return (@($Mods).Count -eq 0)
+}
+
+# PURE. lsass refused module enumeration: is that the protection working, the
+# token, or a gap? RunAsPPL 1 (enabled, UEFI-locked) and 2 (enabled without the
+# UEFI lock; Windows 11 22H2+) both mean LSA Protection is ON (Microsoft Learn,
+# "Configure added LSA protection"). With protection off, a standard-user token
+# can never open lsass whatever the machine's state, so the denial is DEFERRED
+# on that token and a raised WARNING only when an administrator could not read
+# it either.
+function Get-LsassDenialVerdict {
+    param([bool]$IsElevated, $Ppl)
+    $pv = -1
+    try { if ($null -ne $Ppl) { $pv = [int]$Ppl } } catch { $pv = -1 }
+    if ($pv -eq 1 -or $pv -eq 2) {
+        return @{ Deferred = $false; Sev = 'OK'; Line = '[OK] lsass modules not enumerable -- consistent with LSA Protection (RunAsPPL) being enabled. The protection is working.' }
+    }
+    if (-not $IsElevated) {
+        return @{ Deferred = $true; Sev = 'OK'; Line = '[DEFERRED - ADMIN REQUIRED] lsass modules are not readable from a standard-user token -- lsass injection NOT checked. LSA Protection is not enabled, so an administrator run can read them; re-run as administrator to grade this.' }
+    }
+    return @{ Deferred = $false; Sev = 'WARNING'; Line = '[WARNING] lsass module enumeration denied while LSA Protection is OFF -- lsass injection NOT checked.' }
+}
+
 if ($SelfTest) {
     $fails = 0
     function T { param([string]$Name, [bool]$Ok, [string]$Got)
@@ -504,6 +552,26 @@ if ($SelfTest) {
     T 'a user Temp directory IS a staging path' (Test-StagingPath 'C:\Users\u\AppData\Local\Temp\dz_x.dll') ''
     T 'Downloads IS a staging path' (Test-StagingPath 'C:\Users\u\Downloads\dz_x.dll') ''
 
+    # lsass denial by token (2026-10-03): a standard user can never open lsass.
+    $lv = Get-LsassDenialVerdict -IsElevated $false -Ppl $null
+    T 'lsass denied, standard-user token, LSA Protection off: DEFERRED (the token, not the machine), Sev OK, no WARNING' ($lv.Deferred -and $lv.Sev -eq 'OK' -and $lv.Line -match '^\[DEFERRED - ADMIN REQUIRED\] lsass modules are not readable from a standard-user token' -and $lv.Line -notmatch '\[WARNING\]') $lv.Line
+    $lv = Get-LsassDenialVerdict -IsElevated $true -Ppl 0
+    T 'lsass denied, ELEVATED, LSA Protection off: a raised gap (WARNING), never a deferral' ((-not $lv.Deferred) -and $lv.Sev -eq 'WARNING' -and $lv.Line -match '^\[WARNING\] lsass module enumeration denied while LSA Protection is OFF') $lv.Line
+    $lv = Get-LsassDenialVerdict -IsElevated $false -Ppl 1
+    T 'lsass denied with LSA Protection ON (RunAsPPL=1): [OK] on a standard-user token, the protection is working' ((-not $lv.Deferred) -and $lv.Sev -eq 'OK' -and $lv.Line -match '^\[OK\] lsass modules not enumerable -- consistent with LSA Protection') $lv.Line
+    $lv = Get-LsassDenialVerdict -IsElevated $true -Ppl 1
+    T 'lsass denied with LSA Protection ON: [OK] elevated too' ((-not $lv.Deferred) -and $lv.Sev -eq 'OK' -and $lv.Line -match '^\[OK\] lsass modules not enumerable') $lv.Line
+    $lv = Get-LsassDenialVerdict -IsElevated $true -Ppl 2
+    T 'RunAsPPL=2 (enabled without the UEFI lock, Windows 11 22H2+) counts as ON: [OK], not a WARNING' ((-not $lv.Deferred) -and $lv.Sev -eq 'OK' -and $lv.Line -match '^\[OK\]') $lv.Line
+    $lv = Get-LsassDenialVerdict -IsElevated $true -Ppl 'junk'
+    T 'an unreadable RunAsPPL value is not ON: elevated it is the raised gap' ($lv.Sev -eq 'WARNING') $lv.Line
+    # Refusal is decided on evidence, not on an exception (the standard-user
+    # runner returned EMPTY module lists, not errors, for other users' processes).
+    T 'an empty module list is a refusal (every live process has its own image module)' (Test-ModuleEnumerationRefused -Mods @() -Threw $false) ''
+    T 'a null module list is a refusal' (Test-ModuleEnumerationRefused -Mods $null -Threw $false) ''
+    T 'a getter that threw is a refusal' (Test-ModuleEnumerationRefused -Mods $null -Threw $true) ''
+    T 'a non-empty module list is not a refusal' (-not (Test-ModuleEnumerationRefused -Mods @([pscustomobject]@{ FileName = 'C:\x.dll' }) -Threw $false)) ''
+
     if ($fails) { Write-Output "[FAIL] $fails module_inspect self-test expectation(s) unmet"; exit 1 }
     Write-Output '[OK] module_inspect self-test: Click-to-Run/MSIX virtual paths resolve or are stated as uncertain; a genuinely unbacked module still raises T1055.'
     exit 0
@@ -534,12 +602,13 @@ foreach ($p in (Get-Process -EA SilentlyContinue)) {
     $procCount++
     $pname = $p.ProcessName
     $mods = $null
-    try { $mods = $p.Modules } catch {
+    $threw = $false
+    try { $mods = $p.Modules } catch { $threw = $true }
+    if (Test-ModuleEnumerationRefused -Mods $mods -Threw $threw) {
         $denied++
         if ($pname -ieq 'lsass') { $lsassDenied = $true }
         continue
     }
-    if (-not $mods) { continue }
     $first = $true
     $procVirt = $false
     foreach ($m in $mods) {
@@ -586,12 +655,9 @@ if ($modOwners.Count -eq 0) {
 $ppl = $null
 try { $ppl = (Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name 'RunAsPPL' -EA SilentlyContinue).RunAsPPL } catch {}
 if ($lsassDenied) {
-    if ($ppl -eq 1) {
-        '[OK] lsass modules not enumerable -- consistent with LSA Protection (RunAsPPL) being enabled. The protection is working.'
-    } else {
-        '[WARNING] lsass module enumeration denied while LSA Protection is OFF -- lsass injection NOT checked.'
-        $sev = Get-MaxSev $sev 'WARNING'
-    }
+    $lv = Get-LsassDenialVerdict -IsElevated ($Elevated -eq 1) -Ppl $ppl
+    $lv.Line
+    if ($lv.Deferred) { Write-Marker -Name 'module_deferred' -Sev '1' } else { $sev = Get-MaxSev $sev $lv.Sev }
 }
 
 $findings = @()
@@ -715,7 +781,7 @@ if ($capped) {
     "[INFO] Module inspection stopped at the $MaxModules-file cap; $($modOwners.Count - $checked) unique module(s) were NOT checked."
 }
 if ($denied -gt 0) {
-    "[INFO] $denied process(es) refused module enumeration (protected or cross-architecture) -- normal on Windows, but those processes were not inspected."
+    "[INFO] $denied process(es) refused module enumeration (protected, another user's or SYSTEM's on a standard-user token, or cross-architecture) -- normal on Windows, but those processes were not inspected."
 }
 
 Write-Marker -Name 'module' -Sev $sev

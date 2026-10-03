@@ -6,6 +6,44 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### The LSASS PPL tile states Section 12's verdict; the intermittent standard-user alarm explained
+The quoting added to `noadmin_smoke` in #225 named the alarm that had fired
+on some standard-user CI runs and not others: `Dashboard verdict is CRIT but
+ledger max severity is WARNING`, from the tile `[!! CRITICAL !!] LSASS PPL
+DISABLED (RunAsPPL=0)`. Section 12 grades an explicit `RunAsPPL=0` and an
+absent value both as WARNING; the tile re-read the registry and graded the
+explicit 0 as CRIT, so the alarm fired on runner images that carry an
+explicit 0 and stayed quiet where the value is absent. Section 12 now writes
+its reading (`1`, `2`, `absent`, the sanitised value, or `unreadable`) to a
+state file and the tile prints that, naming Section 12, with NOT graded when
+no verdict was recorded. The standard-user job asserts the tile never reads
+CRIT and names its source.
+
+### lsass denied on a standard-user token is a deferral, not a finding
+`module_inspect` printed `[WARNING] lsass module enumeration denied while LSA
+Protection is OFF -- lsass injection NOT checked` and raised a T1055 row
+whenever lsass refused enumeration and `RunAsPPL` was not set -- on a
+standard-user token too, which can never open lsass whatever the machine's
+state. The token, not the machine: the class CLAUDE.md names, found by
+reading which raised-gap lines the standard-user path could print after the
+`[SKIPPED]` retagging, not by a field run (the owner's laptop has
+`RunAsPPL=1` and takes the `[OK]` branch). The verdict is now a pure
+`Get-LsassDenialVerdict` graded by token: unelevated with protection off it
+prints `[DEFERRED - ADMIN REQUIRED]` and counts through
+`dz_module_deferred.txt` into `DEFERRED_COUNT` (both bats); elevated it stays
+the raised WARNING; `RunAsPPL=2` (enabled without the UEFI lock, Windows 11
+22H2+) now counts as ON instead of being graded as OFF. Self-test cases both
+ways; the standard-user CI job asserts the WARNING never prints there and one
+of the two declared branches does; corpus entry
+`[lsass-unreadable-from-standard-user]`. **And the denial itself was never
+detected on the standard-user runner**: the `.Modules` getter did not throw
+for other users' processes there, it returned an empty list, so the
+`catch`-only rule counted zero refusals and Section 4 read "179 unique
+module(s) across 148 process(es)" from the user's own processes alone, with
+no refused count printed. A refusal is now decided on evidence (a live
+process with no readable module), the refused count names the token as a
+cause, and the lsass branch runs where it never had.
+
 ### Defender exclusion tiles read Section 9's state line
 The three Section 9 exclusion blocks (paths, processes, extensions) lived
 inline in both bats, and the dashboard tile then called `Get-MpPreference`

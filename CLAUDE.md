@@ -538,7 +538,13 @@ the fourth: they called `Get-MpPreference` again, printed NO tile at all when
 that query returned nothing (an all-clear by omission), and never showed
 extension exclusions. `tools/defender_exclusions_check.ps1` now grades the
 three kinds once, writes `graded|paths|processes|extensions`, and the tiles
-read that; a missing verdict reads NOT graded.
+read that; a missing verdict reads NOT graded. The LSASS PPL tile was the
+fifth, and the first found by CI rather than a field report: it re-read
+`RunAsPPL` and graded an explicit 0 as CRIT where Section 12 raises WARNING,
+so the standard-user job's ledger-divergence alarm fired on runner images
+carrying an explicit 0 and not on images where the value is absent. An
+intermittent alarm is a tile re-measuring something that differs between
+machines; the fix is the same state-file idiom (`PPL_STATE`).
 
 Two mechanics that bite when a verdict crosses into cmd. A value that becomes
 part of an `echo` into `%PSRUN%` is **shell syntax**: `&`, `|`, `>`, `^`, `%`
@@ -632,7 +638,11 @@ declares a row whose section printed neither a finding nor a `[SKIPPED]`
 line. **And a per-subkey denial must not lose the check**: `persistence_eval`
 enumerated IFEO with `-EA Stop`, one restricted subkey terminated it, and
 both standard-user runs printed `[SKIPPED] IFEO enumeration failed` -- grade
-what is readable and NAME what is not. **And the proof script has a
+what is readable and NAME what is not. **The fourth such tool was found by
+reading, not by a field run**: `module_inspect` raised the lsass-denied gap
+on a standard-user token, which can never open lsass; it surfaced while
+checking which lines the `[SKIPPED]` retagging could print on that path. When
+a change touches a gap line, ask which TOKEN can print it. **And the proof script has a
 standard-user path too.** `tests\field_test.ps1` demanded the read-only skip
 line for the restore point on a token that can never create one (the bat
 defers that step, needs admin), so every standard-user field run ended in
