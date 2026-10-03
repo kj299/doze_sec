@@ -3122,8 +3122,11 @@ jobs:
           rem (e.g. a parse error mid-audit) that still left a partial report:
           rem the exit handler's "EXIT CODE:" line and the [18/18] banner only
           rem exist if the audit actually ran to the end.
-          findstr /c:"EXIT CODE:" "%REP%" >nul || ( echo AUDIT DID NOT REACH EXIT HANDLER -- early exit or crash & exit /b 1 )
-          findstr /c:"[18/18]" "%REP%" >nul || ( echo AUDIT DID NOT REACH SECTION 18 -- early exit & exit /b 1 )
+          rem Asserted by a script that prints the file's shape on failure (size,
+          rem lines, longest line, NUL count, encoding sniff, head and tail): a
+          rem bare findstr verdict named the symptom and nothing else when this
+          rem failed on a run whose console showed every section and the summary.
+          powershell -NoProfile -ExecutionPolicy Bypass -File tests\assert_report_complete.ps1 -Report "%REP%" || exit /b 1
           rem A REAL run (no -selftest) must never carry the test banner nor land
           rem in the selftest quarantine; the harness jobs assert the inverse.
           findstr /c:"TEST RUN -- every finding below was planted" "%REP%" >nul && ( echo REAL RUN CARRIES THE TEST BANNER & exit /b 1 )
