@@ -1385,8 +1385,8 @@ jobs:
           $st = (.\tools\pending_reboot_check.ps1 -SelfTest) -join "`n"
           if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'pending_reboot_check.ps1 -SelfTest failed' }
           $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($n -lt 26) { throw "pending_reboot_check self-test ran only $n case(s)" }
-          foreach ($must in 'written before the boot: STALE', 'a dangling last entry (odd length', 'a registry read failure is a declared gap', 'a single WARNING line even with three flags') {
+          if ($n -lt 32) { throw "pending_reboot_check self-test ran only $n case(s)" }
+          foreach ($must in 'written before the boot: STALE', 'a dangling last entry (odd length', 'a registry read failure is a declared gap', 'a single WARNING line even with three flags', '*1 marker on a delete: the path prints clean', 'a rename whose destination carries *1!') {
             if ($st -notmatch [regex]::Escape($must)) { throw ("pending_reboot_check self-test no longer covers: {0}" -f $must) }
           }
           Write-Host "pending_reboot_check -SelfTest OK ($n cases)"
@@ -1419,12 +1419,17 @@ jobs:
           try {
             $live = Invoke-Rb 'live'
             if ($live.State[0] -eq '0' -and $live.Text -notmatch '(?m)^\[OK\] No pending reboot detected\.') { throw 'nothing pending but no [OK] line' }
-            $planted = @('\??\C:\dz_ci_pending_rename.tmp', '')
+            # Two forms: the documented one, and the marker-prefixed form Windows'
+            # own updaters write (`*1\??\...`, seen verbatim on the owner's laptop,
+            # where it made every entry read "source missing").
+            $planted = @('\??\C:\dz_ci_pending_rename.tmp', '', '*1\??\C:\dz_ci_pending_rename2.tmp', '')
             $val = if ($prior) { @($prior) + $planted } else { $planted }
             Set-ItemProperty -LiteralPath $k -Name PendingFileRenameOperations -Type MultiString -Value $val
             $p = Invoke-Rb 'planted'
             if ($p.Text -notmatch '(?m)^\[WARNING\] Reboot pending: PendingFileRenameOperations is set \(\d+ queued file operation\(s\)\)') { throw 'the planted rename did not produce the finding line' }
             if ($p.Text -notmatch '(?m)^    delete: C:\\dz_ci_pending_rename\.tmp \(source missing\)$') { throw 'the planted operation is not listed beneath the finding by path' }
+            if ($p.Text -notmatch '(?m)^    delete: C:\\dz_ci_pending_rename2\.tmp \(source missing\)  \[marker \*1\]$') { throw 'the marker-prefixed entry was not listed with a clean path and its marker shown' }
+            if ([int]$p.State[2] -lt 2) { throw ("the state line should count at least the two planted operations, counts {0}" -f $p.State[2]) }
             if ($p.State[0] -ne '1' -or $p.State[1] -ne 'fresh') { throw ("the plant postdates the runner's boot: expected state 1|fresh, got {0}|{1}" -f $p.State[0], $p.State[1]) }
             if ($p.Text -notmatch 'written AFTER the last boot: a Restart will run it') { throw 'the age line did not read AFTER the last boot' }
             if ([int]$p.State[2] -lt 1) { throw 'the state line counts no queued operation' }
@@ -3065,7 +3070,7 @@ jobs:
           $cur = (Get-ItemProperty -LiteralPath $k -Name PendingFileRenameOperations -EA SilentlyContinue).PendingFileRenameOperations
           # APPEND, never skip: the post-run step asserts the planted path is LISTED
           # beneath the finding, which a runner's own entries could not satisfy.
-          $planted = @('\??\C:\dz_ci_pending_rename.tmp', '')
+          $planted = @('\??\C:\dz_ci_pending_rename.tmp', '', '*1\??\C:\dz_ci_pending_rename2.tmp', '')
           if ($cur) { Write-Host ("PendingFileRenameOperations already set ({0} entries) -- the runner has a pending reboot of its own; appending the plant" -f @($cur).Count); $planted = @($cur) + $planted }
           Set-ItemProperty -LiteralPath $k -Name PendingFileRenameOperations -Type MultiString -Value $planted
           Write-Host 'planted PendingFileRenameOperations: the audit must now report a pending reboot, list the planted path, and exit 4'
@@ -3184,6 +3189,7 @@ jobs:
           # WHAT IS PENDING IS NAMED. The old check only tested that the value existed;
           # the owner's flag survived a boot and the advice was to reboot again.
           if ($text -notmatch '(?m)^    delete: C:\\dz_ci_pending_rename\.tmp \(source missing\)') { throw 'Section 1 did not list the planted file operation beneath the finding' }
+          if ($text -notmatch '(?m)^    delete: C:\\dz_ci_pending_rename2\.tmp \(source missing\)  \[marker \*1\]') { throw 'Section 1 did not list the marker-prefixed plant with a clean path and its marker' }
           if ($text -notmatch '(?m)^\[INFO\] PendingFileRenameOperations: Session Manager key last written \S+, last boot \S+ -- written AFTER the last boot') { throw 'Section 1 did not say whether the flag was written before or after the last boot (the plant postdates the boot)' }
           if ($text -notmatch '(?m)^\[EXIT 4\] A reboot is pending\. Restart the system -- not Shut down -- then re-run the audit\.') { throw 'the fresh-flag [EXIT 4] advice is missing' }
           # THE ENTRY IS GONE AFTER A COMPLETED RUN, WHATEVER THE CODE. Deleted only on
@@ -3197,6 +3203,16 @@ jobs:
           if ([IO.File]::ReadAllBytes($rep.FullName) -contains [byte]0) { throw 'the final report contains NUL bytes -- report_format did not strip the wevtutil text' }
           $hyg = [regex]::Match($text, '(?m)^\s*REPORT HYGIENE: (\d+) NUL bytes removed')
           if ($hyg.Success) { Write-Host ("report hygiene: {0} NUL byte(s) removed by report_format" -f $hyg.Groups[1].Value); if ([int]$hyg.Groups[1].Value -lt 1) { throw 'the hygiene line reads 0 -- it must not print for 0' } } else { Write-Host 'report hygiene: no NUL bytes in this run (no line printed)' }
+          # EVERY FINDING HAS AN ANALYST NOTE. The 19:16 field report carried five
+          # "No specific analyst note mapped" entries in TOP FINDINGS; a finding the
+          # tool raises without a note on what it means is half a finding.
+          $unmapped = @(($text -split "`n") | Where-Object { $_ -match 'No specific analyst note mapped' }).Count
+          if ($unmapped -gt 0) {
+            $lines = @(($text -split "`n") | Where-Object { $_ -match '^\s*Finding: ' })
+            Write-Host ("findings on this runner:`n" + ($lines -join "`n"))
+            throw ("{0} TOP FINDINGS entr(y|ies) have no analyst note -- add a whyTable entry in tools\top_findings.ps1 for the Finding: line(s) above" -f $unmapped)
+          }
+          Write-Host 'TOP FINDINGS: every finding carries an analyst note'
           # THE PLANTED FOOTPRINTS ARE INFO, NEVER A FINDING (corpus adfs-present /
           # aadconnect-present).
           foreach ($needle in 'ADFS detected', 'Azure AD Connect detected') {

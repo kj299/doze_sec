@@ -19,6 +19,14 @@
 #   PendingFileRenameOperations2 is the same shape (used by some servicing
 #   paths). Windows Update's RebootRequired key and Component Based Servicing's
 #   RebootPending key are the other two flags the audit reads.
+#   ENTRY MARKERS. A path may be prefixed, before the NT `\??\` prefix, by
+#   `!` (documented: MOVEFILE_REPLACE_EXISTING, on a rename destination) and
+#   by `*N` (NOT documented on Microsoft Learn; written by Windows' own
+#   updaters -- OneDrive, Edge, GamingServices wrote `*1`/`*2` on the owner's
+#   Windows 11 26200). The first field run printed `*1\??\C:\...` verbatim
+#   and probed THAT string for existence, so every entry read "(source
+#   missing)" -- a false statement in the line meant to say what is queued.
+#   Both markers are stripped from the path and shown beside it.
 #
 # THE RULE. Every flag that is present is PRINTED with what it holds and WHEN
 # it was written (the key's RegQueryInfoKey last-write time), compared with the
@@ -134,9 +142,27 @@ function ConvertTo-PrintablePath {
     return $s
 }
 
+# PURE. One raw entry -> the path Windows will act on, plus the markers that
+# preceded it: `*N` (undocumented servicing marker), `!` (replace existing,
+# documented), then the NT `\??\` prefix. The markers are kept for display so
+# the report shows what the registry holds without probing a string that is
+# not a path.
+function Split-PendingEntry {
+    param([string]$Raw)
+    $r = @{ Path = ''; Markers = @() }
+    if ($null -eq $Raw) { return $r }
+    $p = $Raw.Trim()
+    if ($p -match '^\*(\d+)') { $r.Markers += ('*' + $Matches[1]); $p = $p.Substring($Matches[0].Length) }
+    if ($p.StartsWith('!')) { $r.Markers += '!replace'; $p = $p.Substring(1) }
+    $p = $p -replace '^\\\?\?\\', ''
+    $r.Path = $p
+    return $r
+}
+
 # PURE. The REG_MULTI_SZ entries, two at a time: src then dst; an empty dst is
 # a delete. A dangling last src (odd length -- .NET drops the final terminator
-# of `src\0\0`) is a delete too. -Exists is the source-file probe, injectable.
+# of `src\0\0`) is a delete too. -Exists is the source-file probe, injectable;
+# it receives the CLEAN source path (markers and NT prefix removed).
 function ConvertTo-PendingOperations {
     param([string[]]$Entries = @(), [scriptblock]$Exists = $null)
     if ($null -eq $Exists) { $Exists = { param([string]$p) Test-Path -LiteralPath $p -PathType Any } }
@@ -149,15 +175,20 @@ function ConvertTo-PendingOperations {
         $dst = ''
         if (($i + 1) -lt $e.Count) { $dst = $e[$i + 1] }
         $i += 2
-        $srcP = ConvertTo-PrintablePath $src
+        $se = Split-PendingEntry $src
+        $de = Split-PendingEntry $dst
+        $markers = @($se.Markers + $de.Markers | Select-Object -Unique)
+        $tag = ''
+        if ($markers.Count -eq 1) { $tag = '  [marker ' + $markers[0] + ']' }
+        elseif ($markers.Count -gt 1) { $tag = '  [markers ' + ($markers -join ', ') + ']' }
         $missing = ''
         $probe = $false
-        try { $probe = [bool](& $Exists ($src -replace '^\\\?\?\\', '')) } catch { $probe = $false }
+        try { $probe = [bool](& $Exists $se.Path) } catch { $probe = $false }
         if (-not $probe) { $missing = ' (source missing)' }
-        if ($dst.Trim()) {
-            [void]$ops.Add(('rename: {0} -> {1}{2}' -f $srcP, (ConvertTo-PrintablePath $dst), $missing))
+        if ($de.Path.Trim()) {
+            [void]$ops.Add(('rename: {0} -> {1}{2}{3}' -f (ConvertTo-PrintablePath $se.Path), (ConvertTo-PrintablePath $de.Path), $missing, $tag))
         } else {
-            [void]$ops.Add(('delete: {0}{1}' -f $srcP, $missing))
+            [void]$ops.Add(('delete: {0}{1}{2}' -f (ConvertTo-PrintablePath $se.Path), $missing, $tag))
         }
     }
     return @($ops.ToArray())
@@ -294,6 +325,23 @@ if ($SelfTest) {
     T 'a path can never start a report line with a tag, and control characters and | are stripped' ($ops[0] -match '^delete: \[CRITICAL\] evil  \.exe$') ($ops -join ' / ')
     $ops = @(ConvertTo-PendingOperations -Entries @() -Exists $all)
     T 'no entries, no operations' ($ops.Count -eq 0) ''
+    # Entry markers, verbatim from the 2026-10-03 19:16 report: `*N` before the
+    # NT prefix on sources, `*N!` on a rename destination. The probe must see
+    # the clean path, or every entry reads "(source missing)".
+    $script:dzProbed = @()
+    $rec = { param([string]$p) $script:dzProbed += $p; $true }
+    $ops = @(ConvertTo-PendingOperations -Entries @('*1\??\C:\Windows\System32\gamingservicesproxy_13.dll.0', '') -Exists $rec)
+    T '*1 marker on a delete: the path prints clean, the marker is shown, the probe receives the clean path (verbatim)' ($ops[0] -eq 'delete: C:\Windows\System32\gamingservicesproxy_13.dll.0  [marker *1]' -and $script:dzProbed[-1] -eq 'C:\Windows\System32\gamingservicesproxy_13.dll.0') (($ops -join ' / ') + ' probed=' + ($script:dzProbed -join ','))
+    $ops = @(ConvertTo-PendingOperations -Entries @('*1\??\C:\ProgramData\Microsoft\EdgeUpdate\Log\MicrosoftEdgeUpdate.log', '*1!\??\C:\ProgramData\Microsoft\EdgeUpdate\Log\MicrosoftEdgeUpdate.log.bak') -Exists $all)
+    T 'a rename whose destination carries *1! (replace existing): both paths clean, markers *1 and !replace shown (verbatim)' ($ops[0] -eq 'rename: C:\ProgramData\Microsoft\EdgeUpdate\Log\MicrosoftEdgeUpdate.log -> C:\ProgramData\Microsoft\EdgeUpdate\Log\MicrosoftEdgeUpdate.log.bak  [markers *1, !replace]') ($ops -join ' / ')
+    $ops = @(ConvertTo-PendingOperations -Entries @('*2\??\C:\Program Files\Microsoft OneDrive\StandaloneUpdater\OneDriveSetup.exe', '') -Exists $all)
+    T '*2 marker is shown as *2 (verbatim)' ($ops[0] -eq 'delete: C:\Program Files\Microsoft OneDrive\StandaloneUpdater\OneDriveSetup.exe  [marker *2]') ($ops -join ' / ')
+    $ops = @(ConvertTo-PendingOperations -Entries @('*1\??\C:\Program Files\Microsoft OneDrive\26.168.0830.0006', '') -Exists { param([string]$p) $p -eq 'C:\Program Files\Microsoft OneDrive\26.168.0830.0006' })
+    T 'a directory delete probes the clean directory path and is not "missing" when it exists (verbatim)' ($ops[0] -eq 'delete: C:\Program Files\Microsoft OneDrive\26.168.0830.0006  [marker *1]') ($ops -join ' / ')
+    $ops = @(ConvertTo-PendingOperations -Entries @('\??\C:\dz_ci_pending_rename.tmp', '') -Exists $all)
+    T 'an entry with no marker prints no marker tag' ($ops[0] -eq 'delete: C:\dz_ci_pending_rename.tmp') ($ops -join ' / ')
+    $sp = Split-PendingEntry '!\??\C:\x.txt'
+    T 'Split-PendingEntry: a bare ! marker (documented replace-existing) is recognised without *N' ($sp.Path -eq 'C:\x.txt' -and @($sp.Markers).Count -eq 1 -and $sp.Markers[0] -eq '!replace') ($sp.Path + ' ' + ($sp.Markers -join ','))
 
     # The report: PendingFileRenameOperations present.
     $r = Get-PendingRebootReport -Renames @('\??\C:\dz_ci_pending_rename.tmp', '') -KeyWhen $after -BootTime $boot -FastStartup 0 -Exists $none
