@@ -6,6 +6,29 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### LSA Protection: the boot event is the fact, the registry value is the intent
+Section 12 and `module_inspect` both decided whether LSASS runs protected
+from `HKLM\...\Lsa\RunAsPPL` alone. Microsoft Learn ("Configure added LSA
+protection"): a clean-installed, enterprise-joined, HVCI-capable Windows 11
+22H2+ client runs LSASS protected BY DEFAULT with no `RunAsPPL` value, so a
+registry-only rule reported exactly that machine as unprotected -- a
+T1003.001 row, a WARN tile, and elevated a T1055 row for the lsass denial
+the protection itself causes. The signal Microsoft names for verification
+is WinInit Event 12 in the System log ("LSASS.exe was started as a protected
+process with level: 4"), readable from a standard-user token.
+`tools/lsa_protection_check.ps1` now decides on that event first and the
+registry second, with the psv2 asymmetry: the event since this boot is
+proof; the event absent is evidence only when the System log still reaches
+back to the boot; the registry value is intent, which reads PENDING when it
+is set but LSASS did not start protected (reboot pending, or value 2 on a
+build before Windows 11 22H2); unknown is a raised gap, never an all-clear.
+Measured ONCE in Section 4 (`-Mode Measure`, before module_inspect), printed
+and raised in Section 12 (`-Mode Report`), read by module_inspect and by the
+tile from the same state file. Fifteen self-test cases; the helpers job runs
+it live and runs a declared experiment (can a synthetic WinInit Event 12 be
+written on the runner?); a printed-finding contract pins the Section 12
+WARNING to its row; corpus entry `[lsa-protection-on-without-registry-value]`.
+
 ### The LSASS PPL tile states Section 12's verdict; the intermittent standard-user alarm explained
 The quoting added to `noadmin_smoke` in #225 named the alarm that had fired
 on some standard-user CI runs and not others: `Dashboard verdict is CRIT but

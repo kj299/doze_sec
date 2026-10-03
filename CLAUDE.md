@@ -498,6 +498,16 @@ runner's PSv2 state is knowable — and asserts the verdict and the ledger marke
 agree, since a `[WARNING]` with no marker is a finding that never reaches the
 ledger.
 
+**A registry value is the intent; the boot event is the fact.** Section 12 and
+`module_inspect` graded LSA Protection from `RunAsPPL` alone, and Microsoft
+documents that a clean-installed Windows 11 22H2+ client runs LSASS protected
+by default with NO value there, so that machine read as unprotected and raised
+twice. `tools/lsa_protection_check.ps1` decides on WinInit Event 12 since this
+boot first (proof), the registry second (intent: PENDING when set but not in
+effect), and only calls it OFF on evidence; it measures once, in Section 4,
+for both consumers. When a check reads a setting, ask whether Windows records
+the setting taking EFFECT, and grade on that.
+
 ### A section and the dashboard must not contradict each other (REQUIRED)
 
 One field report said both things about the same six `brave.exe` processes:

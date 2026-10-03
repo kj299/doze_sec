@@ -446,6 +446,13 @@ proof     = ci:Create standard user, run the audit twice; ci:module_inspect.ps1 
 signature = \[DEFERRED - ADMIN REQUIRED\] lsass modules are not readable from a standard-user token
 note      = A standard user can never open lsass, whatever the LSA Protection policy says. Until 2026-10-03 module_inspect printed the lsass denial as [WARNING] ... lsass injection NOT checked and raised a T1055 row on that token whenever RunAsPPL was not set -- the token, not the machine. The owner's laptop has RunAsPPL=1, so its standard-user runs took the [OK] branch and never showed it. Unelevated the denial is now DEFERRED and counted; elevated it stays a raised WARNING (an administrator who cannot read lsass with protection off is a real gap). RunAsPPL=2 (enabled without the UEFI lock, Windows 11 22H2+) now counts as ON too.
 
+[lsa-protection-on-without-registry-value]
+class     = QUIET
+maxsev    = OK
+proof     = ci:lsa_protection_check.ps1 -SelfTest; field:a protected LSASS cannot be planted on a runner without a reboot, and the helpers job's experiment step reports whether a synthetic WinInit Event 12 can be written there
+signature = LSASS started as a protected process this boot \(WinInit Event 12
+note      = Microsoft Learn ("Configure added LSA protection"): a clean-installed, enterprise-joined, HVCI-capable Windows 11 22H2+ client runs LSASS protected BY DEFAULT with no RunAsPPL value. Until 2026-10-03 Section 12 and module_inspect read the registry alone, so that machine was reported as unprotected (a T1003.001 row, a WARN tile, and elevated a T1055 row for the lsass denial the protection itself causes). tools/lsa_protection_check.ps1 now decides on WinInit Event 12 since this boot first ("LSASS.exe was started as a protected process with level: 4") and the registry second; the event present is proof, the event absent is evidence only when the System log still reaches back to the boot.
+
 [ifeo-subkey-unreadable-from-standard-user]
 class     = QUIET
 maxsev    = INFO

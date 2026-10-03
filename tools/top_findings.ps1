@@ -46,7 +46,7 @@ if (-not $lines -or $lines.Count -eq 0) { return }
 # regex matched against the FULL finding line (case-insensitive).
 # Add to this table as new findings are introduced.
 $whyTable = [ordered]@{
-    'LSASS PPL DISABLED|LSASS PPL not configured' = 'LSASS Protected Process Light is disabled or unset. Without PPL, Mimikatz can dump cleartext credentials directly from LSASS memory.'
+    'LSASS PPL DISABLED|LSASS PPL not configured|LSASS PPL not enabled|LSASS protection set but not in effect' = 'LSASS Protected Process Light is disabled or unset. Without PPL, Mimikatz can dump cleartext credentials directly from LSASS memory.'
     'WDigest ENABLED'      = 'WDigest plaintext credential caching is on. Attackers extract cleartext passwords from LSASS using documented techniques.'
     'NTLMv1 allowed'       = 'NTLMv1 is crackable in minutes via Responder + hashcat. Set LmCompatibilityLevel=5 to require NTLMv2.'
     'Firewall DISABLED'    = 'Windows Firewall is off, removing host-level network filtering. Lateral movement and inbound C2 become easier.'

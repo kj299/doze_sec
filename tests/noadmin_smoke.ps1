@@ -322,9 +322,15 @@ try {
     Assert ($text1 -notmatch '\[!! CRITICAL !!\]\s+LSASS PPL') `
         'the LSASS PPL tile never out-grades Section 12 (no CRIT tile)' `
         'the dashboard graded LSASS PPL as CRIT while Section 12 raises WARNING for it'
-    Assert ($text1 -match 'LSASS PPL[^\r\n]*Section 12') `
+    Assert ($text1 -match 'LSASS (PPL|protection)[^\r\n]*Section 12') `
         'the LSASS PPL tile names Section 12 as its source' `
         'the LSASS PPL tile does not state the verdict Section 12 reached'
+    # Section 12 decides LSA Protection on the boot event first (WinInit Event
+    # 12) and the registry second, measured once in Section 4; its line must
+    # name the event either way (found, absent since boot, or not consultable).
+    Assert ($text1 -match 'WinInit Event 12') `
+        'Section 12 names WinInit Event 12 as the evidence it consulted for LSA Protection' `
+        'Section 12 graded LSA Protection without naming the boot event (registry-only reading is back)'
     Assert (-not @($ledger1 | Where-Object { $_ -match '^\w+\|16\|T1070\.001\|' }).Count) `
         'no T1070.001 row for a Security log the token cannot list' `
         ("a T1070.001 row was raised on a standard-user run with nothing printed: {0}" -f (($ledger1 | Where-Object { $_ -match '\|16\|T1070\.001\|' }) -join ' ; '))

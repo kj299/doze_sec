@@ -371,11 +371,21 @@ jobs:
           out=$(pwsh -NoProfile -File tools/module_inspect.ps1 -SelfTest); echo "$out"
           for n in 'lsass denied, standard-user token, LSA Protection off: DEFERRED' \
                    'lsass denied, ELEVATED, LSA Protection off: a raised gap (WARNING), never a deferral' \
-                   'RunAsPPL=2 (enabled without the UEFI lock, Windows 11 22H2+) counts as ON' \
-                   'an unreadable RunAsPPL value is not ON'; do
+                   'LSA Protection state UNKNOWN, elevated: WARNING naming the unknown state, never OK' \
+                   'no state file at all (empty state) on a standard-user token: DEFERRED, never OK'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
           n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 31 ] || { echo "only $n case(s)"; exit 1; }
+      - name: lsa_protection_check -- the boot event is the fact, the registry value the intent; unknown is a raised gap
+        run: |
+          out=$(pwsh -NoProfile -File tools/lsa_protection_check.ps1 -SelfTest); echo "$out"
+          for n in 'Event 12 this boot with NO RunAsPPL value: ON by event' \
+                   'RunAsPPL=2 with no Event 12 and a log that covers the boot: PENDING' \
+                   'no Event 12, log rolled past the boot, RunAsPPL=1: ON by registry' \
+                   'registry unreadable, no Event 12, log rolled: UNKNOWN is a raised gap'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 12 ] || { echo "only $n case(s)"; exit 1; }
       - name: vt_ip_check -- a single non-top-tier VirusTotal engine is INFO, not a finding
         run: |
           out=$(pwsh -NoProfile -File tools/vt_ip_check.ps1 -SelfTest); echo "$out"
