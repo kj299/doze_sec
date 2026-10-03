@@ -475,7 +475,7 @@ try {
     if (Test-Path $netshKey) { $nsProps = Get-ItemProperty -Path $netshKey -EA Stop }
 } catch { $nsOk = $false }
 if (-not $nsOk) {
-    '[SKIPPED] Netsh helper key could not be read -- check NOT performed.'
+    '[WARNING] Netsh helper key could not be read -- check NOT performed.'
     $netshSev = 'WARNING'
 } elseif (-not $nsProps) {
     '[OK] No netsh helper DLLs registered.'
@@ -545,7 +545,7 @@ try {
     }
 } catch { $ppOk = $false }
 if (-not $ppOk) {
-    '[SKIPPED] Print environments key could not be read -- print-processor check NOT performed.'
+    '[WARNING] Print environments key could not be read -- print-processor check NOT performed.'
     $ppSev = Get-MaxSev $ppSev 'WARNING'
 } elseif ($ppSev -eq 'OK') {
     "[OK] All $ppCount registered print processor(s) are validly Microsoft-signed."
@@ -588,7 +588,7 @@ try {
     }
 } catch { $pmOk = $false }
 if (-not $pmOk) {
-    '[SKIPPED] Print monitors key could not be read -- port-monitor check NOT performed.'
+    '[WARNING] Print monitors key could not be read -- port-monitor check NOT performed.'
     $pmSev = Get-MaxSev $pmSev 'WARNING'
 } elseif ($pmSev -eq 'OK') {
     "[OK] All $pmCount registered port monitor(s) are validly Microsoft-signed."
@@ -611,7 +611,7 @@ try {
     catch { $jobs = @(Get-BitsTransfer -EA Stop) }
 } catch { $bitsOk = $false }
 if (-not $bitsOk) {
-    '[SKIPPED] BITS module or service unavailable -- BITS job check NOT performed.'
+    '[WARNING] BITS module or service unavailable -- BITS job check NOT performed.'
     $bitsSev = Get-MaxSev $bitsSev 'WARNING'
 } elseif (-not $jobs -or $jobs.Count -eq 0) {
     '[OK] No BITS transfer jobs queued.'
@@ -773,7 +773,7 @@ try {
     }
 } catch { $tpOk = $false }
 if (-not $tpOk) {
-    '[SKIPPED] W32Time TimeProviders key could not be read -- check NOT performed.'
+    '[WARNING] W32Time TimeProviders key could not be read -- check NOT performed.'
     $tpSev = Get-MaxSev $tpSev 'WARNING'
 } elseif ($tpSev -eq 'OK') {
     "[OK] All $tpCount registered time provider(s) are validly Microsoft-signed."

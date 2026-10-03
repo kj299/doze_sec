@@ -349,7 +349,7 @@ try {
 } catch { $pOk = $false }
 
 if (-not $pOk -or $setNet.Count -eq 0 -or $setWmi.Count -eq 0 -or $setTl.Count -eq 0) {
-    '[SKIPPED] One or more process enumerations failed -- cross-check NOT performed.'
+    '[WARNING] One or more process enumerations failed -- cross-check NOT performed.'
     $sev = Get-MaxSev $sev 'WARNING'
 } else {
     # Union of PIDs seen anywhere; a PID missing from any one view is a candidate.
@@ -419,7 +419,7 @@ try {
 } catch { $sOk = $false }
 
 if (-not $sOk -or $svcReg.Count -eq 0) {
-    '[SKIPPED] Service enumeration or registry read failed -- cross-check NOT performed.'
+    '[WARNING] Service enumeration or registry read failed -- cross-check NOT performed.'
     $sev = Get-MaxSev $sev 'WARNING'
 } else {
     $hidden = @()
@@ -520,7 +520,7 @@ if (-not $tOk -or $treeTasks.Count -eq 0) {
         $tv.Line
         $deferred++
     } else {
-        '[SKIPPED] TaskCache registry or Task Scheduler unavailable (needs admin) -- task cross-check NOT performed.'
+        '[WARNING] TaskCache registry or Task Scheduler unavailable (needs admin) -- task cross-check NOT performed.'
         $sev = Get-MaxSev $sev $tv.Sev
     }
 } else {
@@ -574,7 +574,7 @@ if (-not $tOk -or $treeTasks.Count -eq 0) {
     $sdSuppressed = $false
     if ($inspected -ge 10 -and $noSd.Count -gt [int]($inspected * 0.25)) {
         $sdSuppressed = $true
-        "[SKIPPED] $($noSd.Count) of $inspected tasks matched the hidden-task rule -- implausibly many, treated as a platform/permissions artifact rather than a compromise. Hidden-task check NOT performed."
+        "[WARNING] $($noSd.Count) of $inspected tasks matched the hidden-task rule -- implausibly many, treated as a platform/permissions artifact rather than a compromise. Hidden-task check NOT performed."
         $sev = Get-MaxSev $sev 'WARNING'
         $noSd = @()
     }
@@ -592,7 +592,7 @@ if (-not $tOk -or $treeTasks.Count -eq 0) {
             $tv.Line
             $deferred++
         } else {
-            '[SKIPPED] Task Scheduler could not be enumerated, so the hidden-task (Tarrask) check could NOT run -- it requires both signals: a missing security descriptor AND absence from the scheduler. A stopped or tampered Schedule service is itself worth investigating.'
+            '[WARNING] Task Scheduler could not be enumerated, so the hidden-task (Tarrask) check could NOT run -- it requires both signals: a missing security descriptor AND absence from the scheduler. A stopped or tampered Schedule service is itself worth investigating.'
             $sev = Get-MaxSev $sev $tv.Sev
         }
     }

@@ -220,7 +220,7 @@ foreach ($sf in @('Startup', 'CommonStartup')) {
     if ($path) { $folders += $path }
 }
 if (-not $folders.Count) {
-    '[SKIPPED] Could not resolve the Startup folder paths -- check NOT performed.'
+    '[WARNING] Could not resolve the Startup folder paths -- check NOT performed.'
     $startupSev = 'WARNING'
 } else {
     foreach ($folder in $folders) {
@@ -232,7 +232,7 @@ if (-not $folders.Count) {
         $enumOk = $true
         try { $items = @(Get-ChildItem -LiteralPath $folder -File -Force -EA Stop) } catch { $enumOk = $false }
         if (-not $enumOk) {
-            "[SKIPPED] Could not enumerate $folder -- check NOT performed."
+            "[WARNING] Could not enumerate $folder -- check NOT performed."
             $startupSev = Get-MaxSev $startupSev 'WARNING'
             continue
         }
@@ -300,7 +300,7 @@ try {
     if (Test-Path $acKey) { $acProps = Get-ItemProperty -Path $acKey -EA Stop }
 } catch { $acOk = $false }
 if (-not $acOk) {
-    '[SKIPPED] AppCertDlls key could not be read -- check NOT performed.'
+    '[WARNING] AppCertDlls key could not be read -- check NOT performed.'
     $appcertSev = 'WARNING'
 } elseif (-not $acProps) {
     '[OK] AppCertDlls not present or empty (stock Windows).'

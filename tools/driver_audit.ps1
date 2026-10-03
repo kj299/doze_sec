@@ -369,7 +369,7 @@ try {
         }
     }
 } catch {
-    '[SKIPPED] Win32_SystemDriver enumeration failed -- loaded-driver set not audited.'
+    '[WARNING] Win32_SystemDriver enumeration failed -- loaded-driver set not audited.'
     $sev = Get-MaxSev $sev 'WARNING'
 }
 # The loaded set above is the authoritative one (a BYOVD has to be loaded to

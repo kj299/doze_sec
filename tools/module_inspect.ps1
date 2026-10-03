@@ -576,7 +576,7 @@ foreach ($p in (Get-Process -EA SilentlyContinue)) {
 }
 
 if ($modOwners.Count -eq 0) {
-    '[SKIPPED] No process modules could be enumerated -- injection check NOT performed.'
+    '[WARNING] No process modules could be enumerated -- injection check NOT performed.'
     Write-Marker -Name 'module' -Sev 'WARNING'
     return
 }
@@ -589,7 +589,7 @@ if ($lsassDenied) {
     if ($ppl -eq 1) {
         '[OK] lsass modules not enumerable -- consistent with LSA Protection (RunAsPPL) being enabled. The protection is working.'
     } else {
-        '[SKIPPED] lsass module enumeration denied while LSA Protection is OFF -- lsass injection NOT checked.'
+        '[WARNING] lsass module enumeration denied while LSA Protection is OFF -- lsass injection NOT checked.'
         $sev = Get-MaxSev $sev 'WARNING'
     }
 }

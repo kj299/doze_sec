@@ -274,7 +274,7 @@ jobs:
           out=$(pwsh -NoProfile -File tools/audit_policy_check.ps1 -SelfTest); echo "$out"
           for n in 'a localized header still yields the rows' \
                    '"Success and Failure" is ON' \
-                   'a localized setting (Erfolg) is SKIPPED, never reported as OFF' \
+                   'a localized setting (Erfolg) is a raised gap ([WARNING] not classified), never reported as OFF' \
                    'Failure alone is OFF' \
                    'cmdline value absent is DISABLED'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }

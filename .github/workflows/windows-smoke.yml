@@ -957,7 +957,7 @@ jobs:
             # a [datetime]::TryParse with an untyped [ref] threw, sent every file
             # read into the catch, and reported a perfectly readable log as
             # SKIPPED -- and the earlier version of THIS assertion accepted it.
-            if ($out -match '\[SKIPPED\]') { throw "cbs_integrity_check reported SKIPPED on an elevated runner, where the CBS logs are readable: $out" }
+            if ($out -match '\[SKIPPED\]' -or $out -match 'system-file integrity NOT checked') { throw "cbs_integrity_check reported a gap on an elevated runner, where the CBS logs are readable: $out" }
             # The all-clear must state the window it covers. CBS rotates and can
             # hold less than a week, so an unbounded "no corrupt system files"
             # claims far more than it knows.
@@ -1282,6 +1282,18 @@ jobs:
             if ($cov -notmatch 'Checks SKIPPED    : 1') { throw 'skipped count not surfaced' }
             if ($cov -notmatch 'Audit visibility  : REDUCED') { throw 'reduced audit visibility not surfaced' }
           } finally { Remove-Item $rp -Force -EA SilentlyContinue }
+          # A RAISED GAP ([WARNING] ... NOT performed) is a check that could not
+          # run AND a finding; the block must count it as a gap, not hide it
+          # inside the warning total (vocabulary decision 2026-10-03).
+          $rp3 = Join-Path $env:TEMP ("dz_rs_ci3_{0}.txt" -f $PID)
+          Set-Content -LiteralPath $rp3 -Encoding ASCII -Value @('[WARNING] Print monitors key could not be read -- port-monitor check NOT performed.', '[WARNING] a real finding', '[SKIPPED] z')
+          try {
+            $cov3 = (.\tools\report_safety.ps1 -Mode Coverage -Report $rp3) -join "`n"
+            Write-Host $cov3
+            if ($cov3 -notmatch 'Gaps RAISED       : 1') { throw 'a raised gap was not counted as a gap' }
+            if ($cov3 -notmatch '0 critical, 2 warning') { throw 'the raised gap must still count as a warning line' }
+            if ($cov3 -notmatch 'Checks SKIPPED    : 1') { throw 'the unraised skip was lost' }
+          } finally { Remove-Item $rp3 -Force -EA SilentlyContinue }
 
           # A MISSING HELPER IS A CHECK THAT DID NOT RUN. doze_sec.bat reports
           # those as "[INFO] tools\X.ps1 not found -- ... skipped", which the
@@ -1478,7 +1490,9 @@ jobs:
             $src = Get-Content .\tools\cross_api_check.ps1 -Raw
             if ($src -notmatch '\$sdSuppressed') { throw 'the proportion-guard suppression flag is gone -- the self-contradicting [OK] can return' }
             if ($src -notmatch '\$noSd\.Count -eq 0 -and \$liveOk -and -not \$sdSuppressed') { throw 'the hidden-task [OK] is no longer guarded on both degradation paths' }
-            if ($t3 -notmatch '\[SKIPPED\][^\r\n]*hidden-task') { throw 'degraded hidden-task path did not report itself as SKIPPED' }
+            # A raised gap prints [WARNING] (vocabulary decision 2026-10-03): the
+            # degraded path says the check could NOT run and raises it.
+            if ($t3 -notmatch '\[WARNING\][^\r\n]*hidden-task[^\r\n]*could NOT run') { throw 'degraded hidden-task path did not report itself as a raised gap ([WARNING] ... could NOT run)' }
             if (-not (Test-Path (Join-Path $md4 'dz_crossapi.txt'))) { throw 'degraded hidden-task path raised no finding at all' }
           } finally {
             Remove-Item $tc -Recurse -Force -EA SilentlyContinue

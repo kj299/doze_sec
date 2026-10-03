@@ -68,7 +68,7 @@ if ($SelfTest) {
     T 'a report with no audit-policy lines at all -> UNKNOWN, never OK' ((Get-AuditVisibility -Lines @('[OK] something else')) -eq 'UNKNOWN') ''
     T 'an empty report -> UNKNOWN' ((Get-AuditVisibility -Lines @()) -eq 'UNKNOWN') ''
     T 'a SKIPPED localized row beside ON rows is still OK (the ON rows are evidence)' ((Get-AuditVisibility -Lines @('[OK] Logon (4624/4625) auditing is ON', '[SKIPPED] User Account Management (4720/4732) auditing state could not be read')) -eq 'OK') ''
-    T 'auditpol itself SKIPPED (needs admin) with nothing else -> UNKNOWN, never OK' ((Get-AuditVisibility -Lines @('[SKIPPED] auditpol could not be queried -- audit-policy visibility NOT verified (needs admin).')) -eq 'UNKNOWN') ''
+    T 'auditpol itself a raised gap (needs admin) with nothing else -> UNKNOWN, never OK' ((Get-AuditVisibility -Lines @('[WARNING] auditpol could not be queried -- audit-policy visibility NOT verified (needs admin).')) -eq 'UNKNOWN') ''
     if ($fails) { Write-Output "[FAIL] $fails report_safety self-test expectation(s) unmet"; exit 1 }
     Write-Output '[OK] report_safety self-test: audit visibility is OK only on evidence of auditing ON, REDUCED on any OFF, and never OK by default.'
     exit 0
@@ -117,6 +117,14 @@ if ($Mode -eq 'Preamble') {
 # ---- Coverage mode -------------------------------------------------------
 $crit = 0; $warn = 0; $skip = 0
 $auditVis = 'UNKNOWN'
+# A RAISED GAP: a check that could NOT run and said so as a finding, because
+# the view it needed is one an administrator should have been able to open
+# (vocabulary decision 2026-10-03: a raised gap prints [WARNING], never
+# [SKIPPED] -- [SKIPPED] is reserved for gaps that raise nothing). Counting
+# only [SKIPPED] lines would then hide these from the coverage block, so they
+# are counted by the phrase every such line carries.
+$gapRx = 'NOT (performed|checked|verified|evaluated|audited|run|graded|calibrated|inspected)\b|verified nothing|could NOT run|not audited\b'
+$gapRaised = 0
 if ($Report -and (Test-Path -LiteralPath $Report)) {
     try {
         $lines = Get-Content -LiteralPath $Report -EA Stop
@@ -129,8 +137,8 @@ if ($Report -and (Test-Path -LiteralPath $Report)) {
             # top_findings.ps1 prepends, which quotes each finding, so every
             # finding was counted twice in the block that is supposed to tell
             # the reader how much to trust the run.
-            if ($t -match '^\[CRITICAL\]') { $crit++ }
-            elseif ($t -match '^\[WARNING\]') { $warn++ }
+            if ($t -match '^\[CRITICAL\]') { $crit++; if ($t -match $gapRx) { $gapRaised++ } }
+            elseif ($t -match '^\[WARNING\]') { $warn++; if ($t -match $gapRx) { $gapRaised++ } }
             elseif ($t -match '^\[SKIPPED\]') { $skip++ }
             # A helper that is missing is a check that DID NOT RUN. doze_sec.bat
             # reports those as "[INFO] tools\X.ps1 not found -- ... skipped",
@@ -156,6 +164,13 @@ if ($skip -gt 0) {
     '                      not cover what was skipped.'
 } else {
     '  Checks SKIPPED    : 0 -- every attempted check produced a result.'
+}
+if ($gapRaised -gt 0) {
+    "  Gaps RAISED       : $gapRaised -- check(s) that could NOT run and were raised as"
+    '                      findings, because the view they needed is one this'
+    '                      token should have been able to open. Not covered by'
+    '                      the clean result either; see the [WARNING] lines'
+    '                      that say NOT performed / NOT checked.'
 }
 switch ($auditVis) {
     'REDUCED' {

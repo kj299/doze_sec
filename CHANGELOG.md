@@ -6,6 +6,22 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### A raised gap prints [WARNING]; [SKIPPED] is never raised
+Vocabulary decision (owner, 2026-10-03). 27 sites in ten tools printed
+`[SKIPPED] ... NOT performed` and raised WARNING in the next line -- a blind
+spot raised on purpose, because a view an administrator cannot open is itself
+an anomaly. The section verdict then read "ISSUES FOUND -- review [WARNING]
+entries above" with no WARNING line to find, and the summary's warning-line
+count ran below the findings counted. Those lines now print `[WARNING]` with
+the same NOT-performed wording; `[SKIPPED]` is reserved for gaps that raise
+nothing and `[DEFERRED - ADMIN REQUIRED]` for a standard-user token's gaps.
+The coverage block counts raised gaps by their phrase as "Gaps RAISED" so
+they stay visible as coverage gaps; `lint_unraised_findings` fails on a
+raised `[SKIPPED]` (27 defects against the code that shipped, three of them missed by the hand survey that preceded the rule). The bats'
+"helper not found" gap for the Defender core check follows the same rule.
+Deferred to the backlog: the ledger row of a raised gap still names the
+finding the check would have made rather than the gap it hit.
+
 ### Defender dashboard: no tile re-measures
 The tamper-protection and signature-age tiles still called
 `Get-MpComputerStatus` themselves after the real-time tile moved onto Section
