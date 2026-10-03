@@ -6,6 +6,23 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### A shipped threat list's content change carries a new verified date
+`ThreatLists/ttp_manifest.txt` changed content in three commits while its
+`# Last verified by doze_sec:` header stayed at 2026-06-06; the 12:51 field
+run then replaced the runtime copy "same date, content differs", right only
+because the seed's tie rule favours the shipped file. The header now also
+carries `sha256:<16 hex>` of the normalised entries (the sync tool's own
+`Get-NormalizedHash` rule, written on every `-updateTTP` refresh), and
+`tools/lint_threat_list_dates.ps1` fails when the entries drift from it,
+when the header is missing, or when the date does not parse or lies in the
+future. `-Stamp` re-verifies deliberately; `-Stamp -KeepDate` adopted the
+digest on the nine IOC lists whose entries have not changed since
+2026-06-06, and `ttp_manifest.txt` moved to 2026-10-03. The self-test
+cross-checks the digest rule against the sync tool by AST so two copies
+cannot drift. Expect ten `runtime copy replaced by the release baseline`
+provenance lines on the first run after this release (the header line
+differs, dates tie, the release wins), once.
+
 ### LSA Protection: the boot event is the fact, the registry value is the intent
 Section 12 and `module_inspect` both decided whether LSASS runs protected
 from `HKLM\...\Lsa\RunAsPPL` alone. Microsoft Learn ("Configure added LSA

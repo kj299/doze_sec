@@ -436,6 +436,21 @@ jobs:
       - name: Run tools/lint_orphan_else.ps1
         run: pwsh -NoProfile -File tools/lint_orphan_else.ps1
 
+  threat-list-dates-lint:
+    name: "Threat lists: a content change carries a new verified date (digest in the header)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # ttp_manifest.txt changed content in three commits while its
+      # "# Last verified" header stayed at 2026-06-06; the seed step then
+      # replaced the runtime copy "same date, content differs", right only
+      # because ties go to the shipped file. The header now carries a digest
+      # of the entries; this fails when they drift from it.
+      - name: Run tools/lint_threat_list_dates.ps1
+        run: pwsh -NoProfile -File tools/lint_threat_list_dates.ps1
+      - name: The lint must fail on a changed entry, a lost header, a future date, and must match the sync tool's digest rule
+        run: pwsh -NoProfile -File tools/lint_threat_list_dates.ps1 -SelfTest
+
   arg0-after-shift-lint:
     name: "Batch lint: no %0-derived path after the parse loop's shift"
     runs-on: ubuntu-latest

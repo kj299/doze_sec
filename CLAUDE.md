@@ -666,7 +666,11 @@ again. **And a runtime copy of a shipped list is a fork.** The IOC lists are
 copied into a runtime directory so `-updateTTP` never touches the checkout;
 copy-if-missing meant a per-user copy from an older release was never
 reconciled, and a format change (the `|BadValue` column) turned UAC ON into an
-IOC. Reconcile on every run and print what was replaced.
+IOC. Reconcile on every run and print what was replaced. **And a shipped list's
+content change is a new verification**: `ttp_manifest.txt` changed entries in
+three commits while its date never moved, so the header now carries a digest
+of the entries and `tools/lint_threat_list_dates.ps1` fails when they drift
+(`-Stamp` re-verifies, deliberately).
 
 **Key existence is not evidence either.** Section 18's registry IOC check
 flagged `HKLM\...\PortProxy\v4tov4\tcp [EXISTS]` while Section 3 of the same

@@ -1,4 +1,4 @@
-# Last verified by doze_sec: 2026-06-06 10:20:38
+# Last verified by doze_sec: 2026-06-06 10:20:38 sha256:72AD9F4D57ACC0B3
 # SENTINEL-X CTI -- Suspicious Registry Keys/Values
 # Updated: 2026-03-29 | Source: MDDR 2024-2025, MITRE ATT&CK
 # Format: HIVE\KEY\PATH|ValueName|BadValue (pipe-delimited)

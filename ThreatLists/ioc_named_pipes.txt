@@ -1,4 +1,4 @@
-# Last verified by doze_sec: 2026-06-06 10:20:38
+# Last verified by doze_sec: 2026-06-06 10:20:38 sha256:EA2E5A8CC2F7C5AE
 # SENTINEL-X CTI -- Malicious Named Pipes
 # Updated: 2026-03-29 | Source: MDDR 2024-2025, The DFIR Report, Red Canary
 # Format: pipe name pattern per line (matched via findstr /i)

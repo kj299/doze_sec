@@ -145,8 +145,13 @@ $staleHits = @()
 function Update-VerifiedHeader {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) { return }
-    $headerLine = '# Last verified by doze_sec: ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
     $existing = @(Get-Content -LiteralPath $Path -EA SilentlyContinue)
+    # The header also carries the first 16 hex of Get-NormalizedHash over the
+    # entries, so tools\lint_threat_list_dates.ps1 can tell a content change
+    # from a re-verification without git history (a shipped list changed
+    # content three times while its date never moved).
+    $digest = Get-NormalizedHash -Content (($existing -join "`n"))
+    $headerLine = '# Last verified by doze_sec: ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + $(if ($digest) { ' sha256:' + $digest.Substring(0, 16) } else { '' })
     $rewritten = New-Object System.Collections.Generic.List[string]
     $rewritten.Add($headerLine)
     $replaced = $false
