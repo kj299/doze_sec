@@ -350,7 +350,11 @@ at once, none of which any findings-oriented gate could see:
 
 So: inside cmd double quotes, escape nothing — `(`, `)`, `|`, `<`, `>`, `&`
 are already literal there. Every `Command:` line must be something a reader can
-paste and run, and must describe what the check actually does.
+paste and run, and must describe what the check actually does. And the report
+must stay plain text: `wevtutil /f:text` leaves NUL-terminated fields in event
+text (a field report carried 100 and `grep` called it binary), so
+`report_format` strips them once for every event block and the summary
+declares the count; `field_test` and the full-run job assert no NUL survives.
 
 ```
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\lint_report_echo.ps1

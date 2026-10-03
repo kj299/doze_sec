@@ -6,6 +6,21 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### The report is plain text again
+The 2026-10-03 field report carried 100 NUL bytes, so `grep` called it a
+binary file: `wevtutil qe ... /f:text` prints some message fields with their
+NUL terminator attached (`Service Account:  LocalSystem\0` in every Event
+7045 record, `Level: Information\0` in the Defender 1116/1117 block) and both
+bats append that text as-is. `tools/report_format.ps1`, which already
+rewrites the report before `top_findings` and `report_html` run, now strips
+every NUL and writes the count to `-NulCountFile`; the summary declares it
+(`REPORT HYGIENE: N NUL bytes removed from event-log text`), so the
+sanitiser is auditable rather than silent. `tests/field_test.ps1` asserts
+the report a person's machine produced holds no NUL byte; the full-run job
+asserts the same on the runner's report and that a printed hygiene count is
+never 0; the helpers job feeds `report_format` a sample with three NULs and
+asserts they are gone, counted, and the surrounding text intact.
+
 ### Section 1 names what is pending
 Every run on the owner's laptop exits 4 with "Reboot the system then re-run
 the audit", and the 2026-10-03 report proved (WinInit Event 12) a boot on

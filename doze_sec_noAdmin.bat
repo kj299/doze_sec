@@ -4906,9 +4906,15 @@ if exist "%SCRIPT_DIR%tools\section_coverage.ps1" (
 )
 
 :: ---- Format the report: insert section terminators for unambiguous boundaries ----
+rem report_format also strips the NUL bytes wevtutil /f:text leaves in event
+rem text and writes how many to a count file; the summary declares the number.
+del "%TEMP%\dz_report_nul.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\report_format.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\report_format.ps1" -Report "%REPORT%" 2>nul
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\report_format.ps1" -Report "%REPORT%" -NulCountFile "%TEMP%\dz_report_nul.txt" 2>nul
 )
+set "REPORT_NULS=0"
+if exist "%TEMP%\dz_report_nul.txt" set /p REPORT_NULS=<"%TEMP%\dz_report_nul.txt"
+del "%TEMP%\dz_report_nul.txt" 2>nul
 
 :: ---- Prepend TOP FINDINGS summary so analysts see the headline issues first ----
 if exist "%SCRIPT_DIR%tools\top_findings.ps1" (
@@ -5052,6 +5058,7 @@ if exist "%SCRIPT_DIR%tools\report_safety.ps1" (
 echo ====================================================================>> "%REPORT%"
 (echo  EXIT CODE: %EXIT_CODE%)>> "%REPORT%"
 (echo  FINDINGS COUNTED: %FINDINGS%)>> "%REPORT%"
+if not "%REPORT_NULS%"=="0" echo  REPORT HYGIENE: %REPORT_NULS% NUL bytes removed from event-log text -- wevtutil /f:text emits NUL-terminated fields; the report is plain text again.>> "%REPORT%"
 if not defined LEDGER_MAXSEV set "LEDGER_MAXSEV=NONE"
 (echo  LEDGER MAXSEV: %LEDGER_MAXSEV%)>> "%REPORT%"
 echo  0=Success  1=Error  2=Warning  3=UnsupportedOS  4=RebootPending  5=RanFromTEMP  6=PartialNoAdmin  7=VTIntegrityFail  8=CriticalFindings>> "%REPORT%"

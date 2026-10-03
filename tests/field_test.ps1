@@ -121,6 +121,9 @@ else {
     Check ($text -match 'READ-ONLY RUN -- this audit makes no changes') 'report carries the READ-ONLY banner' 'the -readonly switch did not take effect'
     Check ($text -match '(?m)^\s*EXIT CODE:') 'report has an EXIT CODE line (the audit completed)' 'no EXIT CODE line -- the audit aborted'
     Check ($text -match '\[18/18\]') 'report reached section [18/18]' 'the audit did not reach the last section'
+    # wevtutil /f:text leaves NUL-terminated fields in event text; a field report
+    # carried 100 of them and grep called it binary. report_format strips them.
+    Check (-not ([IO.File]::ReadAllBytes($report.FullName) -contains [byte]0)) 'report holds no NUL byte (plain text for grep and diff)' 'the report contains NUL bytes -- report_format did not strip the wevtutil text'
     # The RunOnce proof must be looking at the value the audit really writes,
     # and that value must point at the bat. INIT 8 prints its own reg add,
     # with every %VAR% expanded; read the name and the path back out of it.
