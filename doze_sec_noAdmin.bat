@@ -144,6 +144,10 @@ set "DEFCORE_RT=0"
 set "DEFCORE_GRADED=0"
 set "DEFCORE_TAMPER=0"
 set "DEFCORE_SIGAGE=-1"
+set "DEFEXCL_GRADED=0"
+set "DEFEXCL_PATHS=0"
+set "DEFEXCL_PROCS=0"
+set "DEFEXCL_EXTS=0"
 set "PROCPATH_CLEAN="
 set "PROCPATH_BAD=0"
 set "PROCPATH_TOTAL=0"
@@ -2290,31 +2294,47 @@ if defined DEFCORE_LINE for /f "tokens=1,2,3,4,5 delims=|" %%a in ("%DEFCORE_LIN
 )
 del "%TEMP%\dz_defcore_state.txt" 2>nul
 
-del "%TEMP%\dz_defexcl_hit.txt" 2>nul
 echo.>> "%REPORT%"
-echo --- CRITICAL: Exclusion Paths --->> "%REPORT%"
-echo  Command: powershell -Command "(Get-MpPreference).ExclusionPath">> "%REPORT%"
-echo $ok=$true; try{$e=(Get-MpPreference -EA Stop).ExclusionPath}catch{$ok=$false}; if(-not $ok){'[SKIPPED] Get-MpPreference failed -- path-exclusion check NOT performed (Defender disabled or third-party AV?).'}elseif($e){'[WARNING] Exclusion paths found:'; $e; Set-Content -LiteralPath "$env:TEMP\dz_defexcl_hit.txt" -Value hit}else{'[OK] No path exclusions.'} > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
-
-echo.>> "%REPORT%"
-echo --- CRITICAL: Exclusion Processes --->> "%REPORT%"
-echo  Command: powershell -Command "(Get-MpPreference).ExclusionProcess">> "%REPORT%"
-echo $ok=$true; try{$e=(Get-MpPreference -EA Stop).ExclusionProcess}catch{$ok=$false}; if(-not $ok){'[SKIPPED] Get-MpPreference failed -- process-exclusion check NOT performed (Defender disabled or third-party AV?).'}elseif($e){'[WARNING] Exclusion processes found:'; $e; Set-Content -LiteralPath "$env:TEMP\dz_defexcl_hit.txt" -Value hit}else{'[OK] No process exclusions.'} > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
-
-echo.>> "%REPORT%"
-echo --- CRITICAL: Exclusion Extensions --->> "%REPORT%"
-echo  Command: powershell -Command "(Get-MpPreference).ExclusionExtension">> "%REPORT%"
-echo $ok=$true; try{$e=(Get-MpPreference -EA Stop).ExclusionExtension}catch{$ok=$false}; if(-not $ok){'[SKIPPED] Get-MpPreference failed -- extension-exclusion check NOT performed (Defender disabled or third-party AV?).'}elseif($e){'[WARNING] Exclusion extensions found:'; $e; Set-Content -LiteralPath "$env:TEMP\dz_defexcl_hit.txt" -Value hit}else{'[OK] No extension exclusions.'} > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
-
+echo --- CRITICAL: Defender Exclusions (paths, processes, extensions) --->> "%REPORT%"
+echo THREAT: An exclusion is the quietest way to blind an antivirus (T1562.001): nothing>> "%REPORT%"
+echo is switched off and every status flag still reads on, but whatever lives under an>> "%REPORT%"
+echo excluded path, runs as an excluded process or carries an excluded extension is>> "%REPORT%"
+echo never scanned. Every exclusion below is listed for you to confirm it is yours.>> "%REPORT%"
+echo  Command: powershell -File tools\defender_exclusions_check.ps1   [evaluates (Get-MpPreference).ExclusionPath, ExclusionProcess and ExclusionExtension]>> "%REPORT%"
+del "%TEMP%\dz_defexcl.txt" 2>nul
+del "%TEMP%\dz_defexcl_state.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\defender_exclusions_check.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\defender_exclusions_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo  [WARNING] tools\defender_exclusions_check.ps1 not found -- Defender exclusions NOT evaluated.>> "%REPORT%"
+    call :dz_finding WARNING 9 T1562.001 "Defender exclusions not evaluated - tools\defender_exclusions_check.ps1 missing"
+)
 rem Defender exclusions are an attacker's way to blind AV (T1562.001); a
 rem [WARNING] here must count toward Section 9's verdict and the exit code.
-if exist "%TEMP%\dz_defexcl_hit.txt" (
-    call :dz_finding WARNING 9 T1562.001 "Defender exclusions configured"
-    del "%TEMP%\dz_defexcl_hit.txt" 2>nul
+if exist "%TEMP%\dz_defexcl.txt" (
+    set "_DXSEV="
+    set /p _DXSEV=<"%TEMP%\dz_defexcl.txt"
+    call :dz_finding !_DXSEV! 9 T1562.001 "Defender exclusions configured"
+    del "%TEMP%\dz_defexcl.txt" 2>nul
 )
+:: Carry the counts to the dashboard (the DEFCORE_* idiom): the exclusion tiles
+:: state what this section found instead of calling Get-MpPreference a second
+:: time. The old tile re-measured, printed NOTHING when the query failed (an
+:: all-clear by omission) and never showed extension exclusions.
+:: State line: graded|paths|processes|extensions, four integers, always present.
+set "DEFEXCL_GRADED=0"
+set "DEFEXCL_PATHS=0"
+set "DEFEXCL_PROCS=0"
+set "DEFEXCL_EXTS=0"
+set "DEFEXCL_LINE="
+if exist "%TEMP%\dz_defexcl_state.txt" set /p DEFEXCL_LINE=<"%TEMP%\dz_defexcl_state.txt"
+if defined DEFEXCL_LINE for /f "tokens=1,2,3,4 delims=|" %%a in ("%DEFEXCL_LINE%") do (
+    set "DEFEXCL_GRADED=%%a"
+    set "DEFEXCL_PATHS=%%b"
+    set "DEFEXCL_PROCS=%%c"
+    set "DEFEXCL_EXTS=%%d"
+)
+del "%TEMP%\dz_defexcl_state.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- Attack Surface Reduction Rules Audit (T1566.001 / T1003.001 / T1068) --->> "%REPORT%"
@@ -4443,10 +4463,11 @@ echo. >> "%PSRUN%"
 echo sec 'WINDOWS DEFENDER  (Section 9)' >> "%PSRUN%"
 echo $dcMode='%DEFCORE_MODE%';$dcRt='%DEFCORE_RT%';$dcGraded='%DEFCORE_GRADED%';$dcTamper='%DEFCORE_TAMPER%';$dcSigAge=[int]'%DEFCORE_SIGAGE%';$dcPassive=($dcMode -ne '' -and $dcMode -ne 'unknown' -and $dcMode -notmatch 'Normal') >> "%PSRUN%"
 echo $dcTamperOff=$(if($dcGraded -eq '1' -and $dcTamper -ne '1'){'yes'}else{'no'});$dcSigOld=$(if($dcGraded -eq '1' -and $dcSigAge -gt 7){'yes'}else{'no'}) >> "%PSRUN%"
+echo $dxGraded='%DEFEXCL_GRADED%';$dxPaths=[int]'%DEFEXCL_PATHS%';$dxProcs=[int]'%DEFEXCL_PROCS%';$dxExts=[int]'%DEFEXCL_EXTS%' >> "%PSRUN%"
 echo if($isAdmin -eq '1'){ >> "%PSRUN%"
 echo if($dcGraded -ne '1'){ck 'INFO' 'Real-time protection: NOT graded -- Section 9 could not query Defender' 'Get-MpComputerStatus failed in Section 9: a third-party AV may own protection, or Defender is disabled. Confirm which manually.'}elseif($dcPassive){ck 'INFO' ('Defender in '+$dcMode+' -- another antivirus product is in control (Section 9)') 'Defender real-time flags read off by design while another product is primary. Verify that product is running and current.'}elseif($dcRt -eq '1'){ck 'PASS' 'Real-time protection enabled'}else{ck 'CRIT' 'Real-time protection DISABLED' 'Run: Set-MpPreference -DisableRealtimeMonitoring $false'} >> "%PSRUN%"
 echo if($dcGraded -ne '1'){ck 'INFO' 'Tamper protection and signature age: NOT graded -- Section 9 could not query Defender'}else{if($dcTamper -eq '1'){ck 'PASS' 'Tamper protection enabled'}else{ck 'WARN' 'Tamper protection disabled' 'Enable via Windows Security ^> Virus and threat protection settings'};if($dcSigAge -lt 0){ck 'INFO' 'Signature age: not reported by Defender (Section 9)'}elseif($dcSigAge -gt 7){ck 'WARN' "Signatures are $dcSigAge days old -- updates are not arriving (Section 9)" 'Run: Update-MpSignature'}else{ck 'PASS' "Signatures current ($dcSigAge days old)"}} >> "%PSRUN%"
-echo $mpp=Get-MpPreference -EA SilentlyContinue;if($mpp){$ep=@($mpp.ExclusionPath^|Where-Object{$_});$epr=@($mpp.ExclusionProcess^|Where-Object{$_});if($ep.Count -gt 0){ck 'WARN' "Defender path exclusions configured: $($ep.Count) paths" 'Exclusions hide malware from Defender. Verify each is legitimate. See Section 9.'}else{ck 'PASS' 'No Defender path exclusions configured'};if($epr.Count -gt 0){ck 'WARN' "Defender process exclusions configured: $($epr.Count)" 'Verify each is legitimate. See Section 9.'}else{ck 'PASS' 'No Defender process exclusions configured'}} >> "%PSRUN%"
+echo if($dxGraded -ne '1'){ck 'INFO' 'Defender exclusions: NOT graded -- Section 9 could not query Get-MpPreference' 'A third-party AV may own protection, or Defender is disabled. Confirm which manually.'}else{if($dxPaths -gt 0){ck 'WARN' "Defender path exclusions configured: $dxPaths (Section 9)" 'Exclusions hide whatever they cover from Defender. Verify each is legitimate; the list is in Section 9.'}else{ck 'PASS' 'No Defender path exclusions configured (Section 9)'};if($dxProcs -gt 0){ck 'WARN' "Defender process exclusions configured: $dxProcs (Section 9)" 'Verify each is legitimate; the list is in Section 9.'}else{ck 'PASS' 'No Defender process exclusions configured (Section 9)'};if($dxExts -gt 0){ck 'WARN' "Defender extension exclusions configured: $dxExts (Section 9)" 'An excluded extension is unscanned wherever it appears. Verify each; the list is in Section 9.'}else{ck 'PASS' 'No Defender extension exclusions configured (Section 9)'}} >> "%PSRUN%"
 echo }else{ >> "%PSRUN%"
 echo ck 'INFO' 'Defender status check deferred (requires admin)' >> "%PSRUN%"
 echo } >> "%PSRUN%"

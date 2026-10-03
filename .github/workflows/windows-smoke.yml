@@ -1252,6 +1252,88 @@ jobs:
           }
           exit 0
 
+      # Section 9's exclusion check, extracted from three inline blocks. The
+      # dashboard tile used to call Get-MpPreference AGAIN (a second measurement),
+      # printed NOTHING when that query failed, and never showed extension
+      # exclusions; it now reads this tool's state line. Both directions on the
+      # real cmdlets: the runner's own state first, then a planted path exclusion.
+      - name: defender_exclusions_check.ps1 -SelfTest + live (none is OK; a planted exclusion is WARNING and named; the state line carries the counts)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $st = (.\tools\defender_exclusions_check.ps1 -SelfTest) -join "`n"
+          if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'defender_exclusions_check.ps1 -SelfTest failed' }
+          $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($n -lt 10) { throw "defender_exclusions_check self-test ran only $n case(s)" }
+          foreach ($must in 'one path: WARNING naming T1562.001', 'Get-MpPreference failed: one [SKIPPED], not graded', 'an item that starts with a severity tag never starts a report line with one') {
+            if ($st -notmatch [regex]::Escape($must)) { throw ("defender_exclusions_check self-test no longer covers: {0}" -f $must) }
+          }
+          Write-Host "defender_exclusions_check -SelfTest OK ($n cases)"
+          # LIVE, both directions. Touches: defender:ExclusionPath C:\dz_ci_excl_dir
+          # (removed in finally). The harness job plants the same kind of exclusion
+          # on this image and has never skipped it, so a failed Add-MpPreference is a
+          # FAILURE here, not a skip: a plant that might not plant is a step that
+          # might pass vacuously.
+          $md = Join-Path $env:TEMP ("dz_dx_ci_{0}" -f $PID)
+          New-Item -ItemType Directory -Path $md -Force | Out-Null
+          $plantDir = 'C:\dz_ci_excl_dir'
+          $planted = $false
+          $leftover = $false
+          $okWord = @{ paths = 'path'; processes = 'process'; extensions = 'extension' }
+          function Invoke-Live {
+            param([string]$Label)
+            Remove-Item (Join-Path $md 'dz_defexcl.txt') -Force -EA SilentlyContinue
+            $out = (.\tools\defender_exclusions_check.ps1 -MarkerDir $md) -join "`n"
+            Write-Host ("--- {0} ---" -f $Label); Write-Host $out
+            if (-not $out) { throw ("{0}: defender_exclusions_check produced no output -- nothing was graded" -f $Label) }
+            if ($out -match 'null-valued expression|InvalidOperation|CommandNotFoundException|ParameterBindingException') { throw ("{0}: the tool wrote PowerShell errors into its own output" -f $Label) }
+            # The marker must agree with the highest tag printed.
+            $top = 'OK'
+            if ($out -match '(?m)^\[WARNING\]') { $top = 'WARNING' }
+            if ($out -match '(?m)^\[CRITICAL\]') { $top = 'CRITICAL' }
+            $mk = Join-Path $md 'dz_defexcl.txt'
+            $mv = if (Test-Path $mk) { (Get-Content $mk).Trim() } else { 'OK' }
+            if ($mv -ne $top) { throw ("{0}: marker says '{1}' but the highest printed tag is '{2}'" -f $Label, $mv, $top) }
+            $sf = Join-Path $md 'dz_defexcl_state.txt'
+            if (-not (Test-Path $sf)) { throw ("{0}: no state file for the dashboard tiles" -f $Label) }
+            $state = (Get-Content $sf).Trim()
+            Write-Host ("state line: {0}" -f $state)
+            if ($state -notmatch '^[01]\|\d+\|\d+\|\d+$') { throw ("{0}: state line is not graded|paths|processes|extensions: '{1}'" -f $Label, $state) }
+            $f = $state.Split('|')
+            if ($f[0] -ne '1') { throw ("{0}: Get-MpPreference could not be queried on the runner -- the live half graded nothing" -f $Label) }
+            # The counts must agree with the printed lines, kind by kind.
+            $i = 1
+            foreach ($kind in 'paths', 'processes', 'extensions') {
+              $c = [int]$f[$i]; $i++
+              $printed = [regex]::Match($out, ('(?m)^\[WARNING\] Exclusion ' + $kind + ' found \((\d+)\)'))
+              if ($c -gt 0 -and (-not $printed.Success -or [int]$printed.Groups[1].Value -ne $c)) { throw ("{0}: state says {1} {2} but the printed WARNING line disagrees" -f $Label, $c, $kind) }
+              if ($c -eq 0 -and $printed.Success) { throw ("{0}: state says no {1} but a WARNING for them was printed" -f $Label, $kind) }
+              if ($c -eq 0 -and $out -notmatch ('(?m)^\[OK\] No ' + $okWord[$kind] + ' exclusions\.')) { throw ("{0}: no {1} and no [OK] line for them" -f $Label, $kind) }
+            }
+            return @{ Out = $out; Paths = [int]$f[1] }
+          }
+          try {
+            $before = Invoke-Live 'before the plant'
+            Add-MpPreference -ExclusionPath $plantDir -ErrorAction Stop
+            $planted = $true
+            $now = @((Get-MpPreference -ErrorAction Stop).ExclusionPath)
+            if ($now -notcontains $plantDir) { throw 'Add-MpPreference returned but the exclusion is not listed -- the plant did not take' }
+            $after = Invoke-Live 'after the plant'
+            if ($after.Out -notmatch '(?m)^\[WARNING\] Exclusion paths found') { throw 'the planted path exclusion was not raised as a WARNING' }
+            if ($after.Out -notmatch ('(?m)^    path: ' + [regex]::Escape($plantDir) + '$')) { throw 'the planted path is not named on its own "path:" line' }
+            if ($after.Paths -ne ($before.Paths + 1)) { throw ("state path count went {0} -> {1}, expected +1" -f $before.Paths, $after.Paths) }
+            $mv = (Get-Content (Join-Path $md 'dz_defexcl.txt')).Trim()
+            if ($mv -ne 'WARNING') { throw ("marker after the plant reads '{0}', not WARNING" -f $mv) }
+            Write-Host ("defender_exclusions_check.ps1 OK (before: {0} path exclusion(s); after the plant: {1}, raised WARNING, named)" -f $before.Paths, $after.Paths)
+          } finally {
+            if ($planted) { Remove-MpPreference -ExclusionPath $plantDir -ErrorAction SilentlyContinue }
+            $left = @((Get-MpPreference -ErrorAction SilentlyContinue).ExclusionPath)
+            if ($left -contains $plantDir) { $leftover = $true }
+            Remove-Item $md -Recurse -Force -EA SilentlyContinue
+          }
+          if ($leftover) { throw 'the planted exclusion C:\dz_ci_excl_dir could not be removed -- clean it up before this runner is reused' }
+          exit 0
+
       - name: report_safety.ps1 -SelfTest + live (Tier 0 preamble + coverage framing)
         shell: powershell
         run: |
@@ -2882,6 +2964,23 @@ jobs:
             if (-not @($hits | Where-Object { $_ -match '^\s*\[INFO\]' }).Count) { throw ("'{0}' was not printed as [INFO] -- the planted footprint was missed or graded differently" -f $needle) }
             foreach ($hl in $hits) { if ($hl -match '^\s*\[(WARNING|CRITICAL)\]') { throw ("installed software raised as a finding: " + $hl) } }
             Write-Host ("planted footprint reported: " + (@($hits | Where-Object { $_ -match '^\s*\[INFO\]' })[0]).Trim())
+          }
+          # SECTION 9 AND THE DASHBOARD MUST AGREE ON DEFENDER EXCLUSIONS. The tiles
+          # used to call Get-MpPreference again, printed nothing when that failed,
+          # and never showed extension exclusions; they now read Section 9's
+          # state line, so an [OK] line must have its PASS tile and a WARNING its
+          # WARN tile with the same count.
+          if ($text -match 'Defender exclusions: NOT graded') { throw 'the dashboard says Defender exclusions were NOT graded while this runner can query Get-MpPreference' }
+          $plural = @{ path = 'paths'; process = 'processes'; extension = 'extensions' }
+          foreach ($kind in 'path', 'process', 'extension') {
+            $okLine = [regex]::IsMatch($text, ('(?m)^\s*\[OK\] No ' + $kind + ' exclusions\.'))
+            $wl = [regex]::Match($text, ('(?m)^\s*\[WARNING\] Exclusion ' + $plural[$kind] + ' found \((\d+)\)'))
+            $passTile = [regex]::IsMatch($text, ('No Defender ' + $kind + ' exclusions configured \(Section 9\)'))
+            $warnTile = [regex]::Match($text, ('Defender ' + $kind + ' exclusions configured: (\d+) \(Section 9\)'))
+            if (-not $okLine -and -not $wl.Success) { throw ("Section 9 printed neither an [OK] nor a [WARNING] line for {0} exclusions" -f $kind) }
+            if ($okLine -and -not $passTile) { throw ("Section 9 says no {0} exclusions but the dashboard has no PASS tile for them" -f $kind) }
+            if ($wl.Success -and (-not $warnTile.Success -or $warnTile.Groups[1].Value -ne $wl.Groups[1].Value)) { throw ("Section 9 lists {0} {1} exclusion(s) but the dashboard tile disagrees" -f $wl.Groups[1].Value, $kind) }
+            Write-Host ("Defender {0} exclusions: Section 9 and the dashboard agree" -f $kind)
           }
           # And the corpus grader agrees, on the real report of a real run: every
           # catalogued benign twin this runner shows is at or below its allowed

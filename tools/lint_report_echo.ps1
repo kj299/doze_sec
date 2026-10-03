@@ -217,12 +217,16 @@ if ($SelfTest) {
         @{ Name = 'odd quotes swallow the redirect'
            From = 'echo --- Defender Core Status: EVALUATED --->> "%REPORT%"'
            To   = 'echo --- Defender "Core Status: EVALUATED --->> "%REPORT%"' },
+        # Anchored on the ASR Command: line since 2026-10-03; the exclusion
+        # Command: lines that carried these two mutations moved into
+        # tools\defender_exclusions_check.ps1, and a mutation whose anchor is
+        # gone is a vacuous self-test (the check below is what caught that).
         @{ Name = 'caret inside double quotes'
-           From = '"(Get-MpPreference).ExclusionPath"'
-           To   = '"(Get-MpPreference^).ExclusionPath"' },
+           From = '"(Get-MpPreference).AttackSurfaceReductionRules_Ids"'
+           To   = '"(Get-MpPreference^).AttackSurfaceReductionRules_Ids"' },
         @{ Name = 'Command: line truncated (unbalanced paren)'
-           From = '"(Get-MpPreference).ExclusionProcess"'
-           To   = '"Get-MpPreference).ExclusionProcess"' },
+           From = '"(Get-MpPreference).AttackSurfaceReductionRules_Ids"'
+           To   = '"Get-MpPreference).AttackSurfaceReductionRules_Ids"' },
         @{ Name = 'printed PowerShell command does not parse'
            From = "(Get-ItemProperty 'HKCU:\Control Panel\Accessibility\StickyKeys' -Name Flags).Flags"
            To   = "(Get-ItemProperty 'HKCU:\Control Panel\Accessibility\StickyKeys -Name Flags).Flags" },

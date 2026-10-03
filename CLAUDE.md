@@ -533,7 +533,12 @@ verdict reads "NOT graded", never `PASS`. The Defender real-time tile was the
 third instance: it re-measured with no passive-mode handling, read CRIT while
 Section 9 printed INFO, and the remediation keyed off its text -- it now
 reads Section 9's state file (`mode|realtime|graded|tamper|sigage`, every
-Defender tile) and the fixes trigger off that state.
+Defender tile) and the fixes trigger off that state. The exclusion tiles were
+the fourth: they called `Get-MpPreference` again, printed NO tile at all when
+that query returned nothing (an all-clear by omission), and never showed
+extension exclusions. `tools/defender_exclusions_check.ps1` now grades the
+three kinds once, writes `graded|paths|processes|extensions`, and the tiles
+read that; a missing verdict reads NOT graded.
 
 Two mechanics that bite when a verdict crosses into cmd. A value that becomes
 part of an `echo` into `%PSRUN%` is **shell syntax**: `&`, `|`, `>`, `^`, `%`

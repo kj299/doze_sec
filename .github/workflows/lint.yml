@@ -356,6 +356,16 @@ jobs:
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
           n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 16 ] || { echo "only $n case(s)"; exit 1; }
+      - name: defender_exclusions_check -- every exclusion is WARNING and named; none is OK; unqueryable is SKIPPED, never OK
+        run: |
+          out=$(pwsh -NoProfile -File tools/defender_exclusions_check.ps1 -SelfTest); echo "$out"
+          for n in 'one path: WARNING naming T1562.001' \
+                   'Get-MpPreference failed: one [SKIPPED], not graded, no severity invented' \
+                   'an item that starts with a severity tag never starts a report line with one' \
+                   'a single string (not an array) is one exclusion'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 10 ] || { echo "only $n case(s)"; exit 1; }
       - name: vt_ip_check -- a single non-top-tier VirusTotal engine is INFO, not a finding
         run: |
           out=$(pwsh -NoProfile -File tools/vt_ip_check.ps1 -SelfTest); echo "$out"

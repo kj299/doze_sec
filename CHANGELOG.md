@@ -6,6 +6,24 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Defender exclusion tiles read Section 9's state line
+The three Section 9 exclusion blocks (paths, processes, extensions) lived
+inline in both bats, and the dashboard tile then called `Get-MpPreference`
+AGAIN -- a second measurement of the kind the Defender real-time, tamper and
+signature tiles had just been cured of. The tile also printed nothing at all
+when `Get-MpPreference` returned nothing (an all-clear by omission), and
+extension exclusions never reached the dashboard. The blocks are now
+`tools/defender_exclusions_check.ps1` (pure judgement + self-test, marker
+`dz_defexcl.txt`, the same "Defender exclusions configured" ledger row), it
+writes `graded|paths|processes|extensions`, and three tiles state what the
+section found, naming Section 9, with NOT graded when it could not query.
+Each excluded item prints on its own `path:` / `process:` / `extension:` line
+so an item cannot start a report line with a severity tag. The helpers job
+runs the tool before and after planting a real path exclusion and asserts the
+WARNING, the item by name, the marker and the state count; the full-run job
+asserts Section 9 and the dashboard agree on every kind; a printed-finding
+contract pins the exclusion WARNING to its ledger row.
+
 ### A raised gap prints [WARNING]; [SKIPPED] is never raised
 Vocabulary decision (owner, 2026-10-03). 27 sites in ten tools printed
 `[SKIPPED] ... NOT performed` and raised WARNING in the next line -- a blind
