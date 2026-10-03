@@ -6,6 +6,19 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### The LSASS PPL tile states Section 12's verdict; the intermittent standard-user alarm explained
+The quoting added to `noadmin_smoke` in #225 named the alarm that had fired
+on some standard-user CI runs and not others: `Dashboard verdict is CRIT but
+ledger max severity is WARNING`, from the tile `[!! CRITICAL !!] LSASS PPL
+DISABLED (RunAsPPL=0)`. Section 12 grades an explicit `RunAsPPL=0` and an
+absent value both as WARNING; the tile re-read the registry and graded the
+explicit 0 as CRIT, so the alarm fired on runner images that carry an
+explicit 0 and stayed quiet where the value is absent. Section 12 now writes
+its reading (`1`, `2`, `absent`, the sanitised value, or `unreadable`) to a
+state file and the tile prints that, naming Section 12, with NOT graded when
+no verdict was recorded. The standard-user job asserts the tile never reads
+CRIT and names its source.
+
 ### lsass denied on a standard-user token is a deferral, not a finding
 `module_inspect` printed `[WARNING] lsass module enumeration denied while LSA
 Protection is OFF -- lsass injection NOT checked` and raised a T1055 row

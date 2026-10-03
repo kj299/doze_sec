@@ -538,7 +538,13 @@ the fourth: they called `Get-MpPreference` again, printed NO tile at all when
 that query returned nothing (an all-clear by omission), and never showed
 extension exclusions. `tools/defender_exclusions_check.ps1` now grades the
 three kinds once, writes `graded|paths|processes|extensions`, and the tiles
-read that; a missing verdict reads NOT graded.
+read that; a missing verdict reads NOT graded. The LSASS PPL tile was the
+fifth, and the first found by CI rather than a field report: it re-read
+`RunAsPPL` and graded an explicit 0 as CRIT where Section 12 raises WARNING,
+so the standard-user job's ledger-divergence alarm fired on runner images
+carrying an explicit 0 and not on images where the value is absent. An
+intermittent alarm is a tile re-measuring something that differs between
+machines; the fix is the same state-file idiom (`PPL_STATE`).
 
 Two mechanics that bite when a verdict crosses into cmd. A value that becomes
 part of an `echo` into `%PSRUN%` is **shell syntax**: `&`, `|`, `>`, `^`, `%`

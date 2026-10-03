@@ -304,6 +304,17 @@ try {
     Assert ($text1 -match '\[DEFERRED - ADMIN REQUIRED\] lsass modules are not readable from a standard-user token|\[OK\] lsass modules not enumerable -- consistent with LSA Protection') `
         'the lsass denial is declared: DEFERRED (LSA Protection off) or [OK] (LSA Protection on)' `
         'the lsass denial was neither deferred nor explained by LSA Protection'
+    # The LSASS PPL tile states Section 12's verdict. It used to re-read
+    # RunAsPPL and grade an explicit 0 as CRIT where the section raises
+    # WARNING, which is what the intermittent ledger-divergence alarm of
+    # 2026-10-02/03 was (runner images differ in whether the value is absent
+    # or an explicit 0). A CRIT tile with no CRITICAL row can never be right.
+    Assert ($text1 -notmatch '\[!! CRITICAL !!\]\s+LSASS PPL') `
+        'the LSASS PPL tile never out-grades Section 12 (no CRIT tile)' `
+        'the dashboard graded LSASS PPL as CRIT while Section 12 raises WARNING for it'
+    Assert ($text1 -match 'LSASS PPL[^\r\n]*Section 12') `
+        'the LSASS PPL tile names Section 12 as its source' `
+        'the LSASS PPL tile does not state the verdict Section 12 reached'
     Assert (-not @($ledger1 | Where-Object { $_ -match '^\w+\|16\|T1070\.001\|' }).Count) `
         'no T1070.001 row for a Security log the token cannot list' `
         ("a T1070.001 row was raised on a standard-user run with nothing printed: {0}" -f (($ledger1 | Where-Object { $_ -match '\|16\|T1070\.001\|' }) -join ' ; '))
