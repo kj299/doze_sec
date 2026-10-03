@@ -427,7 +427,22 @@ header date against its last content-changing commit. Not built yet: the
 rule as it stands is safe (the shipped file wins a tie), and the cost is one
 `replaced` line in the provenance paragraph the first run after a release.
 
-## module_inspect raises the lsass-denied gap on a standard-user token (found 2026-10-03, deferred)
+## module_inspect raises the lsass-denied gap on a standard-user token (found 2026-10-03, FIXED the same day)
+
+Fixed in the PR after #227: `Get-LsassDenialVerdict` grades by token, the
+deferral is counted through `dz_module_deferred.txt`, the standard-user CI
+job asserts the WARNING never prints there, and `RunAsPPL=2` counts as ON.
+The original note follows for the record.
+
+Follow-up (NOT done): Microsoft Learn ("Configure added LSA protection",
+read 2026-10-03) says a clean install of Windows 11 22H2+ that is
+enterprise-joined and HVCI-capable runs LSASS protected BY DEFAULT with no
+`RunAsPPL` value in the registry. The elevated branch of
+`Get-LsassDenialVerdict` reads an absent value as OFF and raises the WARNING,
+a false positive on exactly that machine class (not the owner's laptop, which
+sets `RunAsPPL=1`). The authoritative signal is WinInit Event 12 in the System
+log ("LSASS.exe was started as a protected process with level: 4"); add it as
+a second, injectable, self-tested input and treat "present this boot" as ON.
 
 `tools/module_inspect.ps1` prints `[WARNING] lsass module enumeration denied
 while LSA Protection is OFF -- lsass injection NOT checked` and raises

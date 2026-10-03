@@ -632,7 +632,11 @@ declares a row whose section printed neither a finding nor a `[SKIPPED]`
 line. **And a per-subkey denial must not lose the check**: `persistence_eval`
 enumerated IFEO with `-EA Stop`, one restricted subkey terminated it, and
 both standard-user runs printed `[SKIPPED] IFEO enumeration failed` -- grade
-what is readable and NAME what is not. **And the proof script has a
+what is readable and NAME what is not. **The fourth such tool was found by
+reading, not by a field run**: `module_inspect` raised the lsass-denied gap
+on a standard-user token, which can never open lsass; it surfaced while
+checking which lines the `[SKIPPED]` retagging could print on that path. When
+a change touches a gap line, ask which TOKEN can print it. **And the proof script has a
 standard-user path too.** `tests\field_test.ps1` demanded the read-only skip
 line for the restore point on a token that can never create one (the bat
 defers that step, needs admin), so every standard-user field run ended in

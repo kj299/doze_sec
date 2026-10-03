@@ -1716,6 +1716,7 @@ echo  Every persistence check reads a registry key or a file on disk. An implant
 echo  injected into a signed host process touches neither -- this inspects the>> "%REPORT%"
 echo  DLLs actually loaded in running processes ^(T1055 / T1574^).>> "%REPORT%"
 del "%TEMP%\dz_module.txt" 2>nul
+del "%TEMP%\dz_module_deferred.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\module_inspect.ps1" (
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\module_inspect.ps1">> "%REPORT%" 2>&1
 ) else (
@@ -1726,6 +1727,15 @@ if exist "%TEMP%\dz_module.txt" (
     set /p _MODSEV=<"%TEMP%\dz_module.txt"
     call :dz_finding !_MODSEV! 4 T1055 "Suspicious DLL loaded inside a running process"
     del "%TEMP%\dz_module.txt" 2>nul
+)
+if exist "%TEMP%\dz_module_deferred.txt" (
+    rem The tool DEFERRED the lsass check this token cannot perform: a standard
+    rem user can never open lsass, so with LSA Protection off that denial is the
+    rem token, not the machine. Counted as deferred, never raised.
+    set "_MIDEF=0"
+    set /p _MIDEF=<"%TEMP%\dz_module_deferred.txt"
+    set /a DEFERRED_COUNT+=!_MIDEF!
+    del "%TEMP%\dz_module_deferred.txt" 2>nul
 )
 
 :: ---- Section 4/18 verdict -----------------------------------------------

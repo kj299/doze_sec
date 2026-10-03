@@ -292,6 +292,18 @@ try {
     Assert ($text1 -match '\[DEFERRED - ADMIN REQUIRED\] TaskCache registry or Task Scheduler not readable from a standard-user token') `
         'the TaskCache hidden-task check is declared DEFERRED on the standard-user path' `
         'the TaskCache hidden-task check was not declared DEFERRED (skipped silently, or raised as a rootkit indicator)'
+    # lsass can never be opened from a standard-user token; with LSA Protection
+    # off that denial printed [WARNING] and raised a T1055 row until 2026-10-03
+    # (found by reading which raised-gap lines this path could print, not by a
+    # field run: the owner's laptop has RunAsPPL=1 and takes the [OK] branch).
+    # The runner's RunAsPPL state is not pinned, so either declared branch is
+    # accepted; the raised WARNING never is.
+    Assert ($text1 -notmatch '\[WARNING\] lsass module enumeration denied') `
+        'the lsass denial is never raised as a finding on the standard-user path' `
+        'the lsass denial was raised as a WARNING on a standard-user run (the token, not the machine)'
+    Assert ($text1 -match '\[DEFERRED - ADMIN REQUIRED\] lsass modules are not readable from a standard-user token|\[OK\] lsass modules not enumerable -- consistent with LSA Protection') `
+        'the lsass denial is declared: DEFERRED (LSA Protection off) or [OK] (LSA Protection on)' `
+        'the lsass denial was neither deferred nor explained by LSA Protection'
     Assert (-not @($ledger1 | Where-Object { $_ -match '^\w+\|16\|T1070\.001\|' }).Count) `
         'no T1070.001 row for a Security log the token cannot list' `
         ("a T1070.001 row was raised on a standard-user run with nothing printed: {0}" -f (($ledger1 | Where-Object { $_ -match '\|16\|T1070\.001\|' }) -join ' ; '))

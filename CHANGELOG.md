@@ -6,6 +6,24 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### lsass denied on a standard-user token is a deferral, not a finding
+`module_inspect` printed `[WARNING] lsass module enumeration denied while LSA
+Protection is OFF -- lsass injection NOT checked` and raised a T1055 row
+whenever lsass refused enumeration and `RunAsPPL` was not set -- on a
+standard-user token too, which can never open lsass whatever the machine's
+state. The token, not the machine: the class CLAUDE.md names, found by
+reading which raised-gap lines the standard-user path could print after the
+`[SKIPPED]` retagging, not by a field run (the owner's laptop has
+`RunAsPPL=1` and takes the `[OK]` branch). The verdict is now a pure
+`Get-LsassDenialVerdict` graded by token: unelevated with protection off it
+prints `[DEFERRED - ADMIN REQUIRED]` and counts through
+`dz_module_deferred.txt` into `DEFERRED_COUNT` (both bats); elevated it stays
+the raised WARNING; `RunAsPPL=2` (enabled without the UEFI lock, Windows 11
+22H2+) now counts as ON instead of being graded as OFF. Self-test cases both
+ways; the standard-user CI job asserts the WARNING never prints there and one
+of the two declared branches does; corpus entry
+`[lsass-unreadable-from-standard-user]`.
+
 ### Defender exclusion tiles read Section 9's state line
 The three Section 9 exclusion blocks (paths, processes, extensions) lived
 inline in both bats, and the dashboard tile then called `Get-MpPreference`
