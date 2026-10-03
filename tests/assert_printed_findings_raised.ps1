@@ -59,7 +59,15 @@ $script:Contracts = @(
     @{ Name      = 'Defender exclusion configured'
        Signature = '^\s*\[WARNING\] Exclusion (paths|processes|extensions) found'
        Section   = '9'
-       Technique = 'T1562.001' }
+       Technique = 'T1562.001' },
+    # Section 12's LSA Protection verdict, measured in Section 4 by
+    # tools\lsa_protection_check.ps1 and printed/raised in Section 12 (marker
+    # idiom). The runner has LSASS unprotected, so the full-run job exercises
+    # this on the real path.
+    @{ Name      = 'LSASS not running as a protected process'
+       Signature = '^\s*\[WARNING\] (LSASS PPL not enabled|RunAsPPL=\S+ is set but LSASS did NOT start protected|LSA Protection state could NOT be determined)'
+       Section   = '12'
+       Technique = 'T1003.001' }
 )
 
 function Get-UnraisedContracts {

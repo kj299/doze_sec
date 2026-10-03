@@ -2105,6 +2105,13 @@ echo  Command: powershell -File tools\module_inspect.ps1>> "%REPORT%"
 echo  Every persistence check reads a registry key or a file on disk. An implant>> "%REPORT%"
 echo  injected into a signed host process touches neither -- this inspects the>> "%REPORT%"
 echo  DLLs actually loaded in running processes ^(T1055 / T1574^).>> "%REPORT%"
+rem LSA Protection is measured ONCE here -- WinInit Event 12 this boot first,
+rem RunAsPPL second (tools\lsa_protection_check.ps1) -- for the lsass judgement
+rem in module_inspect below and for Section 12, which prints and raises it.
+rem The state file lives until Section 12 reads it; do not delete it here.
+del "%TEMP%\dz_lsa_state.txt" 2>nul
+del "%TEMP%\dz_lsa_lines.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\lsa_protection_check.ps1" "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\lsa_protection_check.ps1" -Mode Measure>> "%REPORT%" 2>&1
 del "%TEMP%\dz_module.txt" 2>nul
 del "%TEMP%\dz_module_deferred.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\module_inspect.ps1" (
@@ -2958,9 +2965,10 @@ echo  Command: reg query "HKLM\SYSTEM\CurrentControlSet\Control\DeviceGuard">> "
 reg query "HKLM\SYSTEM\CurrentControlSet\Control\DeviceGuard">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
-echo --- LSASS PPL: SAFE=RunAsPPL=1 --->> "%REPORT%"
+echo --- LSASS PPL: SAFE=RunAsPPL 1 or 2, or WinInit Event 12 this boot --->> "%REPORT%"
 echo  Command: reg query "HKLM\SYSTEM\CurrentControlSet\Control\Lsa" /v RunAsPPL>> "%REPORT%"
 reg query "HKLM\SYSTEM\CurrentControlSet\Control\Lsa" /v RunAsPPL>> "%REPORT%" 2>&1
+echo  Command: powershell -File tools\lsa_protection_check.ps1   [measured once in Section 4: WinInit Event 12 this boot, then RunAsPPL]>> "%REPORT%"
 
 echo.>> "%REPORT%"
 echo --- WDigest: SAFE=UseLogonCredential=0 (1=plaintext in RAM) --->> "%REPORT%"
@@ -2998,31 +3006,40 @@ reg query "HKLM\SYSTEM\CurrentControlSet\Control\Lsa">> "%REPORT%" 2>&1
 echo.>> "%REPORT%"
 echo --- Credential Protection State (evaluated) --->> "%REPORT%"
 del "%TEMP%\dz_wdigest_hit.txt" 2>nul
-del "%TEMP%\dz_ppl_hit.txt" 2>nul
-del "%TEMP%\dz_ppl_state.txt" 2>nul
+del "%TEMP%\dz_lsa.txt" 2>nul
 del "%TEMP%\dz_ntlm_hit.txt" 2>nul
 echo $lsa='HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' > "%PSRUN%"
 echo $wd=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' -Name UseLogonCredential -EA SilentlyContinue).UseLogonCredential;if($wd -eq 1){'[CRITICAL] WDigest ENABLED -- plaintext passwords cached in RAM (T1003.001)';Set-Content -LiteralPath "$env:TEMP\dz_wdigest_hit.txt" -Value hit}else{'[OK] WDigest not caching plaintext credentials.'} >> "%PSRUN%"
-echo $ppl=(Get-ItemProperty $lsa -Name RunAsPPL -EA SilentlyContinue).RunAsPPL;if($ppl -eq 1 -or $ppl -eq 2){'[OK] LSASS runs as a protected process (RunAsPPL='+$ppl+').'}else{'[WARNING] LSASS PPL not enabled -- LSASS memory can be dumped (T1003.001)';Set-Content -LiteralPath "$env:TEMP\dz_ppl_hit.txt" -Value hit};$pplState=$(if($null -eq $ppl){'absent'}else{(([string]$ppl) -replace '[^^0-9A-Za-z]','')});if($pplState.Length -gt 8){$pplState=$pplState.Substring(0,8)};if(-not $pplState){$pplState='unreadable'};Set-Content -LiteralPath "$env:TEMP\dz_ppl_state.txt" -Value $pplState >> "%PSRUN%"
 echo $nl=(Get-ItemProperty $lsa -Name LmCompatibilityLevel -EA SilentlyContinue).LmCompatibilityLevel;if($nl -eq $null){'[OK] LmCompatibilityLevel not set (modern Windows defaults to NTLMv2-only behaviour).'}elseif($nl -ge 3){'[OK] NTLM level '+$nl+' (NTLMv2).'}else{'[WARNING] NTLMv1/LM permitted (LmCompatibilityLevel='+$nl+') -- downgrade/relay exposure';Set-Content -LiteralPath "$env:TEMP\dz_ntlm_hit.txt" -Value hit} >> "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_wdigest_hit.txt" (
     call :dz_finding CRITICAL 12 T1003.001 "WDigest enabled - plaintext credentials cached in RAM"
     del "%TEMP%\dz_wdigest_hit.txt" 2>nul
 )
-if exist "%TEMP%\dz_ppl_hit.txt" (
-    call :dz_finding WARNING 12 T1003.001 "LSASS PPL not enabled - LSASS memory dumpable"
-    del "%TEMP%\dz_ppl_hit.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\lsa_protection_check.ps1" (
+    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\lsa_protection_check.ps1" -Mode Report>> "%REPORT%" 2>&1
+) else (
+    echo  [WARNING] tools\lsa_protection_check.ps1 not found -- LSA Protection NOT evaluated.>> "%REPORT%"
+    call :dz_finding WARNING 12 T1003.001 "LSA Protection not evaluated - tools\lsa_protection_check.ps1 missing"
 )
-:: Carry Section 12's RunAsPPL verdict to the dashboard (the DEFCORE_* idiom).
-:: The tile used to read the registry AGAIN and graded an explicit RunAsPPL=0
-:: as CRIT while this section raises WARNING for it: on runner images that
-:: carry an explicit 0 the standard-user job's ledger-divergence alarm fired,
-:: and on images where the value is absent it did not -- the intermittent
-:: failure of 2026-10-02/03. One measurement, one grade.
+if exist "%TEMP%\dz_lsa.txt" (
+    set "_LSASEV="
+    set /p _LSASEV=<"%TEMP%\dz_lsa.txt"
+    call :dz_finding !_LSASEV! 12 T1003.001 "LSASS PPL not enabled - LSASS memory dumpable"
+    del "%TEMP%\dz_lsa.txt" 2>nul
+)
+:: Carry the LSA Protection verdict to the dashboard (the DEFCORE_* idiom). The
+:: tile used to read the registry AGAIN and graded an explicit RunAsPPL=0 as
+:: CRIT while this section raised WARNING -- the intermittent standard-user
+:: alarm of 2026-10-02/03. The verdict was measured once in Section 4 (the
+:: boot event first, the registry second) and read by module_inspect there;
+:: this is its last consumer, so the state file is deleted here.
 set "PPL_STATE=ungraded"
-if exist "%TEMP%\dz_ppl_state.txt" set /p PPL_STATE=<"%TEMP%\dz_ppl_state.txt"
-del "%TEMP%\dz_ppl_state.txt" 2>nul
+set "LSA_LINE="
+if exist "%TEMP%\dz_lsa_state.txt" set /p LSA_LINE=<"%TEMP%\dz_lsa_state.txt"
+if defined LSA_LINE for /f "tokens=1 delims=|" %%a in ("%LSA_LINE%") do set "PPL_STATE=%%a"
+del "%TEMP%\dz_lsa_state.txt" 2>nul
+del "%TEMP%\dz_lsa_lines.txt" 2>nul
 if exist "%TEMP%\dz_ntlm_hit.txt" (
     call :dz_finding WARNING 12 T1550.002 "NTLMv1/LM permitted - downgrade and relay exposure"
     del "%TEMP%\dz_ntlm_hit.txt" 2>nul
@@ -4616,7 +4633,7 @@ echo. >> "%PSRUN%"
 
 :: ===== CREDENTIAL PROTECTION =========================================
 echo sec 'CREDENTIAL PROTECTION  (Section 12)' >> "%PSRUN%"
-echo $v='%PPL_STATE%';if($v -eq '1' -or $v -eq '2'){ck 'PASS' ('LSASS PPL protection enabled (RunAsPPL='+$v+', Section 12)')}elseif($v -eq 'absent'){ck 'WARN' 'LSASS PPL not configured (Section 12)' 'Set RunAsPPL=dword:2 (protected, still removable) in HKLM\SYSTEM\...\Lsa and reboot. Prevents Mimikatz credential dump. Do NOT use 1: that writes a UEFI variable you cannot undo from the registry, and any smart-card driver, cryptographic plug-in or password filter that is not Microsoft-signed then fails to load and you may be unable to sign in.'}elseif($v -eq 'ungraded'){ck 'INFO' 'LSASS PPL: NOT graded -- Section 12 did not record a RunAsPPL verdict'}else{ck 'WARN' ('LSASS PPL DISABLED (RunAsPPL='+$v+', Section 12)') 'Set RunAsPPL=dword:2 (protected, still removable) in HKLM\SYSTEM\...\Lsa and reboot. Do NOT use 1: it writes a UEFI variable that the registry cannot undo, and unsigned smart-card/crypto/password-filter plug-ins then fail to load.'} >> "%PSRUN%"
+echo $v='%PPL_STATE%';if($v -eq 'on'){ck 'PASS' 'LSASS PPL protection enabled (Section 12)'}elseif($v -eq 'pending'){ck 'WARN' 'LSASS protection set but not in effect this boot (Section 12)' 'RunAsPPL is set but LSASS did not start protected: reboot, or value 2 is not enforced on this build (needs Windows 11 22H2+). Section 12 has the evidence.'}elseif($v -eq 'off'){ck 'WARN' 'LSASS PPL not enabled (Section 12)' 'Set RunAsPPL=dword:2 (protected, still removable) in HKLM\SYSTEM\...\Lsa and reboot. Prevents Mimikatz credential dump. Do NOT use 1: that writes a UEFI variable you cannot undo from the registry, and any smart-card driver, cryptographic plug-in or password filter that is not Microsoft-signed then fails to load and you may be unable to sign in.'}else{ck 'INFO' 'LSASS PPL: NOT graded -- Section 12 could not determine the LSA Protection state'} >> "%PSRUN%"
 echo $v=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' -Name UseLogonCredential -EA SilentlyContinue).UseLogonCredential;if($v -eq 1){ck 'CRIT' 'WDigest ENABLED -- plaintext passwords are cached in RAM' 'Set UseLogonCredential=0 in HKLM\...\WDigest and reboot immediately'}elseif($v -eq 0){ck 'PASS' 'WDigest disabled (UseLogonCredential=0)'}else{ck 'PASS' 'WDigest not set (default off on Win8.1+)'} >> "%PSRUN%"
 echo $v=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name LmCompatibilityLevel -EA SilentlyContinue).LmCompatibilityLevel;if($v -ge 5){ck 'PASS' ('NTLM hardened: NTLMv2 only (Level='+$v+')')}elseif($v -ge 3){ck 'WARN' ('NTLM partially hardened (Level='+$v+')') 'Set LmCompatibilityLevel=5. GPO: Network security: LAN Manager authentication level.'}elseif($null -eq $v){ck 'INFO' 'NTLM level not explicitly set -- the Windows default applies (NTLMv2 response only). Not a finding; set it explicitly to pin the behaviour.'}else{ck 'WARN' ('NTLMv1 allowed (Level='+$v+')') 'Set LmCompatibilityLevel=5 in HKLM\...\Lsa. NTLMv1 is crackable and relayable.'} >> "%PSRUN%"
 echo. >> "%PSRUN%"

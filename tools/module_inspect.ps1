@@ -68,14 +68,22 @@
 # path, not visible from outside" case is downgraded -- and it is downgraded to
 # STATED UNCERTAINTY, not to silence.
 #
-# LSASS AND PPL: when LSA Protection (RunAsPPL 1 or 2) is enabled, lsass module
+# LSASS AND LSA PROTECTION: when LSASS runs as a protected process, module
 # enumeration is denied to everything -- including this tool. That is the
 # protection WORKING, not a coverage gap, so it is reported as [OK] with the
-# reason rather than as a failure. When PPL is OFF and enumeration still fails,
-# the token decides: a standard user can NEVER open lsass, so on that token the
-# denial is [DEFERRED - ADMIN REQUIRED] and counted through
-# dz_module_deferred.txt (never a ledger row -- the token, not the machine);
-# elevated, it is a raised [WARNING] so the blindness reaches the verdict.
+# reason rather than as a failure. Whether protection is on is NOT decided
+# here: tools\lsa_protection_check.ps1 -Mode Measure runs just before this
+# tool (Section 4) and decides it on the boot event first (WinInit Event 12)
+# and the registry value second; this tool reads the first field of its state
+# file (-LsaStateFile, on|off|pending|unknown). A registry-only reading called
+# a clean-installed Windows 11 22H2+ client -- protected by default with no
+# RunAsPPL value -- unprotected, and then raised the denial the protection
+# itself causes. When protection is off (or pending, or unknown) and
+# enumeration still fails, the token decides: a standard user can NEVER open
+# lsass, so on that token the denial is [DEFERRED - ADMIN REQUIRED] and
+# counted through dz_module_deferred.txt (never a ledger row -- the token, not
+# the machine); elevated, it is a raised [WARNING] so the blindness reaches
+# the verdict.
 #
 # PERFORMANCE: the same DLL is loaded by dozens of processes, so module paths
 # are DEDUPLICATED and each unique file is Authenticode-checked exactly once,
@@ -97,6 +105,10 @@ param(
     # Whether this process runs elevated. Read once from the token below;
     # injectable so the self-test can grade both tokens. -1 = detect.
     [int]$Elevated = -1,
+    # The LSA Protection verdict measured by tools\lsa_protection_check.ps1
+    # -Mode Measure (first field: on|off|pending|unknown). Empty = the default
+    # location; a missing file reads as unknown, never as off or on.
+    [string]$LsaStateFile = '',
     [switch]$SelfTest
 )
 
@@ -390,23 +402,26 @@ function Test-ModuleEnumerationRefused {
 }
 
 # PURE. lsass refused module enumeration: is that the protection working, the
-# token, or a gap? RunAsPPL 1 (enabled, UEFI-locked) and 2 (enabled without the
-# UEFI lock; Windows 11 22H2+) both mean LSA Protection is ON (Microsoft Learn,
-# "Configure added LSA protection"). With protection off, a standard-user token
-# can never open lsass whatever the machine's state, so the denial is DEFERRED
-# on that token and a raised WARNING only when an administrator could not read
-# it either.
+# token, or a gap? -LsaState is the verdict tools\lsa_protection_check.ps1
+# measured in this same section (on|off|pending|unknown): on means the denial
+# is the protection working; anything else means a standard-user token cannot
+# tell (it can never open lsass) and defers, while an administrator who still
+# cannot read lsass has a real gap -- raised, and with the state named when it
+# is unknown rather than off.
 function Get-LsassDenialVerdict {
-    param([bool]$IsElevated, $Ppl)
-    $pv = -1
-    try { if ($null -ne $Ppl) { $pv = [int]$Ppl } } catch { $pv = -1 }
-    if ($pv -eq 1 -or $pv -eq 2) {
-        return @{ Deferred = $false; Sev = 'OK'; Line = '[OK] lsass modules not enumerable -- consistent with LSA Protection (RunAsPPL) being enabled. The protection is working.' }
+    param([bool]$IsElevated, [string]$LsaState)
+    $st = $(if ($LsaState) { $LsaState.Trim().ToLowerInvariant() } else { 'unknown' })
+    if ($st -notin @('on', 'off', 'pending', 'unknown')) { $st = 'unknown' }
+    if ($st -eq 'on') {
+        return @{ Deferred = $false; Sev = 'OK'; Line = '[OK] lsass modules not enumerable -- consistent with LSA Protection being on (Section 12: WinInit Event 12 this boot, or RunAsPPL). The protection is working.' }
     }
     if (-not $IsElevated) {
-        return @{ Deferred = $true; Sev = 'OK'; Line = '[DEFERRED - ADMIN REQUIRED] lsass modules are not readable from a standard-user token -- lsass injection NOT checked. LSA Protection is not enabled, so an administrator run can read them; re-run as administrator to grade this.' }
+        return @{ Deferred = $true; Sev = 'OK'; Line = ('[DEFERRED - ADMIN REQUIRED] lsass modules are not readable from a standard-user token -- lsass injection NOT checked. LSA Protection reads {0} (Section 12), so an administrator run can read them; re-run as administrator to grade this.' -f $st) }
     }
-    return @{ Deferred = $false; Sev = 'WARNING'; Line = '[WARNING] lsass module enumeration denied while LSA Protection is OFF -- lsass injection NOT checked.' }
+    if ($st -eq 'unknown') {
+        return @{ Deferred = $false; Sev = 'WARNING'; Line = '[WARNING] lsass module enumeration denied and the LSA Protection state is unknown (Section 12 could not determine it) -- lsass injection NOT checked.' }
+    }
+    return @{ Deferred = $false; Sev = 'WARNING'; Line = ('[WARNING] lsass module enumeration denied while LSA Protection is {0} -- lsass injection NOT checked.' -f $(if ($st -eq 'pending') { 'set but not in effect this boot' } else { 'OFF' })) }
 }
 
 if ($SelfTest) {
@@ -553,18 +568,24 @@ if ($SelfTest) {
     T 'Downloads IS a staging path' (Test-StagingPath 'C:\Users\u\Downloads\dz_x.dll') ''
 
     # lsass denial by token (2026-10-03): a standard user can never open lsass.
-    $lv = Get-LsassDenialVerdict -IsElevated $false -Ppl $null
+    # The LSA Protection state comes from lsa_protection_check's state file.
+    $lv = Get-LsassDenialVerdict -IsElevated $false -LsaState 'off'
     T 'lsass denied, standard-user token, LSA Protection off: DEFERRED (the token, not the machine), Sev OK, no WARNING' ($lv.Deferred -and $lv.Sev -eq 'OK' -and $lv.Line -match '^\[DEFERRED - ADMIN REQUIRED\] lsass modules are not readable from a standard-user token' -and $lv.Line -notmatch '\[WARNING\]') $lv.Line
-    $lv = Get-LsassDenialVerdict -IsElevated $true -Ppl 0
+    $lv = Get-LsassDenialVerdict -IsElevated $true -LsaState 'off'
     T 'lsass denied, ELEVATED, LSA Protection off: a raised gap (WARNING), never a deferral' ((-not $lv.Deferred) -and $lv.Sev -eq 'WARNING' -and $lv.Line -match '^\[WARNING\] lsass module enumeration denied while LSA Protection is OFF') $lv.Line
-    $lv = Get-LsassDenialVerdict -IsElevated $false -Ppl 1
-    T 'lsass denied with LSA Protection ON (RunAsPPL=1): [OK] on a standard-user token, the protection is working' ((-not $lv.Deferred) -and $lv.Sev -eq 'OK' -and $lv.Line -match '^\[OK\] lsass modules not enumerable -- consistent with LSA Protection') $lv.Line
-    $lv = Get-LsassDenialVerdict -IsElevated $true -Ppl 1
-    T 'lsass denied with LSA Protection ON: [OK] elevated too' ((-not $lv.Deferred) -and $lv.Sev -eq 'OK' -and $lv.Line -match '^\[OK\] lsass modules not enumerable') $lv.Line
-    $lv = Get-LsassDenialVerdict -IsElevated $true -Ppl 2
-    T 'RunAsPPL=2 (enabled without the UEFI lock, Windows 11 22H2+) counts as ON: [OK], not a WARNING' ((-not $lv.Deferred) -and $lv.Sev -eq 'OK' -and $lv.Line -match '^\[OK\]') $lv.Line
-    $lv = Get-LsassDenialVerdict -IsElevated $true -Ppl 'junk'
-    T 'an unreadable RunAsPPL value is not ON: elevated it is the raised gap' ($lv.Sev -eq 'WARNING') $lv.Line
+    $lv = Get-LsassDenialVerdict -IsElevated $false -LsaState 'on'
+    T 'lsass denied with LSA Protection ON (Section 12 verdict): [OK] on a standard-user token, the protection is working' ((-not $lv.Deferred) -and $lv.Sev -eq 'OK' -and $lv.Line -match '^\[OK\] lsass modules not enumerable -- consistent with LSA Protection') $lv.Line
+    $lv = Get-LsassDenialVerdict -IsElevated $true -LsaState 'ON'
+    T 'lsass denied with LSA Protection ON: [OK] elevated too (case-insensitive state)' ((-not $lv.Deferred) -and $lv.Sev -eq 'OK' -and $lv.Line -match '^\[OK\] lsass modules not enumerable') $lv.Line
+    $lv = Get-LsassDenialVerdict -IsElevated $true -LsaState 'pending'
+    T 'LSA Protection PENDING (set, not in effect this boot), elevated: WARNING that says so' ($lv.Sev -eq 'WARNING' -and $lv.Line -match 'set but not in effect this boot') $lv.Line
+    $lv = Get-LsassDenialVerdict -IsElevated $true -LsaState 'unknown'
+    T 'LSA Protection state UNKNOWN, elevated: WARNING naming the unknown state, never OK' ($lv.Sev -eq 'WARNING' -and $lv.Line -match 'LSA Protection state is unknown') $lv.Line
+    $lv = Get-LsassDenialVerdict -IsElevated $false -LsaState ''
+    T 'no state file at all (empty state) on a standard-user token: DEFERRED, never OK' ($lv.Deferred -and $lv.Sev -eq 'OK') $lv.Line
+    $lv = Get-LsassDenialVerdict -IsElevated $true -LsaState 'junk'
+    T 'an unrecognised state word is unknown: elevated it is the raised gap' ($lv.Sev -eq 'WARNING' -and $lv.Line -match 'unknown') $lv.Line
+
     # Refusal is decided on evidence, not on an exception (the standard-user
     # runner returned EMPTY module lists, not errors, for other users' processes).
     T 'an empty module list is a refusal (every live process has its own image module)' (Test-ModuleEnumerationRefused -Mods @() -Threw $false) ''
@@ -652,10 +673,19 @@ if ($modOwners.Count -eq 0) {
 
 # LSA Protection makes lsass modules unreadable BY DESIGN. Distinguish that from
 # a genuine failure so the report never implies a gap where a defence is working.
-$ppl = $null
-try { $ppl = (Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name 'RunAsPPL' -EA SilentlyContinue).RunAsPPL } catch {}
+# The state was measured once, just before this tool, by lsa_protection_check;
+# this tool never reads the registry for it (one measurement, two consumers).
+$lsaState = 'unknown'
+try {
+    $lsf = $LsaStateFile
+    if (-not $lsf) { $lsf = Join-Path $(if ($env:TEMP) { $env:TEMP } else { [IO.Path]::GetTempPath() }) 'dz_lsa_state.txt' }
+    if (Test-Path -LiteralPath $lsf) {
+        $first = [string](Get-Content -LiteralPath $lsf -ErrorAction Stop | Select-Object -First 1)
+        $lsaState = ($first.Split('|')[0]).Trim()
+    }
+} catch { $lsaState = 'unknown' }
 if ($lsassDenied) {
-    $lv = Get-LsassDenialVerdict -IsElevated ($Elevated -eq 1) -Ppl $ppl
+    $lv = Get-LsassDenialVerdict -IsElevated ($Elevated -eq 1) -LsaState $lsaState
     $lv.Line
     if ($lv.Deferred) { Write-Marker -Name 'module_deferred' -Sev '1' } else { $sev = Get-MaxSev $sev $lv.Sev }
 }

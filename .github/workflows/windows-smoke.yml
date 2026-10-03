@@ -1334,6 +1334,83 @@ jobs:
           if ($leftover) { throw 'the planted exclusion C:\dz_ci_excl_dir could not be removed -- clean it up before this runner is reused' }
           exit 0
 
+      # LSA Protection, decided on the boot event first (WinInit Event 12) and
+      # the registry second, measured once for Sections 4 and 12. A protected
+      # LSASS cannot be planted on a runner without a reboot, so the ON-by-event
+      # path is proven by the self-test and by an EXPERIMENT below that is
+      # declared either way: can a synthetic WinInit Event 12 be written here?
+      - name: lsa_protection_check.ps1 -SelfTest + live (WinInit Event 12 this boot or RunAsPPL decides; neither is OFF, declared) + Event 12 write experiment
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $st = (.\tools\lsa_protection_check.ps1 -SelfTest) -join "`n"
+          if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'lsa_protection_check.ps1 -SelfTest failed' }
+          $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($n -lt 12) { throw "lsa_protection_check self-test ran only $n case(s)" }
+          foreach ($must in 'Event 12 this boot with NO RunAsPPL value: ON by event', 'RunAsPPL=2 with no Event 12 and a log that covers the boot: PENDING', 'registry unreadable, no Event 12, log rolled: UNKNOWN is a raised gap') {
+            if ($st -notmatch [regex]::Escape($must)) { throw ("lsa_protection_check self-test no longer covers: {0}" -f $must) }
+          }
+          Write-Host "lsa_protection_check -SelfTest OK ($n cases)"
+          $md = Join-Path $env:TEMP ("dz_lsa_ci_{0}" -f $PID)
+          New-Item -ItemType Directory -Path $md -Force | Out-Null
+          function Invoke-Lsa {
+            param([string]$Label)
+            foreach ($x in 'dz_lsa.txt', 'dz_lsa_state.txt', 'dz_lsa_lines.txt') { Remove-Item (Join-Path $md $x) -Force -EA SilentlyContinue }
+            $m = (.\tools\lsa_protection_check.ps1 -Mode Measure -MarkerDir $md) -join "`n"
+            if ($m -match 'null-valued expression|InvalidOperation|CommandNotFoundException|ParameterBindingException') { throw ("{0}: Measure wrote PowerShell errors: {1}" -f $Label, $m) }
+            $sf = Join-Path $md 'dz_lsa_state.txt'
+            if (-not (Test-Path $sf)) { throw ("{0}: Measure wrote no state file" -f $Label) }
+            $state = (Get-Content $sf).Trim()
+            Write-Host ("--- {0} --- state: {1}" -f $Label, $state)
+            if ($state -notmatch '^(on|off|pending|unknown)\|(OK|WARNING)\|(event12|registry|none)\|[A-Za-z0-9:.@-]+\|[A-Za-z0-9:.@-]+$') { throw ("{0}: state line is not verdict|sev|source|registry|event: '{1}'" -f $Label, $state) }
+            $r = (.\tools\lsa_protection_check.ps1 -Mode Report -MarkerDir $md) -join "`n"
+            Write-Host $r
+            if (-not $r) { throw ("{0}: Report printed nothing" -f $Label) }
+            if ($r -match 'null-valued expression|InvalidOperation|CommandNotFoundException|ParameterBindingException') { throw ("{0}: Report wrote PowerShell errors" -f $Label) }
+            $top = 'OK'
+            if ($r -match '(?m)^\[WARNING\]') { $top = 'WARNING' }
+            if ($r -match '(?m)^\[CRITICAL\]') { $top = 'CRITICAL' }
+            $mk = Join-Path $md 'dz_lsa.txt'
+            $mv = if (Test-Path $mk) { (Get-Content $mk).Trim() } else { 'OK' }
+            if ($mv -ne $top) { throw ("{0}: marker says '{1}' but the highest printed tag is '{2}'" -f $Label, $mv, $top) }
+            $f = $state.Split('|')
+            if ($f[0] -eq 'unknown') { throw ("{0}: a runner's LSA Protection state is knowable; UNKNOWN means the measurement could not read its own registry or System log" -f $Label) }
+            if ($f[0] -eq 'on' -and $r -notmatch '(?m)^\[OK\] LSASS') { throw ("{0}: state says on but no [OK] LSASS line was printed" -f $Label) }
+            if (($f[0] -eq 'off' -or $f[0] -eq 'pending') -and $r -notmatch '(?m)^\[WARNING\]') { throw ("{0}: state says {1} but no WARNING was printed" -f $Label, $f[0]) }
+            if ($r -notmatch 'WinInit Event 12') { throw ("{0}: the report line does not name the boot event it consulted" -f $Label) }
+            return $f
+          }
+          $wrote = $false
+          try {
+            $f = Invoke-Lsa 'live'
+            Write-Host ("runner verdict: {0} by {1} (registry {2}, event {3})" -f $f[0], $f[2], $f[3], $f[4])
+            # THE OTHER CONSUMER agrees with the state file: module_inspect's lsass
+            # line, when lsass is denied to this elevated token, must match.
+            $mi = (.\tools\module_inspect.ps1 -MarkerDir $md -LsaStateFile (Join-Path $md 'dz_lsa_state.txt')) -join "`n"
+            $ml = @($mi -split "`n" | Where-Object { $_ -match 'lsass module' })
+            if ($ml.Count -eq 0) { Write-Host 'module_inspect: lsass modules were enumerable from this elevated token (no denial line) -- consistent with LSA Protection off' ; if ($f[0] -eq 'on') { throw 'LSA Protection reads on but an elevated module_inspect could read lsass modules' } }
+            else {
+              Write-Host ("module_inspect: " + $ml[0].Trim())
+              if ($f[0] -eq 'on' -and $ml[0] -notmatch '^\[OK\]') { throw 'LSA Protection reads on but module_inspect did not explain the lsass denial by it' }
+              if ($f[0] -ne 'on' -and $ml[0] -notmatch '^\[WARNING\]') { throw ("LSA Protection reads {0} but module_inspect did not raise the elevated lsass denial" -f $f[0]) }
+            }
+            # THE EXPERIMENT. Touches: eventlog:System (one synthetic WinInit 12 on an
+            # ephemeral runner; CI only, never the harness a person runs).
+            try {
+              Write-EventLog -LogName System -Source 'Microsoft-Windows-Wininit' -EventId 12 -EntryType Information -Message 'LSASS.exe was started as a protected process with level: 4' -ErrorAction Stop
+              $wrote = $true
+            } catch {
+              Write-Host ("[ SKIP ] a synthetic WinInit Event 12 cannot be written on this runner ({0}) -- the ON-by-event path stays proven by the self-test; the corpus entry keeps its field: reason" -f $_.Exception.Message)
+            }
+            if ($wrote) {
+              Start-Sleep -Seconds 3
+              $f2 = Invoke-Lsa 'after a synthetic WinInit Event 12'
+              if ($f2[0] -ne 'on' -or $f2[2] -ne 'event12') { throw ("a WinInit Event 12 logged this boot did not read as ON by event (got {0} by {1})" -f $f2[0], $f2[2]) }
+              Write-Host 'PROMOTE: a synthetic WinInit Event 12 lands on this runner and reads as ON by event -- move [lsa-protection-on-without-registry-value] to a ci: plant proof'
+            }
+          } finally { Remove-Item $md -Recurse -Force -EA SilentlyContinue }
+          exit 0
+
       - name: report_safety.ps1 -SelfTest + live (Tier 0 preamble + coverage framing)
         shell: powershell
         run: |
@@ -1749,7 +1826,7 @@ jobs:
           # The lsass denial is graded by TOKEN: a standard user can never open
           # lsass, so with LSA Protection off it is DEFERRED there and a raised
           # WARNING only elevated. A lost case here is a lost deferral guard.
-          foreach ($must in 'lsass denied, standard-user token, LSA Protection off: DEFERRED', 'lsass denied, ELEVATED, LSA Protection off: a raised gap (WARNING), never a deferral', 'RunAsPPL=2 (enabled without the UEFI lock, Windows 11 22H2+) counts as ON') {
+          foreach ($must in 'lsass denied, standard-user token, LSA Protection off: DEFERRED', 'lsass denied, ELEVATED, LSA Protection off: a raised gap (WARNING), never a deferral', 'LSA Protection state UNKNOWN, elevated: WARNING naming the unknown state, never OK') {
             if ($out -notmatch [regex]::Escape($must)) { throw ("module_inspect self-test no longer covers: {0}" -f $must) }
           }
           # The staging-path rule pins the Adobe native addon a field run reported
