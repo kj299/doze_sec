@@ -3382,7 +3382,7 @@ jobs:
   readonly-field-test:
     name: "tests/field_test.ps1: -readonly changes nothing on the machine (proven before/after)"
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 32
     steps:
       - uses: actions/checkout@v4
 
@@ -3464,6 +3464,10 @@ jobs:
       # itself be refused while the plant stands).
       - name: "GPO execution policy AllSigned: the audit declares itself blind, never CLEAN"
         shell: powershell
+        # Both bats stop at INIT; minutes, not the job budget. The first push hung
+        # here for 13 minutes: the blocked path fell through to `start notepad`,
+        # which inherited this step's output pipe.
+        timeout-minutes: 6
         run: |
           $ErrorActionPreference = 'Stop'
           $k = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell'
@@ -3530,6 +3534,10 @@ jobs:
       # finally, and by the cmd step after this one.
       - name: "ConstrainedLanguage lockdown: field_test and both bats refuse to run blind"
         shell: powershell
+        # Both bats stop at INIT; minutes, not the job budget. The first push hung
+        # here for 13 minutes: the blocked path fell through to `start notepad`,
+        # which inherited this step's output pipe.
+        timeout-minutes: 6
         run: |
           $ErrorActionPreference = 'Stop'
           $sentinel = Join-Path $env:RUNNER_TEMP 'dz_ci_clm_planted.txt'

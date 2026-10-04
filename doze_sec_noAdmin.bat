@@ -627,6 +627,7 @@ echo --- PowerShell script execution (can this machine run the audit's helper sc
 echo  Command: powershell -Command "Get-ExecutionPolicy -List">> "%REPORT%"
 del "%TEMP%\dz_exec_state.txt" 2>nul
 set "EXEC_STATE="
+set "EXEC_MODE="
 if not exist "%SCRIPT_DIR%tools\exec_probe.ps1" goto :exec_probe_missing
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\exec_probe.ps1" -StateFile "%TEMP%\dz_exec_state.txt" >nul 2>&1
 if exist "%TEMP%\dz_exec_state.txt" set /p EXEC_STATE=<"%TEMP%\dz_exec_state.txt"
@@ -644,7 +645,16 @@ echo  PowerShell refused to run a script file here. An execution policy set by G
 echo  [!] PowerShell refused to run the audit's helper scripts on this machine.
 :exec_blind
 echo  What PowerShell reports for this machine:>> "%REPORT%"
-"%PWSH%" -NoProfile -Command "Get-ExecutionPolicy -List | ForEach-Object { '    ' + $_.Scope + ' = ' + $_.ExecutionPolicy }; '    LanguageMode = ' + $ExecutionContext.SessionState.LanguageMode">> "%REPORT%" 2>&1
+:: Read from the registry, where Group Policy stores it, not through PowerShell:
+:: under AllSigned even a -Command can stop at an interactive "untrusted
+:: publisher" prompt while it loads a module.
+set "EP_MACHINE=not set"
+set "EP_USER=not set"
+for /f "tokens=3" %%a in ('reg query "HKLM\SOFTWARE\Policies\Microsoft\Windows\PowerShell" /v ExecutionPolicy 2^>nul ^| findstr /i "ExecutionPolicy"') do set "EP_MACHINE=%%a"
+for /f "tokens=3" %%a in ('reg query "HKCU\SOFTWARE\Policies\Microsoft\Windows\PowerShell" /v ExecutionPolicy 2^>nul ^| findstr /i "ExecutionPolicy"') do set "EP_USER=%%a"
+echo     MachinePolicy = %EP_MACHINE%   [HKLM\SOFTWARE\Policies\Microsoft\Windows\PowerShell]>> "%REPORT%"
+echo     UserPolicy    = %EP_USER%   [HKCU\SOFTWARE\Policies\Microsoft\Windows\PowerShell]>> "%REPORT%"
+if defined EXEC_MODE echo     LanguageMode  = %EXEC_MODE%>> "%REPORT%"
 echo  Running anyway would print CLEAN for checks that never ran, so nothing was audited.>> "%REPORT%"
 echo  Ask whoever manages this machine to allow it, or run the audit on a machine you control.>> "%REPORT%"
 echo  See docs\second-machine.md in the doze_sec folder.>> "%REPORT%"
@@ -5242,6 +5252,10 @@ echo   false answers. It is tamper-evidence for the report, not proof the>> "%RE
 echo   machine is sound.>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
+:: Nothing was audited: no HTML, no seal, and above all no "start notepad"
+:: fallback -- a child that inherits the caller's output pipe holds it open
+:: until someone closes Notepad, and field_test or CI waits forever.
+if "%EXEC_BLOCKED%"=="1" goto :final_exit
 echo %C_CYAN%Generating HTML report...%C_RESET%
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\report_html.ps1" -Report "%REPORT%" -HtmlPath "%REPORT_HTML%" -RemediationPath "%REMEDIATION%" 2>&1
 if exist "%REPORT_HTML%" (
