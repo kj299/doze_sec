@@ -151,6 +151,10 @@ set "DEFEXCL_EXTS=0"
 set "PPL_STATE=ungraded"
 set "REBOOT_AGE=unknown"
 set "BITLOCKER_STATE=ungraded"
+set "EXEC_BLOCKED=0"
+:: Set again before the summary; initialised here so a run that ends at INIT
+:: (unsupported OS, AUDIT NOT PERFORMED) does not print an empty hygiene line.
+set "REPORT_NULS=0"
 set "PROCPATH_CLEAN="
 set "PROCPATH_BAD=0"
 set "PROCPATH_TOTAL=0"
@@ -611,6 +615,63 @@ if "%IS_ADMIN%"=="0" (
     echo.>> "%REPORT%"
 )
 echo ====================================================================>> "%REPORT%"
+echo.>> "%REPORT%"
+:: ---- Can this machine run the audit's PowerShell helpers? --------------
+:: Every helper and every staged block runs as powershell -ExecutionPolicy
+:: Bypass -File. An execution policy set by Group Policy (MachinePolicy or
+:: UserPolicy) OVERRIDES Bypass, and AppLocker or WDAC run PowerShell in
+:: ConstrainedLanguage. Either way a refused helper writes no marker, no
+:: marker reads OK, and the sections said CLEAN for checks that never ran.
+:: Probe once, before the first helper, and refuse to run blind.
+echo --- PowerShell script execution (can this machine run the audit's helper scripts?) --->> "%REPORT%"
+echo  Command: powershell -Command "Get-ExecutionPolicy -List">> "%REPORT%"
+del "%TEMP%\dz_exec_state.txt" 2>nul
+set "EXEC_STATE="
+set "EXEC_MODE="
+if not exist "%SCRIPT_DIR%tools\exec_probe.ps1" goto :exec_probe_missing
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\exec_probe.ps1" -StateFile "%TEMP%\dz_exec_state.txt" >nul 2>&1
+if exist "%TEMP%\dz_exec_state.txt" set /p EXEC_STATE=<"%TEMP%\dz_exec_state.txt"
+del "%TEMP%\dz_exec_state.txt" 2>nul
+if "%EXEC_STATE%"=="ok|FullLanguage" goto :exec_probe_ok
+echo.>> "%REPORT%"
+echo *** AUDIT NOT PERFORMED -- PowerShell will not run this audit's helper scripts on this machine ***>> "%REPORT%"
+if "%EXEC_STATE%"=="" goto :exec_refused
+set "EXEC_MODE=%EXEC_STATE:ok|=%"
+echo  Scripts run here, but in %EXEC_MODE% mode, not FullLanguage: AppLocker or WDAC has locked PowerShell down, and the .NET calls the checks rely on are blocked.>> "%REPORT%"
+echo  [!] PowerShell runs in %EXEC_MODE% mode on this machine -- the checks cannot run.
+goto :exec_blind
+:exec_refused
+echo  PowerShell refused to run a script file here. An execution policy set by Group Policy, MachinePolicy or UserPolicy, overrides -ExecutionPolicy Bypass; AppLocker or WDAC script rules, or an antivirus product, can also block scripts.>> "%REPORT%"
+echo  [!] PowerShell refused to run the audit's helper scripts on this machine.
+:exec_blind
+echo  What PowerShell reports for this machine:>> "%REPORT%"
+:: Read from the registry, where Group Policy stores it, not through PowerShell:
+:: under AllSigned even a -Command can stop at an interactive "untrusted
+:: publisher" prompt while it loads a module.
+set "EP_MACHINE=not set"
+set "EP_USER=not set"
+for /f "tokens=3" %%a in ('reg query "HKLM\SOFTWARE\Policies\Microsoft\Windows\PowerShell" /v ExecutionPolicy 2^>nul ^| findstr /i "ExecutionPolicy"') do set "EP_MACHINE=%%a"
+for /f "tokens=3" %%a in ('reg query "HKCU\SOFTWARE\Policies\Microsoft\Windows\PowerShell" /v ExecutionPolicy 2^>nul ^| findstr /i "ExecutionPolicy"') do set "EP_USER=%%a"
+echo     MachinePolicy = %EP_MACHINE%   [HKLM\SOFTWARE\Policies\Microsoft\Windows\PowerShell]>> "%REPORT%"
+echo     UserPolicy    = %EP_USER%   [HKCU\SOFTWARE\Policies\Microsoft\Windows\PowerShell]>> "%REPORT%"
+if defined EXEC_MODE echo     LanguageMode  = %EXEC_MODE%>> "%REPORT%"
+echo  Running anyway would print CLEAN for checks that never ran, so nothing was audited.>> "%REPORT%"
+echo  Ask whoever manages this machine to allow it, or run the audit on a machine you control.>> "%REPORT%"
+echo  See docs\second-machine.md in the doze_sec folder.>> "%REPORT%"
+echo  [!] Nothing was audited -- running anyway would print CLEAN for checks that never ran.
+echo  [!] See the top of %REPORT% and docs\second-machine.md.
+set "EXEC_BLOCKED=1"
+set "EXIT_CODE=1"
+goto :end_script
+:exec_probe_missing
+echo *** AUDIT NOT PERFORMED -- tools\exec_probe.ps1 is missing: this copy of doze_sec is incomplete ***>> "%REPORT%"
+echo  Copy the whole doze_sec folder, including tools, tests and ThreatLists, and run again.>> "%REPORT%"
+echo  [!] tools\exec_probe.ps1 is missing -- this copy of doze_sec is incomplete. Nothing was audited.
+set "EXEC_BLOCKED=1"
+set "EXIT_CODE=1"
+goto :end_script
+:exec_probe_ok
+echo [OK] PowerShell runs this audit's helper scripts (FullLanguage; the execution policy allows them).>> "%REPORT%"
 echo.>> "%REPORT%"
 rem Tier 0 truthful-reporting preamble: what a clean result does and does
 rem not mean, at-risk-user safety warnings, and where to get expert help.
@@ -5059,14 +5120,14 @@ echo.
 rem ATT&CK coverage matrix -- auto-derived from the audits own technique
 rem references and annotated with what fired this run. Informational; raises
 rem no finding. Placed just before COVERAGE & CONFIDENCE.
-if exist "%SCRIPT_DIR%tools\attack_matrix.ps1" (
+if "%EXEC_BLOCKED%"=="0" if exist "%SCRIPT_DIR%tools\attack_matrix.ps1" (
     echo.>> "%REPORT%"
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\attack_matrix.ps1" -SourceDir "%SCRIPT_DIR%." -Report "%REPORT%" -Ledger "%LEDGER%">> "%REPORT%" 2>&1
 )
 rem Tier 0 COVERAGE & CONFIDENCE block -- reads the finished report and
 rem states how much was actually covered, so a clean pass is never read as
 rem a safety guarantee. Top-level call, no nesting.
-if exist "%SCRIPT_DIR%tools\report_safety.ps1" (
+if "%EXEC_BLOCKED%"=="0" if exist "%SCRIPT_DIR%tools\report_safety.ps1" (
     "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\report_safety.ps1" -Mode Coverage -Report "%REPORT%">> "%REPORT%" 2>&1
 )
 echo ====================================================================>> "%REPORT%"
@@ -5077,7 +5138,8 @@ if not defined LEDGER_MAXSEV set "LEDGER_MAXSEV=NONE"
 (echo  LEDGER MAXSEV: %LEDGER_MAXSEV%)>> "%REPORT%"
 echo  0=Success  1=Error  2=Warning  3=UnsupportedOS  4=RebootPending  5=RanFromTEMP  6=PartialNoAdmin  7=VTIntegrityFail  8=CriticalFindings>> "%REPORT%"
 if "%EXIT_CODE%"=="0" echo  STATUS: No issues in the checks that ran. NOT a proof of safety -- see COVERAGE ^& CONFIDENCE below and READ THIS FIRST at the top.>> "%REPORT%"
-if "%EXIT_CODE%"=="1" echo  STATUS: Fatal error. Check console output above for details.>> "%REPORT%"
+if "%EXIT_CODE%"=="1" if "%EXEC_BLOCKED%"=="1" echo  STATUS: Nothing was audited -- PowerShell will not run the audit's helper scripts here. See the top of this report.>> "%REPORT%"
+if "%EXIT_CODE%"=="1" if not "%EXEC_BLOCKED%"=="1" echo  STATUS: Fatal error. Check console output above for details.>> "%REPORT%"
 if "%EXIT_CODE%"=="2" echo  STATUS: Audit complete with warnings. Review [WARNING] items in report.>> "%REPORT%"
 if "%EXIT_CODE%"=="3" echo  STATUS: Unsupported OS. Use -dev switch to override.>> "%REPORT%"
 if "%EXIT_CODE%"=="4" if "%REBOOT_AGE%"=="stale" echo  STATUS: Reboot-pending flags that survived the last boot -- Section 1 lists what is queued.>> "%REPORT%"
@@ -5190,6 +5252,10 @@ echo   false answers. It is tamper-evidence for the report, not proof the>> "%RE
 echo   machine is sound.>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
+:: Nothing was audited: no HTML, no seal, and above all no "start notepad"
+:: fallback -- a child that inherits the caller's output pipe holds it open
+:: until someone closes Notepad, and field_test or CI waits forever.
+if "%EXEC_BLOCKED%"=="1" goto :final_exit
 echo %C_CYAN%Generating HTML report...%C_RESET%
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\report_html.ps1" -Report "%REPORT%" -HtmlPath "%REPORT_HTML%" -RemediationPath "%REMEDIATION%" 2>&1
 if exist "%REPORT_HTML%" (
