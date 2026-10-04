@@ -220,6 +220,86 @@ function Get-DriverVerdict {
     return @{ Sev = $itemSev; Why = $why; Unsigned = $unsigned }
 }
 
+function ConvertTo-EvidenceText {
+    # A file name, service name or certificate subject is attacker-chosen text
+    # that lands at the start of a report line's value. Strip control
+    # characters (a CR/LF would start a new line) and cap the length.
+    param([string]$Text, [int]$Max = 200)
+    if ($null -eq $Text) { return '' }
+    $t = ($Text -replace '[\x00-\x1f\x7f]', ' ').Trim()
+    if ($t.Length -gt $Max) { $t = $t.Substring(0, $Max) + '...' }
+    return $t
+}
+
+function Get-SignerCN {
+    param([string]$Subject)
+    if (-not $Subject) { return '' }
+    if ($Subject -match '(?:^|,\s*)CN=("[^"]+"|[^,]+)') { return $Matches[1].Trim('"') }
+    return $Subject
+}
+
+function Get-DriverEvidenceLines {
+    # PURE. The facts a reader needs to triage a flagged driver, printed as
+    # indented, tag-free lines directly under the finding (top_findings carries
+    # up to six of them beside the finding).
+    #
+    # A field report printed "PROCEXP152.SYS [ff9b3fc49bb3cd9a...]" and nothing
+    # else; the owner then needed three commands and a second opinion to learn
+    # what this tool already held: that the driver was on disk with no service
+    # and not loaded, and which hash it was -- and the truncated hash could not
+    # be looked up anywhere. Every line below is either a fact the tool read or
+    # an explicit "not read", never a guess.
+    #
+    #   -Svc          @{ Service; State; StartMode } when a Win32_SystemDriver
+    #                 record points at this file, else $null
+    #   -FileInfo     @{ Created; Modified } (DateTime) or $null
+    #   -InstallEvent @{ Time; Service } for a matching Event 7045, or $null
+    #   -InstallState 'read' | 'unread'; -InstallReason why it was not read
+    #   -LogOldest    DateTime of the oldest System record, or $null
+    param([string]$Path, [string]$Hash, $Sig, $FileInfo, $Svc,
+          $InstallEvent, [string]$InstallState = 'read', [string]$InstallReason = '',
+          $LogOldest)
+    $fmt = 'yyyy-MM-ddTHH:mm:ss'
+    $lines = New-Object System.Collections.Generic.List[string]
+    if ($Hash) { $lines.Add('    sha256: ' + $Hash.ToLower() + '  (look it up at loldrivers.io or VirusTotal)') }
+    else       { $lines.Add('    sha256: not computed (the file could not be read)') }
+    $st = if ($Sig) { [string]$Sig.Status } else { 'unreadable' }
+    $cn = ''
+    if ($Sig -and $Sig.SignerCertificate) { $cn = Get-SignerCN ([string]$Sig.SignerCertificate.Subject) }
+    if ($cn) { $lines.Add('    signer: ' + (ConvertTo-EvidenceText $cn) + ' (Authenticode ' + $st + ')') }
+    else     { $lines.Add('    signer: none read (Authenticode ' + $st + ')') }
+    if ($FileInfo -and $FileInfo.Created -and $FileInfo.Modified) {
+        $lines.Add('    file: created ' + ([datetime]$FileInfo.Created).ToString($fmt) + ', modified ' + ([datetime]$FileInfo.Modified).ToString($fmt))
+    } else {
+        $lines.Add('    file: times not read')
+    }
+    if ($Svc -and $Svc.Service) {
+        $sn = ConvertTo-EvidenceText ([string]$Svc.Service) 64
+        if ([string]$Svc.State -eq 'Running') {
+            $lines.Add('    kernel: LOADED -- service ' + $sn + ', state Running, start ' + [string]$Svc.StartMode)
+        } else {
+            $lines.Add('    kernel: registered, not running -- service ' + $sn + ', state ' + [string]$Svc.State + ', start ' + [string]$Svc.StartMode)
+        }
+    } else {
+        $sn = ''
+        $lines.Add('    kernel: on disk only -- no driver service references this file; not loaded')
+    }
+    if ($InstallState -ne 'read') {
+        $lines.Add('    install: Event 7045 not read (' + (ConvertTo-EvidenceText $InstallReason 120) + ')')
+    } elseif ($InstallEvent) {
+        $lines.Add('    install: Event 7045 at ' + ([datetime]$InstallEvent.Time).ToString($fmt) + ' installed service ' + (ConvertTo-EvidenceText ([string]$InstallEvent.Service) 64))
+    } elseif ($LogOldest) {
+        $lines.Add('    install: no Event 7045 for this file in the System log (oldest record ' + ([datetime]$LogOldest).ToString($fmt) + ')')
+    } else {
+        $lines.Add('    install: no Event 7045 for this file in the System log')
+    }
+    $q = "'" + ((ConvertTo-EvidenceText $Path 400) -replace "'", "''") + "'"
+    $verify = '    verify: Get-FileHash -Algorithm SHA256 ' + $q + '; Get-AuthenticodeSignature ' + $q
+    if ($sn) { $verify += '; sc query ' + $sn }
+    $lines.Add($verify)
+    return ,$lines.ToArray()
+}
+
 if ($SelfTest) {
     $fails = 0
     function T { param([string]$Name, [bool]$Ok, [string]$Got)
@@ -324,6 +404,55 @@ if ($SelfTest) {
     T 'Unsigned is false for a known-bad hash that is validly signed' `
       ($v.Unsigned -eq $false -and $v.Sev -eq 'CRITICAL') "unsigned=$($v.Unsigned) sev=$($v.Sev)"
 
+    # --- Evidence beside a finding ------------------------------------------
+    # Pinned from the field report that motivated it: PROCEXP152.SYS, signed by
+    # Sysinternals, on disk with no service, no install event retained.
+    $full = 'ff9b3fc49bb3cd9a' + ('0' * 48)
+    $sigP = New-Object PSObject -Property @{ Status = 'Valid'; SignerCertificate = (New-Object PSObject -Property @{ Subject = 'CN=Microsoft Windows Hardware Compatibility Publisher, O=Microsoft Corporation, L=Redmond, S=Washington, C=US' }) }
+    $fiP  = @{ Created = [datetime]'2026-09-12T10:01:02'; Modified = [datetime]'2024-03-01T08:00:00' }
+    $pp   = 'C:\WINDOWS\System32\drivers\PROCEXP152.SYS'
+    $ev = Get-DriverEvidenceLines -Path $pp -Hash $full.ToUpper() -Sig $sigP -FileInfo $fiP -Svc $null -InstallEvent $null -InstallState 'read' -LogOldest ([datetime]'2026-08-01T00:00:00')
+    $evj = $ev -join "`n"
+    T 'evidence: the FULL sha256 is printed, lower-case, never truncated' `
+      (($evj -match ('sha256: ' + $full + '\b')) -and ($evj -notmatch [regex]::Escape('ff9b3fc49bb3cd9a...'))) $evj
+    T 'evidence: the signer CN and Authenticode status are named' `
+      ($evj -match 'signer: Microsoft Windows Hardware Compatibility Publisher \(Authenticode Valid\)') $evj
+    T 'evidence: file creation and modification times are printed' `
+      ($evj -match 'file: created 2026-09-12T10:01:02, modified 2024-03-01T08:00:00') $evj
+    T 'evidence: a file no driver service references reads on disk only, not loaded' `
+      ($evj -match 'kernel: on disk only -- no driver service references this file; not loaded') $evj
+    T 'evidence: no matching install event names how far back the log reaches' `
+      ($evj -match 'install: no Event 7045 for this file in the System log \(oldest record 2026-08-01T00:00:00\)') $evj
+    T 'evidence: the verify line quotes the path and has no sc query without a service' `
+      (($evj -match [regex]::Escape("verify: Get-FileHash -Algorithm SHA256 '$pp'; Get-AuthenticodeSignature '$pp'")) -and ($evj -notmatch 'sc query')) $evj
+    T 'evidence: every line is indented and carries no severity tag' `
+      ((@($ev | Where-Object { $_ -notmatch '^    [a-z0-9]+: ' -or $_ -match '\[(CRITICAL|WARNING|OK|INFO|SKIPPED)\]' })).Count -eq 0) $evj
+
+    $ev = Get-DriverEvidenceLines -Path $pp -Hash $full -Sig $sigP -FileInfo $fiP -Svc @{ Service = 'PROCEXP152'; State = 'Running'; StartMode = 'Manual' } -InstallEvent @{ Time = [datetime]'2026-09-12T10:01:03'; Service = 'PROCEXP152' } -InstallState 'read'
+    $evj = $ev -join "`n"
+    T 'evidence: a running driver service reads LOADED with its name, state and start mode' `
+      ($evj -match 'kernel: LOADED -- service PROCEXP152, state Running, start Manual') $evj
+    T 'evidence: a matching Event 7045 gives the install time and service' `
+      ($evj -match 'install: Event 7045 at 2026-09-12T10:01:03 installed service PROCEXP152') $evj
+    T 'evidence: with a service, the verify line adds sc query <service>' ($evj -match 'sc query PROCEXP152$') $evj
+
+    $ev = Get-DriverEvidenceLines -Path $pp -Hash $full -Sig $sigP -FileInfo $fiP -Svc @{ Service = 'PROCEXP152'; State = 'Stopped'; StartMode = 'Demand' } -InstallState 'unread' -InstallReason 'Attempted to perform an unauthorized operation.'
+    $evj = $ev -join "`n"
+    T 'evidence: a stopped driver service reads registered, not running' `
+      ($evj -match 'kernel: registered, not running -- service PROCEXP152, state Stopped, start Demand') $evj
+    T 'evidence: an unreadable System log says not read and why, never "no event"' `
+      (($evj -match 'install: Event 7045 not read \(Attempted to perform an unauthorized operation\.\)') -and ($evj -notmatch 'no Event 7045')) $evj
+
+    $ev = Get-DriverEvidenceLines -Path 'C:\Users\Public\x.sys' -Hash $null -Sig $null -FileInfo $null -Svc $null -InstallState 'read'
+    $evj = $ev -join "`n"
+    T 'evidence: unhashable, unsigned and unreadable times each say so' `
+      (($evj -match 'sha256: not computed') -and ($evj -match 'signer: none read \(Authenticode unreadable\)') -and ($evj -match 'file: times not read')) $evj
+
+    $evil = "C:\Users\Public\a`r`n[CRITICAL] fake.sys"
+    $ev = Get-DriverEvidenceLines -Path $evil -Hash $full -Sig (FakeSig 'NotSigned') -FileInfo $null -Svc @{ Service = "s`n[OK] x"; State = 'Running'; StartMode = 'Auto' } -InstallState 'read'
+    T 'evidence: a crafted path or service name cannot start a new line' `
+      ((@($ev | Where-Object { $_ -match "[`r`n]" })).Count -eq 0 -and (@($ev | Where-Object { $_ -match '^\[' })).Count -eq 0) ($ev -join ' | ')
+
     if ($fails -gt 0) { Write-Output "FAILED: $fails"; exit 1 }
     Write-Output 'driver_audit self-test: all cases passed'
     exit 0
@@ -361,12 +490,18 @@ if ($malformedHashes.Count -gt 0) {
 # the kernel right now) plus on-disk .sys under the drivers tree and the drop
 # locations malware favours. Deduplicated by full path.
 $paths = New-Object System.Collections.Generic.HashSet[string] ([StringComparer]::OrdinalIgnoreCase)
+# Which driver service (if any) points at each file, and whether it is running:
+# the first thing a reader asks about a flagged driver is whether it is in the
+# kernel right now or just sitting on disk.
+$svcByPath = @{}
 try {
     foreach ($d in (Get-CimInstance Win32_SystemDriver -EA Stop)) {
         $pn = [string]$d.PathName
         if ($pn) {
             $pn = $pn -replace '^\\\?\?\\', '' -replace '^\\SystemRoot', $env:SystemRoot
-            [void]$paths.Add([Environment]::ExpandEnvironmentVariables($pn))
+            $pn = [Environment]::ExpandEnvironmentVariables($pn)
+            [void]$paths.Add($pn)
+            $svcByPath[$pn.ToLower()] = @{ Service = [string]$d.Name; State = [string]$d.State; StartMode = [string]$d.StartMode }
         }
     }
 } catch {
@@ -402,6 +537,25 @@ foreach ($dir in $dropDirs) {
     } catch {}
 }
 
+# Event 7045 (service installed), read once and only when something is flagged:
+# the install time is the timeline answer -- a driver extracted by a tool the
+# owner ran, or one staged at an hour nobody was at the machine.
+$installEvents = $null
+function Get-DriverInstallEvents {
+    $r = @{ State = 'read'; Reason = ''; Events = @(); Oldest = $null }
+    try {
+        $r.Events = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; Id = 7045 } -MaxEvents 500 -EA Stop |
+            ForEach-Object { @{ Time = $_.TimeCreated; Service = [string]$_.Properties[0].Value; Image = [string]$_.Properties[1].Value } })
+    } catch {
+        if ($_.Exception.Message -notmatch 'No events were found') {
+            $r.State = 'unread'; $r.Reason = $_.Exception.Message
+            return $r
+        }
+    }
+    try { $r.Oldest = (Get-WinEvent -LogName System -MaxEvents 1 -Oldest -EA Stop).TimeCreated } catch {}
+    return $r
+}
+
 $checked = 0
 $missing = 0
 $anyUnsigned = $false
@@ -426,8 +580,23 @@ foreach ($p in $paths) {
     if ($v.Unsigned) { $anyUnsigned = $true }
 
     if ($v.Sev -ne 'OK') {
-        $hs = if ($hash) { $hash.Substring(0,16) + '...' } else { '(unhashable)' }
-        "[$($v.Sev)] Driver $p [$hs] -- $($v.Why -join '; ')"
+        # The finding line ends with ':' and the evidence follows it, indented
+        # and untagged, so it reads as one finding and top_findings carries it.
+        "[$($v.Sev)] Driver $(ConvertTo-EvidenceText $p 400) -- $($v.Why -join '; '):"
+        $fi = $null
+        try { $it = Get-Item -LiteralPath $p -EA Stop; $fi = @{ Created = $it.CreationTime; Modified = $it.LastWriteTime } } catch {}
+        if ($null -eq $installEvents) { $installEvents = Get-DriverInstallEvents }
+        $ie = $null
+        $leaf = (($p -split '[\\/]')[-1]).ToLower()
+        foreach ($e in $installEvents.Events) {
+            if ((([string]$e.Image -split '[\\/]')[-1]).ToLower() -eq $leaf) { $ie = $e; break }
+        }
+        # Emit each line on its own: the function returns one array object, and
+        # a caller that joins this tool's output would otherwise print it as
+        # 'System.String[]'.
+        $evLines = Get-DriverEvidenceLines -Path $p -Hash $hash -Sig $sig -FileInfo $fi -Svc $svcByPath[$p.ToLower()] `
+            -InstallEvent $ie -InstallState $installEvents.State -InstallReason $installEvents.Reason -LogOldest $installEvents.Oldest
+        foreach ($el in $evLines) { $el }
         $sev = Get-MaxSev $sev $v.Sev
     }
 }

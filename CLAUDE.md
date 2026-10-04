@@ -566,7 +566,11 @@ fifth, and the first found by CI rather than a field report: it re-read
 so the standard-user job's ledger-divergence alarm fired on runner images
 carrying an explicit 0 and not on images where the value is absent. An
 intermittent alarm is a tile re-measuring something that differs between
-machines; the fix is the same state-file idiom (`PPL_STATE`).
+machines; the fix is the same state-file idiom (`PPL_STATE`). The BitLocker tile was the sixth: it re-ran
+`Get-BitLockerVolume` in the dashboard of both bats, and on the standard-user
+path the section itself ran it twice -- once declared DEFERRED, once printed
+`[SKIPPED]` -- so one gap was counted as both. Section 13 now writes
+`BITLOCKER_STATE` and the tile reads it.
 
 Two mechanics that bite when a verdict crosses into cmd. A value that becomes
 part of an `echo` into `%PSRUN%` is **shell syntax**: `&`, `|`, `>`, `^`, `%`
@@ -621,7 +625,16 @@ tasks (no executable action), a loopback-only listener, and a Winlogon logoff
 counter -- and three of them only because an UNQUOTED action path with spaces
 (`C:\Program Files\...\x.exe /arg`) defeated the signature check: the first
 token is not the binary; walk the prefixes to the first file that exists, as
-CreateProcess does. Pin every such line verbatim, in both directions.
+CreateProcess does. Pin every such line verbatim, in both directions. Per-user service instances are the next class:
+Windows names them `<template>_<suffix>` per logon session, so a new logon
+renamed 24 of them; they compare under their template -- only when the
+template exists and the instance runs its image, so a look-alike stays
+visible. **And a finding must carry what the reader needs to triage it.** A
+BYOVD line printed a 16-character hash prefix and nothing else; the owner
+spent three commands learning what the tool already held (no service, not
+loaded) and could not look the hash up at all. Print the full hash, the
+loaded state, the signer, the file times and the install event beneath the
+finding.
 
 **A standard-user token is a different machine.** The first field run of
 `doze_sec_noAdmin.bat` reported Windows 11's own ZTHelper service as a hidden

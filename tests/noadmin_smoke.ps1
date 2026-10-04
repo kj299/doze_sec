@@ -289,6 +289,19 @@ try {
     Assert ($text1 -match '\[DEFERRED - ADMIN REQUIRED\] Log ''Security'' needs administrator rights') `
         'the Security log is declared DEFERRED on the standard-user path, not skipped-and-raised' `
         'the Security log was not declared DEFERRED (it was skipped silently, or raised as a finding)'
+    # BitLocker needs admin. The field run on 2026-10-03 declared it DEFERRED and
+    # then re-ran the cmdlet four lines later, printing a [SKIPPED] line for the
+    # same gap -- 'Checks SKIPPED : 1' and a TOP FINDINGS coverage note for a
+    # check already counted as deferred. One declaration; the tile reads it.
+    Assert ($text1 -match '\[DEFERRED - ADMIN REQUIRED\] Get-BitLockerVolume and manage-bde require admin') `
+        'BitLocker is declared DEFERRED on the standard-user path' `
+        'BitLocker was not declared DEFERRED on the standard-user path'
+    Assert ($text1 -notmatch '\[SKIPPED\] BitLocker status unavailable') `
+        'BitLocker is declared once (no second [SKIPPED] line for the same deferral)' `
+        'BitLocker printed a [SKIPPED] line after its DEFERRED one -- the same gap counted twice'
+    Assert ($text1 -match '\[\s+INFO\s+\]\s+BitLocker status check deferred \(requires admin\)') `
+        'the BitLocker tile reads deferred' `
+        'the BitLocker tile does not read deferred on a standard-user run'
     Assert ($text1 -match '\[DEFERRED - ADMIN REQUIRED\] TaskCache registry or Task Scheduler not readable from a standard-user token') `
         'the TaskCache hidden-task check is declared DEFERRED on the standard-user path' `
         'the TaskCache hidden-task check was not declared DEFERRED (skipped silently, or raised as a rootkit indicator)'

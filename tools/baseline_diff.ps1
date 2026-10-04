@@ -233,6 +233,72 @@ function Test-ExcludedRunValue {
     return ($script:ExcludedRunValues -contains $Name)
 }
 
+# doze_sec's own RunOnce resume entry (INIT 8). A baseline saved by a run that
+# created it records it, and every later diff then reports it -- and once its
+# path was corrected, a non-read-only run would have reported it CHANGED, as an
+# unsigned .bat autorun. Excluded by MARKER, never by name: the value name alone
+# is attacker-choosable, so the data must also point at one of our own bats.
+function Test-OwnResumeEntry {
+    param([string]$Key, [string]$Name, [string]$Value)
+    if ($Key -notmatch '\\RunOnce$') { return $false }
+    if ($Name -notmatch '^\*.+_resume$') { return $false }
+    return ($Value -match '\\doze_sec(_noAdmin)?\.bat"?\s+-resume"?\s*$')
+}
+
+# A record the diff must not compare at all. Applied to the OLD snapshot as well
+# as the live one, so a baseline saved before an exclusion existed stops
+# reporting the excluded value as REMOVED on every run.
+function Test-ExcludedRecord {
+    param([string]$Cat, [string]$Id, [string]$Detail)
+    if ($Cat -ne 'RUN') { return $false }
+    $i = $Id.LastIndexOf('\')
+    if ($i -lt 0) { return $false }
+    $k = $Id.Substring(0, $i); $n = $Id.Substring($i + 1)
+    if (Test-ExcludedRunValue -Key $k -Name $n) { return $true }
+    return (Test-OwnResumeEntry -Key $k -Name $n -Value $Detail)
+}
+
+# Per-user services. Windows creates an instance of every per-user service
+# template for each logon session, named <template>_<LUID suffix> (Microsoft
+# Learn, "Per-user services in Windows"), so a new logon renamed all of them: a
+# field report carried 24 NEW and 24 REMOVED lines for AarSvc_*, cbdhsvc_*,
+# CDPUserSvc_* and the rest. They are compared under one key per template --
+# but only when a real template of that name exists (Type has
+# SERVICE_USER_SERVICE 0x40, not SERVICE_USERSERVICE_INSTANCE 0x80) AND the
+# instance runs the template's own image. A name that merely looks per-user, or
+# an instance repointed at another binary, keeps its own key and stays visible.
+$script:PerUserSvcRx = '^(.+)_([0-9a-f]{4,8})$'
+function ConvertTo-ImageKey {
+    param([string]$Image)
+    return ([Environment]::ExpandEnvironmentVariables([string]$Image) -replace '"', '').Trim().ToLower()
+}
+function Get-RecordKey {
+    param([string]$Cat, [string]$Id, [string]$Detail, [hashtable]$Templates)
+    if ($Cat -eq 'SVC' -and $Templates -and $Id -match $script:PerUserSvcRx) {
+        $tn = $Matches[1]
+        $tk = $tn.ToLower()
+        if ($Templates.ContainsKey($tk)) {
+            $img = $Detail -replace ' start=\w+$', ''
+            if ((ConvertTo-ImageKey $img) -eq (ConvertTo-ImageKey $Templates[$tk])) { return ('SVC|' + $tn + '_<per-user>') }
+        }
+    }
+    return ($Cat + '|' + $Id)
+}
+function Get-UserServiceTemplates {
+    $t = @{}
+    try {
+        foreach ($k in (Get-ChildItem -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services' -EA Stop)) {
+            try {
+                $pr = Get-ItemProperty -LiteralPath $k.PSPath -EA Stop
+                $ty = 0
+                if ($null -ne $pr.Type) { $ty = [int]$pr.Type }
+                if (($ty -band 0x40) -and -not ($ty -band 0x80) -and $pr.ImagePath) { $t[$k.PSChildName.ToLower()] = [string]$pr.ImagePath }
+            } catch {}
+        }
+    } catch {}
+    return $t
+}
+
 # PORT detail is '<owner> bind=<local address>'. The bind address is recorded
 # so a loopback-only listener can be told from one reachable over the network;
 # the owner alone decides whether two records are "the same" so a baseline
@@ -544,6 +610,44 @@ if ($SelfTest) {
     T 'Winlogon Shell / Userinit are NOT excluded' (-not (Test-ExcludedRunValue -Key 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name 'Shell')) ''
     T 'the same value name under a Run key is NOT excluded (the exclusion is key-scoped)' (-not (Test-ExcludedRunValue -Key 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'LastLogOffEndTimePerfCounter')) ''
 
+    # --- Per-user service instances, pinned from the 2026-10-03 22:49 report ---
+    $tpl = @{
+        'aarsvc'     = 'C:\WINDOWS\system32\svchost.exe -k AarSvcGroup -p'
+        'cbdhsvc'    = 'C:\WINDOWS\system32\svchost.exe -k ClipboardSvcGroup -p'
+        'cdpusersvc' = 'C:\WINDOWS\system32\svchost.exe -k UnistackSvcGroup'
+        'credentialenrollmentmanagerusersvc' = 'C:\WINDOWS\system32\CredentialEnrollmentManager.exe'
+    }
+    $kOld = Get-RecordKey -Cat 'SVC' -Id 'AarSvc_fdf7a'   -Detail 'C:\WINDOWS\system32\svchost.exe -k AarSvcGroup -p start=Manual' -Templates $tpl
+    $kNew = Get-RecordKey -Cat 'SVC' -Id 'AarSvc_4c42911' -Detail 'C:\WINDOWS\system32\svchost.exe -k AarSvcGroup -p start=Manual' -Templates $tpl
+    T 'a per-user service renamed by a new logon keeps one key (AarSvc_fdf7a == AarSvc_4c42911)' ($kOld -eq $kNew -and $kNew -eq 'SVC|AarSvc_<per-user>') "$kOld / $kNew"
+    $k1 = Get-RecordKey -Cat 'SVC' -Id 'cbdhsvc_4c42911' -Detail 'C:\WINDOWS\system32\svchost.exe -k ClipboardSvcGroup -p start=Auto' -Templates $tpl
+    $k2 = Get-RecordKey -Cat 'SVC' -Id 'CredentialEnrollmentManagerUserSvc_fdf7a' -Detail 'C:\WINDOWS\system32\CredentialEnrollmentManager.exe start=Manual' -Templates $tpl
+    T 'cbdhsvc and CredentialEnrollmentManagerUserSvc instances key by template' ($k1 -eq 'SVC|cbdhsvc_<per-user>' -and $k2 -eq 'SVC|CredentialEnrollmentManagerUserSvc_<per-user>') "$k1 / $k2"
+    $k3 = Get-RecordKey -Cat 'SVC' -Id 'CDPUserSvc_4c42911' -Detail '"C:\Windows\System32\svchost.exe" -k UnistackSvcGroup start=Auto' -Templates $tpl
+    T 'the image comparison ignores case and quotes' ($k3 -eq 'SVC|CDPUserSvc_<per-user>') $k3
+    $k4 = Get-RecordKey -Cat 'SVC' -Id 'evil_abc12' -Detail 'C:\Users\Public\evil.exe start=Auto' -Templates $tpl
+    T 'a per-user-LOOKING name with no template keeps its own key (stays visible as NEW)' ($k4 -eq 'SVC|evil_abc12') $k4
+    $k5 = Get-RecordKey -Cat 'SVC' -Id 'AarSvc_4c42911' -Detail 'C:\Users\Public\svchost.exe -k AarSvcGroup -p start=Manual' -Templates $tpl
+    T 'an instance repointed at another image keeps its own key (stays visible)' ($k5 -eq 'SVC|AarSvc_4c42911') $k5
+    $k6 = Get-RecordKey -Cat 'TASK' -Id '\AarSvc_4c42911' -Detail 'x' -Templates $tpl
+    T 'only services are keyed by template' ($k6 -eq 'TASK|\AarSvc_4c42911') $k6
+    $k7 = Get-RecordKey -Cat 'SVC' -Id 'AarSvc_4c42911' -Detail 'C:\WINDOWS\system32\svchost.exe -k AarSvcGroup -p start=Manual' -Templates @{}
+    T 'with no template map (registry unreadable) nothing is collapsed' ($k7 -eq 'SVC|AarSvc_4c42911') $k7
+
+    # --- Old-snapshot exclusions -------------------------------------------
+    T 'an OLD Winlogon counter record is excluded from the diff' `
+      (Test-ExcludedRecord -Cat 'RUN' -Id 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\LastLogOffEndTimePerfCounter' -Detail '1804345906204') ''
+    T 'our own RunOnce resume entry (data names doze_sec.bat) is excluded' `
+      (Test-ExcludedRecord -Cat 'RUN' -Id 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce\*WIN11_SecurityAudit_resume' -Detail '"C:\Users\u\src\doze_sec\doze_sec.bat" -resume') ''
+    T 'the noAdmin bat resume entry is excluded too' `
+      (Test-ExcludedRecord -Cat 'RUN' -Id 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce\*WIN11_SecurityAudit_resume' -Detail '"C:\x\doze_sec_noAdmin.bat" -resume') ''
+    T 'the resume NAME with someone else''s data is NOT excluded (marker, never name)' `
+      (-not (Test-ExcludedRecord -Cat 'RUN' -Id 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce\*WIN11_SecurityAudit_resume' -Detail 'C:\Users\Public\evil.exe -resume')) ''
+    T 'the resume shape under a Run key (not RunOnce) is NOT excluded' `
+      (-not (Test-ExcludedRecord -Cat 'RUN' -Id 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\*WIN11_SecurityAudit_resume' -Detail '"C:\x\doze_sec.bat" -resume')) ''
+    T 'a SVC record is never excluded by the RUN rules' `
+      (-not (Test-ExcludedRecord -Cat 'SVC' -Id 'LastLogOffEndTimePerfCounter' -Detail 'x')) ''
+
     if ($fails) { Write-Output "[FAIL] $fails baseline_diff self-test expectation(s) unmet"; exit 1 }
     Write-Output '[OK] baseline_diff self-test: update churn (signed replacements and version bumps, dynamic RPC ports, loopback listeners, COM-handler tasks, logon counters) is context; replaced unsigned binaries, moved listeners, new admins, new roots and suspicious arguments are findings.'
     exit 0
@@ -613,6 +717,7 @@ function Get-Snapshot {
                 # either -- both the direct check and change detection missed it.
                 if ($psNoteProps -contains $p.Name) { continue }
                 if (Test-ExcludedRunValue -Key $k -Name $p.Name) { continue }
+                if (Test-OwnResumeEntry -Key $k -Name $p.Name -Value ([string]$p.Value)) { continue }
                 $recs.Add(('RUN|{0}\{1}|{2}' -f (CleanField $k), (CleanField $p.Name), (CleanField ([string]$p.Value))))
             }
         } catch {}
@@ -717,15 +822,21 @@ if (-not (Test-Path -LiteralPath $Path)) {
 }
 
 $old = @{}
+$oldExcluded = 0
+$perUserOld = 0
+$perUserNew = 0
+$userSvcTemplates = Get-UserServiceTemplates
 try {
     foreach ($ln in (Get-Content -LiteralPath $Path -Encoding UTF8 -EA Stop)) {
         $t = $ln.Trim()
         if (-not $t -or $t.StartsWith('#')) { continue }
         $f = $t.Split('|')
         if ($f.Length -lt 2) { continue }
-        $key = $f[0] + '|' + $f[1]
         $detail = ''
         if ($f.Length -ge 3) { $detail = ($f[2..($f.Length - 1)] -join '|') }
+        if (Test-ExcludedRecord -Cat $f[0] -Id $f[1] -Detail $detail) { $oldExcluded++; continue }
+        $key = Get-RecordKey -Cat $f[0] -Id $f[1] -Detail $detail -Templates $userSvcTemplates
+        if ($key -ne ($f[0] + '|' + $f[1])) { $perUserOld++ }
         $old[$key] = $detail
     }
 } catch {
@@ -739,10 +850,18 @@ $new = @{}
 foreach ($ln in $snapshot) {
     $f = $ln.Split('|')
     if ($f.Length -lt 2) { continue }
-    $key = $f[0] + '|' + $f[1]
     $detail = ''
     if ($f.Length -ge 3) { $detail = ($f[2..($f.Length - 1)] -join '|') }
+    $key = Get-RecordKey -Cat $f[0] -Id $f[1] -Detail $detail -Templates $userSvcTemplates
+    if ($key -ne ($f[0] + '|' + $f[1])) { $perUserNew++ }
     $new[$key] = $detail
+}
+# Declared, never silent: what was compared differently, and why.
+if ($perUserOld -gt 0 -or $perUserNew -gt 0) {
+    "[INFO] Per-user service instances compared by template ($perUserOld in the baseline, $perUserNew now): Windows renames them <template>_<suffix> at every logon. An instance whose image differs from its template's is still compared by its own name."
+}
+if ($oldExcluded -gt 0) {
+    "[INFO] Excluded by design: $oldExcluded value(s) in the saved baseline (Winlogon logon/logoff counters, or doze_sec's own RunOnce resume entry) -- not compared."
 }
 
 # NEW items that are validly Microsoft-signed are almost always Windows Update

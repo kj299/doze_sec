@@ -771,6 +771,23 @@ jobs:
               if (-not $l3) { throw 'signed known-abusable driver in the normal location was not reported at all' }
               if ($l3 -match '^\[CRITICAL\]') { throw ("validly signed driver in System32\drivers was reported CRITICAL (false positive): $l3") }
               if ($l3 -notmatch '^\[WARNING\]') { throw ("expected WARNING for signed known-abusable driver, got: $l3") }
+              # The finding carries its triage facts directly beneath it: the
+              # FULL hash (a truncated one cannot be looked up), whether the
+              # driver is in the kernel, who signed it, and the install answer.
+              # The plant is a file no driver service references, so it must
+              # read 'on disk only'.
+              if ($l3 -notmatch ':$') { throw "the finding line must end with ':' so its evidence is carried with it: $l3" }
+              $a3 = @($o3 -split "`n")
+              $i3 = [array]::IndexOf($a3, $l3)
+              $ev3 = ($a3[($i3 + 1)..($i3 + 6)]) -join "`n"
+              Write-Host $ev3
+              $h3 = (Get-FileHash -LiteralPath $inPlace -Algorithm SHA256).Hash.ToLower()
+              if ($ev3 -notmatch ('(?m)^    sha256: ' + $h3 + '\b')) { throw "full sha256 $h3 not printed under the finding" }
+              if ($ev3 -notmatch '(?m)^    kernel: on disk only') { throw 'the on-disk-only plant did not read kernel: on disk only' }
+              if ($ev3 -notmatch '(?m)^    signer: \S') { throw 'no signer line under the finding' }
+              if ($ev3 -notmatch '(?m)^    install: ') { throw 'no install-event line under the finding' }
+              if ($ev3 -notmatch '(?m)^    verify: Get-FileHash') { throw 'no verify line under the finding' }
+              if ($o3 -match 'gdrv\.sys \[[0-9a-f]{16}\.\.\.\]') { throw 'a truncated hash is still printed' }
               Remove-Item -LiteralPath $inPlace -Force -EA SilentlyContinue
               # Same name, same valid signature, but STAGED outside the drivers
               # directory -- that is the real BYOVD pattern and must stay CRITICAL.
@@ -1593,7 +1610,7 @@ jobs:
           $st = (.\tools\baseline_diff.ps1 -SelfTest) -join "`n"
           if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'baseline_diff.ps1 -SelfTest failed' }
           $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($nst -lt 70) { throw "baseline_diff self-test ran only $nst case(s)" }
+          if ($nst -lt 84) { throw "baseline_diff self-test ran only $nst case(s)" }
           Write-Host "baseline_diff -SelfTest OK ($nst cases)"
           $md = Join-Path $env:TEMP ("dz_bl_ci_{0}" -f $PID)
           New-Item -ItemType Directory -Path $md -Force | Out-Null
@@ -1633,6 +1650,40 @@ jobs:
             $m = Join-Path $md 'dz_baseline.txt'
             if (-not (Test-Path $m)) { throw 'baseline diff wrote no marker for a new persistence value' }
             if ((Get-Content $m).Trim() -ne 'WARNING') { throw ("expected WARNING marker, got {0}" -f (Get-Content $m)) }
+
+            # WHAT CHANGES BY DESIGN, IN AN OLD SNAPSHOT. A field run carried 48
+            # lines for one logon: every per-user service instance renamed
+            # <template>_<suffix>. Re-suffix this runner's own instances in a
+            # copy of the snapshot (a "previous logon"), and add records the
+            # diff must not compare (a Winlogon counter, our own resume entry)
+            # beside the malign twin it MUST still report (the resume NAME
+            # pointing at someone else's binary).
+            $snapOld = Join-Path $md 'baseline_oldlogon.snapshot'
+            $tplNames = @()
+            foreach ($k in (Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Services')) {
+              $ty = (Get-ItemProperty -LiteralPath $k.PSPath -Name Type -EA SilentlyContinue).Type
+              if ($ty -and ($ty -band 0x40) -and -not ($ty -band 0x80)) { $tplNames += $k.PSChildName }
+            }
+            $inst = @($recs1 | Where-Object { $_ -match '^SVC\|([^|]+)_[0-9a-f]{4,8}\|' -and ($tplNames -contains ($_ -replace '^SVC\|([^|]+)_[0-9a-f]{4,8}\|.*$', '$1')) })
+            Write-Host ("per-user service instance record(s) on this runner: {0}" -f $inst.Count)
+            $oldRecs = @($recs1 | ForEach-Object { if ($inst -contains $_) { $_ -replace '^(SVC\|[^|]+_)[0-9a-f]{4,8}(\|)', '${1}fdf7a$2' } else { $_ } })
+            $oldRecs += 'RUN|HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\LastLogOffEndTimePerfCounter|1804345906204'
+            $oldRecs += 'RUN|HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce\*WIN11_SecurityAudit_resume|"C:\src\doze_sec\doze_sec.bat" -resume'
+            $oldRecs += 'RUN|HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce\*dz_ci_twin_resume|C:\Users\Public\dz_ci_twin.exe -resume'
+            Set-Content -LiteralPath $snapOld -Value $oldRecs -Encoding UTF8
+            $dOld = (.\tools\baseline_diff.ps1 -Mode Diff -Path $snapOld -MarkerDir $md) -join "`n"
+            if ($dOld -match 'LastLogOffEndTimePerfCounter') { throw 'an OLD Winlogon counter record was still compared' }
+            if ($dOld -match 'WIN11_SecurityAudit_resume') { throw 'our own resume entry in an old snapshot was still compared' }
+            if ($dOld -notmatch 'REMOVED autorun/persistence value since baseline: \S*\*dz_ci_twin_resume') { throw 'the resume NAME with a foreign binary was excluded -- the exclusion must key on the marker, not the name' }
+            if ($dOld -notmatch 'Excluded by design: 2 value\(s\) in the saved baseline') { throw 'the old-snapshot exclusion was not declared with its count' }
+            if ($inst.Count -gt 0) {
+              $instNames = @($inst | ForEach-Object { ($_ -split '\|')[1] -replace '_[0-9a-f]{4,8}$', '' })
+              $tplLines = @(($dOld -split "`n") | Where-Object { $l = $_; $l -match '(NEW|REMOVED) service since baseline' -and @($instNames | Where-Object { $l -match ('\b' + [regex]::Escape($_) + '_') }).Count })
+              if ($tplLines.Count) { throw ("per-user service instances still reported after a re-suffix: " + ($tplLines -join ' | ')) }
+              if ($dOld -notmatch 'Per-user service instances compared by template') { throw 'the template comparison was not declared' }
+            } else {
+              Write-Host '[ SKIP ] no per-user service instance on this runner -- the template rule is proven by the self-test cases only'
+            }
 
             # A NEW SERVICE HOSTED BY A SIGNED LOLBIN MUST NOT BE DOWNGRADED.
             # The signature gate keyed on the host binary only, so
@@ -3216,6 +3267,18 @@ jobs:
             throw ("{0} TOP FINDINGS entr(y|ies) have no analyst note -- add a whyTable entry in tools\top_findings.ps1 for the Finding: line(s) above" -f $unmapped)
           }
           Write-Host 'TOP FINDINGS: every finding carries an analyst note'
+          # THE BITLOCKER TILE STATES SECTION 13'S VERDICT. It re-ran
+          # Get-BitLockerVolume until 2026-10-04 -- the sixth tile that measured
+          # twice. Section 13's evaluated line and the tile must agree.
+          $blSec  = [regex]::Match($text, '(?m)^\[(OK|WARNING|SKIPPED)\] BitLocker (ON|OFF|status unavailable)')
+          $blTile = [regex]::Match($text, '(?m)^\s*\[\s*(OK|PASS|WARNING|WARN|INFO)\s*\]\s+BitLocker (ON for \S+ \(Section 13\)|OFF for \S+ \(Section 13\)|status unavailable -- see Section 13|: NOT graded)')
+          if (-not $blSec.Success)  { throw 'Section 13 printed no evaluated BitLocker line' }
+          if (-not $blTile.Success) { throw 'no BitLocker dashboard tile naming Section 13' }
+          $want = @{ 'OK' = 'ON for'; 'WARNING' = 'OFF for'; 'SKIPPED' = 'status unavailable' }[$blSec.Groups[1].Value]
+          if ($blTile.Groups[2].Value -notlike "$want*") { throw ("BitLocker tile '{0}' disagrees with Section 13 '{1}'" -f $blTile.Value.Trim(), $blSec.Value) }
+          Write-Host ("BitLocker: Section 13 '{0}' == tile '{1}'" -f $blSec.Value, $blTile.Value.Trim())
+          if ((Get-Content -LiteralPath .\doze_sec.bat -Raw) -match "ck '\w+' \('BitLocker[^\r\n]*Get-BitLockerVolume|Get-BitLockerVolume[^\r\n]*ck '(PASS|WARN|INFO)'") { throw 'a dashboard tile in doze_sec.bat calls Get-BitLockerVolume again' }
+          if ((Get-Content -LiteralPath .\doze_sec_noAdmin.bat -Raw) -match "Get-BitLockerVolume[^\r\n]*ck '(PASS|WARN|INFO)'") { throw 'a dashboard tile in doze_sec_noAdmin.bat calls Get-BitLockerVolume again' }
           # THE PLANTED FOOTPRINTS ARE INFO, NEVER A FINDING (corpus adfs-present /
           # aadconnect-present).
           foreach ($needle in 'ADFS detected', 'Azure AD Connect detected') {
