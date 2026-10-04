@@ -150,6 +150,7 @@ set "DEFEXCL_PROCS=0"
 set "DEFEXCL_EXTS=0"
 set "PPL_STATE=ungraded"
 set "REBOOT_AGE=unknown"
+set "BITLOCKER_STATE=ungraded"
 set "PROCPATH_CLEAN="
 set "PROCPATH_BAD=0"
 set "PROCPATH_TOTAL=0"
@@ -2939,10 +2940,18 @@ echo --- UAC and Disk Encryption State (evaluated) --->> "%REPORT%"
 del "%TEMP%\dz_uac_hit.txt" 2>nul
 del "%TEMP%\dz_uacprompt_hit.txt" 2>nul
 del "%TEMP%\dz_bitlocker_hit.txt" 2>nul
+del "%TEMP%\dz_bitlocker_state.txt" 2>nul
+if "%IS_ADMIN%"=="0" set "BITLOCKER_STATE=deferred"
 echo $pol='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' > "%PSRUN%"
 echo $lua=(Get-ItemProperty $pol -Name EnableLUA -EA SilentlyContinue).EnableLUA;$cpb=(Get-ItemProperty $pol -Name ConsentPromptBehaviorAdmin -EA SilentlyContinue).ConsentPromptBehaviorAdmin >> "%PSRUN%"
 echo if($lua -eq 0){'[CRITICAL] UAC DISABLED (EnableLUA=0) -- all processes auto-elevate silently (T1548.002)';Set-Content -LiteralPath "$env:TEMP\dz_uac_hit.txt" -Value hit}elseif($cpb -eq 0){'[WARNING] UAC auto-elevates without prompting (ConsentPromptBehaviorAdmin=0)';Set-Content -LiteralPath "$env:TEMP\dz_uacprompt_hit.txt" -Value hit}else{'[OK] UAC enabled with elevation prompt.'} >> "%PSRUN%"
-echo try{$bl=Get-BitLockerVolume -MountPoint $env:SystemDrive -EA Stop;if($bl.ProtectionStatus -eq 'On'){'[OK] BitLocker ON for '+$env:SystemDrive+' ('+$bl.EncryptionMethod+').'}else{'[WARNING] BitLocker OFF for '+$env:SystemDrive+' -- data readable if the drive is removed';Set-Content -LiteralPath "$env:TEMP\dz_bitlocker_hit.txt" -Value hit}}catch{'[SKIPPED] BitLocker status unavailable (needs admin, or edition/cmdlet missing).'} >> "%PSRUN%"
+rem A standard-user token cannot query BitLocker. The BitLocker block above
+rem already printed and counted that deferral; running the cmdlet again here
+rem printed a second, [SKIPPED] declaration of the same gap and inflated
+rem Checks SKIPPED in the coverage block.
+if "%IS_ADMIN%"=="0" goto :sec13_bl_eval_done
+echo try{$bl=Get-BitLockerVolume -MountPoint $env:SystemDrive -EA Stop;if($bl.ProtectionStatus -eq 'On'){'[OK] BitLocker ON for '+$env:SystemDrive+' ('+$bl.EncryptionMethod+').';Set-Content -LiteralPath "$env:TEMP\dz_bitlocker_state.txt" -Value on}else{'[WARNING] BitLocker OFF for '+$env:SystemDrive+' -- data readable if the drive is removed';Set-Content -LiteralPath "$env:TEMP\dz_bitlocker_hit.txt" -Value hit;Set-Content -LiteralPath "$env:TEMP\dz_bitlocker_state.txt" -Value off}}catch{'[SKIPPED] BitLocker status unavailable (edition or cmdlet missing).';Set-Content -LiteralPath "$env:TEMP\dz_bitlocker_state.txt" -Value unavailable} >> "%PSRUN%"
+:sec13_bl_eval_done
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_uac_hit.txt" (
     call :dz_finding CRITICAL 13 T1548.002 "UAC disabled - processes auto-elevate silently"
@@ -2956,6 +2965,11 @@ if exist "%TEMP%\dz_bitlocker_hit.txt" (
     call :dz_finding WARNING 13 T1486 "System drive not encrypted with BitLocker"
     del "%TEMP%\dz_bitlocker_hit.txt" 2>nul
 )
+:: The dashboard tile states the verdict this block reached (on / off /
+:: unavailable, or deferred on a standard-user token); it never queries
+:: BitLocker a second time.
+if exist "%TEMP%\dz_bitlocker_state.txt" set /p BITLOCKER_STATE=<"%TEMP%\dz_bitlocker_state.txt"
+del "%TEMP%\dz_bitlocker_state.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- Driver Signature Enforcement --->> "%REPORT%"
@@ -4697,7 +4711,7 @@ echo sec 'SYSTEM HARDENING  (Sections 11, 13)' >> "%PSRUN%"
 echo $lua=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name EnableLUA -EA SilentlyContinue).EnableLUA;$cpb=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name ConsentPromptBehaviorAdmin -EA SilentlyContinue).ConsentPromptBehaviorAdmin;if($lua -eq 1 -and ($cpb -eq 2 -or $cpb -eq 5)){ck 'PASS' ('UAC on with prompt (EnableLUA=1, ConsentPrompt='+$cpb+')')}elseif($lua -eq 0){ck 'CRIT' 'UAC DISABLED -- all processes auto-elevate silently' 'Set EnableLUA=1 in HKLM\...\Policies\System and reboot'}elseif($cpb -eq 0){ck 'WARN' 'UAC auto-elevates without prompting (ConsentPromptBehaviorAdmin=0)' 'Set ConsentPromptBehaviorAdmin=2 for secure desktop confirmation'}else{ck 'WARN' ('UAC not fully hardened (EnableLUA='+$lua+', ConsentPrompt='+$cpb+')') 'Recommend: EnableLUA=1, ConsentPromptBehaviorAdmin=2'} >> "%PSRUN%"
 echo if($isAdmin -eq '1'){ >> "%PSRUN%"
 echo $ts=bcdedit /enum 2^>$null^|Select-String 'testsigning\s+yes';if($ts){ck 'WARN' 'Driver signature enforcement DISABLED (testsigning=Yes)' 'Unsigned kernel drivers can load. Fix: bcdedit /set testsigning off'}else{ck 'PASS' 'Driver signature enforcement active'} >> "%PSRUN%"
-echo try{$bl=Get-BitLockerVolume -MountPoint $env:SystemDrive -EA Stop;if($bl.ProtectionStatus -eq 'On'){ck 'PASS' ('BitLocker ON for '+$env:SystemDrive+' ('+$bl.EncryptionMethod+')')}else{ck 'WARN' ('BitLocker OFF for '+$env:SystemDrive) 'Drive unencrypted -- data readable if the drive is removed. BEFORE enabling: save the recovery key OFF this machine (manage-bde -protectors -get C:) or back it up to your Microsoft account. Without it, a later firmware, TPM or boot-config change makes every file on C: permanently unrecoverable. Then: manage-bde -on C:'}}catch{ck 'INFO' 'BitLocker status unavailable -- see Section 13'} >> "%PSRUN%"
+echo $blst='%BITLOCKER_STATE%';if($blst -eq 'on'){ck 'PASS' ('BitLocker ON for '+$env:SystemDrive+' (Section 13)')}elseif($blst -eq 'off'){ck 'WARN' ('BitLocker OFF for '+$env:SystemDrive+' (Section 13)') 'Drive unencrypted -- data readable if the drive is removed. BEFORE enabling: save the recovery key OFF this machine (manage-bde -protectors -get C:) or back it up to your Microsoft account. Without it, a later firmware, TPM or boot-config change makes every file on C: permanently unrecoverable. Then: manage-bde -on C:'}elseif($blst -eq 'unavailable'){ck 'INFO' 'BitLocker status unavailable -- see Section 13'}elseif($blst -eq 'deferred'){ck 'INFO' 'BitLocker status check deferred (requires admin)'}else{ck 'INFO' 'BitLocker: NOT graded -- Section 13 recorded no BitLocker state'} >> "%PSRUN%"
 echo }else{ >> "%PSRUN%"
 echo ck 'INFO' 'Driver signature check deferred (requires admin)' >> "%PSRUN%"
 echo ck 'INFO' 'BitLocker status check deferred (requires admin)' >> "%PSRUN%"

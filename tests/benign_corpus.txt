@@ -404,6 +404,13 @@ proof     = ci:baseline_diff.ps1 -SelfTest; ci:baseline_diff.ps1 -SelfTest + liv
 signature = NEW listening port since baseline \(loopback-only listener
 note      = A listener bound to 127.0.0.1 or ::1 only cannot be reached from the network, whoever owns it and whatever the port: Intel's jhi_service on [::1]:49670 was a WARNING on 2026-10-03. The snapshot now records the bind address (owner bind=<address>) and the diff compares owners only, so a baseline saved before the field existed does not report every port as CHANGED. A listener that MOVES from loopback to 0.0.0.0 or :: is WARNING; a new listener bound to every address by a non-system process is WARNING. The helpers job opens one loopback and one all-interfaces listener and asserts INFO and WARNING respectively. Verify: Get-NetTCPConnection -State Listen -LocalPort <port>.
 
+[baseline-per-user-service]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:baseline_diff.ps1 -SelfTest; ci:baseline_diff.ps1 -SelfTest + live
+signature = Per-user service instances compared by template
+note      = Windows creates an instance of every per-user service template for each logon session, named <template>_<suffix> (Microsoft Learn, "Per-user services in Windows"), so one new logon renamed all of them: the 2026-10-03 22:49 report carried 24 NEW and 24 REMOVED service lines (AarSvc_fdf7a -> AarSvc_4c42911, cbdhsvc_*, CDPUserSvc_* ...). The diff now compares an instance under its template's key, but only when a real template exists (Type has 0x40, not 0x80) and the instance runs the template's own image; a look-alike name with no template, or an instance repointed at another binary, keeps its own key and is still reported. The helpers job re-suffixes the runner's own instances in an old snapshot and asserts no NEW/REMOVED line for them. Verify: Get-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Services\<template> | Select Type, ImagePath.
+
 [baseline-com-handler-task]
 class     = QUIET
 maxsev    = INFO

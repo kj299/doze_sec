@@ -6,6 +6,50 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### A driver finding carries its triage facts; BitLocker is declared once; per-user services stop churning the baseline
+Three things the 2026-10-03 field runs showed, none a missed detection, each
+the report being unhelpful or wrong about the machine.
+
+**Driver findings.** The standard-user report printed
+`Driver ...\PROCEXP152.SYS [ff9b3fc49bb3cd9a...] -- known BYOVD-abusable
+driver ...` and nothing else. The owner then needed three commands and a
+second opinion to learn what `driver_audit` already held: the driver had no
+service and was not loaded, and the hash -- cut to 16 characters -- could
+not be looked up anywhere. The finding line now ends with `:` and carries,
+indented beneath it, the full SHA-256, the signer and Authenticode status,
+the file's created/modified times, whether a driver service points at it
+and is running (`LOADED`, `registered, not running`, or `on disk only`),
+the matching Event 7045 install record or how far back the System log
+reaches, and the commands to verify each. Severity rules are unchanged. The
+helpers job asserts the block under its signed `gdrv.sys` plant (full hash
+equal to `Get-FileHash`, `on disk only`).
+
+**BitLocker, standard user.** Section 13 declared BitLocker
+`[DEFERRED - ADMIN REQUIRED]` and then, four lines later, ran
+`Get-BitLockerVolume` unelevated anyway and printed
+`[SKIPPED] BitLocker status unavailable` -- so the coverage block read
+`Checks SKIPPED : 1` and TOP FINDINGS added a coverage note for a check
+already counted as deferred. The evaluated block now runs only with admin
+rights. And the dashboard's BitLocker tile, in both bats, queried BitLocker
+a second time -- the sixth tile that re-measured instead of stating the
+section's verdict. Section 13 now writes `on` / `off` / `unavailable` (or
+`deferred`) and the tile reads it; the full-run job asserts they agree and
+the standard-user job asserts one declaration and a deferred tile.
+
+**Baseline churn.** The elevated report's baseline block was ~95 lines, 48
+of them one class: per-user service instances, which Windows names
+`<template>_<suffix>` per logon session, so a new logon renamed all 24. The
+diff now compares an instance under its template, but only when a real
+user-service template exists and the instance runs its image -- a
+look-alike name, or an instance repointed at another binary, is still
+reported. Two values that repeated on every read-only run are excluded from
+the OLD snapshot too: the Winlogon logon/logoff counters (excluded at
+capture since #232, but an older snapshot still held them) and doze_sec's
+own RunOnce resume entry -- by marker, not name: the data must point at one
+of our bats. The helpers job re-suffixes the runner's instances in an old
+snapshot and plants the resume name with a foreign binary as the twin that
+must still be reported.
+
 ### Pending-reboot entries carry markers; every finding carries a note
 The first field run of `pending_reboot_check` (2026-10-03 19:16) listed the
 seven queued operations and read every one as `(source missing)`: the real
