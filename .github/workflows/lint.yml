@@ -580,3 +580,15 @@ jobs:
       # through after deciding to skip the RunOnce `reg add`.
       - name: Run tools/report_command_probe.ps1 -SelfTest
         run: pwsh -NoProfile -File tools/report_command_probe.ps1 -SelfTest
+
+  exec-probe-selftest:
+    name: "exec_probe: the audit can tell when PowerShell will not run its helpers"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The bats refuse to run blind when a Group Policy execution policy or a
+      # language lockdown stops their helpers; the probe's state line is what
+      # they read. The refusal itself is exercised on Windows (windows-smoke,
+      # readonly-field-test: a planted MachinePolicy and __PSLockdownPolicy).
+      - name: Run tools/exec_probe.ps1 -SelfTest
+        run: pwsh -NoProfile -File tools/exec_probe.ps1 -SelfTest

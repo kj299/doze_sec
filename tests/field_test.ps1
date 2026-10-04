@@ -25,6 +25,13 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# AppLocker / WDAC run PowerShell in ConstrainedLanguage, where the .NET calls
+# below and inside the audit's checks throw. Say so plainly, before anything
+# here fails with an error that names a type instead of the cause.
+if ([string]$ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') {
+    Write-Host ("[FAIL] PowerShell runs in {0} mode on this machine (AppLocker or WDAC lockdown). The audit's checks cannot run here, so nothing can be audited. See docs\second-machine.md." -f $ExecutionContext.SessionState.LanguageMode)
+    exit 1
+}
 $root = Split-Path -Parent $PSScriptRoot
 $id = [Security.Principal.WindowsIdentity]::GetCurrent()
 $elevated = (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -116,9 +123,22 @@ else {
     Write-Host ("  report: {0}" -f $report.FullName)
     if ($report.LastWriteTime -lt $t0) { Write-Host '  [FAIL   ] the newest report predates this run -- the audit produced no report'; $fail++ }
     $text = [IO.File]::ReadAllText($report.FullName)
+    # The audit refuses to run blind when PowerShell will not run its helper
+    # scripts here (a Group Policy execution policy, or a language lockdown).
+    # Every check below would then fail for that one reason; name it once.
+    if ($text -match '\*\*\* AUDIT NOT PERFORMED -- ([^*]+)\*\*\*') {
+        Write-Host ("  [FAIL   ] AUDIT NOT PERFORMED -- {0}" -f $Matches[1].Trim())
+        $why = [regex]::Match($text, '(?m)^\s*(PowerShell refused[^\r\n]*|Scripts run here, but[^\r\n]*|Copy the whole doze_sec folder[^\r\n]*)')
+        if ($why.Success) { Write-Host ("            {0}" -f $why.Groups[1].Value.Trim()) }
+        Write-Host '            Nothing was audited on this machine. The read-only proof above still holds. See docs\second-machine.md.'
+        Write-Host ''
+        Write-Host 'FAIL: the audit could not run its checks on this machine (not a finding about the machine).'
+        exit 1
+    }
     Check ($report.DirectoryName -notmatch '\\selftest$') 'report is a REAL report (not under selftest\)' 'landed in the test quarantine'
     Check ($text -notmatch 'TEST RUN -- every finding below was planted') 'report carries no TEST RUN banner' 'a real run was stamped as a test run'
     Check ($text -match 'READ-ONLY RUN -- this audit makes no changes') 'report carries the READ-ONLY banner' 'the -readonly switch did not take effect'
+    Check ($text -match "\[OK\] PowerShell runs this audit's helper scripts \(FullLanguage") 'PowerShell ran the audit''s helper scripts here (FullLanguage, policy allows them)' 'no execution-probe [OK] line -- the audit could not confirm its checks ran'
     Check ($text -match '(?m)^\s*EXIT CODE:') 'report has an EXIT CODE line (the audit completed)' 'no EXIT CODE line -- the audit aborted'
     Check ($text -match '\[18/18\]') 'report reached section [18/18]' 'the audit did not reach the last section'
     # wevtutil /f:text leaves NUL-terminated fields in event text; a field report

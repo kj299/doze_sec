@@ -714,6 +714,19 @@ jobs:
           Write-Host "audit_policy_check.ps1 OK (incl. GUID-to-subcategory verification against the live OS)"
           exit 0
 
+      - name: exec_probe.ps1 -SelfTest + live (Windows PowerShell 5.1 writes ok|FullLanguage)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\tools\exec_probe.ps1 -SelfTest
+          if ($LASTEXITCODE -ne 0) { throw 'exec_probe self-test failed' }
+          $sf = Join-Path $env:TEMP ("dz_exec_ci_{0}.txt" -f $PID)
+          & powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\exec_probe.ps1 -StateFile $sf
+          $st = (Get-Content -LiteralPath $sf -TotalCount 1)
+          Remove-Item -LiteralPath $sf -Force -EA SilentlyContinue
+          if ($st -ne 'ok|FullLanguage') { throw "exec_probe on an unrestricted runner wrote '$st', expected ok|FullLanguage -- the bats would refuse to run" }
+          Write-Host "exec_probe OK ($st)"
+
       - name: driver_audit.ps1 (BYOVD by hash + unsigned catch-all; renamed cannot evade)
         shell: powershell
         run: |
@@ -3390,7 +3403,8 @@ jobs:
                               'report carries the READ-ONLY banner', 'report carries no TEST RUN banner',
                               'read-only skip declared: boot menu left as found', 'no known benign look-alike is reported above',
                               'RunOnce proof targets the value the audit writes (*WIN11_SecurityAudit_resume)',
-                              'RunOnce resume path ends in \doze_sec.bat')) {
+                              'RunOnce resume path ends in \doze_sec.bat',
+                              'PowerShell ran the audit''s helper scripts here (FullLanguage, policy allows them)')) {
             if ($out -notmatch [regex]::Escape($must)) { throw ("field_test output lacks the proof line: {0}" -f $must) }
           }
           if ($out -match '\[FAIL') { throw 'field_test printed a FAIL line' }
@@ -3437,6 +3451,129 @@ jobs:
           .\tools\report_command_probe.ps1 -SelfTest
           if ($LASTEXITCODE -ne 0) { throw 'report_command_probe self-test did not fail on its mutations' }
           Write-Host "report_command_probe.ps1 OK"
+
+      # A MANAGED MACHINE MUST NOT READ CLEAN WHEN NOTHING RAN. Every helper and
+      # staged block runs as `powershell -ExecutionPolicy Bypass -File`, and an
+      # execution policy set by Group Policy OVERRIDES Bypass: each helper is
+      # refused, writes no marker, and no marker reads OK. The registry value
+      # below is how Group Policy stores MachinePolicy. Both bats must stop at
+      # the probe with exit 1 and print the evidence, and never reach a section.
+      # Touches: registry HKLM\SOFTWARE\Policies\Microsoft\Windows\PowerShell
+      # (EnableScripts, ExecutionPolicy) -- restored in finally, and by the cmd
+      # step after this one if the finally never ran (a PowerShell step would
+      # itself be refused while the plant stands).
+      - name: "GPO execution policy AllSigned: the audit declares itself blind, never CLEAN"
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $k = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell'
+          $sentinel = Join-Path $env:RUNNER_TEMP 'dz_ci_gpo_planted.txt'
+          $had = Test-Path -LiteralPath $k
+          $prior = $null
+          if ($had) { $prior = Get-ItemProperty -LiteralPath $k -EA SilentlyContinue }
+          $probe = Join-Path $env:TEMP 'dz_ci_gpo_probe.ps1'
+          Set-Content -LiteralPath $probe -Value "'DZ_RAN'" -Encoding ASCII
+          try {
+            New-Item -Path $k -Force | Out-Null
+            Set-Content -LiteralPath $sentinel -Value 'planted' -Encoding ASCII
+            Set-ItemProperty -LiteralPath $k -Name EnableScripts -Value 1 -Type DWord
+            Set-ItemProperty -LiteralPath $k -Name ExecutionPolicy -Value 'AllSigned' -Type String
+            $ErrorActionPreference = 'Continue'
+            $r = (& powershell -NoProfile -ExecutionPolicy Bypass -File $probe 2>&1 | Out-String)
+            if ($r -match 'DZ_RAN') { Write-Host '[ SKIP ] the Group Policy execution policy did not take on this runner (a -File script still ran with Bypass) -- the guard is NOT exercised here'; return }
+            Write-Host 'plant confirmed: powershell -ExecutionPolicy Bypass -File is refused under MachinePolicy AllSigned'
+            foreach ($run in @(@{ Bat = 'doze_sec.bat'; Args = '-dev -readonly -noConsoleLog' }, @{ Bat = 'doze_sec_noAdmin.bat'; Args = '-dev -readonly -noAdmin -noConsoleLog' })) {
+              $t0 = Get-Date
+              $con = (& cmd /c ('{0} {1}' -f $run.Bat, $run.Args) 2>&1 | ForEach-Object { "$_" }) -join "`n"
+              $rc = $LASTEXITCODE
+              $rep = @(Get-ChildItem 'C:\SecurityAudit\SecurityReport_*.txt', (Join-Path $env:USERPROFILE 'SecurityAudit\SecurityReport_*.txt') -EA SilentlyContinue |
+                       Where-Object { $_.LastWriteTime -ge $t0 } | Sort-Object LastWriteTime -Descending) | Select-Object -First 1
+              if (-not $rep) { Write-Host $con; throw ("{0}: no report written -- the refusal must be declared in a report, not only on the console" -f $run.Bat) }
+              $text = [IO.File]::ReadAllText($rep.FullName)
+              Write-Host ("--- {0} (exit {1}) ---" -f $run.Bat, $rc)
+              Write-Host (($text -split "`r?`n" | Where-Object { $_ -match 'AUDIT NOT PERFORMED|PowerShell refused|MachinePolicy|LanguageMode =|STATUS:' }) -join "`n")
+              if ($rc -ne 1) { throw ("{0}: exit {1}, expected 1 -- a blind run must not exit as a completed audit" -f $run.Bat, $rc) }
+              if ($text -notmatch "\*\*\* AUDIT NOT PERFORMED -- PowerShell will not run this audit's helper scripts") { throw ("{0}: no AUDIT NOT PERFORMED banner" -f $run.Bat) }
+              if ($text -notmatch 'MachinePolicy = AllSigned') { throw ("{0}: the evidence (Get-ExecutionPolicy -List) is missing from the report" -f $run.Bat) }
+              if ($text -match '\[SECTION \d+/18 RESULT') { throw ("{0}: the audit reached a section verdict while its helpers were refused" -f $run.Bat) }
+              if ($text -match 'CLEAN -- no issues detected') { throw ("{0}: a section read CLEAN on a run that could not run its checks" -f $run.Bat) }
+              if ($text -notmatch 'STATUS: Nothing was audited') { throw ("{0}: the STATUS line does not say nothing was audited" -f $run.Bat) }
+            }
+            Write-Host 'both bats refuse to run blind under a Group Policy execution policy, and say why'
+          } finally {
+            if ($had) {
+              foreach ($n in 'EnableScripts', 'ExecutionPolicy') {
+                if ($prior -and ($prior.PSObject.Properties.Name -contains $n)) { Set-ItemProperty -LiteralPath $k -Name $n -Value $prior.$n }
+                else { Remove-ItemProperty -LiteralPath $k -Name $n -EA SilentlyContinue }
+              }
+            } else { Remove-Item -LiteralPath $k -Recurse -Force -EA SilentlyContinue }
+            Remove-Item -LiteralPath $sentinel, $probe -Force -EA SilentlyContinue
+          }
+
+      - name: Remove the planted execution policy if the step above did not (cmd, not PowerShell)
+        if: always()
+        shell: cmd
+        run: |
+          if exist "%RUNNER_TEMP%\dz_ci_gpo_planted.txt" (
+            reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\PowerShell" /v ExecutionPolicy /f
+            reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\PowerShell" /v EnableScripts /f
+            del "%RUNNER_TEMP%\dz_ci_gpo_planted.txt"
+          )
+          exit /b 0
+
+      # AppLocker / WDAC run PowerShell in ConstrainedLanguage, where Add-Type
+      # and most .NET types throw inside the checks. The machine-level
+      # __PSLockdownPolicy=4 variable forces that mode for new PowerShell
+      # processes; whether Windows PowerShell 5.1 on this image honours it is
+      # checked first and the step declares a [ SKIP ] if it does not.
+      # Touches: machine environment variable __PSLockdownPolicy -- removed in
+      # finally, and by the cmd step after this one.
+      - name: "ConstrainedLanguage lockdown: field_test and both bats refuse to run blind"
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sentinel = Join-Path $env:RUNNER_TEMP 'dz_ci_clm_planted.txt'
+          try {
+            Set-Content -LiteralPath $sentinel -Value 'planted' -Encoding ASCII
+            [Environment]::SetEnvironmentVariable('__PSLockdownPolicy', '4', 'Machine')
+            $ErrorActionPreference = 'Continue'
+            $mode = (& powershell -NoProfile -Command '$ExecutionContext.SessionState.LanguageMode' 2>&1 | Out-String).Trim()
+            if ($mode -ne 'ConstrainedLanguage') { Write-Host ("[ SKIP ] __PSLockdownPolicy=4 did not engage ConstrainedLanguage on this runner (a new process reports '{0}') -- the CLM path is proven only by exec_probe's state vocabulary and field_test's mode check" -f $mode); return }
+            Write-Host 'plant confirmed: a new PowerShell process runs in ConstrainedLanguage'
+            $ft = (& powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\field_test.ps1 -BatPath .\doze_sec.bat -NoConsoleLog 2>&1 | ForEach-Object { "$_" }) -join "`n"
+            $ftRc = $LASTEXITCODE
+            Write-Host $ft
+            if ($ftRc -ne 1) { throw ("field_test exited {0} under ConstrainedLanguage, expected 1" -f $ftRc) }
+            if ($ft -notmatch '\[FAIL\] PowerShell runs in ConstrainedLanguage mode on this machine') { throw 'field_test did not name the language lockdown' }
+            foreach ($run in @(@{ Bat = 'doze_sec.bat'; Args = '-dev -readonly -noConsoleLog' }, @{ Bat = 'doze_sec_noAdmin.bat'; Args = '-dev -readonly -noAdmin -noConsoleLog' })) {
+              $t0 = Get-Date
+              $con = (& cmd /c ('{0} {1}' -f $run.Bat, $run.Args) 2>&1 | ForEach-Object { "$_" }) -join "`n"
+              $rc = $LASTEXITCODE
+              $rep = @(Get-ChildItem 'C:\SecurityAudit\SecurityReport_*.txt', (Join-Path $env:USERPROFILE 'SecurityAudit\SecurityReport_*.txt') -EA SilentlyContinue |
+                       Where-Object { $_.LastWriteTime -ge $t0 } | Sort-Object LastWriteTime -Descending) | Select-Object -First 1
+              if (-not $rep) { Write-Host $con; throw ("{0}: no report written under ConstrainedLanguage" -f $run.Bat) }
+              $text = [IO.File]::ReadAllText($rep.FullName)
+              Write-Host ("--- {0} (exit {1}) ---" -f $run.Bat, $rc)
+              Write-Host (($text -split "`r?`n" | Where-Object { $_ -match 'AUDIT NOT PERFORMED|Scripts run here|LanguageMode =|STATUS:' }) -join "`n")
+              if ($rc -ne 1) { throw ("{0}: exit {1} under ConstrainedLanguage, expected 1" -f $run.Bat, $rc) }
+              if ($text -notmatch 'Scripts run here, but in ConstrainedLanguage mode') { throw ("{0}: the language lockdown was not named" -f $run.Bat) }
+              if ($text -match '\[SECTION \d+/18 RESULT') { throw ("{0}: the audit reached a section verdict under ConstrainedLanguage" -f $run.Bat) }
+            }
+            Write-Host 'field_test and both bats refuse to run blind under ConstrainedLanguage, and say why'
+          } finally {
+            [Environment]::SetEnvironmentVariable('__PSLockdownPolicy', $null, 'Machine')
+            Remove-Item -LiteralPath $sentinel -Force -EA SilentlyContinue
+          }
+
+      - name: Remove the planted language lockdown if the step above did not (cmd, not PowerShell)
+        if: always()
+        shell: cmd
+        run: |
+          if exist "%RUNNER_TEMP%\dz_ci_clm_planted.txt" (
+            reg delete "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v __PSLockdownPolicy /f
+            del "%RUNNER_TEMP%\dz_ci_clm_planted.txt"
+          )
+          exit /b 0
 
       - name: Upload the audit artifacts for inspection
         if: always()

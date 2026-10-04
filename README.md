@@ -240,7 +240,7 @@ Full tactic-by-tactic and threat-class coverage matrices — including explicit 
 | Code | Meaning | Script |
 |:----:|---------|--------|
 | 0 | Success - all checks passed | Both |
-| 1 | Fatal pre-flight error - audit did not run | Both |
+| 1 | Fatal pre-flight error - audit did not run (including `AUDIT NOT PERFORMED`: PowerShell will not run the audit's helper scripts on this machine -- a Group Policy execution policy or an AppLocker/WDAC language lockdown) | Both |
 | 2 | Warning - issues found (review report) | Both |
 | 3 | Unsupported OS (use `-dev` to override) | Both |
 | 4 | Reboot pending (Section 1 lists what is queued and whether the flag predates the last boot) | Both |
@@ -466,6 +466,7 @@ Two activities, two scripts, and they must not be mixed up:
 | On | Run | What it does |
 |----|-----|--------------|
 | **The machine you are sitting at** | `.\tests\field_test.ps1` (any PowerShell; elevated is better) | Runs the audit with `-readonly` -- nothing changes outside `C:\SecurityAudit\` and the temp folder, no network connections -- proves that before and after (RunOnce key, boot configuration, restore points), checks the report against `tests\benign_corpus.txt`, and prints every finding for you to adjudicate. Plants nothing. |
+| **Someone else's machine, or a work PC** | `docs\second-machine.md` | The same `field_test.ps1`, carried over on a USB stick: a paste-in preflight that says whether the machine will let the audit run, the warnings to read first (IT alerts, the owner's privacy), what to bring back, and how to leave nothing behind. |
 | **A throwaway VM or CI only** | `.\tests\manual_ci.ps1` (elevated) | The detection harness: plants ~30 known-bad artifacts, runs the audit, asserts every one is detected, removes them. Never on a daily-driver machine -- see `docs\recovery.md`. |
 
 **Reporting a false positive.** A finding that turns out to be something

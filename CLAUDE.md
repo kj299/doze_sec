@@ -520,6 +520,16 @@ effect), and only calls it OFF on evidence; it measures once, in Section 4,
 for both consumers. When a check reads a setting, ask whether Windows records
 the setting taking EFFECT, and grade on that.
 
+**A managed machine is a different machine too.** Every helper runs as
+`powershell -ExecutionPolicy Bypass -File`, and an execution policy set by
+Group Policy OVERRIDES Bypass; AppLocker/WDAC run PowerShell in
+ConstrainedLanguage. A refused helper writes no marker and no marker reads OK,
+so the whole audit could read CLEAN having checked nothing -- the OK-default
+mistake at the scale of the entire run. `tools\exec_probe.ps1` runs once
+before the first helper; anything but `ok|FullLanguage` prints
+`AUDIT NOT PERFORMED` with the evidence and exits 1. Found by reading, while
+writing `docs\second-machine.md`; CI plants both conditions.
+
 ### A section and the dashboard must not contradict each other (REQUIRED)
 
 One field report said both things about the same six `brave.exe` processes:

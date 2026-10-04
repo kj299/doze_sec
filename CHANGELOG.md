@@ -6,6 +6,43 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### A managed machine can no longer make the audit read CLEAN while blind; a second-machine runbook
+Every helper and every staged block runs as `powershell -ExecutionPolicy Bypass
+-File`. An execution policy set by Group Policy (MachinePolicy or UserPolicy,
+e.g. AllSigned) overrides `-ExecutionPolicy Bypass`, and AppLocker or WDAC run
+PowerShell in ConstrainedLanguage, where the .NET calls the checks use throw.
+A refused helper writes no marker, no marker reads OK, so on such a machine the
+sections would have said CLEAN for checks that never ran -- and on Windows 11
+24H2 (no wmic) INIT 3 would have read the build as 0 and field_test's `-dev`
+would have carried the run on. Found by reading, while writing the runbook for
+a machine that may be managed; no field run showed it.
+
+Both bats now run `tools\exec_probe.ps1` once, right after the report header
+and before the first helper. If PowerShell refuses the script, or runs it in a
+language mode other than FullLanguage, the report opens with
+`*** AUDIT NOT PERFORMED -- PowerShell will not run this audit's helper scripts
+on this machine ***`, prints `Get-ExecutionPolicy -List` and the language mode
+(read through `-Command`, which no execution policy blocks), and the run ends
+with exit 1 and `STATUS: Nothing was audited`. A copy missing `tools\` says
+so the same way. On an ordinary machine the report gains one
+`[OK] PowerShell runs this audit's helper scripts (FullLanguage ...)` line,
+which field_test now requires. field_test itself names a ConstrainedLanguage
+session before anything in it fails, and names an AUDIT NOT PERFORMED report
+in one line instead of a cascade of integrity failures. The read-only CI job
+plants both conditions -- a MachinePolicy AllSigned value and the machine
+`__PSLockdownPolicy=4` variable -- runs both bats under each, and asserts
+exit 1, the banner, the evidence and no section verdict; each plant is
+confirmed to have taken first and declares a `[ SKIP ]` if it did not, and a
+`cmd` step removes it if the PowerShell step could not.
+
+`docs\second-machine.md` is the runbook for backlog P0 #1: carry the folder
+on a USB stick (no git, no GitHub login, nothing installed), paste a
+preflight that says GO / NO-GO, read the warnings first (a work PC's security
+software may alert IT, who may cut the machine off the network; someone
+else's report holds their user names and software -- keep it private; never
+the plant harness, never the remediation scripts), run field_test elevated
+and not, bring the two output folders back, delete three folders.
+
 ### A driver finding carries its triage facts; BitLocker is declared once; per-user services stop churning the baseline
 Three things the 2026-10-03 field runs showed, none a missed detection, each
 the report being unhelpful or wrong about the machine.
