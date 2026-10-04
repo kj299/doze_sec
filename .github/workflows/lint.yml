@@ -397,10 +397,12 @@ jobs:
                    'a dangling last entry (odd length' \
                    'a registry read failure is a declared gap' \
                    'a single WARNING line even with three flags' \
-                   'nothing pending: the OK line'; do
+                   'nothing pending: the OK line' \
+                   '*1 marker on a delete: the path prints clean' \
+                   'a rename whose destination carries *1!'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
-          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 26 ] || { echo "only $n case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 32 ] || { echo "only $n case(s)"; exit 1; }
       - name: lsa_protection_check -- the boot event is the fact, the registry value the intent; unknown is a raised gap
         run: |
           out=$(pwsh -NoProfile -File tools/lsa_protection_check.ps1 -SelfTest); echo "$out"

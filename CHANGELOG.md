@@ -6,6 +6,23 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Pending-reboot entries carry markers; every finding carries a note
+The first field run of `pending_reboot_check` (2026-10-03 19:16) listed the
+seven queued operations and read every one as `(source missing)`: the real
+entries are prefixed, before the NT `\??\` prefix, by `*1` / `*2` on the
+source and `*1!` on a rename destination. `!` is Microsoft's documented
+MOVEFILE_REPLACE_EXISTING marker; `*N` is not on Microsoft Learn and is
+written by Windows' own updaters (OneDrive, Edge, GamingServices). The strip
+anchored on `\??\`, so the marker survived into the printed path and into
+the existence probe. `Split-PendingEntry` now strips both markers and the
+prefix, the probe receives the clean path, and the markers are shown beside
+the operation (`[marker *1]`, `[markers *1, !replace]`); six cases pinned
+verbatim, and both CI plants add a `*1`-prefixed entry. The same report's
+TOP FINDINGS block still read "No specific analyst note mapped" for five
+findings (Script Block Logging, hidden accounts, three ASR rules);
+`top_findings` has notes for them, and the full-run job now fails on ANY
+unmapped finding so the gap cannot reopen.
+
 ### The report is plain text again
 The 2026-10-03 field report carried 100 NUL bytes, so `grep` called it a
 binary file: `wevtutil qe ... /f:text` prints some message fields with their
