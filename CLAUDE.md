@@ -476,6 +476,13 @@ regex reported six defects across four files on its first run. A lint people
 learn to work around is worse than no lint. `-SelfTest` proves it fails on each
 class **and stays quiet on the prose**. CI runs it in `lint.yml`.
 
+**Copied helpers stay identical.** The tools are self-contained on purpose (no
+module imports), so a helper several tools need is copied into each.
+`tools/lint_shared_copies.ps1` pins the copies of `Get-RegKeyLastWrite`,
+`Get-WhenLine` and `Write-WhenCaveat` byte-identical (comments included);
+`pending_reboot_check`'s copy had already lost a line when it was added. When a
+helper is copied into a third tool, add its name to the lint's manifest.
+
 ### "Unavailable" is not an answer (REQUIRED)
 
 A check that cannot determine its own subject must say so *loudly and

@@ -110,6 +110,7 @@ public static extern int RegQueryInfoKey(IntPtr hKey, System.Text.StringBuilder 
     } catch { return $null }
     $key = $null
     try {
+        # Accept both provider paths (HKLM:\...) and PSPath forms.
         $p = $KeyPath -replace '^Microsoft\.PowerShell\.Core\\Registry::', ''
         $p = $p -replace '^HKEY_LOCAL_MACHINE\\', 'HKLM:\' -replace '^HKEY_CURRENT_USER\\', 'HKCU:\'
         $key = Get-Item -LiteralPath $p -EA Stop
