@@ -592,3 +592,17 @@ jobs:
       # readonly-field-test: a planted MachinePolicy and __PSLockdownPolicy).
       - name: Run tools/exec_probe.ps1 -SelfTest
         run: pwsh -NoProfile -File tools/exec_probe.ps1 -SelfTest
+
+  shared-copies-lint:
+    name: "Shared helpers: every copy stays identical"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The tools are self-contained by design, so a helper several of them
+      # need is copied. A fix made in one copy and not the others leaves two
+      # tools answering the same question differently; pending_reboot_check's
+      # copy of Get-RegKeyLastWrite had already drifted when this was added.
+      - name: Run tools/lint_shared_copies.ps1
+        run: pwsh -NoProfile -File tools/lint_shared_copies.ps1
+      - name: Run tools/lint_shared_copies.ps1 -SelfTest
+        run: pwsh -NoProfile -File tools/lint_shared_copies.ps1 -SelfTest

@@ -6,6 +6,14 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Copied helpers cannot drift
+The tools are self-contained by design, so `Get-RegKeyLastWrite` lives in five
+tools and `Get-WhenLine` / `Write-WhenCaveat` in four. `tools/lint_shared_copies.ps1`
+fails CI when any copy differs from the others (line endings aside), naming the
+file and the first differing line; its self-test drifts a temp copy each way.
+It found one drift on its first run -- `pending_reboot_check`'s copy had lost a
+comment line -- restored here. No behaviour change.
+
 ### A managed machine can no longer make the audit read CLEAN while blind; a second-machine runbook
 Every helper and every staged block runs as `powershell -ExecutionPolicy Bypass
 -File`. An execution policy set by Group Policy (MachinePolicy or UserPolicy,
