@@ -3539,6 +3539,11 @@ jobs:
           Write-Host $vt
           if ($vrc -ne 2 -or $vt -notmatch '\[UNVERIFIED\]' -or $vt -notmatch '1 difference\(s\) from this copy' -or $vt -match '\[OK\] The tool') { throw ("a copy in a new place that was ALSO changed must read UNVERIFIED with the difference count, exit 2 (got {0})" -f $vrc) }
           Write-Host 'read-only field test: proven on this runner, run from a stick made from an LF-only marked download, which it left unchanged; a copy in a new place is matched by content, and one that also changed is UNVERIFIED.'
+          # The last call above is the deliberately UNVERIFIED -Verify (exit 2).
+          # This step's verdict is its throws; the runner's PowerShell wrapper
+          # would otherwise report that exit code as the step's (the #237 lesson).
+          $global:LASTEXITCODE = 0
+          exit 0
 
       # The report prints ~176 " Command: <X>" lines -- "here is how to check
       # this yourself". lint_report_echo proves each one PARSES. Parsing is not
