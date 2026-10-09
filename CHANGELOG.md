@@ -6,6 +6,62 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Sections 18a, 18f and 18g: one matcher that cannot read clean on failure, and plants that prove 18a and 18f fire
+No test had ever planted a positive 18a match (a running process named on
+`ioc_processes.txt`) or 18f match (a C2 domain from `ioc_domains.txt` in the
+DNS cache). Reading the two sections showed they could also print
+`[OK] No ... IOC matches.` having matched nothing:
+- **The exit code checked was the wrong one.** They ran
+  `findstr /i /g:<list> <file> | findstr /v /c:"#"`, and in a cmd pipe
+  `%errorlevel%` is the LAST stage's. When the first findstr failed (list
+  unreadable -- 18f never checked that its list existed -- a line too long,
+  out of memory), its error went only to the console. The second findstr got
+  no input and exited 1, and the report said `[OK]`.
+- **The list's own header picked the match mode.** findstr treats every
+  search string as literal or every one as a pattern, depending on the first
+  line, which is `# Last verified by doze_sec: <date> <time>`. The time
+  separator comes from the culture. Where it is `.`, the header holds a
+  pattern character and the whole list silently became patterns.
+- **Comment lines were search strings,** although the header said findstr
+  ignored them. The six bare `#` lines matched any line containing `#`, which
+  the second findstr then removed, so a real hit on such a line vanished.
+
+All three sections now match with `tools\select_lines.ps1 -PatternFile`,
+already used by 18g. It skips comments and blank lines and matches as a
+literal, case-insensitive substring. Its exit code is 0 for a match, 1 for
+none, and 2 for nothing to match with. Exit 2 now prints
+`[WARNING] <check> NOT performed -- <list> could not be read or holds no
+entries` and raises a gap-worded row under the same section and technique. It
+used to print `[OK]` in 18g too. `select_lines` gains a `-SelfTest` that runs
+the script as a child process, so the exit codes it checks are the ones
+cmd.exe sees. It has 12 cases: comments never searched, a literal `.`, a hit
+on a line holding `#` kept, a comment-only or missing list is 2, and others.
+The list headers that said "matched via findstr" now say how each list is
+really matched.
+
+The plant harness gains four cases:
+- A copy of ping.exe named `dz_selftest_evil_chisel.exe`, running from
+  `C:\dz_selftest_ioc\`, must be matched in 18a.
+- Its twin, named after an RMM agent the list deliberately dropped, must not.
+- A HOSTS line `127.0.0.1 dz-selftest-evil.ngrok.io` must be matched in 18f.
+  Windows preloads HOSTS into the cache `ipconfig /displaydns` lists, so
+  nothing is sent to the network. If the DNS client did not load the line,
+  the case is declared void, not passed.
+- Its twin, `dz-selftest-benign.ngrok.com`, the vendor's own site, must not.
+
+Each match must reach the ledger under its own section and technique
+(Section 3 also raises T1071.004). Every expectation is anchored inside its
+subsection, because Section 3 copies the whole DNS cache into the report and
+a bare name match would pass whether or not 18f fired. Cold cleanup stops the
+processes by path, and the HOSTS lines carry the existing marker. The two
+twins have ADVISE corpus entries. Contracts were added to
+`assert_printed_findings_raised`, and `top_findings` gained analyst notes for
+the three findings and the gap lines. lint.yml checks that each section in
+both bats branches three ways on the exit code, and that the old two-way
+branch fails that check.
+
+Not changed, noted: 18b and 18e read their lists in PowerShell, and a missing
+list there prints `[SKIPPED]` / `[INFO]` without raising.
 ### The USB stick: an adversarial review of this PR, every finding fixed before merge
 Five lenses, each finding re-checked by a skeptic. All 24 findings held, some
 at lower severity; none deleted anything this laptop had not written or

@@ -181,6 +181,14 @@ Get-Process -Name 'svchost' -EA SilentlyContinue |
     Where-Object { $_.Path -and $_.Path.StartsWith('C:\Users\Public\dz_selftest_masq', [StringComparison]::OrdinalIgnoreCase) } |
     Stop-Process -Force -EA SilentlyContinue
 Remove-Path 'C:\Users\Public\dz_selftest_masq'                 'Masquerading svchost.exe directory (Public\dz_selftest_masq)'
+# The Section 18a plants are RUNNING copies of ping.exe named after an IOC
+# entry and its benign twin; stopped by PATH before their directories go.
+Get-Process -EA SilentlyContinue |
+    Where-Object { $_.Path -and ($_.Path.StartsWith('C:\dz_selftest_ioc\', [StringComparison]::OrdinalIgnoreCase) -or $_.Path.StartsWith('C:\dz_selftest_ioc_benign\', [StringComparison]::OrdinalIgnoreCase)) } |
+    Stop-Process -Force -EA SilentlyContinue
+if (Test-Path -LiteralPath 'C:\dz_selftest_ioc' -PathType Container) { Start-Sleep -Milliseconds 500 }
+Remove-Path 'C:\dz_selftest_ioc'                                'IOC-named process directory (dz_selftest_ioc)'
+Remove-Path 'C:\dz_selftest_ioc_benign'                         'Benign twin process directory (dz_selftest_ioc_benign)'
 Remove-Path 'C:\Program Files\dz selftest fp'                   'FP-service directory'
 Remove-Path 'C:\dz_selftest_excl_dir'                           'Defender exclusion directory'
 Remove-Path (Join-Path $OutDir 'baseline.snapshot')            'Seeded baseline snapshot'
@@ -200,9 +208,9 @@ try {
     $kept  = @($lines | Where-Object { $_ -notmatch $MARK })
     if ($kept.Count -ne $lines.Count) {
         Set-Content -LiteralPath $hostsPath -Value $kept -Encoding UTF8 -Force
-        Report 'HOSTS entry (DNS hijack line)' 'REMOVED'
-    } else { Report 'HOSTS entry (DNS hijack line)' 'ABSENT' }
-} catch { Report 'HOSTS entry (DNS hijack line)' 'ABSENT' }
+        Report 'HOSTS entries (DNS hijack line; the 18f IOC domain and its twin)' 'REMOVED'
+    } else { Report 'HOSTS entries (DNS hijack line; the 18f IOC domain and its twin)' 'ABSENT' }
+} catch { Report 'HOSTS entries (DNS hijack line; the 18f IOC domain and its twin)' 'ABSENT' }
 
 # --- PowerShell profile: delete ONLY if it is the planted download cradle ---
 $psProfile = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'WindowsPowerShell\Microsoft.PowerShell_profile.ps1'

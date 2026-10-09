@@ -4219,7 +4219,7 @@ echo  no match is not proof of cleanliness ^(only these known IOCs were checked^
 
 echo.>> "%REPORT%"
 echo --- [18a] Process IOC Match --->> "%REPORT%"
-echo  Command: powershell Get-CimInstance Win32_Process ^| findstr /i /g:"%IOCDIR%\ioc_processes.txt" ^| findstr /v /c:"#">> "%REPORT%"
+echo  Command: powershell Get-CimInstance Win32_Process ^| select_lines.ps1 -PatternFile "%IOCDIR%\ioc_processes.txt">> "%REPORT%"
 echo  Matching running processes against ioc_processes.txt>> "%REPORT%"
 :: wmic was removed in Windows 11 24H2+; the old `wmic | findstr` pipeline
 :: printed [OK] with zero processes examined when wmic was absent. Enumerate
@@ -4232,15 +4232,27 @@ if defined _ENUM18A goto :sec18a_match
 echo [SKIPPED] Process enumeration failed -- running processes could not be listed; IOC match NOT performed.>> "%REPORT%"
 goto :sec18a_done
 :sec18a_match
-findstr /i /g:"%IOCDIR%\ioc_processes.txt" "%TEMP%\dz_proc18a.tmp" | findstr /v /c:"#">> "%REPORT%" 2>&1
-if %errorlevel% equ 0 (
-    echo [WARNING] Process IOC matches found above. Investigate immediately.>> "%REPORT%"
-    set /a IOC_HITS+=1
-    call :dz_finding WARNING 18 T1057 "Process IOC match"
-) else (
-    echo [OK] No process IOC matches.>> "%REPORT%"
-)
+:: select_lines, not findstr /g: -- findstr took the list's comment lines as
+:: search strings, let its date header decide literal vs regex matching,
+:: and its failure (list unreadable, a line too long) left the errorlevel
+:: of the SECOND findstr in the pipe, which read [OK]. select_lines skips
+:: comments, matches literally, and exits 2 when it had nothing to match.
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_proc18a.tmp" -PatternFile "%IOCDIR%\ioc_processes.txt">> "%REPORT%" 2>&1
+set "_SEL18A=!errorlevel!"
+if "!_SEL18A!"=="0" goto :sec18a_hit
+if "!_SEL18A!"=="1" goto :sec18a_clean
+echo [WARNING] Process IOC match NOT performed -- ioc_processes.txt could not be read or holds no entries; select_lines exit !_SEL18A!.>> "%REPORT%"
+call :dz_finding WARNING 18 T1057 "Process IOC match NOT performed - list unreadable or empty"
+goto :sec18a_done
+:sec18a_hit
+echo [WARNING] Process IOC matches found above. Investigate immediately.>> "%REPORT%"
+set /a IOC_HITS+=1
+call :dz_finding WARNING 18 T1057 "Process IOC match"
+goto :sec18a_done
+:sec18a_clean
+echo [OK] No process IOC matches.>> "%REPORT%"
 :sec18a_done
+set "_SEL18A="
 set "_ENUM18A="
 del "%TEMP%\dz_proc18a.tmp" 2>nul
 
@@ -4318,7 +4330,7 @@ if exist "%TEMP%\dz_iochit_18e.txt" (
 
 echo.>> "%REPORT%"
 echo --- [18f] DNS Cache C2 Domain Match --->> "%REPORT%"
-echo  Command: ipconfig /displaydns ^| findstr /i /g:"%IOCDIR%\ioc_domains.txt" ^| findstr /v /c:"#">> "%REPORT%"
+echo  Command: ipconfig /displaydns ^| select_lines.ps1 -PatternFile "%IOCDIR%\ioc_domains.txt">> "%REPORT%"
 echo  Matching DNS cache against ioc_domains.txt>> "%REPORT%"
 :: Capture the cache to a temp file first: a failed/denied ipconfig used to
 :: feed findstr nothing and print [OK], hiding the failure. Empty file ->
@@ -4330,15 +4342,24 @@ if defined _ENUM18F goto :sec18f_match
 echo [SKIPPED] DNS cache could not be read -- C2 domain match NOT performed.>> "%REPORT%"
 goto :sec18f_done
 :sec18f_match
-findstr /i /g:"%IOCDIR%\ioc_domains.txt" "%TEMP%\dz_dns18f.tmp" | findstr /v /c:"#">> "%REPORT%" 2>&1
-if %errorlevel% equ 0 (
-    echo [WARNING] C2 domain IOC matches found in DNS cache above.>> "%REPORT%"
-    set /a IOC_HITS+=1
-    call :dz_finding WARNING 18 T1071.004 "C2 domain IOC match in DNS cache"
-) else (
-    echo [OK] No C2 domain IOC matches in DNS cache.>> "%REPORT%"
-)
+:: select_lines for the reasons given at 18a. A missing ioc_domains.txt
+:: (only ioc_processes.txt is checked above) is exit 2 here: NOT performed.
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_dns18f.tmp" -PatternFile "%IOCDIR%\ioc_domains.txt">> "%REPORT%" 2>&1
+set "_SEL18F=!errorlevel!"
+if "!_SEL18F!"=="0" goto :sec18f_hit
+if "!_SEL18F!"=="1" goto :sec18f_clean
+echo [WARNING] C2 domain IOC match NOT performed -- ioc_domains.txt could not be read or holds no entries; select_lines exit !_SEL18F!.>> "%REPORT%"
+call :dz_finding WARNING 18 T1071.004 "C2 domain IOC match NOT performed - list unreadable or empty"
+goto :sec18f_done
+:sec18f_hit
+echo [WARNING] C2 domain IOC matches found in DNS cache above.>> "%REPORT%"
+set /a IOC_HITS+=1
+call :dz_finding WARNING 18 T1071.004 "C2 domain IOC match in DNS cache"
+goto :sec18f_done
+:sec18f_clean
+echo [OK] No C2 domain IOC matches in DNS cache.>> "%REPORT%"
 :sec18f_done
+set "_SEL18F="
 set "_ENUM18F="
 del "%TEMP%\dz_dns18f.tmp" 2>nul
 
@@ -4359,17 +4380,23 @@ del "%TEMP%\dz_evt.tmp" 2>nul
 goto :sec18g_done
 :sec18g_match
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" -PatternFile "%IOCDIR%\ioc_lolbins.txt">> "%REPORT%" 2>&1
-:: Capture select_lines's exit before del overwrites errorlevel. select_lines
-:: mirrors findstr's convention: 0 = at least one match emitted, 1 = none.
+:: Capture select_lines's exit before del overwrites errorlevel: 0 = at least
+:: one match emitted, 1 = none, 2 = it had no patterns (the list missing or
+:: only comments) -- which used to read [OK] here.
 set "_SELECT_EXIT=!errorlevel!"
 del "%TEMP%\dz_evt.tmp" 2>nul
-if "!_SELECT_EXIT!"=="0" (
-    echo [CRITICAL] LOLBin abuse patterns detected in running processes.>> "%REPORT%"
-    set /a IOC_HITS+=1
-    call :dz_finding CRITICAL 18 T1059 "LOLBin abuse patterns detected in running processes"
-) else (
-    echo [OK] No LOLBin abuse patterns in running processes.>> "%REPORT%"
-)
+if "!_SELECT_EXIT!"=="0" goto :sec18g_hit
+if "!_SELECT_EXIT!"=="1" goto :sec18g_clean
+echo [WARNING] LOLBin pattern match NOT performed -- ioc_lolbins.txt could not be read or holds no entries; select_lines exit !_SELECT_EXIT!.>> "%REPORT%"
+call :dz_finding WARNING 18 T1059 "LOLBin pattern match NOT performed - list unreadable or empty"
+goto :sec18g_done
+:sec18g_hit
+echo [CRITICAL] LOLBin abuse patterns detected in running processes.>> "%REPORT%"
+set /a IOC_HITS+=1
+call :dz_finding CRITICAL 18 T1059 "LOLBin abuse patterns detected in running processes"
+goto :sec18g_done
+:sec18g_clean
+echo [OK] No LOLBin abuse patterns in running processes.>> "%REPORT%"
 :sec18g_done
 set "_ENUM18G="
 

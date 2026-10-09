@@ -2,7 +2,7 @@
 # SENTINEL-X CTI -- LOLBin Abuse Patterns
 # Updated: 2026-03-29 | Source: LOLBAS Project, MDDR 2024-2025, Red Canary
 # Format: command-line fragment per line (matched against process command lines)
-# Matched via findstr /i against wmic process CommandLine output
+# Matched by tools\select_lines.ps1 (literal, case-insensitive) against process command lines
 #
 # === CERTUTIL ABUSE (T1105, T1140) ===
 certutil -urlcache

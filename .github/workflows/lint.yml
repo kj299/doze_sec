@@ -607,6 +607,46 @@ jobs:
       - name: Run tools/lint_shared_copies.ps1 -SelfTest
         run: pwsh -NoProfile -File tools/lint_shared_copies.ps1 -SelfTest
 
+  ioc-matchers:
+    name: "Sections 18a/18f/18g: select_lines, and a list with nothing to match is NOT performed, never OK"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tools/select_lines.ps1 -SelfTest
+        run: pwsh -NoProfile -File tools/select_lines.ps1 -SelfTest
+      # findstr /g: read a broken list as [OK]: the errorlevel checked was the
+      # SECOND findstr's in the pipe. Each of 18a, 18f and 18g must call
+      # select_lines with its list and give exit 0 a raise, exit 1 the [OK]
+      # line, and anything else a raised NOT-performed line -- in both bats.
+      - name: 18a, 18f and 18g branch three ways on select_lines' exit, in both bats
+        shell: pwsh
+        run: |
+          $specs = @(
+            @{ S = '18a'; List = 'ioc_processes.txt'; Var = '_SEL18A';      Gap = 'Process IOC match NOT performed' },
+            @{ S = '18f'; List = 'ioc_domains.txt';   Var = '_SEL18F';      Gap = 'C2 domain IOC match NOT performed' },
+            @{ S = '18g'; List = 'ioc_lolbins.txt';   Var = '_SELECT_EXIT'; Gap = 'LOLBin pattern match NOT performed' })
+          function Get-Defects([string]$text, [string]$name) {
+            $bad = @()
+            foreach ($sp in $specs) {
+              $m = [regex]::Match($text, '(?s)--- \[' + $sp.S + '\].*?(?=--- \[18[a-z]\]|$)')
+              if (-not $m.Success) { $bad += ("{0}: section {1} not found -- this check is broken, not the code" -f $name, $sp.S); continue }
+              $b = $m.Value
+              if ($b -notmatch ('select_lines\.ps1" -Path "[^"]+" -PatternFile "%IOCDIR%\\' + [regex]::Escape($sp.List) + '"')) { $bad += ("{0} {1}: does not match with select_lines -PatternFile {2}" -f $name, $sp.S, $sp.List) }
+              if ($b -match 'findstr /i /g:') { $bad += ("{0} {1}: still matches with findstr /g:" -f $name, $sp.S) }
+              if ($b -notmatch ('if "!' + $sp.Var + '!"=="0" goto') -or $b -notmatch ('if "!' + $sp.Var + '!"=="1" goto')) { $bad += ("{0} {1}: exit 0 and exit 1 are not both branched on" -f $name, $sp.S) }
+              if ($b -notmatch ('echo \[WARNING\] ' + [regex]::Escape($sp.Gap) + '.*\r?\ncall :dz_finding WARNING 18 ')) { $bad += ("{0} {1}: any other exit does not print and raise '{2}'" -f $name, $sp.S, $sp.Gap) }
+            }
+            return $bad
+          }
+          $all = @()
+          foreach ($bat in 'doze_sec.bat', 'doze_sec_noAdmin.bat') { $all += Get-Defects ([IO.File]::ReadAllText($bat)) $bat }
+          # Mutation: the old two-way branch (anything but 0 reads [OK]) must fail.
+          $mut = [IO.File]::ReadAllText('doze_sec.bat') -replace 'if "!_SEL18F!"=="1" goto :sec18f_clean', 'goto :sec18f_clean'
+          if (-not @(Get-Defects $mut 'mutated' | Where-Object { $_ -match '18f' }).Count) { throw 'the check did not fail on a copy where any non-zero exit reads [OK] -- it cannot catch the defect' }
+          if ($all.Count) { $all | ForEach-Object { Write-Host "[FAIL] $_" }; exit 1 }
+          Write-Host '[OK] 18a, 18f and 18g match with select_lines and report a list with nothing to match as NOT performed, in both bats; the two-way mutation fails as it should.'
+          exit 0
+
   usb-stick-selftest:
     name: "USB stick: copy only, USB only, harness off, returned stick checked"
     runs-on: ubuntu-latest

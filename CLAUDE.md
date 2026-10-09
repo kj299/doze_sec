@@ -649,7 +649,13 @@ were XML element names run against `wevtutil /f:text` output, so it matched
 nothing and printed `[OK] No recent service install events` on every machine
 while Section 18 listed 26. **A filter that can never match is a permanent
 all-clear**; when a pipeline's vocabulary comes from another tool's output
-format, CI must run that pipeline against a real record.
+format, CI must run that pipeline against a real record. **And in a cmd pipe
+the errorlevel is the LAST stage's**: Sections 18a and 18f ran
+`findstr /g:<list> <file> | findstr /v "#"`, so a first findstr that could
+not read its list (or choked on a line) handed the second nothing, and the
+section printed `[OK]`. A matcher's "could not check" needs its own exit code
+and its own NOT-performed line (`select_lines` exits 2), and the plant that
+proves the match fires must be anchored inside its own subsection.
 
 **"All fail" is a different claim from "some fail".** `dns_probe` graded each
 domain on its own, so a laptop with no network -- nine domains, nine failures
