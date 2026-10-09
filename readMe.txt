@@ -266,6 +266,14 @@ RUNNING FROM A USB STICK
      DRIVE -- check the letter, and that it is not a BitLocker-locked or
      Mac-formatted stick holding files you need.
 
+     NO GIT, OR THE CHANGE IS NOT MERGED YET? The script needs no git. On
+     GitHub: the branch, Code, Download ZIP; Extract All with the destination
+     set to the folder the ZIP is in (the ZIP holds its own folder, and the
+     default destination adds another). Then Test-Path the script's full path
+     (...\doze_sec-<branch>\tools\make_usb_stick.ps1) and run the commands
+     above with that path. Every text file goes onto the stick with Windows
+     line endings, which a download lacks, so the stick is the same.
+
   2. RUN IT on the other PC, straight from the stick (nothing copied):
 
        powershell -NoProfile -ExecutionPolicy Bypass -File E:\doze_sec\tests\field_test.ps1
@@ -277,11 +285,13 @@ RUNNING FROM A USB STICK
      Results are written on that PC (C:\SecurityAudit and
      C:\Users\<name>\SecurityAudit): copy them to the stick OUTSIDE
      E:\doze_sec (e.g. E:\results\<PC name>), then delete them from the PC.
+     Anything added inside E:\doze_sec reads as tampering back home.
      If it prints AUDIT NOT PERFORMED, IT policy blocks the audit. STOP; do
      not work around it.
 
-  3. BACK HOME, before opening anything on the stick, run the checker from
-     your checkout on this laptop -- never anything from the stick:
+  3. BACK HOME, before opening anything on the stick, run the checker kept on
+     this laptop (the -Verify command the make run printed, or from your
+     checkout) -- never anything from the stick:
 
        powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1 -Drive E: -Verify
 
@@ -290,7 +300,9 @@ RUNNING FROM A USB STICK
      keep that stick as it is (evidence) and use a new one. Move E:\results
      to your laptop and delete it from the stick before the stick travels
      again. Read the .txt report. Never run anything from the stick on your
-     own laptop.
+     own laptop. If it says UNVERIFIED and lists manifests, the stick may have
+     a new volume ID (another USB port) AND a change: run it again with
+     -Manifest "<the path it lists>" to see what changed.
 
   WHY THE STICK IS NOT BOOTABLE: booting from it would start a different
   Windows, and the audit checks the Windows that is running -- it would

@@ -719,7 +719,7 @@ jobs:
       # the laptop. On Linux its stream cases skip; here they must run: Mark of
       # the Web on a source file must not reach the copy, and a stream added to
       # the copy on a visited machine must be reported.
-      - name: make_usb_stick.ps1 -SelfTest on 5.1 (USB-only target rule, no formatting, harness left off, MOTW does not travel, a planted stream is reported)
+      - name: make_usb_stick.ps1 -SelfTest on 5.1 (USB-only target rule, no formatting, harness left off, MOTW does not travel, a planted stream is reported, text files CRLF, a re-identified stick matched by content)
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -729,12 +729,15 @@ jobs:
           foreach ($must in 'Mark of the Web does not travel onto the copy', 'an alternate data stream added on a visited machine is reported',
                             'the script calls no formatting, partitioning or boot command', 'a copy of this repo holds the audit, no harness and not this script',
                             'a OneDrive cloud placeholder', 'a link in place of doze_sec is reported, and nothing behind it is read',
-                            'refresh refuses a copy holding files it did not write', 'refresh refuses a tampered copy') {
+                            'refresh refuses a copy holding files it did not write', 'refresh refuses a tampered copy',
+                            'an LF-only .ps1, .txt and .md land with CRLF', 'a text file holding a NUL byte (UTF-16) is copied byte for byte',
+                            'a stick whose volume ID changed (another USB port) is matched by content',
+                            'a CHANGED copy whose ID changed is never matched') {
             if ($out -notmatch [regex]::Escape($must)) { throw ("make_usb_stick case missing on Windows: {0}" -f $must) }
           }
           if ($out -match '\[SKIP\] (Mark of the Web|links on the stick)') { throw 'the stream or link cases skipped on Windows -- they must run here (the runner is elevated, so symbolic links can be created)' }
           $n = @($out -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($n -lt 65) { throw "make_usb_stick self-test ran only $n case(s)" }
+          if ($n -lt 82) { throw "make_usb_stick self-test ran only $n case(s)" }
           Write-Host "make_usb_stick -SelfTest OK ($n cases)"
 
       - name: exec_probe.ps1 -SelfTest + live (Windows PowerShell 5.1 writes ok|FullLanguage)
@@ -3418,14 +3421,53 @@ jobs:
           $ErrorActionPreference = 'Continue'
           # Run it the way docs\second-machine.md says: from a stick-equivalent
           # copy made by tools\make_usb_stick.ps1 (the reduced file set, harness
-          # left off, batch files CRLF), not from the checkout. Same audit, same
-          # assertions, no extra run.
+          # left off), not from the checkout. Same audit, same assertions, no
+          # extra run.
+          #
+          # And make that copy from the HARDER source, the one the GitHub
+          # "Download ZIP" route hands a person: every file LF-only (the repo
+          # has no .gitattributes; this runner's checkout is CRLF, so a stick
+          # made from it never exercised the conversion), every file carrying
+          # Mark of the Web (Explorer's Extract All copies the ZIP's onto each
+          # file), inside a nested folder that is not named doze_sec. The stick
+          # it makes must be the same as one made from a checkout.
+          $zip = Join-Path $env:RUNNER_TEMP 'dz_src.zip'
+          $zipRoot = Join-Path $env:RUNNER_TEMP 'dz_zipsrc'
+          git -c core.autocrlf=false archive --format=zip --prefix=doze_sec-ci-branch/ -o $zip HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'git archive failed' }
+          Expand-Archive -LiteralPath $zip -DestinationPath $zipRoot
+          $src = Join-Path $zipRoot 'doze_sec-ci-branch'
+          foreach ($probe in 'doze_sec.bat', 'tests\field_test.ps1', 'ThreatLists\ttp_manifest.txt') {
+            if ([Array]::IndexOf([IO.File]::ReadAllBytes((Join-Path $src $probe)), [byte]13) -ge 0) {
+              throw ("{0} in the archive holds a CR -- the source is not LF-only, so this step would test nothing it means to" -f $probe)
+            }
+          }
+          $srcFiles = @(Get-ChildItem -LiteralPath $src -Recurse -File)
+          foreach ($f in $srcFiles) { Set-Content -LiteralPath $f.FullName -Stream 'Zone.Identifier' -Value "[ZoneTransfer]`r`nZoneId=3" }
+          Write-Host ("source: {0} file(s), LF-only, each marked with Mark of the Web" -f $srcFiles.Count)
           $stickRoot = Join-Path $env:RUNNER_TEMP 'dz_stick'
           $store = Join-Path $env:RUNNER_TEMP 'dz_stick_manifests'
-          $mk = (& .\tools\make_usb_stick.ps1 -ToFolder $stickRoot -ManifestStore $store *>&1 | ForEach-Object { "$_" }) -join "`n"
+          # Started the way a person starts it -- powershell -ExecutionPolicy
+          # Bypass -File -- since the script itself carries Mark of the Web here:
+          # under this runner's own policy a marked script started with & could
+          # be refused or prompt, which is not what is under test.
+          $mk = (& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $src 'tools\make_usb_stick.ps1') -ToFolder $stickRoot -ManifestStore $store 2>&1 | ForEach-Object { "$_" }) -join "`n"
           Write-Host $mk
           if ($LASTEXITCODE -ne 0) { throw 'make_usb_stick -ToFolder failed' }
+          if ($mk -notmatch '\[INFO\] (\d+) text file\(s\) had LF line endings' -or [int]$matches[1] -lt 90) { throw 'the stick script did not convert the LF-only text files (expected >= 90)' }
+          if ($mk -notmatch '\[INFO\] (\d+) source file\(s\) carried Mark of the Web' -or [int]$matches[1] -lt 90) { throw 'the stick script did not count the marked source files (expected >= 90)' }
           $stick = Join-Path $stickRoot 'doze_sec'
+          $bare = @(); $marked = @()
+          foreach ($f in (Get-ChildItem -LiteralPath $stick -Recurse -File)) {
+            if ($f.Name -match '\.(bat|cmd|ps1|txt|md)$') {
+              $b = [IO.File]::ReadAllBytes($f.FullName)
+              for ($i = 0; $i -lt $b.Length; $i++) { if ($b[$i] -eq 10 -and ($i -eq 0 -or $b[$i - 1] -ne 13)) { $bare += $f.FullName; break } }
+            }
+            if (Get-Item -LiteralPath $f.FullName -Stream 'Zone.Identifier' -EA SilentlyContinue) { $marked += $f.FullName }
+          }
+          if ($bare.Count) { throw ("text file(s) on the stick still hold a bare LF: {0}" -f ($bare -join ', ')) }
+          if ($marked.Count) { throw ("Mark of the Web travelled onto the stick: {0}" -f ($marked -join ', ')) }
+          Write-Host 'stick made from an LF-only, marked download: every text file CRLF, no Mark of the Web on the copy.'
           foreach ($h in 'tests\manual_ci.ps1', 'tests\detection_selftest.ps1', 'tests\cleanup_selftest.ps1', 'tests\noadmin_smoke.ps1', '.git', '.github') {
             if (Test-Path -LiteralPath (Join-Path $stick $h)) { throw ("the stick copy carries {0} -- the harness must stay off it" -f $h) }
           }
@@ -3455,10 +3497,28 @@ jobs:
           # The audit wrote nothing into its own folder: the stick copy is exactly
           # what make_usb_stick put there, so a write-protected stick works and
           # the reduced file set was enough.
+          # (-Verify runs from the CHECKOUT's copy of the script, not the one in
+          # the download: a different copy of the checker must find the manifest
+          # the first one kept on this machine.)
           $vf = (& .\tools\make_usb_stick.ps1 -ToFolder $stickRoot -ManifestStore $store -Verify *>&1 | ForEach-Object { "$_" }) -join "`n"
           Write-Host $vf
           if ($LASTEXITCODE -ne 0) { throw 'the audit changed files in its own folder (make_usb_stick -Verify differs) -- a write-protected stick would break' }
-          Write-Host 'read-only field test: proven on this runner, run from a stick-equivalent copy that it left unchanged.'
+          # Windows can give a stick a new volume ID in another USB port, so the
+          # recorded target no longer names it. A folder in a new place is the same shape
+          # here: -Verify must match it by content and say so, and a changed copy
+          # with no matching target must be UNVERIFIED (exit 2), never OK. (A
+          # copy, so the stick the audit ran from stays where later steps expect.)
+          $moved = Join-Path $env:RUNNER_TEMP 'dz_stick_moved'
+          Copy-Item -LiteralPath $stickRoot -Destination $moved -Recurse
+          $vm = (& .\tools\make_usb_stick.ps1 -ToFolder $moved -ManifestStore $store -Verify *>&1 | ForEach-Object { "$_" }) -join "`n"
+          Write-Host $vm
+          if ($LASTEXITCODE -ne 0 -or $vm -notmatch 'its files match, one for one') { throw 'an unchanged copy in a new place was not matched by content' }
+          Add-Content -LiteralPath (Join-Path $moved 'doze_sec\tools\exec_probe.ps1') -Value '# changed on a visited machine'
+          $vt = (& .\tools\make_usb_stick.ps1 -ToFolder $moved -ManifestStore $store -Verify *>&1 | ForEach-Object { "$_" }) -join "`n"
+          $vrc = $LASTEXITCODE
+          Write-Host $vt
+          if ($vrc -ne 2 -or $vt -notmatch '\[UNVERIFIED\]' -or $vt -notmatch '1 difference\(s\) from this copy' -or $vt -match '\[OK\] The tool') { throw ("a copy in a new place that was ALSO changed must read UNVERIFIED with the difference count, exit 2 (got {0})" -f $vrc) }
+          Write-Host 'read-only field test: proven on this runner, run from a stick made from an LF-only marked download, which it left unchanged; a copy in a new place is matched by content, and one that also changed is UNVERIFIED.'
 
       # The report prints ~176 " Command: <X>" lines -- "here is how to check
       # this yourself". lint_report_echo proves each one PARSES. Parsing is not

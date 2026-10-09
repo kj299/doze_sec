@@ -6,6 +6,57 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### The USB stick from a download is the stick CI tests; a re-identified stick still verifies
+The owner tried to make the stick before the PR adding the script was merged,
+so the script was not in their checkout. Making it from GitHub's Download ZIP
+instead was then checked by reading the code (two tracers, seven skeptics and
+a completeness critic, reading only). The route works, and the check turned up
+four things, all fixed here. None of them deleted anything or vouched for a
+changed stick:
+- **Line endings.** Only `.bat`/`.cmd` were written with CRLF. From a ZIP,
+  which carries the repo's LF endings, every `.ps1` and `.txt` reached the stick
+  LF-only. A Windows checkout, the only thing CI ever built a stick from, is
+  CRLF throughout. findstr's `$` anchor needs a CR, so Section 18i printed a
+  stray blank line, and `findstr /g:` had never been run against an LF-only
+  list. Every text file (an extension allowlist; a file holding a NUL byte is
+  left alone) is now written with CRLF. The conversion is byte-exact through
+  Latin-1, safe for UTF-8, and much faster than the old per-byte loop.
+- **A stick with a new volume ID.** `-Verify` found the laptop manifest only by
+  volume ID. Windows can give a stick with no serial number a new ID in another
+  USB port, and the stick then read `[UNVERIFIED] ... make the stick again`. A
+  failed volume lookup was swallowed with the same result. `-Verify` and
+  `-Refresh` now fall back to the newest laptop manifest the copy matches file
+  for file, and say so. Among exact matches, one whose stick-root record also
+  matches is preferred. No exact match gives `[UNVERIFIED]` (exit 2), never a
+  TAMPERED verdict against a manifest that may belong to another stick. The
+  message lists every laptop manifest with its difference count and points to
+  `-Manifest`. A manifest that cannot be read is now listed with its reason; it
+  used to be skipped in silence.
+- **Which guide, where the results go.** The make run's last lines name the
+  guide on the stick (`E:\doze_sec\docs\second-machine.md`); an older checkout
+  can hold an older guide that has no warning about the results folder. They
+  also say to bring results back outside `E:\doze_sec`, since anything added
+  there reads as tampering.
+- **The ZIP route is documented**, including the trap that sends a first run
+  to the same "does not exist" error: the ZIP holds its own top folder, and
+  Extract All's default destination adds another.
+
+CI: the read-only job now builds its stick from a `git archive` with
+autocrlf off. It asserts the source really is LF-only, so the step cannot pass
+on a source that tests nothing. It plants Mark of the Web on every file, puts
+the tree in a nested folder, and runs the script with `-ExecutionPolicy Bypass
+-File` as a person does. It asserts that no bare LF and no mark reached the
+stick. field_test then runs from that stick with every existing assertion. A
+copy in a new place must verify by content, and a copy that was also changed
+must read UNVERIFIED (exit 2). The self-test grows to 85 cases on Windows.
+Five mutations each fail it: normalisation limited to batch files again, no
+content fallback, a match that ignores differences, the NUL guard removed, and
+no root ranking.
+
+Found while reading, not fixed here: no test has ever planted a process name
+from `ioc_processes.txt` (Section 18a) or a domain from `ioc_domains.txt` in
+the DNS cache (Section 18f). Both detections have never fired in a test.
+
 ### Carry the tool on a USB stick; two defects found on the way
 README, readMe.txt and docs/second-machine.md now explain how to put doze_sec
 on a USB stick with tools built into Windows, and how to run it from there.

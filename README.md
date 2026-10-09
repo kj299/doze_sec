@@ -315,6 +315,23 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1 -Li
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1 -Drive E:
 ```
 
+**No git on this laptop, or the change you want is not merged yet?** The script
+needs no git. On GitHub, open the branch, **Code**, **Download ZIP**, then in
+File Explorer right-click the ZIP, **Extract All**, and set the destination to
+the folder the ZIP is in (for example `C:\Users\<name>\Downloads`). The ZIP
+holds a folder named after the branch, and Extract All's default destination
+adds another, so with the default the files land one folder deeper than you
+expect. Check before you run, and use the full path:
+
+```
+$t = "C:\Users\<name>\Downloads\doze_sec-<branch>\tools\make_usb_stick.ps1"
+Test-Path $t
+powershell -NoProfile -ExecutionPolicy Bypass -File $t -Drive E:
+```
+
+The stick is the same either way: the script writes every text file with
+Windows line endings, which a download does not have.
+
 `-ListCandidates` only lists drives, and changes nothing. `-Drive E:`:
 
 - accepts only a drive on the **USB bus** that is not the disk Windows started
@@ -327,15 +344,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1 -Dr
   later is never one that travelled. It names each file it leaves off;
 - copies file **contents** only, so Mark of the Web never travels. A PC whose
   IT sets a RemoteSigned script policy would otherwise refuse some helpers. It
-  also writes the batch files with the Windows line endings cmd.exe needs;
+  also writes every text file with Windows line endings, as a Windows checkout
+  has them (cmd.exe needs them in the batch files);
 - reads every file back, records anything already at the stick's root that
   could run or boot, and keeps a SHA-256 manifest of the stick on your laptop
   (`%LOCALAPPDATA%\doze_sec\sticks\`), with a copy on the stick.
 
-Then eject the stick, plug it back in, and run the same command with `-Verify`
-(from your checkout, as the script prints it). That reads the files back from
-the stick, so it proves the copy landed intact. It does not test the stick's
-real capacity.
+Then eject the stick, plug it back in, and run the `-Verify` command the
+script prints at the end. It names the script's full path, so it works from any
+folder. That reads the files back from the stick, so it proves the copy landed
+intact. It does not test the stick's real capacity. The last lines it prints
+also name the guide to follow on the other PC -- the copy on the stick, which
+matches the tool on it.
 
 Without the script, `robocopy C:\path\to\doze_sec E:\doze_sec /E /XD .git`
 from your Windows checkout also works. But it carries the harness and any Mark
@@ -366,7 +386,8 @@ the same way, and delete that folder when you are done.
 Either way the results are written **on that PC**: `C:\SecurityAudit\` for the
 administrator run and `C:\Users\<name>\SecurityAudit\` for the normal one.
 Copy both folders to the stick, **outside** `E:\doze_sec` (for example
-`E:\results\<PC name>\`), then delete them from the PC.
+`E:\results\<PC name>\`), then delete them from the PC. Anything added
+inside `E:\doze_sec` reads as tampering when you check the stick back home.
 
 If it prints **AUDIT NOT PERFORMED**, that PC's IT policy does not let the
 audit's scripts run. **Stop there, and do not try to work around it.** The
@@ -374,8 +395,9 @@ console output says which policy; send it.
 
 ### 3. Back home
 
-- Before you open anything on the stick, check it with the script **in your
-  checkout on this laptop** -- never anything from the stick:
+- Before you open anything on the stick, check it with the script kept **on
+  this laptop** -- the `-Verify` command the make run printed, or from your
+  checkout as below -- never anything from the stick:
 
   ```
   cd C:\path\to\your\doze_sec
@@ -389,10 +411,17 @@ console output says which policy; send it.
   programs). A change means the PC you visited made it, and that is itself
   worth reporting: **keep that stick exactly as it is, as evidence, and use a
   new stick for the next PC.**
+
+  The manifest is found by the stick's volume ID. Windows can give a stick a
+  new one when it goes into another USB port; then the check matches the
+  stick by its contents instead and says so. If something on the stick
+  changed as well, it prints `[UNVERIFIED]` and lists the manifests this
+  laptop holds, each with its difference count: run it again with
+  `-Manifest "<the path it lists>"` to see exactly what changed.
 - Move `E:\results\` to your laptop and delete it from the stick before the
   stick goes anywhere else: those reports are the visited PC's private data.
-  If the tool verified unchanged, `-Drive E: -Refresh` (same command, from your
-  checkout) then makes a fresh copy for the next PC. It deletes only files this
+  If the tool verified unchanged, `-Drive E: -Refresh` (the same command with
+  `-Refresh` in place of `-Verify`) then makes a fresh copy for the next PC. It deletes only files this
   laptop wrote, and refuses if anything in `E:\doze_sec` changed.
 - Read the **.txt** report. The .html was written by the PC you were checking;
   if you suspect that PC, do not open its .html in your browser.
