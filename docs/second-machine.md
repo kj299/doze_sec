@@ -51,26 +51,32 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1 -Dr
 
 It accepts only a drive on the USB bus that is not your Windows disk, and it
 **never formats anything**. It copies the tool to `E:\doze_sec`, leaves off
-`.git` and the test harness (named as it goes -- the harness must never reach
-someone else's PC), and keeps a SHA-256 manifest of the stick on your laptop.
-Then eject the stick, plug it back in, and run the same command with `-Verify`
-once before you leave.
+`.git`, the test harness and itself (named as it goes -- the harness must never
+reach someone else's PC, and the checker you run later must never be one that
+travelled), and keeps a SHA-256 manifest of the stick on your laptop. Then
+eject the stick, plug it back in, and run the `-Verify` command it prints, from
+your checkout, once before you leave. Use a clean stick, not an old Windows
+install or recovery stick.
 
-If the stick is unformatted: File Explorer, right-click the drive, Format,
-exFAT. **Formatting erases every file on that drive -- check the letter is the
-stick.** Without the script, `robocopy C:\path\to\doze_sec E:\doze_sec /E /XD .git`
-also works, but it carries the harness, and there is no manifest to check the
-stick against afterwards.
+If Windows says the stick must be formatted: File Explorer, right-click the
+drive, Format, exFAT. **Formatting erases every file on that drive -- check the
+letter is the stick, and that it is not a BitLocker-locked or Mac-formatted
+stick holding files you need.** Without the script,
+`robocopy C:\path\to\doze_sec E:\doze_sec /E /XD .git` from your Windows
+checkout also works, but it carries the harness, and there is no manifest to
+check the stick against afterwards.
 
 ## Step 2: decide how to run it on the second machine
 
 - **A. Straight from the stick (the default).** Nothing of the tool is copied
-  onto that PC. Leave the stick in until field_test prints `OK` or `FAIL`.
-  The commands below use `E:`; use whatever letter the stick gets there.
+  onto that PC. Leave the stick in until field_test prints `OK` or `FAIL`, and
+  take it out before that PC restarts. The commands below use `E:`; use
+  whatever letter the stick gets there.
 - **B. Copied onto the PC,** if the stick cannot stay plugged in: copy
-  `E:\doze_sec` to `Documents\doze_sec`, i.e.
-  `C:\Users\<name>\Documents\doze_sec`. **Do not put it in a Temp folder:** the
-  audit refuses to run from Temp (exit code 5).
+  `E:\doze_sec` to `C:\Users\<name>\doze_sec`. **Not into Documents:** OneDrive
+  may sync Documents, which would upload the tool to the owner's cloud and keep
+  it there after you delete it. **Not into a Temp folder:** the audit refuses to
+  run from Temp (exit code 5).
 
 ## Step 3: preflight. Paste this in before running anything
 
@@ -127,7 +133,7 @@ New-Item -ItemType Directory -Force $env:USERPROFILE\SecurityAudit | Out-Null
 powershell -NoProfile -ExecutionPolicy Bypass -File E:\doze_sec\tests\field_test.ps1 | Tee-Object -FilePath $env:USERPROFILE\SecurityAudit\field_test_console.txt
 ```
 
-For way B, replace `E:\doze_sec` with `$env:USERPROFILE\Documents\doze_sec`.
+For way B, replace `E:\doze_sec` with `$env:USERPROFILE\doze_sec`.
 
 **If you do not have admin rights,** the normal run alone is still worth
 doing. Checks that need admin are marked `[DEFERRED - ADMIN REQUIRED]`.
@@ -151,7 +157,8 @@ field_test ends with one of:
 
 ## Step 5: bring the results back
 
-Copy these folders onto the USB stick, for example into `E:\results\<PC name>\`:
+Copy these folders onto the USB stick, **outside** `E:\doze_sec`, for example
+into `E:\results\<PC name>\`:
 
 - `C:\SecurityAudit` (from the administrator run)
 - `C:\Users\<name>\SecurityAudit` (from the normal run)
@@ -166,26 +173,33 @@ Delete whichever of these exist:
 
 - `C:\SecurityAudit`
 - `C:\Users\<name>\SecurityAudit`
-- `C:\Users\<name>\Documents\doze_sec` (way B only)
+- `C:\Users\<name>\doze_sec` (way B only)
 
 Nothing else changed. field_test's `== Read-only proof ==` lines say so for
 the RunOnce key, the boot configuration and the restore points.
 
 ## Step 7: back home
 
-- Before anything else, check the stick on your laptop:
+- Before you open anything on the stick, check it with the script **in your
+  checkout on this laptop** -- never anything from the stick:
 
   ```
+  cd C:\path\to\your\doze_sec
   powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1 -Drive E: -Verify
   ```
 
   It compares `E:\doze_sec` with the manifest kept on your laptop -- never the
   copy on the stick, which the visited PC could have rewritten -- and lists any
-  file changed, added or removed, plus anything new at the stick's root that
-  could run (`autorun.inf`, shortcuts, programs). **A changed tool file means
-  the PC you visited changed it: report it, do not run that copy again, and
-  keep that stick exactly as it is -- it is evidence.** Use a new stick for the
-  next PC. If nothing changed, `-Drive E: -Refresh` makes a fresh copy.
+  file changed, added or removed, any link, and anything new or changed at the
+  stick's root that could run or boot (`autorun.inf`, shortcuts, programs).
+  **A change means the PC you visited made it: report it, do not run that copy
+  again, and keep that stick exactly as it is -- it is evidence.** Use a new
+  stick for the next PC.
+- Move `E:\results\` to your laptop and delete it from the stick before the
+  stick goes anywhere else: those reports are that PC's private data. If the
+  tool verified unchanged, `-Drive E: -Refresh` (same command, from your
+  checkout) then makes a fresh copy. It deletes only files this laptop wrote,
+  and refuses if anything in `E:\doze_sec` changed.
 - Read the `.txt` report first. The `.html` was written by the PC you were
   checking; if you suspect that PC, do not open its `.html` in your browser.
 - **Never run anything from the stick on your own laptop** -- the remediation
@@ -196,10 +210,11 @@ the RunOnce key, the boot configuration and the restore points.
 Booting the PC from the stick would start a different Windows, and the audit
 checks the Windows that is running, so it would describe the stick, not the PC.
 Windows' own bootable stick (a recovery drive) does not include PowerShell, so
-the audit could not start there anyway. **Do not boot the PC from the stick or
-change its boot settings:** on a PC with BitLocker or device encryption that
-can make it ask for the 48-digit recovery key at the next start, and without
-the key you cannot get to any file on that PC again.
+the audit could not start there anyway. **Do not boot the PC from the stick,
+change its boot settings, or leave the stick in while it restarts:** on a PC
+with BitLocker or device encryption that can make it ask for the 48-digit
+recovery key at the next start, and without the key you cannot get to any
+file on that PC again.
 
 ---
 

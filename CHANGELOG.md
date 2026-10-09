@@ -15,8 +15,26 @@ accepts only a USB-bus disk that is not the boot or system disk. It leaves off
 contents only, so Mark of the Web does not travel, and writes the batch files
 with CRLF line endings. It reads every file back and keeps a SHA-256 manifest
 on the laptop. `-Verify` checks a returned stick against that laptop copy,
-never the one on the stick, and lists files changed, added or removed, new
-data streams, links, and new runnable files at the stick root.
+never the one on the stick. It lists files changed, added or removed, new data
+streams and links, and root files that can run or boot and were not there when
+the stick was made. It never follows a link: a junction planted in place of
+`E:\doze_sec` is reported, and nothing behind it is read. The checker itself
+stays off the stick, so the one that vouches for a stick has never travelled.
+It also refuses to run from the target. `-Refresh` deletes only files the
+laptop manifest lists, and only when the copy is still exactly what the
+laptop wrote: saved results or evidence of tampering make it refuse and list
+what it found. An adversarial review (five lenses, each finding re-checked by
+a skeptic) found 13 real defects before the first push, and all are fixed:
+- Stream enumeration threw on FAT32/exFAT under Windows PowerShell 5.1.
+- An unreadable stick (BitLocker-locked, Mac-formatted) was called
+  "unformatted", with format advice.
+- `-Refresh` could delete saved results.
+- A junction in place of the tool folder was followed.
+- The checker shipped on the stick, and the documented back-home command was
+  relative.
+- Root files already on the stick were flagged as tampering.
+- Results could travel on to the next PC.
+- Way B used Documents, which OneDrive may sync.
 
 The stick is not bootable, and the docs say why. The audit checks the running
 Windows, so a booted stick would audit itself. Windows' own bootable stick has
@@ -27,15 +45,20 @@ verifies that copy is unchanged. That proves the reduced file set is enough
 and the audit writes nothing into its own folder, so a write-protected stick
 works.
 
-Two defects turned up in the research, both fixed:
+Defects found along the way, all fixed:
 - The VirusTotal self-check abort (exit 7) jumped past the RunOnce cleanup
   after INIT 8 had created the resume entry, so the next logon would have
   relaunched the audit. A lint.yml step now requires the delete before every
   early exit after INIT 8, and it fails on the pre-fix scripts.
 - A `-noAdmin` run wrote its console log to `C:\SecurityAudit` while
   promising to write only the user's own folder. The log now goes to the run's
-  output folder. The standard-user CI job asserts it, and a single quote in a
-  profile path is escaped for the Tee-Object string.
+  output folder, and the standard-user CI job asserts it. The path now reaches
+  Tee-Object through the environment (`-LiteralPath $env:...`), so no
+  apostrophe in a profile name -- straight or typographic -- can break it.
+- Found by the same review, and older than this change: the noAdmin RunOnce
+  resume entry left out `-noAdmin`, so a resumed standard-user run would have
+  stopped FATAL at the admin check. It now carries the switch, and field_test
+  accepts the longer command line.
 
 ### Copied helpers cannot drift
 The tools are self-contained by design, so `Get-RegKeyLastWrite` lives in five

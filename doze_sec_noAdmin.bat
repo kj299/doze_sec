@@ -26,9 +26,11 @@ set "DOZE_CONSOLE_LOG=%DOZE_LOG_DIR%\AuditConsole_%DOZE_LOG_TS%.log"
 set "DOZE_EXIT_FILE=%TEMP%\dz_rc_%DOZE_LOG_TS%_%RANDOM%.tmp"
 set "DOZE_TEED=1"
 echo  [*] Console output also being captured to: %DOZE_CONSOLE_LOG%
-:: The path sits inside a single-quoted PowerShell string; a profile folder
-:: such as C:\Users\o'neil would end it early, so double any single quote.
-call "%~f0" %* 2>&1 | powershell -NoProfile -ExecutionPolicy Bypass -Command "$input | Tee-Object -FilePath '%DOZE_CONSOLE_LOG:'=''%'"
+:: The path is read from the environment, not pasted into the command: a
+:: profile folder such as C:\Users\o'neil -- or one with a typographic
+:: apostrophe, which PowerShell also treats as a quote -- would end a quoted
+:: string early and lose the whole console capture. -LiteralPath: no wildcards.
+call "%~f0" %* 2>&1 | powershell -NoProfile -ExecutionPolicy Bypass -Command "$input | Tee-Object -LiteralPath $env:DOZE_CONSOLE_LOG"
 set "DOZE_EXIT_CODE=0"
 if exist "%DOZE_EXIT_FILE%" (
     set /p DOZE_EXIT_CODE=<"%DOZE_EXIT_FILE%"
@@ -875,10 +877,14 @@ echo %C_GREEN%[INIT 7/14]%C_RESET% Fresh run. Proceeding with full pre-flight.
 :: [INIT 8/14] CREATE RUNONCE RESUME ENTRY
 :: ====================================================================
 echo %C_GREEN%[INIT 8/14]%C_RESET% Creating RunOnce resume entry...
+:: A resumed run must take the same path: without -noAdmin a standard user's
+:: resumed run would stop FATAL at the admin check, so it could never resume.
+set "RESUME_ARGS=-resume"
+if "%NO_ADMIN_MODE%"=="1" set "RESUME_ARGS=-resume -noAdmin"
 echo --- [INIT 8/14] RunOnce Resume Key --->> "%REPORT%"
-echo  Command: reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /t REG_SZ /d "\"%SCRIPT_PATH%\" -resume" /f>> "%REPORT%"
+echo  Command: reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /t REG_SZ /d "\"%SCRIPT_PATH%\" %RESUME_ARGS%" /f>> "%REPORT%"
 echo  If this run is interrupted (reboot/crash), Windows will automatically>> "%REPORT%"
-echo  re-run the script with the -resume switch on next login.>> "%REPORT%"
+echo  re-run the script with %RESUME_ARGS% on next login.>> "%REPORT%"
 echo  Key: HKCU\...\RunOnce  Value: *%SCRIPT_NAME%_resume>> "%REPORT%"
 echo  The * prefix forces execution even in Safe Mode.>> "%REPORT%"
 
@@ -887,7 +893,7 @@ if "%READONLY_MODE%"=="1" (
     echo %C_GREEN%[INIT 8/14]%C_RESET% Read-only mode - RunOnce key not created.
     goto :runonce_done
 )
-reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /t REG_SZ /d "\"%SCRIPT_PATH%\" -resume" /f >nul 2>&1
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /t REG_SZ /d "\"%SCRIPT_PATH%\" %RESUME_ARGS%" /f >nul 2>&1
 if %errorlevel% equ 0 (
     echo  [OK] RunOnce key created successfully.>> "%REPORT%"
     set "RUNONCE_CREATED=1"

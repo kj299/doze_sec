@@ -727,13 +727,14 @@ jobs:
           Write-Host $out
           if ($LASTEXITCODE -ne 0) { throw 'make_usb_stick self-test failed' }
           foreach ($must in 'Mark of the Web does not travel onto the copy', 'an alternate data stream added on a visited machine is reported',
-                            'the script calls no formatting, partitioning or boot command', 'a copy of this repo holds the audit and no harness',
-                            'a OneDrive cloud placeholder') {
+                            'the script calls no formatting, partitioning or boot command', 'a copy of this repo holds the audit, no harness and not this script',
+                            'a OneDrive cloud placeholder', 'a link in place of doze_sec is reported, and nothing behind it is read',
+                            'refresh refuses a copy holding files it did not write', 'refresh refuses a tampered copy') {
             if ($out -notmatch [regex]::Escape($must)) { throw ("make_usb_stick case missing on Windows: {0}" -f $must) }
           }
-          if ($out -match '\[SKIP\] Mark of the Web') { throw 'the stream cases skipped on Windows -- they must run here' }
+          if ($out -match '\[SKIP\] (Mark of the Web|links on the stick)') { throw 'the stream or link cases skipped on Windows -- they must run here (the runner is elevated, so symbolic links can be created)' }
           $n = @($out -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($n -lt 50) { throw "make_usb_stick self-test ran only $n case(s)" }
+          if ($n -lt 65) { throw "make_usb_stick self-test ran only $n case(s)" }
           Write-Host "make_usb_stick -SelfTest OK ($n cases)"
 
       - name: exec_probe.ps1 -SelfTest + live (Windows PowerShell 5.1 writes ok|FullLanguage)

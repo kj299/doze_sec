@@ -288,8 +288,9 @@ The HTML report features a navigation sidebar, color-coded findings (green/yello
 The audit installs nothing. It needs only the Windows PowerShell 5.1 and
 cmd.exe built into Windows 10 and 11, so it can travel on a USB stick to a PC
 that cannot or should not install anything. The stick only **carries** the
-files: the audit always runs inside that PC's own Windows. **The stick is not
-bootable** -- see [Why the stick is not bootable](#why-the-stick-is-not-bootable).
+files: the audit always runs inside that PC's own Windows. Nothing here makes
+the stick bootable, and you should never boot a PC from it -- see
+[Why the stick is not bootable](#why-the-stick-is-not-bootable).
 
 If the PC is not yours, read [docs/second-machine.md](docs/second-machine.md)
 first. It has the warnings (ask the owner; on a work PC get IT's written OK,
@@ -298,44 +299,48 @@ whether the PC will let the audit run, and every step below in more detail.
 
 ### 1. Make the stick, on your own laptop
 
-Any USB stick works -- FAT32, exFAT or NTFS -- and the tool is a few MB. You do
-not need to format it. If it is brand new and unformatted: File Explorer,
-right-click the drive, **Format**, choose **exFAT**, **Start**. **Formatting
-erases every file on that drive. Check that the letter is the stick, not
-another disk, before you click Start.**
+Any USB stick works -- FAT32, exFAT or NTFS -- and the tool is a few MB. A
+clean stick is best; avoid an old Windows install or recovery stick. You do not
+need to format it. If it is brand new and Windows says it must be formatted:
+File Explorer, right-click the drive, **Format**, choose **exFAT**, **Start**.
+**Formatting erases every file on that drive. Check that the letter is the
+stick and that it holds nothing you need -- a stick locked by BitLocker or
+formatted on a Mac also looks unreadable -- before you click Start.**
 
 Open PowerShell as administrator (the script asks Windows which bus each disk
-is on), go to your `doze_sec` folder, and run:
+is on), go to your `doze_sec` checkout, and run (use your stick's letter):
 
 ```
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1 -ListCandidates
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1 -Drive E:
 ```
 
-`-ListCandidates` only lists drives, and changes nothing. `-Drive E:` (use your
-stick's letter):
+`-ListCandidates` only lists drives, and changes nothing. `-Drive E:`:
 
 - accepts only a drive on the **USB bus** that is not the disk Windows started
   from and not the Windows drive. It **never formats, partitions or writes boot
   files**; a copy cannot erase the wrong disk;
-- copies the tool into `E:\doze_sec` and leaves off `.git` and the **test
-  harness**. That is the scripts that plant fake malware (on a real laptop they
-  once locked the owner out) and the one that creates a local user account,
-  none of which belongs on someone else's PC. It names each file it leaves off;
+- copies the tool into `E:\doze_sec` and leaves off `.git`, the **test
+  harness** -- the scripts that plant fake malware (on a real laptop they once
+  locked the owner out) and the one that creates a local user account, none of
+  which belongs on someone else's PC -- and **itself**, so the checker you run
+  later is never one that travelled. It names each file it leaves off;
 - copies file **contents** only, so Mark of the Web never travels. A PC whose
   IT sets a RemoteSigned script policy would otherwise refuse some helpers. It
   also writes the batch files with the Windows line endings cmd.exe needs;
-- reads every file back, and keeps a SHA-256 manifest of the stick on your
-  laptop (`%LOCALAPPDATA%\doze_sec\sticks\`), with a copy on the stick.
+- reads every file back, records anything already at the stick's root that
+  could run or boot, and keeps a SHA-256 manifest of the stick on your laptop
+  (`%LOCALAPPDATA%\doze_sec\sticks\`), with a copy on the stick.
 
-Then eject the stick, plug it back in, and run the same command with
-`-Verify`. That reads the files from the stick itself, so a stick that lies
-about its size is caught before you leave.
+Then eject the stick, plug it back in, and run the same command with `-Verify`
+(from your checkout, as the script prints it). That reads the files back from
+the stick, so it proves the copy landed intact. It does not test the stick's
+real capacity.
 
 Without the script, `robocopy C:\path\to\doze_sec E:\doze_sec /E /XD .git`
-also works. But it carries the harness and any Mark of the Web, and there is no
-manifest to check the stick against when it comes back. Keep a plain folder
-name such as `E:\doze_sec` -- no `( ) ! % & ^`.
+from your Windows checkout also works. But it carries the harness and any Mark
+of the Web, and there is no manifest to check the stick against when it comes
+back. Keep a plain folder name such as `E:\doze_sec` -- no `( ) ! % & ^`.
 
 ### 2. Run it on the other PC
 
@@ -347,18 +352,21 @@ powershell -NoProfile -ExecutionPolicy Bypass -File E:\doze_sec\tests\field_test
 
 Run it once in PowerShell **as administrator** if you can, then once in a
 normal window. Leave the stick in until it prints `OK` or `FAIL`; pulling it
-out mid-run stops the audit. A write-protected stick is fine for the run: the
-audit never writes into its own folder.
+out mid-run stops the audit. Take it out before that PC restarts. A
+write-protected stick is fine for the run: the audit never writes into its own
+folder.
 
 **B. Copied onto the PC** -- if the stick cannot stay plugged in: copy
-`E:\doze_sec` to `Documents\doze_sec` (not a Temp folder: the audit refuses to
-run from Temp, exit code 5), run `Documents\doze_sec\tests\field_test.ps1` the
-same way, and delete that folder when you are done.
+`E:\doze_sec` to `C:\Users\<name>\doze_sec`. Not into Documents, which
+OneDrive may upload to the owner's cloud, and not into a Temp folder, where the
+audit refuses to run (exit code 5). Run
+`powershell -NoProfile -ExecutionPolicy Bypass -File $env:USERPROFILE\doze_sec\tests\field_test.ps1`
+the same way, and delete that folder when you are done.
 
 Either way the results are written **on that PC**: `C:\SecurityAudit\` for the
 administrator run and `C:\Users\<name>\SecurityAudit\` for the normal one.
-Copy both folders to the stick (for example `E:\results\<PC name>\`), then
-delete them from the PC.
+Copy both folders to the stick, **outside** `E:\doze_sec` (for example
+`E:\results\<PC name>\`), then delete them from the PC.
 
 If it prints **AUDIT NOT PERFORMED**, that PC's IT policy does not let the
 audit's scripts run. **Stop there, and do not try to work around it.** The
@@ -366,13 +374,26 @@ console output says which policy; send it.
 
 ### 3. Back home
 
-- Run `tools\make_usb_stick.ps1 -Drive E: -Verify` on your laptop. It lists any
-  tool file changed, added or removed while the stick was away. It also lists
-  any new file at the stick's root that could run or point elsewhere
-  (`autorun.inf`, shortcuts, programs). A changed tool file means the PC you
-  visited changed it, and that is itself worth reporting: keep that stick
-  exactly as it is, as evidence, and make the next one on a new stick. If
-  nothing changed, `-Drive E: -Refresh` makes a fresh copy for the next PC.
+- Before you open anything on the stick, check it with the script **in your
+  checkout on this laptop** -- never anything from the stick:
+
+  ```
+  cd C:\path\to\your\doze_sec
+  powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1 -Drive E: -Verify
+  ```
+
+  It compares the stick with the manifest kept on your laptop -- never the
+  copy on the stick, which the visited PC could have rewritten -- and lists any
+  tool file changed, added or removed, any link, and any new or changed file at
+  the stick's root that could run or boot (`autorun.inf`, shortcuts,
+  programs). A change means the PC you visited made it, and that is itself
+  worth reporting: **keep that stick exactly as it is, as evidence, and use a
+  new stick for the next PC.**
+- Move `E:\results\` to your laptop and delete it from the stick before the
+  stick goes anywhere else: those reports are the visited PC's private data.
+  If the tool verified unchanged, `-Drive E: -Refresh` (same command, from your
+  checkout) then makes a fresh copy for the next PC. It deletes only files this
+  laptop wrote, and refuses if anything in `E:\doze_sec` changed.
 - Read the **.txt** report. The .html was written by the PC you were checking;
   if you suspect that PC, do not open its .html in your browser.
 - **Never run anything from the stick on your own laptop.** That includes the
@@ -386,15 +407,21 @@ console output says which policy; send it.
   drive, does not include PowerShell, so the audit could not even start there.
   Auditing a PC's disk while that PC's Windows is not running would need a
   separate offline mode; it is on the backlog.
-- **Do not boot the PC from the stick or change its boot settings.** On a PC
-  with BitLocker or device encryption (on by default on many Windows 11 PCs),
-  that can make it ask for the 48-digit recovery key at the next start.
-  **Without the key, you cannot get to any file on that PC again.**
+- **Do not boot the PC from the stick or change its boot settings, and take
+  the stick out before the PC restarts.** On a PC with BitLocker or device
+  encryption (on by default on many Windows 11 PCs), boot changes -- or bootable
+  media left in during a restart -- can make it ask for the 48-digit recovery
+  key at the next start. **Without the key, you cannot get to any file on that
+  PC again.**
 - **For a check from outside the running Windows,** Windows has one built in:
   Windows Security > Virus & threat protection > Scan options > **Microsoft
-  Defender Offline scan**. It is a malware scan, not this audit. Have the
-  BitLocker recovery key in hand before you start it; for a Microsoft account it
-  is at account.microsoft.com/devices/recoverykey.
+  Defender Offline scan**. It is a malware scan, not this audit, and it works
+  only on an x64 PC (not ARM) where Microsoft Defender is the active antivirus
+  and the recovery environment is enabled -- in an elevated window,
+  `reagentc /info` must say `Windows RE status: Enabled`, or the scan silently
+  does nothing. Have the BitLocker recovery key in hand before you start it
+  (for a Microsoft account it is at account.microsoft.com/devices/recoverykey),
+  and afterwards check Windows Security > Protection history for the result.
 
 ## CTI Skill Integration
 

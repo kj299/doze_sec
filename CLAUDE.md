@@ -544,7 +544,11 @@ copy cannot. It accepts only a USB-bus disk that is not the boot/system disk,
 leaves the plant harness off (named), copies file contents so Mark of the Web
 cannot travel, and keeps the stick's SHA-256 manifest on the LAPTOP: whatever
 comes back on the stick, its manifest included, may have been rewritten by the
-machine it visited. Booting is out on purpose: the audit checks the running
+machine it visited. For the same reason the checker never travels on the stick
+and refuses to run from the target, a walk of the stick never follows any
+reparse point (check the ROOT itself before Test-Path, which follows links),
+and `-Refresh` deletes only files the laptop manifest lists, and only when the
+copy is unchanged -- a returned stick can hold the owner's results or evidence. Booting is out on purpose: the audit checks the running
 Windows, so a booted stick would audit itself; Windows' own bootable stick has
 no PowerShell; and boot changes can push a BitLocker PC into recovery. And
 OneDrive Files On-Demand marks ordinary synced files as reparse points, so a
