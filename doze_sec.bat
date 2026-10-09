@@ -1400,6 +1400,10 @@ if "%NETWORK_AVAIL%"=="1" if "%VT_SELF_SKIP%"=="0" if exist "%USERPROFILE%\.vt_t
             echo.>> "%REPORT%"
             echo   EXIT CODE: 7    FINDINGS COUNTED: !FINDINGS!>> "%REPORT%"
             echo ====================================================================>> "%REPORT%"
+            rem This abort comes after INIT 8 created the RunOnce resume entry and
+            rem jumps past :end_script, which is where that entry is removed. Remove
+            rem it here too, or the next logon relaunches the audit with -resume.
+            reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /f >nul 2>&1
             set "EXIT_CODE=7"
             goto :final_exit
         )

@@ -480,3 +480,41 @@ no tile when the query failed, and never showed extension exclusions). No
 Defender tile re-measures. First experiment run (2026-10-02): `AMRunningMode`
 read `Normal` before and after the policy value; the runner image already
 carried a `ForceDefenderPassiveMode` value of its own.
+
+## Offline audit mode (proposed 2026-10-09, not started)
+
+The owner asked for a bootable USB stick. That is out for now: the audit checks
+the running Windows, so a booted stick would audit itself, Windows' own
+bootable stick (a recovery drive) has no PowerShell, and boot changes can push a
+BitLocker PC into recovery. What a bootable stick would really buy is a view a
+kernel implant cannot falsify: the report's own READ THIS FIRST says on-host
+auditing cannot be authoritative against that adversary. The way to get it is an
+offline mode, and a research pass (wf_a41f91ca-3fd) sized it.
+
+- v1 scope: the target disk attached to a second, healthy Windows 10/11 machine.
+  That means no boot media, no ADK, no WinPE licensing and no Get-WinEvent limit
+  in WinPE.
+- A new entry point, for example `tools\offline_audit.ps1`, never the bat. It
+  copies the target's hives (with their logs) and its .evtx files, loads only
+  the copies, verifies every hive is non-empty (RegLoadKey creates an empty
+  hive for a wrong path), and ships a standalone cold unload.
+- Roughly 65 checks re-root to files, about 66 need a new data source (task
+  XML, hive-based service/firewall/Defender reads, .evtx), and 38 are live-only.
+  The live-only checks and the 7 SAM-based ones are declared NOT performed.
+- Catalog-signed inbox files read "signature not verifiable offline", never
+  "unsigned".
+- Time windows anchor to the target's last shutdown.
+- The headline output is a diff of the live report against the offline one,
+  the RootkitRevealer principle.
+- Estimate: 3,000-5,000 new lines plus changes across about 21 tools, over
+  several PRs.
+
+## exec_probe: partial Mark of the Web (found 2026-10-09)
+
+Under a Group Policy RemoteSigned execution policy, a checkout extracted from a
+downloaded ZIP carries Mark of the Web on some files. exec_probe tests only
+itself, so it can pass while a marked helper is refused, and a refused helper
+writes no marker, so its check reads OK. A stick made by `make_usb_stick.ps1`
+carries file contents only and is immune. A checkout is not. Proposed:
+exec_probe counts Zone.Identifier streams on `tools\*.ps1` and declares a gap
+when any is marked and the policy is RemoteSigned.

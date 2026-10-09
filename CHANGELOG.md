@@ -6,6 +6,37 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Carry the tool on a USB stick; two defects found on the way
+README, readMe.txt and docs/second-machine.md now explain how to put doze_sec
+on a USB stick with tools built into Windows, and how to run it from there.
+`tools\make_usb_stick.ps1` makes the stick. It never formats anything. It
+accepts only a USB-bus disk that is not the boot or system disk. It leaves off
+`.git` and the plant harness, and names each file it skips. It copies file
+contents only, so Mark of the Web does not travel, and writes the batch files
+with CRLF line endings. It reads every file back and keeps a SHA-256 manifest
+on the laptop. `-Verify` checks a returned stick against that laptop copy,
+never the one on the stick, and lists files changed, added or removed, new
+data streams, links, and new runnable files at the stick root.
+
+The stick is not bootable, and the docs say why. The audit checks the running
+Windows, so a booted stick would audit itself. Windows' own bootable stick has
+no PowerShell. And boot changes can send a BitLocker PC into recovery. For a
+check from outside Windows, the docs point to Microsoft Defender Offline. The
+read-only CI job now runs field_test from a copy the script made, then
+verifies that copy is unchanged. That proves the reduced file set is enough
+and the audit writes nothing into its own folder, so a write-protected stick
+works.
+
+Two defects turned up in the research, both fixed:
+- The VirusTotal self-check abort (exit 7) jumped past the RunOnce cleanup
+  after INIT 8 had created the resume entry, so the next logon would have
+  relaunched the audit. A lint.yml step now requires the delete before every
+  early exit after INIT 8, and it fails on the pre-fix scripts.
+- A `-noAdmin` run wrote its console log to `C:\SecurityAudit` while
+  promising to write only the user's own folder. The log now goes to the run's
+  output folder. The standard-user CI job asserts it, and a single quote in a
+  profile path is escaped for the Tee-Object string.
+
 ### Copied helpers cannot drift
 The tools are self-contained by design, so `Get-RegKeyLastWrite` lives in five
 tools and `Get-WhenLine` / `Write-WhenCaveat` in four. `tools/lint_shared_copies.ps1`

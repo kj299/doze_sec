@@ -85,8 +85,9 @@ COMMAND-LINE SWITCHES
                 ~/.vt_token exists and the network is up).
 
   -noConsoleLog Skip console-output capture. By default stdout+stderr
-                are tee'd to C:\SecurityAudit\AuditConsole_[timestamp].log
-                so crashes leave a debuggable trace.
+                are tee'd to AuditConsole_[timestamp].log in the output
+                folder (C:\SecurityAudit, or %USERPROFILE%\SecurityAudit
+                with -noAdmin) so crashes leave a debuggable trace.
 
   -help         Show full usage guide with section descriptions.
   -h, /?, --help  (aliases)
@@ -124,8 +125,8 @@ OUTPUT FILES
   Non-admin mode:
     %USERPROFILE%\SecurityAudit\SecurityReport_[timestamp].txt
     %USERPROFILE%\SecurityAudit\SecurityReport_[timestamp].html
-    (same subdirectory structure; AuditConsole_[timestamp].log is always
-    written to C:\SecurityAudit\ regardless of mode)
+    (same subdirectory structure, including AuditConsole_[timestamp].log;
+    a -noAdmin run writes nothing at the root of C:)
 
   The HTML report opens automatically after the audit completes. It features
   a dark-theme dashboard with CRITICAL/WARNING/PASSED/INFO counts, a
@@ -239,6 +240,56 @@ THREAT COVERAGE
   LOLBins:
     certutil, mshta, regsvr32, rundll32, msiexec, bitsadmin,
     cmstp, installutil, wmic, forfiles
+
+
+RUNNING FROM A USB STICK
+--------------------------------------------------------------------------------
+  The audit installs nothing, so it can travel on a USB stick. The stick only
+  CARRIES the files: the audit runs inside the PC's own Windows. The stick is
+  NOT bootable (see below). If the PC is not yours, read
+  docs\second-machine.md first: ask the owner; on a work PC get IT's written
+  OK, because its security software may alert them.
+
+  1. MAKE THE STICK (on your own laptop, PowerShell as administrator):
+
+       powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1 -ListCandidates
+       powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1 -Drive E:
+
+     It accepts only a drive on the USB bus that is not the Windows disk, and
+     it NEVER formats anything. It copies the tool to E:\doze_sec without
+     .git and without the test harness (the scripts that plant fake malware or
+     create a user account), and keeps a SHA-256 manifest on your laptop.
+     Then eject, plug back in, and run it again with -Verify.
+     If the stick is unformatted: File Explorer, right-click it, Format,
+     exFAT. FORMATTING ERASES EVERY FILE ON THAT DRIVE -- check the letter.
+
+  2. RUN IT on the other PC, straight from the stick (nothing copied):
+
+       powershell -NoProfile -ExecutionPolicy Bypass -File E:\doze_sec\tests\field_test.ps1
+
+     Once as administrator if you can, then once in a normal window. Leave
+     the stick in until it prints OK or FAIL. Or copy E:\doze_sec to
+     Documents\doze_sec (never a Temp folder) and run it from there.
+     Results are written on that PC (C:\SecurityAudit and
+     C:\Users\<name>\SecurityAudit): copy them to the stick, then delete them.
+     If it prints AUDIT NOT PERFORMED, IT policy blocks the audit. STOP; do
+     not work around it.
+
+  3. BACK HOME: run make_usb_stick.ps1 -Drive E: -Verify. Any tool file the
+     visited PC changed is listed -- that is itself worth reporting; keep that
+     stick as it is (evidence) and use a new one. Read the .txt report. Never
+     run anything from the stick on your own laptop.
+
+  WHY THE STICK IS NOT BOOTABLE: booting from it would start a different
+  Windows, and the audit checks the Windows that is running -- it would
+  describe the stick, not the PC. Windows' own bootable stick (a recovery
+  drive) has no PowerShell, so the audit could not start there anyway.
+  DO NOT BOOT THE PC FROM THE STICK OR CHANGE ITS BOOT SETTINGS: on a PC with
+  BitLocker or device encryption it can demand the 48-digit recovery key at
+  the next start, and without the key you cannot get to any file on it again.
+  For a check from outside the running Windows, use the built-in Microsoft
+  Defender Offline scan (Windows Security > Virus & threat protection > Scan
+  options) -- with the BitLocker recovery key in hand first.
 
 
 REQUIREMENTS

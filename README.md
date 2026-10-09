@@ -67,7 +67,7 @@ doze_sec.bat -help
 | `-dnsprobe` | Both | Section 3: active DNS integrity probe. Resolves a fixed list of **legitimate** update/security domains and flags DNS/HOSTS blackholing (T1562.001). Never resolves attacker/C2 domains. Off by default |
 | `-noVtSelf` | Both | Skip the automatic pre-flight VT integrity check on script-critical binaries (default: runs whenever `~/.vt_token` exists and network is up) |
 | `-ctiSkill <file>` | Admin only | Per-run override for the SENTINEL-X CTI skill file used by `-updateTTP` (1.2.0+: `standalone\cyber-threat-intel-prompt.md`; pre-1.2.0: `cyber_threat_skill.yaml`). Beats `DOZESEC_CTI_SKILL` env var and auto-discovery |
-| `-noConsoleLog` | Both | Skip console-output capture (default ON). Without this switch, stdout+stderr are tee'd to `C:\SecurityAudit\AuditConsole_<TS>.log` so crashes leave a debuggable trace |
+| `-noConsoleLog` | Both | Skip console-output capture (default ON). Without this switch, stdout+stderr are tee'd to `AuditConsole_<TS>.log` in the output folder (`C:\SecurityAudit\`, or `%USERPROFILE%\SecurityAudit\` with `-noAdmin`) so crashes leave a debuggable trace |
 | `-readonly` | Both | Inspect only: changes nothing on this machine outside the output folder and the temp folder, and makes no network connections. Skips the RunOnce resume key, the F8 boot-menu change, the restore point and the update checks; refuses `-vt`, `-dnsprobe`, `-updateTTP` and `-importTTP`. Used by `tests\field_test.ps1` for false-positive hunting on a real machine |
 | `-selftest` | Both | Test-harness mode: writes every output under `C:\SecurityAudit\selftest\` (or `%USERPROFILE%\SecurityAudit\selftest\`) and stamps the report `*** TEST RUN -- every finding below was planted ***`, so a report of planted findings can never be mistaken for, or auto-diffed against, a real audit. Used by `tests\detection_selftest.ps1`; not for real audits |
 | `-help` | Both | Show usage guide with section descriptions |
@@ -271,7 +271,7 @@ C:\SecurityAudit\
 
 The HTML report features a navigation sidebar, color-coded findings (green/yellow/red), collapsible detail sections, and a dashboard with CRITICAL/WARNING/PASSED/INFO counts.
 
-**Non-admin mode:** Same structure under `%USERPROFILE%\SecurityAudit\` — except `AuditConsole_<TS>.log`, which is always written to `C:\SecurityAudit\` (the console-capture wrapper runs before the output directory is selected; standard users can create that directory on a default Windows ACL)
+**Non-admin mode:** Same structure under `%USERPROFILE%\SecurityAudit\`, including `AuditConsole_<TS>.log`. A `-noAdmin` run writes nothing at the root of `C:` (until 2026-10 the console log went to `C:\SecurityAudit\` whatever the mode).
 
 ## Requirements
 
@@ -282,6 +282,119 @@ The HTML report features a navigation sidebar, color-coded findings (green/yello
 - [smartmontools](https://www.smartmontools.org/wiki/Download) (optional, for detailed SMART data)
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (optional, for `-updateTTP`)
 - [VirusTotal API key](https://www.virustotal.com/gui/my-apikey) (optional, for `-vt`)
+
+## Running from a USB stick
+
+The audit installs nothing. It needs only the Windows PowerShell 5.1 and
+cmd.exe built into Windows 10 and 11, so it can travel on a USB stick to a PC
+that cannot or should not install anything. The stick only **carries** the
+files: the audit always runs inside that PC's own Windows. **The stick is not
+bootable** -- see [Why the stick is not bootable](#why-the-stick-is-not-bootable).
+
+If the PC is not yours, read [docs/second-machine.md](docs/second-machine.md)
+first. It has the warnings (ask the owner; on a work PC get IT's written OK,
+because its security software may alert them), a paste-in preflight that says
+whether the PC will let the audit run, and every step below in more detail.
+
+### 1. Make the stick, on your own laptop
+
+Any USB stick works -- FAT32, exFAT or NTFS -- and the tool is a few MB. You do
+not need to format it. If it is brand new and unformatted: File Explorer,
+right-click the drive, **Format**, choose **exFAT**, **Start**. **Formatting
+erases every file on that drive. Check that the letter is the stick, not
+another disk, before you click Start.**
+
+Open PowerShell as administrator (the script asks Windows which bus each disk
+is on), go to your `doze_sec` folder, and run:
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1 -ListCandidates
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1 -Drive E:
+```
+
+`-ListCandidates` only lists drives, and changes nothing. `-Drive E:` (use your
+stick's letter):
+
+- accepts only a drive on the **USB bus** that is not the disk Windows started
+  from and not the Windows drive. It **never formats, partitions or writes boot
+  files**; a copy cannot erase the wrong disk;
+- copies the tool into `E:\doze_sec` and leaves off `.git` and the **test
+  harness**. That is the scripts that plant fake malware (on a real laptop they
+  once locked the owner out) and the one that creates a local user account,
+  none of which belongs on someone else's PC. It names each file it leaves off;
+- copies file **contents** only, so Mark of the Web never travels. A PC whose
+  IT sets a RemoteSigned script policy would otherwise refuse some helpers. It
+  also writes the batch files with the Windows line endings cmd.exe needs;
+- reads every file back, and keeps a SHA-256 manifest of the stick on your
+  laptop (`%LOCALAPPDATA%\doze_sec\sticks\`), with a copy on the stick.
+
+Then eject the stick, plug it back in, and run the same command with
+`-Verify`. That reads the files from the stick itself, so a stick that lies
+about its size is caught before you leave.
+
+Without the script, `robocopy C:\path\to\doze_sec E:\doze_sec /E /XD .git`
+also works. But it carries the harness and any Mark of the Web, and there is no
+manifest to check the stick against when it comes back. Keep a plain folder
+name such as `E:\doze_sec` -- no `( ) ! % & ^`.
+
+### 2. Run it on the other PC
+
+**A. Straight from the stick** -- nothing of the tool is copied onto the PC:
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File E:\doze_sec\tests\field_test.ps1
+```
+
+Run it once in PowerShell **as administrator** if you can, then once in a
+normal window. Leave the stick in until it prints `OK` or `FAIL`; pulling it
+out mid-run stops the audit. A write-protected stick is fine for the run: the
+audit never writes into its own folder.
+
+**B. Copied onto the PC** -- if the stick cannot stay plugged in: copy
+`E:\doze_sec` to `Documents\doze_sec` (not a Temp folder: the audit refuses to
+run from Temp, exit code 5), run `Documents\doze_sec\tests\field_test.ps1` the
+same way, and delete that folder when you are done.
+
+Either way the results are written **on that PC**: `C:\SecurityAudit\` for the
+administrator run and `C:\Users\<name>\SecurityAudit\` for the normal one.
+Copy both folders to the stick (for example `E:\results\<PC name>\`), then
+delete them from the PC.
+
+If it prints **AUDIT NOT PERFORMED**, that PC's IT policy does not let the
+audit's scripts run. **Stop there, and do not try to work around it.** The
+console output says which policy; send it.
+
+### 3. Back home
+
+- Run `tools\make_usb_stick.ps1 -Drive E: -Verify` on your laptop. It lists any
+  tool file changed, added or removed while the stick was away. It also lists
+  any new file at the stick's root that could run or point elsewhere
+  (`autorun.inf`, shortcuts, programs). A changed tool file means the PC you
+  visited changed it, and that is itself worth reporting: keep that stick
+  exactly as it is, as evidence, and make the next one on a new stick. If
+  nothing changed, `-Drive E: -Refresh` makes a fresh copy for the next PC.
+- Read the **.txt** report. The .html was written by the PC you were checking;
+  if you suspect that PC, do not open its .html in your browser.
+- **Never run anything from the stick on your own laptop.** That includes the
+  `Remediation_*.ps1` scripts, which are for the audited PC, after review.
+
+### Why the stick is not bootable
+
+- **It would audit the wrong Windows.** Booting from the stick starts a
+  different Windows, and the audit checks whichever Windows is running. It
+  would describe the stick, not the PC. Windows' own bootable stick, a recovery
+  drive, does not include PowerShell, so the audit could not even start there.
+  Auditing a PC's disk while that PC's Windows is not running would need a
+  separate offline mode; it is on the backlog.
+- **Do not boot the PC from the stick or change its boot settings.** On a PC
+  with BitLocker or device encryption (on by default on many Windows 11 PCs),
+  that can make it ask for the 48-digit recovery key at the next start.
+  **Without the key, you cannot get to any file on that PC again.**
+- **For a check from outside the running Windows,** Windows has one built in:
+  Windows Security > Virus & threat protection > Scan options > **Microsoft
+  Defender Offline scan**. It is a malware scan, not this audit. Have the
+  BitLocker recovery key in hand before you start it; for a Microsoft account it
+  is at account.microsoft.com/devices/recoverykey.
 
 ## CTI Skill Integration
 
@@ -466,7 +579,7 @@ Two activities, two scripts, and they must not be mixed up:
 | On | Run | What it does |
 |----|-----|--------------|
 | **The machine you are sitting at** | `.\tests\field_test.ps1` (any PowerShell; elevated is better) | Runs the audit with `-readonly` -- nothing changes outside `C:\SecurityAudit\` and the temp folder, no network connections -- proves that before and after (RunOnce key, boot configuration, restore points), checks the report against `tests\benign_corpus.txt`, and prints every finding for you to adjudicate. Plants nothing. |
-| **Someone else's machine, or a work PC** | `docs\second-machine.md` | The same `field_test.ps1`, carried over on a USB stick: a paste-in preflight that says whether the machine will let the audit run, the warnings to read first (IT alerts, the owner's privacy), what to bring back, and how to leave nothing behind. |
+| **Someone else's machine, or a work PC** | `docs\second-machine.md` | The same `field_test.ps1`, carried over on a USB stick made by `tools\make_usb_stick.ps1` (see [Running from a USB stick](#running-from-a-usb-stick)): a paste-in preflight that says whether the machine will let the audit run, the warnings to read first (IT alerts, the owner's privacy), what to bring back, and how to leave nothing behind. |
 | **A throwaway VM or CI only** | `.\tests\manual_ci.ps1` (elevated) | The detection harness: plants ~30 known-bad artifacts, runs the audit, asserts every one is detected, removes them. Never on a daily-driver machine -- see `docs\recovery.md`. |
 
 **Reporting a false positive.** A finding that turns out to be something

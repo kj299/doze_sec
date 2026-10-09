@@ -13,14 +13,22 @@ if /i "%~1"=="--help"     goto :_console_log_done
 if /i "%~1"=="/?"         goto :_console_log_done
 for %%a in (%*) do if /i "%%~a"=="-noConsoleLog" goto :_console_log_done
 where powershell >nul 2>&1 || goto :_console_log_done
-if not exist "C:\SecurityAudit" mkdir "C:\SecurityAudit" >nul 2>&1
+:: The console log goes where this run's report goes: the user profile's
+:: SecurityAudit folder for -noAdmin, the same switch that picks OUTDIR below.
+:: It used to be C:\SecurityAudit always, so a standard-user run that promises
+:: to write only its own output folder also created a folder at the root of C:.
+set "DOZE_LOG_DIR=C:\SecurityAudit"
+for %%a in (%*) do if /i "%%~a"=="-noAdmin" set "DOZE_LOG_DIR=%USERPROFILE%\SecurityAudit"
+if not exist "%DOZE_LOG_DIR%" mkdir "%DOZE_LOG_DIR%" >nul 2>&1
 for /f "usebackq" %%t in (`powershell -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmmss"`) do set "DOZE_LOG_TS=%%t"
 if not defined DOZE_LOG_TS set "DOZE_LOG_TS=unknown"
-set "DOZE_CONSOLE_LOG=C:\SecurityAudit\AuditConsole_%DOZE_LOG_TS%.log"
+set "DOZE_CONSOLE_LOG=%DOZE_LOG_DIR%\AuditConsole_%DOZE_LOG_TS%.log"
 set "DOZE_EXIT_FILE=%TEMP%\dz_rc_%DOZE_LOG_TS%_%RANDOM%.tmp"
 set "DOZE_TEED=1"
 echo  [*] Console output also being captured to: %DOZE_CONSOLE_LOG%
-call "%~f0" %* 2>&1 | powershell -NoProfile -ExecutionPolicy Bypass -Command "$input | Tee-Object -FilePath '%DOZE_CONSOLE_LOG%'"
+:: The path sits inside a single-quoted PowerShell string; a profile folder
+:: such as C:\Users\o'neil would end it early, so double any single quote.
+call "%~f0" %* 2>&1 | powershell -NoProfile -ExecutionPolicy Bypass -Command "$input | Tee-Object -FilePath '%DOZE_CONSOLE_LOG:'=''%'"
 set "DOZE_EXIT_CODE=0"
 if exist "%DOZE_EXIT_FILE%" (
     set /p DOZE_EXIT_CODE=<"%DOZE_EXIT_FILE%"
@@ -29,6 +37,7 @@ if exist "%DOZE_EXIT_FILE%" (
 set "DOZE_TEED="
 set "DOZE_LOG_TS="
 set "DOZE_CONSOLE_LOG="
+set "DOZE_LOG_DIR="
 set "DOZE_EXIT_FILE="
 exit /b %DOZE_EXIT_CODE%
 :_console_log_done
@@ -51,7 +60,7 @@ exit /b %DOZE_EXIT_CODE%
 ::                (which runs whenever ~/.vt_token exists and network is up)
 ::    -noConsoleLog  Skip console-output capture (default ON). Without this
 ::                switch, stdout+stderr are tee'd to
-::                C:\SecurityAudit\AuditConsole_<timestamp>.log so crashes
+::                [OUTDIR]\AuditConsole_<timestamp>.log so crashes
 ::                leave a debuggable trace.
 ::    -help       Show usage guide, all switches, and section descriptions
 ::
@@ -70,7 +79,7 @@ exit /b %DOZE_EXIT_CODE%
 ::           %USERPROFILE%\SecurityAudit\SecurityReport_[...].txt  (noAdmin)
 ::  SMART:   [OUTDIR]\SmartData\
 ::  LOGS:    [OUTDIR]\EventExports\
-::  CONSOLE: C:\SecurityAudit\AuditConsole_[timestamp].log  (unless -noConsoleLog)
+::  CONSOLE: [OUTDIR]\AuditConsole_[timestamp].log  (unless -noConsoleLog)
 ::  THREATS: [OUTDIR]\ThreatLists\
 :: ====================================================================
 setlocal enabledelayedexpansion
@@ -312,7 +321,7 @@ echo                 Used by tests\field_test.ps1 for false-positive hunting on
 echo                 a real machine.
 echo    %C_GREEN%-selftest%C_RESET%      Test-harness mode: write everything under C:\SecurityAudit\selftest\
 echo                 the script self-tees stdout+stderr to
-echo                 C:\SecurityAudit\AuditConsole_^<timestamp^>.log so crashes
+echo                 the output folder's AuditConsole_^<timestamp^>.log so crashes
 echo                 leave a debuggable trace alongside the report.
 echo.
 echo    %C_GREEN%-help, -h, /?, --help%C_RESET%
@@ -977,6 +986,10 @@ if "%NETWORK_AVAIL%"=="1" if "%VT_SELF_SKIP%"=="0" if exist "%USERPROFILE%\.vt_t
             echo.>> "%REPORT%"
             echo   EXIT CODE: 7    FINDINGS COUNTED: !FINDINGS!>> "%REPORT%"
             echo ====================================================================>> "%REPORT%"
+            rem This abort comes after INIT 8 created the RunOnce resume entry and
+            rem jumps past :end_script, which is where that entry is removed. Remove
+            rem it here too, or the next logon relaunches the audit with -resume.
+            reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "*%SCRIPT_NAME%_resume" /f >nul 2>&1
             set "EXIT_CODE=7"
             goto :final_exit
         )
