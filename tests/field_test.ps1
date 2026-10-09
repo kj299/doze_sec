@@ -151,7 +151,7 @@ else {
     # named $runOnceVal exists, and the audit's path was "<cwd>\<last
     # switch>" on every switched run for as long as the bat expanded %~f0
     # after its parse loop (cmd's shift moves %0 too).
-    $cmdLine = [regex]::Match($text, '(?m)^\s*Command: reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce" /v "(\*[^"]+_resume)" /t REG_SZ /d "\\"([^"]*?)\\" -resume" /f')
+    $cmdLine = [regex]::Match($text, '(?m)^\s*Command: reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce" /v "(\*[^"]+_resume)" /t REG_SZ /d "\\"([^"]*?)\\" -resume[^"]*" /f')
     Check $cmdLine.Success 'report prints the INIT 8 RunOnce command (the value name and path the audit uses)' 'no INIT 8 "Command: reg add ... RunOnce ... -resume" line -- the proof cannot verify what it is looking for'
     if ($cmdLine.Success) {
         Check ($cmdLine.Groups[1].Value -eq $runOnceVal) ("RunOnce proof targets the value the audit writes ({0})" -f $runOnceVal) ("the audit writes '{0}' but the proof looked for '{1}' -- a value the audit never writes" -f $cmdLine.Groups[1].Value, $runOnceVal)

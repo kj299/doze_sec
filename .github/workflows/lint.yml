@@ -606,3 +606,48 @@ jobs:
         run: pwsh -NoProfile -File tools/lint_shared_copies.ps1
       - name: Run tools/lint_shared_copies.ps1 -SelfTest
         run: pwsh -NoProfile -File tools/lint_shared_copies.ps1 -SelfTest
+
+  usb-stick-selftest:
+    name: "USB stick: copy only, USB only, harness off, returned stick checked"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # tools/make_usb_stick.ps1 never formats or writes boot files; its target
+      # rule refuses anything not on the USB bus, the boot/system disk and the
+      # Windows drive; the copy leaves the plant harness off; -Verify trusts
+      # only the manifest kept on the laptop. The NTFS stream cases run in
+      # windows-smoke.
+      - name: Run tools/make_usb_stick.ps1 -SelfTest
+        run: pwsh -NoProfile -File tools/make_usb_stick.ps1 -SelfTest
+      # A run that ends after INIT 8 created the RunOnce resume entry must
+      # remove it. :end_script does; an early `goto :final_exit` skips that, so
+      # each one needs its own delete. The VirusTotal self-check abort (exit 7)
+      # had none until 2026-10-09.
+      - name: Every early exit after INIT 8 removes the RunOnce resume entry
+        shell: pwsh
+        run: |
+          function Get-Defects([string[]]$lines, [string]$name) {
+            $init8 = [array]::FindIndex($lines, [Predicate[string]]{ param($l) $l -match '\[INIT 8/14\] RunOnce' })
+            $end = [array]::FindIndex($lines, [Predicate[string]]{ param($l) $l -match '^:end_script\b' })
+            if ($init8 -lt 0 -or $end -lt 0) { return @("${name}: INIT 8 or :end_script not found -- this check is broken, not the code") }
+            $bad = @()
+            for ($i = $init8; $i -lt $end; $i++) {
+              if ($lines[$i] -notmatch 'goto\s+:final_exit\b') { continue }
+              $win = $lines[[Math]::Max(0, $i - 6)..($i - 1)] -join "`n"
+              if ($win -notmatch 'reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce" /v "\*%SCRIPT_NAME%_resume"') { $bad += ("{0}:{1}: goto :final_exit after INIT 8 without removing the RunOnce resume entry" -f $name, ($i + 1)) }
+            }
+            return $bad
+          }
+          $all = @()
+          $seen = 0
+          foreach ($b in 'doze_sec.bat', 'doze_sec_noAdmin.bat') {
+            $lines = [IO.File]::ReadAllLines($b)
+            $seen += @($lines | Where-Object { $_ -match 'goto\s+:final_exit\b' }).Count
+            $all += Get-Defects $lines $b
+          }
+          if ($seen -lt 2) { throw "found only $seen goto :final_exit -- this check is not looking at the code it was written for" }
+          # Mutation: the same check must fail with the delete removed.
+          $mut = [IO.File]::ReadAllLines('doze_sec.bat') | Where-Object { $_ -notmatch 'reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce" /v "\*%SCRIPT_NAME%_resume" /f >nul 2>&1$' -or $_ -notmatch '^\s{12}' }
+          if (-not @(Get-Defects ([string[]]$mut) 'mutated').Count) { throw 'the check did not fail on a copy with the exit-7 delete removed -- it cannot catch the defect' }
+          if ($all.Count) { $all | ForEach-Object { Write-Host "[FAIL] $_" }; exit 1 }
+          Write-Host "[OK] every goto :final_exit after INIT 8 removes the RunOnce resume entry (both bats); the mutation fails as it should"

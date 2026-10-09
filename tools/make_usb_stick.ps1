@@ -1,0 +1,1018 @@
+# make_usb_stick.ps1 -- put doze_sec on a USB stick, and check the stick when
+# it comes back. Run it on YOUR OWN laptop, from your checkout -- never on the
+# machine being audited, and never the copy of anything that is on the stick.
+#
+# WHAT IT DOES
+#   -Drive E:            copies the tool into E:\doze_sec, reads every file back,
+#                        and writes a SHA-256 manifest -- one copy kept on this
+#                        laptop, one on the stick.
+#   -Drive E: -Verify    after the stick has been to another machine: compares
+#                        E:\doze_sec with the manifest kept on this laptop and
+#                        lists every file changed, added or removed, and any new
+#                        file at the stick's root that could run.
+#   -ToFolder D:\x       the same copy into a plain folder (CI, or a copy you
+#                        will carry some other way). Verify works the same.
+#   -ListCandidates      read-only: every lettered volume and whether this
+#                        script would accept it.
+#   -Refresh             with -Drive/-ToFolder: replace an earlier copy. It
+#                        deletes only the files the manifest kept on this laptop
+#                        lists, and only when the copy is still exactly what this
+#                        laptop wrote -- anything changed or added (your saved
+#                        results, or evidence of what a visited machine did) makes
+#                        it refuse and list what it found.
+#
+# WHAT IT NEVER DOES
+#   It never formats, partitions or writes boot files. There is no
+#   Format-Volume, Clear-Disk, Initialize-Disk, New-Partition, diskpart or
+#   bcdboot in it, and its self-test fails if one appears. Formatting erases
+#   every file on the selected drive, and picking the wrong drive erases the
+#   wrong one; a copy cannot. If the stick needs formatting, do it yourself in
+#   File Explorer after checking the drive letter is the stick and that it
+#   holds nothing you need.
+#
+#   It never makes the stick bootable, on purpose. doze_sec audits the Windows
+#   that is running; booting the PC from a stick runs a different Windows, so
+#   the audit would describe the stick. Windows' own bootable stick (a recovery
+#   drive) has no PowerShell, so the audit could not start there anyway. And
+#   booting other media can make a BitLocker PC demand its 48-digit recovery
+#   key at the next start -- without it, every file on that PC is out of reach.
+#   See README.md.
+#
+# WHAT GOES ON THE STICK
+#   Everything the audit needs, and nothing that changes a machine. Left off,
+#   and named when the copy runs: .git, .github, .claude, the test harness --
+#   tests\manual_ci.ps1 and tests\detection_selftest.ps1 plant fake malware (on
+#   a real laptop they once locked the owner out of it), tests\cleanup_selftest.ps1
+#   is that harness's cleanup, tests\noadmin_smoke.ps1 creates a local user
+#   account -- and THIS script: the stick's checker must not travel with the
+#   stick, or a visited machine could rewrite the checker that later vouches
+#   for it.
+#
+#   File CONTENTS are copied, not the files' alternate data streams, so Mark of
+#   the Web never travels onto the stick: under a Group Policy RemoteSigned
+#   execution policy a marked helper would be refused while the rest ran.
+#   Batch files are written with CRLF line endings, which cmd.exe needs; a
+#   checkout made outside Windows has LF only.
+#
+# WHY THE MANIFEST LIVES ON THIS LAPTOP
+#   The stick visits machines that may be compromised. Whatever is on the stick
+#   when it comes back -- including its own copy of the manifest -- may have
+#   been rewritten there. -Verify and -Refresh trust only the copy kept here,
+#   and never follow a link or junction found on the stick. A changed tool file
+#   on a returned stick is itself worth reporting: keep that stick as it is.
+#   And the check is only as trustworthy as this laptop.
+#
+# Windows PowerShell 5.1 (the Storage module: Windows 8 and later). -SelfTest
+# also runs on pwsh 7 on Linux with injected disk objects; the cases that need
+# NTFS alternate data streams print [SKIP] there.
+
+[CmdletBinding()]
+param(
+    [string]$Drive = '',
+    [string]$ToFolder = '',
+    [switch]$Verify,
+    [switch]$Refresh,
+    [switch]$ListCandidates,
+    [string]$Source = '',
+    [string]$ManifestStore = '',
+    [string]$Manifest = '',
+    [switch]$SelfTest
+)
+
+$ErrorActionPreference = 'Stop'
+$script:Version = 'make_usb_stick v1'
+$script:OnWindows = ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT)
+$script:StickFolder = 'doze_sec'
+$script:StickManifestName = 'STICK_MANIFEST.sha256'
+# Top-level directories that never go on a stick.
+$script:ExcludeDirs = @('.git', '.github', '.claude')
+# Files that change a machine, and the stick's own checker. Relative to the
+# repo root, backslash form.
+$script:ExcludeFiles = @(
+    'tests\manual_ci.ps1',
+    'tests\detection_selftest.ps1',
+    'tests\cleanup_selftest.ps1',
+    'tests\noadmin_smoke.ps1',
+    'tools\make_usb_stick.ps1'
+)
+# Files the audit cannot run without; a copy missing one is refused.
+$script:Required = @(
+    'doze_sec.bat', 'doze_sec_noAdmin.bat',
+    'tools\exec_probe.ps1', 'tests\field_test.ps1', 'tests\benign_corpus.txt',
+    'tests\unraised_allowlist.txt', 'ThreatLists\ioc_hashes.txt'
+)
+# Files at the stick's root of a kind that can run or point elsewhere. They are
+# recorded when the stick is made, and -Verify reports any that are new or
+# changed: that is how a visited machine would try to reach the next one.
+$script:RootSuspectRx = '\.(inf|lnk|exe|scr|com|pif|bat|cmd|ps1|psm1|vbs|vbe|js|jse|wsf|wsh|hta|dll|cpl|msi|url)$'
+# Root entries that make a stick bootable (an old install or recovery stick).
+$script:BootNames = @('bootmgr', 'bootmgr.efi', 'efi', 'boot', 'sources')
+# Root folders Windows itself keeps on a removable drive.
+$script:SystemRootDirs = @('System Volume Information', '$RECYCLE.BIN')
+# A root file larger than this is recorded by size, not hashed.
+$script:RootHashLimit = 64MB
+
+if (-not $Source) { $Source = Split-Path -Parent $PSScriptRoot }
+
+# ---------------------------------------------------------------------------
+# Pure helpers
+# ---------------------------------------------------------------------------
+
+function ConvertTo-BusName {
+    # Get-Disk formats BusType as a name; the CIM class holds a number. 7 is USB.
+    param($BusType)
+    if ($null -eq $BusType) { return '' }
+    $s = [string]$BusType
+    if ($s -eq '7') { return 'USB' }
+    return $s
+}
+
+function Get-StickVerdict {
+    # PURE. Decides whether a volume may receive the tool.
+    #   -Disk    object with BusType, IsBoot, IsSystem, IsOffline, IsReadOnly,
+    #            FriendlyName, Size (Get-Disk); $null when it could not be read
+    #   -Volume  object with DriveLetter, FileSystem, DriveType, UniqueId,
+    #            SizeRemaining (Get-Volume); $null when it could not be read
+    #   -Context @{ SystemDrive = 'C'; ProtectedPaths = @(...); LookupError = '' }
+    # Returns @{ Ok; Reasons = @(); Info = @() }. Fails closed: anything it
+    # cannot establish is a reason to refuse.
+    param($Disk, $Volume, [hashtable]$Context)
+    $reasons = New-Object System.Collections.Generic.List[string]
+    $info = New-Object System.Collections.Generic.List[string]
+    $busOk = $false
+    if ($Context -and $Context.LookupError) {
+        $reasons.Add('could not identify the disk behind this drive: ' + $Context.LookupError + ' -- try an elevated PowerShell')
+    }
+    if ($null -eq $Disk) {
+        if (-not ($Context -and $Context.LookupError)) { $reasons.Add('could not read the disk behind this drive') }
+    } else {
+        $bus = ConvertTo-BusName $Disk.BusType
+        $busOk = ($bus -eq 'USB')
+        if (-not $busOk) {
+            $seen = if ($bus) { $bus } else { 'nothing' }
+            $reasons.Add('the disk is not on the USB bus (Windows reports: ' + $seen + ')')
+        }
+        if ($Disk.IsBoot)     { $reasons.Add('this is the disk Windows booted from') }
+        if ($Disk.IsSystem)   { $reasons.Add('this disk holds the system partition') }
+        if ($Disk.IsOffline)  { $reasons.Add('the disk is offline') }
+        if ($Disk.IsReadOnly) { $reasons.Add('the disk is read-only (a write-protect switch?) -- turn protection off to make the stick, back on afterwards if you like') }
+    }
+    if ($null -eq $Volume) {
+        if (-not ($Context -and $Context.LookupError)) { $reasons.Add('could not read the volume') }
+    } else {
+        $letter = ([string]$Volume.DriveLetter).Trim().TrimEnd(':').ToUpper()
+        $sys = ''
+        if ($Context -and $Context.SystemDrive) { $sys = ([string]$Context.SystemDrive).Trim().TrimEnd(':').ToUpper() }
+        if ($letter -and $sys -and $letter -eq $sys) { $reasons.Add('this is the Windows drive (' + $letter + ':)') }
+        if ($letter -and $Context -and $Context.ProtectedPaths) {
+            foreach ($p in $Context.ProtectedPaths) {
+                if (-not $p) { continue }
+                $pl = ([string]$p).Trim()
+                if ($pl.Length -ge 2 -and $pl[1] -eq ':' -and $pl.Substring(0, 1).ToUpper() -eq $letter) {
+                    $reasons.Add('this drive holds ' + $pl)
+                }
+            }
+        }
+        # File-system advice only for a USB disk: for any other disk the bus
+        # reason already refuses it, and format advice there is how a person is
+        # talked into erasing a data drive.
+        if ($busOk) {
+            $fs = [string]$Volume.FileSystem
+            if ($fs -in @('FAT', 'FAT32', 'exFAT', 'NTFS')) {
+                # fine
+            } elseif (-not $fs -or $fs -in @('RAW', 'Unknown')) {
+                $reasons.Add('Windows cannot read a file system on this volume. It may be locked by BitLocker (unlock it in File Explorer first), formatted on a Mac or under Linux, or brand new. Format it ONLY if you know it holds nothing you need -- formatting erases every file on it (File Explorer, right-click the drive, Format, exFAT).')
+            } else {
+                $reasons.Add('the volume uses ' + $fs + ', a file system that holds files but that this script does not write to -- use another stick')
+            }
+        }
+        if ([string]$Volume.DriveType -eq 'Fixed') {
+            $info.Add('the volume reports drive type Fixed; many USB sticks and USB SSDs do. The bus decides, and it is USB.')
+        }
+    }
+    return @{ Ok = ($reasons.Count -eq 0); Reasons = $reasons.ToArray(); Info = $info.ToArray() }
+}
+
+function Test-SelfOnTarget {
+    # PURE. Is this script running from the target it is about to make,
+    # verify or refresh? The stick's own copy -- if one is there at all, it was
+    # put there by someone else -- must never be the one that vouches for it.
+    param([string]$ScriptRoot, [string]$Outer)
+    if (-not $ScriptRoot -or -not $Outer) { return $false }
+    $a = ($ScriptRoot.TrimEnd('\', '/') + '\') -replace '/', '\'
+    $b = ($Outer.TrimEnd('\', '/') + '\') -replace '/', '\'
+    return $a.StartsWith($b, [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Get-RelPath {
+    param([string]$Root, [string]$Full)
+    $r = $Full.Substring($Root.TrimEnd('\', '/').Length).TrimStart('\', '/')
+    return ($r -replace '/', '\')
+}
+
+function Join-Rel {
+    param([string]$Root, [string]$Rel)
+    return [IO.Path]::Combine($Root, ($Rel -replace '\\', [string][IO.Path]::DirectorySeparatorChar))
+}
+
+function Test-IsReparse {
+    param([IO.FileSystemInfo]$Item)
+    return (($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)
+}
+
+function Get-EntryState {
+    # 'missing' | 'link' | 'dir' | 'file' -- read from the entry ITSELF, never
+    # from what a link points at. Test-Path and DirectoryInfo.Exists follow
+    # links; a junction planted on a stick can point into this laptop.
+    param([string]$Path)
+    $fi = New-Object IO.FileInfo $Path
+    $fi.Refresh()
+    $a = [int]$fi.Attributes
+    if ($a -eq -1) { return 'missing' }
+    if (($a -band [int][IO.FileAttributes]::ReparsePoint) -ne 0) { return 'link' }
+    if (($a -band [int][IO.FileAttributes]::Directory) -ne 0) { return 'dir' }
+    return 'file'
+}
+
+function Test-IsLinkEntry {
+    # PURE. Is this reparse point a LINK (symbolic link or junction), which a
+    # walk must never follow? OneDrive Files On-Demand marks ordinary synced
+    # files and folders as reparse points too (cloud placeholders), and the
+    # owner's checkout lives under OneDrive, so "any reparse point" would refuse
+    # every real checkout. PowerShell names the link kind in LinkType.
+    param($Attributes, $LinkType)
+    if (([IO.FileAttributes]$Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) { return $false }
+    return ([string]$LinkType -in @('SymbolicLink', 'Junction'))
+}
+
+function Get-TreeEntries {
+    # Walks a tree WITHOUT following links: a link is returned as one entry and
+    # never descended into, so a junction cannot lead this script outside the
+    # tree. -Strict (used on the stick) treats EVERY reparse point as a link: a
+    # stick made by this script holds none, so any reparse point there was
+    # added elsewhere. Without -Strict (the source checkout) only symbolic links
+    # and junctions count; cloud placeholders are walked like ordinary files.
+    # The ROOT itself is the caller's to check (Get-EntryState) before calling.
+    # Returns @{ Files = @(FileInfo); Dirs = @(DirectoryInfo); Reparse = @(rel) }.
+    param([string]$Root, [switch]$Strict)
+    $files = New-Object System.Collections.Generic.List[IO.FileInfo]
+    $dirs = New-Object System.Collections.Generic.List[IO.DirectoryInfo]
+    $reparse = New-Object System.Collections.Generic.List[string]
+    $stack = New-Object System.Collections.Generic.Stack[IO.DirectoryInfo]
+    $stack.Push((New-Object IO.DirectoryInfo $Root))
+    while ($stack.Count -gt 0) {
+        $d = $stack.Pop()
+        foreach ($e in $d.GetFileSystemInfos()) {
+            $isLink = if ($Strict) { Test-IsReparse $e } else { Test-IsLinkEntry $e.Attributes $e.LinkType }
+            if ($isLink) { $reparse.Add((Get-RelPath $Root $e.FullName)); continue }
+            if ($e -is [IO.DirectoryInfo]) { $dirs.Add($e); $stack.Push($e) }
+            else { $files.Add([IO.FileInfo]$e) }
+        }
+    }
+    return @{ Files = $files.ToArray(); Dirs = $dirs.ToArray(); Reparse = $reparse.ToArray() }
+}
+
+function Test-Excluded {
+    # Returns the reason a relative path stays off the stick, or ''.
+    param([string]$Rel)
+    $top = ($Rel -split '\\')[0]
+    foreach ($d in $script:ExcludeDirs) { if ($top -ieq $d) { return $d + '\' } }
+    foreach ($f in $script:ExcludeFiles) { if ($Rel -ieq $f) { return $f } }
+    return ''
+}
+
+function Get-Sha256Hex {
+    param([byte[]]$Bytes)
+    $h = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($h.ComputeHash($Bytes)) -replace '-', '').ToLower() }
+    finally { $h.Dispose() }
+}
+
+function ConvertTo-CrLf {
+    # Byte-exact: every LF not already preceded by CR becomes CRLF. Batch files
+    # are ASCII, so no character can be split.
+    param([byte[]]$Bytes)
+    $out = New-Object 'System.Collections.Generic.List[byte]'
+    for ($i = 0; $i -lt $Bytes.Length; $i++) {
+        $b = $Bytes[$i]
+        if ($b -eq 10 -and ($i -eq 0 -or $Bytes[$i - 1] -ne 13)) { $out.Add(13) }
+        $out.Add($b)
+    }
+    return $out.ToArray()
+}
+
+function Test-CanHoldStreams {
+    # Only NTFS (and ReFS) store named alternate data streams. On FAT32 and
+    # exFAT, Windows PowerShell 5.1's Get-Item -Stream THROWS (FindFirstStreamW
+    # fails with ERROR_INVALID_PARAMETER and the 5.1 provider raises it), so
+    # asking there would end the run on the most common sticks.
+    param([string]$Path)
+    if (-not $script:OnWindows) { return $false }
+    $fmt = ''
+    try { $fmt = (New-Object IO.DriveInfo ([IO.Path]::GetPathRoot([IO.Path]::GetFullPath($Path)))).DriveFormat } catch {}
+    return ($fmt -in @('NTFS', 'ReFS'))
+}
+
+function Get-MotwCount {
+    # How many source files carry a Zone.Identifier stream (Mark of the Web).
+    # -1 when the source's file system cannot hold one.
+    param([IO.FileInfo[]]$Files, [string]$Root)
+    if (-not (Test-CanHoldStreams $Root)) { return -1 }
+    $n = 0
+    foreach ($f in $Files) {
+        try { if (Get-Item -LiteralPath $f.FullName -Stream 'Zone.Identifier' -EA Stop) { $n++ } } catch {}
+    }
+    return $n
+}
+
+function Get-ExtraStreams {
+    # Alternate data streams on a file, other than the main one. Returns a
+    # '(could not list ...)' entry when they could not be read, so a failed
+    # check is reported as a difference, never as a clean result.
+    param([string]$Path)
+    if (-not (Test-CanHoldStreams $Path)) { return @() }
+    try { $all = @(Get-Item -LiteralPath $Path -Stream * -EA Stop) }
+    catch { return @('(could not list streams: ' + $_.Exception.Message + ')') }
+    return @($all | Where-Object { $_.Stream -ne ':$DATA' } | ForEach-Object { $_.Stream })
+}
+
+function Get-RootScan {
+    # The stick root, minus doze_sec and Windows' own folders:
+    #   Watch  ordered name -> sha256 | 'size:N' | 'link' | 'dir' for every root
+    #          entry that can run, point elsewhere or boot (recorded in the
+    #          manifest when the stick is made, compared on -Verify)
+    #   Boot   names that make the stick bootable (bootmgr, EFI, ...)
+    #   Other  any other top-level folder (for example results you copied there)
+    param([string]$Outer)
+    $watch = [ordered]@{}
+    $boot = New-Object System.Collections.Generic.List[string]
+    $other = New-Object System.Collections.Generic.List[string]
+    if ((Get-EntryState $Outer) -ne 'dir') { return @{ Watch = $watch; Boot = $boot.ToArray(); Other = $other.ToArray() } }
+    foreach ($e in (New-Object IO.DirectoryInfo $Outer).GetFileSystemInfos()) {
+        $n = $e.Name
+        if ($n -ieq $script:StickFolder -and -not (Test-IsReparse $e)) { continue }
+        if ($script:SystemRootDirs -contains $n) { continue }
+        $isBoot = ($script:BootNames -contains $n.ToLowerInvariant())
+        if ($isBoot) { $boot.Add($n) }
+        if (Test-IsReparse $e) { $watch[$n] = 'link'; continue }
+        if ($e -is [IO.DirectoryInfo]) {
+            if ($isBoot) { $watch[$n] = 'dir' } else { $other.Add($n) }
+            continue
+        }
+        if ($isBoot -or $n -match $script:RootSuspectRx) {
+            $fi = [IO.FileInfo]$e
+            if ($fi.Length -gt $script:RootHashLimit) { $watch[$n] = 'size:' + $fi.Length }
+            else {
+                try { $watch[$n] = Get-Sha256Hex ([IO.File]::ReadAllBytes($fi.FullName)) }
+                catch { $watch[$n] = 'unreadable' }
+            }
+        }
+    }
+    return @{ Watch = $watch; Boot = $boot.ToArray(); Other = $other.ToArray() }
+}
+
+function Invoke-StickCopy {
+    # Copies $Source into $Dest (which must not exist). Returns
+    # @{ Entries = ordered rel -> sha256; Excluded = @(); Normalized; Motw; Bytes }.
+    # Throws with a plain reason on anything it refuses.
+    param([string]$Source, [string]$Dest)
+    $srcFull = [IO.Path]::GetFullPath($Source).TrimEnd('\', '/')
+    $dstFull = [IO.Path]::GetFullPath($Dest).TrimEnd('\', '/')
+    if (Test-SelfOnTarget $dstFull $srcFull) { throw ('the destination ' + $dstFull + ' is inside the source tree') }
+    if (Test-SelfOnTarget $srcFull $dstFull) { throw ('the source ' + $srcFull + ' is inside the destination') }
+    if ((Get-EntryState $dstFull) -ne 'missing') { throw ($dstFull + ' already exists -- use -Refresh to replace a copy this script made, or remove it yourself') }
+    $tree = Get-TreeEntries $srcFull
+    $excluded = New-Object System.Collections.Generic.List[string]
+    $plan = New-Object System.Collections.Generic.List[object]
+    foreach ($r in $tree.Reparse) {
+        $why = Test-Excluded $r
+        if (-not $why) { throw ('the source contains a link or junction (' + $r + '); copy refused -- a link could carry files from outside the tool onto the stick') }
+    }
+    foreach ($f in $tree.Files) {
+        $rel = Get-RelPath $srcFull $f.FullName
+        $why = Test-Excluded $rel
+        if ($why) { if (-not $excluded.Contains($why)) { $excluded.Add($why) }; continue }
+        $plan.Add(@{ Rel = $rel; File = $f })
+    }
+    foreach ($req in $script:Required) {
+        if (-not @($plan | Where-Object { $_.Rel -ieq $req }).Count) { throw ('the source is missing ' + $req + ' -- is -Source the doze_sec folder?') }
+    }
+    $seen = @{}
+    foreach ($p in $plan) {
+        $k = $p.Rel.ToLowerInvariant()
+        if ($seen.ContainsKey($k)) { throw ('two source files differ only in case (' + $seen[$k] + ', ' + $p.Rel + '); FAT32 and exFAT cannot hold both') }
+        $seen[$k] = $p.Rel
+    }
+    $motw = Get-MotwCount @($plan | ForEach-Object { $_.File }) $srcFull
+    $entries = [ordered]@{}
+    $normalized = 0
+    $bytesTotal = [long]0
+    [void][IO.Directory]::CreateDirectory($dstFull)
+    foreach ($p in ($plan | Sort-Object { $_.Rel })) {
+        $bytes = [IO.File]::ReadAllBytes($p.File.FullName)
+        if ($p.Rel -match '\.(bat|cmd)$') {
+            $crlf = ConvertTo-CrLf $bytes
+            if ($crlf.Length -ne $bytes.Length) { $normalized++ }
+            $bytes = $crlf
+        }
+        $target = Join-Rel $dstFull $p.Rel
+        [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($target))
+        # Contents only: no alternate data stream, so no Mark of the Web, can follow.
+        [IO.File]::WriteAllBytes($target, $bytes)
+        $entries[$p.Rel] = Get-Sha256Hex $bytes
+        $bytesTotal += $bytes.Length
+    }
+    # Read every file back and compare: a copy that did not land is not a copy.
+    foreach ($rel in @($entries.Keys)) {
+        $back = Get-Sha256Hex ([IO.File]::ReadAllBytes((Join-Rel $dstFull $rel)))
+        if ($back -ne $entries[$rel]) { throw ('read-back mismatch on ' + $rel + ' -- the stick did not store what was written; use another stick') }
+    }
+    return @{ Entries = $entries; Excluded = @($excluded.ToArray() | Sort-Object); Normalized = $normalized; Motw = $motw; Bytes = $bytesTotal }
+}
+
+function New-ManifestText {
+    param([System.Collections.IDictionary]$Entries, [string]$TargetId, [string]$SourcePath, [string]$Created, [System.Collections.IDictionary]$Root)
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add('# doze_sec stick manifest -- SHA-256 of every file this script put on the stick')
+    $lines.Add('# made-by: ' + $script:Version)
+    $lines.Add('# created: ' + $Created)
+    $lines.Add('# target: ' + $TargetId)
+    $lines.Add('# source: ' + $SourcePath)
+    $lines.Add('# files: ' + $Entries.Count)
+    $lines.Add('# root-scan: v1')
+    if ($Root) { foreach ($k in $Root.Keys) { $lines.Add('# root: ' + $Root[$k] + ' ' + $k) } }
+    foreach ($k in $Entries.Keys) { $lines.Add($Entries[$k] + '  ' + $k) }
+    return ($lines -join "`r`n") + "`r`n"
+}
+
+function Read-Manifest {
+    # Returns @{ Header = @{}; Entries = @{ rel -> sha256 }; Root = @{ name -> state } or $null }.
+    param([string]$Path)
+    $hdr = @{}
+    $ent = @{}
+    $root = @{}
+    foreach ($ln in [IO.File]::ReadAllLines($Path)) {
+        if ($ln -match '^#\s*root:\s*(\S+)\s+(.+)$') { $root[$matches[2]] = $matches[1]; continue }
+        if ($ln -match '^#\s*([a-z-]+):\s*(.*)$') { $hdr[$matches[1]] = $matches[2].Trim(); continue }
+        if ($ln -match '^#' -or -not $ln.Trim()) { continue }
+        if ($ln -match '^([0-9a-f]{64})  (.+)$') { $ent[$matches[2]] = $matches[1]; continue }
+        throw ('unreadable manifest line in ' + $Path + ': ' + $ln)
+    }
+    if (-not $hdr.ContainsKey('made-by') -or $hdr['made-by'] -notmatch '^make_usb_stick ') { throw ($Path + ' is not a manifest written by this script') }
+    $rootOut = $null
+    if ($hdr.ContainsKey('root-scan')) { $rootOut = $root }
+    return @{ Header = $hdr; Entries = $ent; Root = $rootOut }
+}
+
+function Compare-StickTree {
+    # Compares <Root> (the doze_sec folder) with a trusted manifest's entries,
+    # and the stick root (<OuterRoot>) with the root recorded when the stick
+    # was made. Never follows a link: a <Root> that is itself a link is reported
+    # as RootLink and nothing under it is read.
+    # Returns @{ RootLink; Missing; Changed; Added; Removed; Streams; Reparse;
+    #            RootNew; Other }.
+    param([string]$Root, [hashtable]$Expected, [string]$OuterRoot = '', $RootBaseline = $null)
+    $r = @{ RootLink = $false; Missing = $false; Changed = @(); Added = @(); Removed = @(); Streams = @(); Reparse = @(); RootNew = @(); Other = @() }
+    $state = Get-EntryState $Root
+    if ($state -eq 'link') { $r.RootLink = $true; return $r }
+    if ($state -ne 'dir') { $r.Missing = $true; return $r }
+    $changed = New-Object System.Collections.Generic.List[string]
+    $added = New-Object System.Collections.Generic.List[string]
+    $streams = New-Object System.Collections.Generic.List[string]
+    $tree = Get-TreeEntries $Root -Strict
+    $present = @{}
+    foreach ($f in $tree.Files) {
+        $rel = Get-RelPath $Root $f.FullName
+        if ($rel -ieq $script:StickManifestName) { continue }
+        $present[$rel] = $true
+        # PowerShell hashtables compare keys case-insensitively, as FAT and
+        # exFAT compare names.
+        if (-not $Expected.ContainsKey($rel)) { $added.Add($rel); continue }
+        $h = Get-Sha256Hex ([IO.File]::ReadAllBytes($f.FullName))
+        if ($h -ne $Expected[$rel]) { $changed.Add($rel) }
+        foreach ($s in (Get-ExtraStreams $f.FullName)) { $streams.Add($rel + ':' + $s) }
+    }
+    $r.Changed = $changed.ToArray()
+    $r.Added = $added.ToArray()
+    $r.Removed = @($Expected.Keys | Where-Object { -not $present.ContainsKey($_) } | Sort-Object)
+    $r.Streams = $streams.ToArray()
+    $r.Reparse = $tree.Reparse
+    if ($OuterRoot) {
+        $scan = Get-RootScan $OuterRoot
+        $new = New-Object System.Collections.Generic.List[string]
+        foreach ($k in $scan.Watch.Keys) {
+            if ($null -eq $RootBaseline) { $new.Add($k + ' (the root was not recorded when this stick was made)'); continue }
+            if (-not $RootBaseline.ContainsKey($k)) { $new.Add($k); continue }
+            if ($RootBaseline[$k] -ne $scan.Watch[$k]) { $new.Add($k + ' (changed)') }
+        }
+        $r.RootNew = $new.ToArray()
+        $r.Other = $scan.Other
+    }
+    return $r
+}
+
+function Get-DiffCount {
+    param([hashtable]$C)
+    return (@($C.Changed).Count + @($C.Added).Count + @($C.Removed).Count + @($C.Streams).Count + @($C.Reparse).Count)
+}
+
+function Remove-StickCopy {
+    # Removes a copy this laptop made -- and only if it is still exactly that.
+    # Compares <Dir> with the TRUSTED manifest's entries first (never the copy
+    # on the stick) and refuses, listing what it found, on any file changed,
+    # added or removed, any new stream, or any link: an added file may be the
+    # owner's saved results, a changed one is evidence of what a visited machine
+    # did, and a link could lead the delete off the stick. Then it deletes only
+    # the files the manifest lists, the stick's manifest, and folders left
+    # empty. Throws with the reason on refusal; deletes nothing in that case.
+    param([string]$Dir, [hashtable]$Expected)
+    if ($null -eq $Expected) { throw ('this laptop holds no manifest for ' + $Dir + ', so nothing proves what in it is ours; remove it yourself after looking at what it holds') }
+    $c = Compare-StickTree -Root $Dir -Expected $Expected
+    if ($c.RootLink) { throw ($Dir + ' is itself a link or junction; refused -- inspect the stick before reusing it') }
+    if ($c.Missing) { throw ($Dir + ' does not exist') }
+    if ((Get-DiffCount $c) -gt 0) {
+        $list = @($c.Changed | ForEach-Object { 'changed: ' + $_ }) + @($c.Added | ForEach-Object { 'added: ' + $_ }) +
+                @($c.Removed | ForEach-Object { 'removed: ' + $_ }) + @($c.Streams | ForEach-Object { 'stream: ' + $_ }) +
+                @($c.Reparse | ForEach-Object { 'link: ' + $_ })
+        $shown = @($list | Select-Object -First 12) -join '; '
+        if ($list.Count -gt 12) { $shown += ('; and ' + ($list.Count - 12) + ' more') }
+        throw ($Dir + ' is no longer exactly what this laptop wrote (' + $shown + '). Nothing was deleted. Run -Verify; move out any files of yours; if the visited machine changed it, keep this stick as evidence and use a new one.')
+    }
+    foreach ($k in @($Expected.Keys)) {
+        $f = New-Object IO.FileInfo (Join-Rel $Dir $k)
+        $f.Attributes = 'Normal'
+        $f.Delete()
+    }
+    $mf = New-Object IO.FileInfo (Join-Path $Dir $script:StickManifestName)
+    if ($mf.Exists) { $mf.Attributes = 'Normal'; $mf.Delete() }
+    $tree = Get-TreeEntries $Dir -Strict
+    foreach ($d in ($tree.Dirs | Sort-Object { $_.FullName.Length } -Descending)) {
+        try { $d.Delete($false) } catch {}
+    }
+    (New-Object IO.DirectoryInfo $Dir).Delete($false)
+}
+
+function Get-ManifestStore {
+    if ($ManifestStore) { return $ManifestStore }
+    $base = $env:LOCALAPPDATA
+    if (-not $base) { $base = [IO.Path]::GetTempPath() }
+    return (Join-Path (Join-Path $base 'doze_sec') 'sticks')
+}
+
+function Find-TrustedManifest {
+    # The newest manifest in the store whose target matches. Never the stick's.
+    param([string]$Store, [string]$TargetId)
+    if ((Get-EntryState $Store) -ne 'dir') { return $null }
+    foreach ($f in (Get-ChildItem -LiteralPath $Store -Filter '*.sha256' -File | Sort-Object Name -Descending)) {
+        try { $m = Read-Manifest $f.FullName } catch { continue }
+        if ($m.Header['target'] -ceq $TargetId) { return $f.FullName }
+    }
+    return $null
+}
+
+function Get-IdTag {
+    param([string]$TargetId)
+    return (Get-Sha256Hex ([Text.Encoding]::UTF8.GetBytes($TargetId))).Substring(0, 8)
+}
+
+function ConvertTo-Hashtable {
+    param([System.Collections.IDictionary]$D)
+    $h = @{}
+    foreach ($k in $D.Keys) { $h[$k] = $D[$k] }
+    return $h
+}
+
+# ---------------------------------------------------------------------------
+# Live lookups (Windows only)
+# ---------------------------------------------------------------------------
+
+function Get-LiveTarget {
+    param([string]$Letter)
+    $r = @{ Disk = $null; Volume = $null; Error = '' }
+    try {
+        $r.Volume = Get-Volume -DriveLetter $Letter -EA Stop
+        $r.Disk = Get-Partition -DriveLetter $Letter -EA Stop | Get-Disk -EA Stop
+    } catch { $r.Error = $_.Exception.Message }
+    return $r
+}
+
+function Get-LiveContext {
+    param([string]$Err)
+    return @{
+        SystemDrive    = $env:SystemDrive
+        ProtectedPaths = @($env:windir, $env:USERPROFILE, $Source, $PSScriptRoot)
+        LookupError    = $Err
+    }
+}
+
+function ConvertTo-Letter {
+    param([string]$D)
+    if ($D -notmatch '^\s*([A-Za-z])(:\\?)?\s*$') { throw ('-Drive takes a drive letter such as E: -- got "' + $D + '"') }
+    return $matches[1].ToUpper()
+}
+
+# ---------------------------------------------------------------------------
+# Self-test
+# ---------------------------------------------------------------------------
+
+if ($SelfTest) {
+    $fails = 0
+    function T { param([string]$Name, [bool]$Ok, [string]$Got)
+        if ($Ok) { Write-Output "[OK]   $Name" } else { Write-Output "[FAIL] $Name$(if ($Got) { ": $Got" })"; $script:fails++ }
+    }
+    function D { param($Bus = 'USB', [bool]$Boot = $false, [bool]$Sys = $false, [bool]$Off = $false, [bool]$Ro = $false)
+        return (New-Object PSObject -Property @{ BusType = $Bus; IsBoot = $Boot; IsSystem = $Sys; IsOffline = $Off; IsReadOnly = $Ro; FriendlyName = 'Test Stick'; Size = 16GB })
+    }
+    function V { param([string]$L = 'E', [string]$Fs = 'exFAT', [string]$Dt = 'Removable')
+        return (New-Object PSObject -Property @{ DriveLetter = $L; FileSystem = $Fs; DriveType = $Dt; UniqueId = '\\?\Volume{test}\'; SizeRemaining = 8GB })
+    }
+    function New-Tree { param([string]$Root, [string[]]$Rels)
+        foreach ($rel in $Rels) {
+            $p = Join-Rel $Root $rel
+            [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($p))
+            [IO.File]::WriteAllText($p, ("content of " + $rel + "`nline two`n"))
+        }
+    }
+    $ctx = @{ SystemDrive = 'C:'; ProtectedPaths = @('C:\Windows', 'C:\Users\u', 'C:\Users\u\src\doze_sec'); LookupError = '' }
+
+    # --- the target rule ---------------------------------------------------
+    $v = Get-StickVerdict (D) (V) $ctx
+    T 'a USB stick formatted exFAT is accepted' ($v.Ok) ($v.Reasons -join '; ')
+    $v = Get-StickVerdict (D -Bus 7) (V -Fs 'FAT32') $ctx
+    T 'BusType given as the CIM number 7 is USB' ($v.Ok) ($v.Reasons -join '; ')
+    foreach ($bus in @('SATA', 'NVMe', 'SD', 'SCSI', 'RAID', 'Unknown')) {
+        $v = Get-StickVerdict (D -Bus $bus) (V) $ctx
+        T ("a disk on the {0} bus is refused, naming what was seen" -f $bus) ((-not $v.Ok) -and ($v.Reasons -join ' ') -match [regex]::Escape($bus)) ($v.Reasons -join '; ')
+    }
+    $v = Get-StickVerdict (D -Bus $null) (V) $ctx
+    T 'an unreadable bus fails closed' ((-not $v.Ok) -and ($v.Reasons -join ' ') -match 'not on the USB bus') ($v.Reasons -join '; ')
+    $v = Get-StickVerdict (D -Boot $true) (V) $ctx
+    T 'the boot disk is refused even on USB' ((-not $v.Ok) -and ($v.Reasons -join ' ') -match 'booted from') ($v.Reasons -join '; ')
+    $v = Get-StickVerdict (D -Sys $true) (V) $ctx
+    T 'the system disk is refused' ((-not $v.Ok) -and ($v.Reasons -join ' ') -match 'system partition') ($v.Reasons -join '; ')
+    $v = Get-StickVerdict (D -Off $true) (V) $ctx
+    T 'an offline disk is refused' (-not $v.Ok) ($v.Reasons -join '; ')
+    $v = Get-StickVerdict (D -Ro $true) (V) $ctx
+    T 'a read-only (write-protected) disk is refused, and says why' ((-not $v.Ok) -and ($v.Reasons -join ' ') -match 'write-protect') ($v.Reasons -join '; ')
+    $v = Get-StickVerdict (D) (V -Fs 'RAW') $ctx
+    $rj = $v.Reasons -join ' '
+    T 'an unreadable volume is never called unformatted: BitLocker or Mac/Linux is named before any format advice, with the erase warning' ((-not $v.Ok) -and $rj -match 'cannot read a file system' -and $rj -match 'BitLocker' -and $rj -match 'Mac' -and $rj -match 'ONLY if you know' -and $rj -match 'erases every file' -and $rj -notmatch 'not formatted') $rj
+    $v = Get-StickVerdict (D) (V -Fs '') $ctx
+    T 'a volume with no file system name gets the same careful wording' ((-not $v.Ok) -and ($v.Reasons -join ' ') -match 'BitLocker') ($v.Reasons -join '; ')
+    $v = Get-StickVerdict (D) (V -Fs 'ReFS') $ctx
+    T 'a ReFS volume is named as holding files, with no format advice' ((-not $v.Ok) -and ($v.Reasons -join ' ') -match 'ReFS' -and ($v.Reasons -join ' ') -notmatch 'Format') ($v.Reasons -join '; ')
+    $v = Get-StickVerdict (D -Bus 'SATA') (V -Fs 'RAW') $ctx
+    T 'a non-USB disk gets no format advice at all (only the bus reason)' ((-not $v.Ok) -and ($v.Reasons -join ' ') -notmatch 'Format' -and ($v.Reasons -join ' ') -notmatch 'erases') ($v.Reasons -join '; ')
+    $v = Get-StickVerdict (D) (V -L 'C') $ctx
+    T 'the Windows drive letter is refused whatever the bus says' ((-not $v.Ok) -and ($v.Reasons -join ' ') -match 'Windows drive') ($v.Reasons -join '; ')
+    $v = Get-StickVerdict (D) (V -L 'D') @{ SystemDrive = 'C:'; ProtectedPaths = @('D:\src\doze_sec'); LookupError = '' }
+    T 'a drive holding the source checkout is refused' ((-not $v.Ok) -and ($v.Reasons -join ' ') -match 'holds D:\\src') ($v.Reasons -join '; ')
+    $v = Get-StickVerdict (D) (V -Dt 'Fixed') $ctx
+    T 'a USB disk reporting Fixed is accepted, with an INFO line (the bus decides)' ($v.Ok -and ($v.Info -join ' ') -match 'bus decides') (($v.Reasons + $v.Info) -join '; ')
+    $v = Get-StickVerdict $null $null @{ SystemDrive = 'C:'; ProtectedPaths = @(); LookupError = 'Access denied' }
+    T 'a lookup error refuses and suggests an elevated window' ((-not $v.Ok) -and ($v.Reasons -join ' ') -match 'elevated') ($v.Reasons -join '; ')
+
+    T 'ConvertTo-Letter accepts E, E: and E:\' ((ConvertTo-Letter 'e') -eq 'E' -and (ConvertTo-Letter 'E:') -eq 'E' -and (ConvertTo-Letter 'E:\') -eq 'E') ''
+    $threw = $false; try { [void](ConvertTo-Letter 'E:\stuff') } catch { $threw = $true }
+    T 'ConvertTo-Letter refuses a path' $threw ''
+    T 'the script refuses to vouch for a target it is running from (drive)' (Test-SelfOnTarget 'E:\doze_sec\tools' 'E:\') ''
+    T 'the script refuses to vouch for a target it is running from (folder, any case)' (Test-SelfOnTarget 'd:\x\stick\doze_sec\tools' 'D:\x\stick') ''
+    T 'a laptop checkout is not on the target' (-not (Test-SelfOnTarget 'C:\Users\u\src\doze_sec\tools' 'E:\')) ''
+    T 'a sibling folder with a common prefix is not the target' (-not (Test-SelfOnTarget 'D:\x\stick2\tools' 'D:\x\stick')) ''
+
+    $crlf = ConvertTo-CrLf ([Text.Encoding]::ASCII.GetBytes("a`nb`r`nc`n"))
+    T 'LF becomes CRLF and an existing CRLF is left alone' ([Text.Encoding]::ASCII.GetString($crlf) -ceq "a`r`nb`r`nc`r`n") ([Text.Encoding]::ASCII.GetString($crlf))
+
+    $rp = [IO.FileAttributes]::Archive -bor [IO.FileAttributes]::ReparsePoint
+    T 'a symbolic link is a link' (Test-IsLinkEntry $rp 'SymbolicLink') ''
+    T 'a junction is a link' (Test-IsLinkEntry ([IO.FileAttributes]::Directory -bor [IO.FileAttributes]::ReparsePoint) 'Junction') ''
+    T 'a OneDrive cloud placeholder (reparse point, no link type) is NOT a link -- the owner''s checkout is under OneDrive' (-not (Test-IsLinkEntry $rp $null)) ''
+    T 'a hard link is not a link to avoid (it is the file itself)' (-not (Test-IsLinkEntry ([IO.FileAttributes]::Archive) 'HardLink')) ''
+    T 'a plain file is not a link' (-not (Test-IsLinkEntry ([IO.FileAttributes]::Archive) $null)) ''
+
+    # The script must never format, partition or write boot files, and never
+    # delete recursively (a recursive delete follows junctions on 5.1). Checked
+    # on the AST, so the comments that explain why are not a match; the
+    # self-test's own temp cleanup below is the one allowed Remove-Item.
+    $tok = $null; $err = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($PSCommandPath, [ref]$tok, [ref]$err)
+    $cmds = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true) | ForEach-Object { $_.GetCommandName() } | Where-Object { $_ })
+    $bad = @($cmds | Where-Object { $_ -match '^(Format-Volume|Clear-Disk|Initialize-Disk|New-Partition|Set-Partition|Remove-Partition|Resize-Partition|diskpart(\.exe)?|bcdboot(\.exe)?|bcdedit(\.exe)?|format(\.com)?|Set-Disk)$' })
+    T 'the script calls no formatting, partitioning or boot command' ($bad.Count -eq 0) ($bad -join ', ')
+    $rm = @($cmds | Where-Object { $_ -eq 'Remove-Item' }).Count
+    T 'only the self-test''s own temp cleanup uses Remove-Item' ($rm -eq 1) ("Remove-Item calls: " + $rm)
+
+    # --- copy, manifest, verify, refresh on temp trees -----------------------
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ('dz_stick_selftest_' + $PID)
+    # Every link this self-test plants is removed on its own before the temp
+    # tree is: a recursive delete must never meet a link it could follow.
+    $links = New-Object System.Collections.Generic.List[string]
+    try {
+        $src = Join-Path $tmp 'src'
+        New-Tree $src ($script:Required + @('tools\other.ps1', '.git\config', '.github\workflows\x.yml', 'tests\manual_ci.ps1', 'tests\detection_selftest.ps1', 'tests\cleanup_selftest.ps1', 'tests\noadmin_smoke.ps1', 'tools\make_usb_stick.ps1', 'docs\second-machine.md'))
+        $store = Join-Path $tmp 'store'
+        $ManifestStore = $store
+        $outer = Join-Path $tmp 'stick'
+        [void][IO.Directory]::CreateDirectory($outer)
+        [IO.File]::WriteAllText((Join-Path $outer 'autorun.inf'), '[autorun]')   # already there when the stick is made
+        $dest = Join-Path $outer $script:StickFolder
+        $res = Invoke-StickCopy -Source $src -Dest $dest
+        T 'the copy holds every required file' (@($script:Required | Where-Object { -not (Test-Path -LiteralPath (Join-Rel $dest $_)) }).Count -eq 0) ''
+        T 'no harness file and not this script reach the stick' (@($script:ExcludeFiles | Where-Object { Test-Path -LiteralPath (Join-Rel $dest $_) }).Count -eq 0) ''
+        T '.git and .github stay off the stick' (-not (Test-Path -LiteralPath (Join-Path $dest '.git')) -and -not (Test-Path -LiteralPath (Join-Path $dest '.github'))) ''
+        T 'every exclusion is reported, none silently' (@($res.Excluded).Count -eq 7) ($res.Excluded -join ', ')
+        $batBytes = [IO.File]::ReadAllBytes((Join-Path $dest 'doze_sec.bat'))
+        T 'the LF-only bat lands with CRLF line endings' ([Text.Encoding]::ASCII.GetString($batBytes) -match "`r`n" -and $res.Normalized -eq 2) ("normalized=" + $res.Normalized)
+        T 'a non-batch file is copied byte for byte' ([IO.File]::ReadAllText((Join-Rel $dest 'tools\other.ps1')) -ceq ("content of tools\other.ps1`nline two`n")) ''
+
+        $scan0 = Get-RootScan $outer
+        T 'the root scan records what was already at the stick root' ($scan0.Watch.Contains('autorun.inf')) (@($scan0.Watch.Keys) -join ', ')
+        $tid = 'folder=' + $dest
+        $text = New-ManifestText -Entries $res.Entries -TargetId $tid -SourcePath $src -Created '2026-10-09T12:00:00' -Root $scan0.Watch
+        [void][IO.Directory]::CreateDirectory($store)
+        $keep = Join-Path $store ('stick_20261009_120000_' + (Get-IdTag $tid) + '.sha256')
+        [IO.File]::WriteAllText($keep, $text)
+        [IO.File]::WriteAllText((Join-Path $dest $script:StickManifestName), $text)
+        $m = Read-Manifest $keep
+        T 'the manifest round-trips: one entry per copied file, and the root baseline' ($m.Entries.Count -eq $res.Entries.Count -and $m.Header['target'] -eq $tid -and $null -ne $m.Root -and $m.Root.ContainsKey('autorun.inf')) ("entries=" + $m.Entries.Count)
+        T 'the trusted manifest is found in the laptop store by target' ((Find-TrustedManifest $store $tid) -eq $keep) ''
+        T 'a different target finds no manifest' ($null -eq (Find-TrustedManifest $store 'folder=elsewhere')) ''
+
+        $c = Compare-StickTree -Root $dest -Expected $m.Entries -OuterRoot $outer -RootBaseline $m.Root
+        T 'an untouched stick verifies identical, and a root file that was there when it was made is not reported' (((Get-DiffCount $c) + @($c.RootNew).Count) -eq 0) ((@($c.Changed) + @($c.Added) + @($c.Removed) + @($c.RootNew)) -join ', ')
+        $c = Compare-StickTree -Root $dest -Expected $m.Entries -OuterRoot $outer -RootBaseline $null
+        T 'with no root baseline the root entries are reported as not recorded, never as clean' (@($c.RootNew | Where-Object { $_ -match 'not recorded' }).Count -eq 1) ($c.RootNew -join ', ')
+
+        # A user's own results inside doze_sec: -Refresh must refuse and keep them.
+        $resultsFile = Join-Rel $dest 'results\PC1\SecurityReport.txt'
+        [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($resultsFile))
+        [IO.File]::WriteAllText($resultsFile, 'the owner''s saved report')
+        $threw = ''; try { Remove-StickCopy -Dir $dest -Expected $m.Entries } catch { $threw = $_.Exception.Message }
+        T 'refresh refuses a copy holding files it did not write, names them, and deletes nothing' ($threw -match 'added: results' -and $threw -match 'Nothing was deleted' -and (Test-Path -LiteralPath $resultsFile) -and (Test-Path -LiteralPath (Join-Rel $dest 'tools\exec_probe.ps1'))) $threw
+        [IO.Directory]::Delete((Join-Rel $dest 'results'), $true)
+
+        # Tampering, as a visited machine would.
+        [IO.File]::AppendAllText((Join-Rel $dest 'tools\exec_probe.ps1'), "`n# tampered")
+        [IO.File]::WriteAllText((Join-Rel $dest 'tools\extra.ps1'), 'new')
+        [IO.File]::Delete((Join-Rel $dest 'tests\benign_corpus.txt'))
+        [IO.File]::WriteAllText((Join-Path $outer 'setup.exe'), 'MZ')
+        [IO.File]::WriteAllText((Join-Path $outer 'autorun.inf'), '[autorun]open=setup.exe')
+        [void][IO.Directory]::CreateDirectory((Join-Path $outer 'results'))
+        $c = Compare-StickTree -Root $dest -Expected $m.Entries -OuterRoot $outer -RootBaseline $m.Root
+        T 'a changed tool file is reported' (@($c.Changed) -contains 'tools\exec_probe.ps1') ($c.Changed -join ', ')
+        T 'an added file is reported' (@($c.Added) -contains 'tools\extra.ps1') ($c.Added -join ', ')
+        T 'a removed file is reported' (@($c.Removed) -contains 'tests\benign_corpus.txt') ($c.Removed -join ', ')
+        T 'a NEW runnable file at the stick root is reported' (@($c.RootNew) -contains 'setup.exe') ($c.RootNew -join ', ')
+        T 'a CHANGED root file is reported as changed' (@($c.RootNew) -contains 'autorun.inf (changed)') ($c.RootNew -join ', ')
+        T 'other folders at the stick root are listed (results that must not travel on)' (@($c.Other) -contains 'results') ($c.Other -join ', ')
+        $threw = ''; try { Remove-StickCopy -Dir $dest -Expected $m.Entries } catch { $threw = $_.Exception.Message }
+        T 'refresh refuses a tampered copy -- it is evidence -- and deletes nothing' ($threw -match 'changed: tools\\exec_probe.ps1' -and (Test-Path -LiteralPath (Join-Rel $dest 'tools\extra.ps1'))) $threw
+        $threw = ''; try { Remove-StickCopy -Dir $dest -Expected $null } catch { $threw = $_.Exception.Message }
+        T 'refresh with no manifest on this laptop refuses, whatever the stick''s own manifest says' ($threw -match 'no manifest') $threw
+
+        # A link planted on the stick, inside doze_sec and in place of it.
+        $slink = $false
+        try { New-Item -ItemType SymbolicLink -Path (Join-Rel $dest 'tools\escape') -Target $src -EA Stop | Out-Null; $slink = $true } catch {}
+        if ($slink) {
+            $c2 = Compare-StickTree -Root $dest -Expected $m.Entries
+            T 'a link planted inside the copy is reported and not followed' ((@($c2.Reparse) -contains 'tools\escape') -and -not @(@($c2.Added) | Where-Object { $_ -like 'tools\escape\*' }).Count) ((@($c2.Reparse) + @($c2.Added)) -join ', ')
+            (Get-Item -LiteralPath (Join-Rel $dest 'tools\escape') -Force).Delete()
+            $outer2 = Join-Path $tmp 'stick2'
+            [void][IO.Directory]::CreateDirectory($outer2)
+            $laptopDir = Join-Path $tmp 'laptop_files'
+            New-Tree $laptopDir @('secret.txt')
+            New-Item -ItemType SymbolicLink -Path (Join-Path $outer2 $script:StickFolder) -Target $laptopDir -EA Stop | Out-Null
+            $links.Add((Join-Path $outer2 $script:StickFolder))
+            $c3 = Compare-StickTree -Root (Join-Path $outer2 $script:StickFolder) -Expected $m.Entries -OuterRoot $outer2 -RootBaseline $m.Root
+            T 'a link in place of doze_sec is reported, and nothing behind it is read' ($c3.RootLink -and @($c3.Added).Count -eq 0) ("rootlink=" + $c3.RootLink + " added=" + (@($c3.Added) -join ','))
+            $threw = ''; try { Remove-StickCopy -Dir (Join-Path $outer2 $script:StickFolder) -Expected $m.Entries } catch { $threw = $_.Exception.Message }
+            T 'refresh refuses a doze_sec that is a link, and the files behind it survive' ($threw -match 'link or junction' -and (Test-Path -LiteralPath (Join-Path $laptopDir 'secret.txt'))) $threw
+        } else { Write-Output '[SKIP] links on the stick: creating a symbolic link needs rights this session lacks' }
+
+        # A clean copy refreshes.
+        $dest3 = Join-Path (Join-Path $tmp 'stick3') $script:StickFolder
+        $res3 = Invoke-StickCopy -Source $src -Dest $dest3
+        Remove-StickCopy -Dir $dest3 -Expected (ConvertTo-Hashtable $res3.Entries)
+        T 'refresh removes a copy that is still exactly what this laptop wrote' ((Get-EntryState $dest3) -eq 'missing') ''
+
+        $threw = ''; try { [void](Invoke-StickCopy -Source $src -Dest $dest) } catch { $threw = $_.Exception.Message }
+        T 'an existing copy is never overwritten without -Refresh' ($threw -match 'already exists') $threw
+        $threw = ''; try { [void](Invoke-StickCopy -Source $src -Dest (Join-Path $src 'inner')) } catch { $threw = $_.Exception.Message }
+        T 'a destination inside the source tree is refused' ($threw -match 'inside the source') $threw
+
+        $miss = Join-Path $tmp 'miss'
+        New-Tree $miss @('doze_sec.bat', 'tools\x.ps1')
+        $threw = ''; try { [void](Invoke-StickCopy -Source $miss -Dest (Join-Path $tmp 'miss_out')) } catch { $threw = $_.Exception.Message }
+        T 'a source missing a required file is refused, naming it' ($threw -match 'missing') $threw
+
+        $case = Join-Path $tmp 'case'
+        New-Tree $case ($script:Required + @('tools\A.ps1', 'tools\a.ps1'))
+        if (@(Get-ChildItem -LiteralPath (Join-Path $case 'tools') -File).Count -eq 3) {
+            $threw = ''; try { [void](Invoke-StickCopy -Source $case -Dest (Join-Path $tmp 'case_out')) } catch { $threw = $_.Exception.Message }
+            T 'two source files differing only in case are refused' ($threw -match 'only in case') $threw
+        } else { Write-Output '[SKIP] case-only collision: this file system is case-insensitive, the collision cannot be planted here' }
+
+        $lnk = Join-Path $tmp 'lnk'
+        New-Tree $lnk $script:Required
+        $planted = $false
+        $outside = Join-Path $tmp 'outside_target'
+        New-Tree $outside @('x.txt')
+        try { New-Item -ItemType SymbolicLink -Path (Join-Path $lnk 'tools\outside') -Target $outside -EA Stop | Out-Null; $planted = $true; $links.Add((Join-Path $lnk 'tools\outside')) } catch {}
+        if ($planted) {
+            $threw = ''; try { [void](Invoke-StickCopy -Source $lnk -Dest (Join-Path $tmp 'lnk_out')) } catch { $threw = $_.Exception.Message }
+            T 'a link inside the source is refused, never followed' ($threw -match 'link or junction') $threw
+        } else { Write-Output '[SKIP] link in source: creating a symbolic link needs rights this session lacks' }
+
+        if ($script:OnWindows -and (Test-CanHoldStreams $tmp)) {
+            $ms = Join-Path $tmp 'motw'
+            New-Tree $ms $script:Required
+            Set-Content -LiteralPath (Join-Rel $ms 'tools\exec_probe.ps1') -Stream 'Zone.Identifier' -Value "[ZoneTransfer]`r`nZoneId=3"
+            $mdest = Join-Path $tmp 'motw_out'
+            $mres = Invoke-StickCopy -Source $ms -Dest $mdest
+            T 'Mark of the Web on a source file is counted' ($mres.Motw -eq 1) ("motw=" + $mres.Motw)
+            T 'Mark of the Web does not travel onto the copy' (@(Get-ExtraStreams (Join-Rel $mdest 'tools\exec_probe.ps1')).Count -eq 0) ''
+            Set-Content -LiteralPath (Join-Rel $mdest 'tools\exec_probe.ps1') -Stream 'dz_hidden' -Value 'x'
+            $mc = Compare-StickTree -Root $mdest -Expected (ConvertTo-Hashtable $mres.Entries)
+            T 'an alternate data stream added on a visited machine is reported' (@(@($mc.Streams) -match 'dz_hidden').Count -eq 1) ($mc.Streams -join ', ')
+        } else {
+            Write-Output '[SKIP] Mark of the Web and alternate data streams: NTFS streams exist only on Windows (windows-smoke runs these cases)'
+        }
+
+        # The real repo: the stick carries what the audit needs, no harness, not this script.
+        $real = Join-Path $tmp 'real'
+        $rres = Invoke-StickCopy -Source $Source -Dest $real
+        T 'a copy of this repo holds the audit, no harness and not this script' ((@($script:ExcludeFiles | Where-Object { Test-Path -LiteralPath (Join-Rel $real $_) }).Count -eq 0) -and (Test-Path -LiteralPath (Join-Rel $real 'tools\exec_probe.ps1'))) ''
+        T 'every exclusion that applied to this repo was named' (@($rres.Excluded | Where-Object { $_ -like 'tests\*' }).Count -eq 4 -and @($rres.Excluded) -contains 'tools\make_usb_stick.ps1') ($rres.Excluded -join ', ')
+    } finally {
+        foreach ($l in $links) {
+            try { $li = Get-Item -LiteralPath $l -Force -EA Stop; $li.Delete() } catch {}
+        }
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force -EA SilentlyContinue }
+    }
+    if ($fails -gt 0) { Write-Output "FAILED: $fails"; exit 1 }
+    Write-Output '[OK] make_usb_stick self-test: only a USB stick is accepted, nothing is formatted, the harness and this script stay off, and a returned stick is checked against the laptop copy of its manifest.'
+    exit 0
+}
+
+# ---------------------------------------------------------------------------
+# Live modes
+# ---------------------------------------------------------------------------
+
+if ($ListCandidates) {
+    if (-not $script:OnWindows) { Write-Output '[FAIL] -ListCandidates needs Windows.'; exit 1 }
+    Write-Output 'Lettered volumes and whether this script would put the tool on them (read-only; nothing is changed):'
+    foreach ($vol in (Get-Volume | Where-Object { $_.DriveLetter } | Sort-Object DriveLetter)) {
+        $lt = Get-LiveTarget ([string]$vol.DriveLetter)
+        $v = Get-StickVerdict $lt.Disk $lt.Volume (Get-LiveContext $lt.Error)
+        $name = if ($lt.Disk) { [string]$lt.Disk.FriendlyName } else { '?' }
+        $bus = if ($lt.Disk) { ConvertTo-BusName $lt.Disk.BusType } else { '?' }
+        $state = if ($v.Ok) { 'ACCEPTED' } else { 'refused ' }
+        Write-Output ('  {0}:  {1}  {2,-8} {3,-6} {4}' -f $vol.DriveLetter, $state, [string]$vol.FileSystem, $bus, $name)
+        foreach ($r in $v.Reasons) { Write-Output ('        - ' + $r) }
+    }
+    exit 0
+}
+
+if (($Drive -and $ToFolder) -or (-not $Drive -and -not $ToFolder)) {
+    Write-Output 'Usage: make_usb_stick.ps1 -Drive E: [-Verify | -Refresh]   or   -ToFolder <dir> [-Verify | -Refresh]   or   -ListCandidates   or   -SelfTest'
+    exit 1
+}
+
+$outer = ''
+$targetId = ''
+$letter = ''
+$lt = $null
+if ($Drive) {
+    if (-not $script:OnWindows) { Write-Output '[FAIL] -Drive needs Windows.'; exit 1 }
+    try { $letter = ConvertTo-Letter $Drive } catch { Write-Output ('[FAIL] ' + $_.Exception.Message); exit 1 }
+    $outer = $letter + ':\'
+} else {
+    $outer = [IO.Path]::GetFullPath($ToFolder)
+}
+if (Test-SelfOnTarget $PSScriptRoot $outer) {
+    Write-Output ('[FAIL] This copy of make_usb_stick.ps1 is running from ' + $outer + ' -- the target itself.')
+    Write-Output '  Run the copy in your doze_sec checkout on this laptop. A checker that travelled on the stick can'
+    Write-Output '  have been rewritten by a machine it visited, and could then report anything at all.'
+    exit 1
+}
+if ($ToFolder -and (Get-EntryState $outer) -eq 'link') { Write-Output ('[FAIL] ' + $outer + ' is a link or junction; refused.'); exit 1 }
+if ($Drive) {
+    $lt = Get-LiveTarget $letter
+    if ($lt.Volume) { $targetId = 'volume=' + [string]$lt.Volume.UniqueId }
+    if (-not $Verify) {
+        $v = Get-StickVerdict $lt.Disk $lt.Volume (Get-LiveContext $lt.Error)
+        $name = if ($lt.Disk) { [string]$lt.Disk.FriendlyName } else { '?' }
+        Write-Output ("Target: {0}:  {1}" -f $letter, $name)
+        foreach ($i in $v.Info) { Write-Output ('[INFO] ' + $i) }
+        if (-not $v.Ok) {
+            foreach ($r in $v.Reasons) { Write-Output ('[FAIL] ' + $r) }
+            Write-Output 'Nothing was written. Run -ListCandidates to see which drives this script accepts.'
+            exit 1
+        }
+    }
+} elseif (-not $Verify) {
+    [void][IO.Directory]::CreateDirectory($outer)
+}
+$dest = Join-Path $outer $script:StickFolder
+if (-not $targetId) { $targetId = 'folder=' + [IO.Path]::GetFullPath($dest) }
+$store = Get-ManifestStore
+$trusted = $Manifest
+if (-not $trusted) { $trusted = Find-TrustedManifest $store $targetId }
+
+if ($Verify) {
+    if (-not $trusted) {
+        Write-Output ('[UNVERIFIED] No manifest for this stick in ' + $store + '.')
+        Write-Output '  The copy of the manifest ON the stick is not used: a visited machine could have rewritten it along with the files.'
+        Write-Output '  Pass -Manifest <file> if you kept it elsewhere; otherwise make the stick again from your checkout.'
+        exit 2
+    }
+    $m = Read-Manifest $trusted
+    $c = Compare-StickTree -Root $dest -Expected $m.Entries -OuterRoot $outer -RootBaseline $m.Root
+    Write-Output ('Checking ' + $dest + ' against ' + $trusted + ' (made ' + $m.Header['created'] + ', ' + $m.Entries.Count + ' files)')
+    if ($c.RootLink) {
+        Write-Output ('[LINK]    ' + $dest + ' is a link or junction -- not followed, nothing behind it was read.')
+        Write-Output '[WARNING] The stick was changed after it left this laptop. Keep it exactly as it is: it is evidence. Do not open anything on it.'
+        exit 1
+    }
+    if ($c.Missing) { Write-Output ('[FAIL] ' + $dest + ' does not exist.'); exit 1 }
+    foreach ($x in $c.Changed) { Write-Output ('[CHANGED] ' + $x) }
+    foreach ($x in $c.Added)   { Write-Output ('[ADDED]   ' + $x) }
+    foreach ($x in $c.Removed) { Write-Output ('[REMOVED] ' + $x) }
+    foreach ($x in $c.Streams) { Write-Output ('[STREAM]  ' + $x + '  (a hidden data stream that was not there when the stick was made)') }
+    foreach ($x in $c.Reparse) { Write-Output ('[LINK]    ' + $x + '  (a link or junction -- not followed)') }
+    foreach ($x in $c.RootNew) { Write-Output ('[ROOT]    ' + $outer + $x + '  (a file at the stick root that can run, point elsewhere or boot, and was not there when the stick was made -- do not open it)') }
+    foreach ($x in $c.Other)   { Write-Output ('[INFO]    ' + $outer + $x + '\  is not part of the tool. If it holds reports from a PC you visited, move it to this laptop and delete it from the stick before the stick goes anywhere else -- they are that PC''s private data.') }
+    $toolDiff = Get-DiffCount $c
+    $rc = 0
+    if ($toolDiff -eq 0) {
+        Write-Output ('[OK] The tool on the stick is exactly what this laptop put there (' + $m.Entries.Count + ' files). This check is only as trustworthy as this laptop.')
+    } else {
+        Write-Output ('[WARNING] ' + $toolDiff + ' difference(s) in the tool. It was changed after it left this laptop.')
+        Write-Output '  Do not run it again. Note which machine it visited -- a changed tool file is itself worth reporting.'
+        Write-Output '  Keep this stick exactly as it is -- it is evidence -- and use a NEW stick for the next machine.'
+        $rc = 1
+    }
+    if (@($c.RootNew).Count -gt 0) {
+        Write-Output ('[WARNING] ' + @($c.RootNew).Count + ' new or changed file(s) at the stick root that can run or boot. Do not open them; keep the stick as it is.')
+        $rc = 1
+    }
+    exit $rc
+}
+
+# --- make (and -Refresh) -------------------------------------------------------
+$destState = Get-EntryState $dest
+if ($destState -ne 'missing') {
+    if (-not $Refresh) {
+        Write-Output ('[FAIL] ' + $dest + ' already exists. Use -Refresh to replace a copy this laptop made, or remove it yourself.')
+        exit 1
+    }
+    $srcFull = [IO.Path]::GetFullPath($Source)
+    if ((Test-SelfOnTarget $srcFull $dest) -or (Test-SelfOnTarget $dest $srcFull)) { Write-Output ('[FAIL] ' + $dest + ' overlaps the source ' + $srcFull + '; refused.'); exit 1 }
+    $expected = $null
+    if ($trusted) { $expected = (Read-Manifest $trusted).Entries }
+    try { Remove-StickCopy -Dir $dest -Expected $expected; Write-Output ('[OK] Removed the earlier copy at ' + $dest + ' (it was still exactly what this laptop wrote).') }
+    catch { Write-Output ('[FAIL] ' + $_.Exception.Message); exit 1 }
+}
+$srcBytes = [long]0
+$srcRoot = [IO.Path]::GetFullPath($Source)
+foreach ($f in (Get-TreeEntries $srcRoot).Files) { if (-not (Test-Excluded (Get-RelPath $srcRoot $f.FullName))) { $srcBytes += $f.Length } }
+if ($Drive -and $lt.Volume -and $lt.Volume.SizeRemaining -and ([long]$lt.Volume.SizeRemaining -lt [long]($srcBytes * 1.2))) {
+    Write-Output ('[FAIL] Not enough free space on ' + $outer + ' (' + [long]$lt.Volume.SizeRemaining + ' bytes free, about ' + [long]($srcBytes * 1.2) + ' needed).')
+    exit 1
+}
+$scan = Get-RootScan $outer
+if (@($scan.Boot).Count -gt 0) {
+    Write-Output ('[WARNING] The stick already holds boot files (' + ($scan.Boot -join ', ') + ') -- it looks like an old install or recovery stick.')
+    Write-Output '  Never leave it in a PC while that PC restarts: a bootable stick there can make a BitLocker PC ask for its'
+    Write-Output '  48-digit recovery key, and without the key you cannot get to any file on it. A clean stick is better.'
+}
+foreach ($k in $scan.Watch.Keys) { if ($scan.Boot -notcontains $k) { Write-Output ('[INFO] Already at the stick root, recorded so -Verify can tell whether it changes: ' + $k) } }
+foreach ($x in $scan.Other) { Write-Output ('[INFO] ' + $outer + $x + '\ is on the stick too. If it holds reports from a PC you visited, move it off before this stick travels -- they are that PC''s private data.') }
+Write-Output ('Copying ' + $Source + ' -> ' + $dest)
+try { $res = Invoke-StickCopy -Source $Source -Dest $dest }
+catch { Write-Output ('[FAIL] ' + $_.Exception.Message); Write-Output ('  If ' + $dest + ' was partly written, delete it before trying again.'); exit 1 }
+foreach ($x in $res.Excluded) { Write-Output ('[INFO] Left off the stick: ' + $x) }
+if ($res.Normalized -gt 0) { Write-Output ('[INFO] ' + $res.Normalized + ' batch file(s) had LF-only line endings and were written with CRLF, which cmd.exe needs.') }
+if ($res.Motw -gt 0) { Write-Output ('[INFO] ' + $res.Motw + ' source file(s) carried Mark of the Web (downloaded). The stick holds file contents only, so the mark did not travel; the manifest identifies these files from here on.') }
+$created = Get-Date -Format 's'
+$text = New-ManifestText -Entries $res.Entries -TargetId $targetId -SourcePath $srcRoot -Created $created -Root $scan.Watch
+[void][IO.Directory]::CreateDirectory($store)
+$keep = Join-Path $store ('stick_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '_' + (Get-IdTag $targetId) + '.sha256')
+# The laptop copy first. The stick's own copy is a convenience only: -Verify
+# and -Refresh read the laptop's.
+[IO.File]::WriteAllText($keep, $text)
+[IO.File]::WriteAllText((Join-Path $dest $script:StickManifestName), $text)
+Write-Output ('[OK] ' + $res.Entries.Count + ' files copied and read back, ' + $res.Bytes + ' bytes.')
+Write-Output ('[OK] Manifest kept on this laptop: ' + $keep)
+$again = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + $PSCommandPath + '" ' + $(if ($Drive) { '-Drive ' + $letter + ':' } else { '-ToFolder "' + $ToFolder + '"' }) + ' -Verify'
+Write-Output ''
+Write-Output 'Next:'
+Write-Output '  1. Eject the stick (Safely Remove), plug it back in, and run this -- from THIS laptop, this checkout:'
+Write-Output ('       ' + $again)
+Write-Output '     It reads the files back from the stick, so it proves the copy landed intact. (It does not test'
+Write-Output '     the stick''s real capacity: a fake-capacity stick can hold these few MB and lose what comes later.)'
+Write-Output '  2. If the stick has a write-protect switch, you may turn it on now: the audit never writes into its own folder.'
+Write-Output '     (You then need another stick, or the switch off, to bring the results back.)'
+Write-Output '  3. On the other machine, follow docs\second-machine.md. When the stick comes back, run the same command'
+Write-Output '     again here before you open anything on the stick.'
+exit 0

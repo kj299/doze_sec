@@ -714,6 +714,29 @@ jobs:
           Write-Host "audit_policy_check.ps1 OK (incl. GUID-to-subcategory verification against the live OS)"
           exit 0
 
+      # tools\make_usb_stick.ps1 puts the tool on a USB stick (copy only -- it
+      # never formats) and checks a returned stick against the manifest kept on
+      # the laptop. On Linux its stream cases skip; here they must run: Mark of
+      # the Web on a source file must not reach the copy, and a stream added to
+      # the copy on a visited machine must be reported.
+      - name: make_usb_stick.ps1 -SelfTest on 5.1 (USB-only target rule, no formatting, harness left off, MOTW does not travel, a planted stream is reported)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = (.\tools\make_usb_stick.ps1 -SelfTest) -join "`n"
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw 'make_usb_stick self-test failed' }
+          foreach ($must in 'Mark of the Web does not travel onto the copy', 'an alternate data stream added on a visited machine is reported',
+                            'the script calls no formatting, partitioning or boot command', 'a copy of this repo holds the audit, no harness and not this script',
+                            'a OneDrive cloud placeholder', 'a link in place of doze_sec is reported, and nothing behind it is read',
+                            'refresh refuses a copy holding files it did not write', 'refresh refuses a tampered copy') {
+            if ($out -notmatch [regex]::Escape($must)) { throw ("make_usb_stick case missing on Windows: {0}" -f $must) }
+          }
+          if ($out -match '\[SKIP\] (Mark of the Web|links on the stick)') { throw 'the stream or link cases skipped on Windows -- they must run here (the runner is elevated, so symbolic links can be created)' }
+          $n = @($out -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($n -lt 65) { throw "make_usb_stick self-test ran only $n case(s)" }
+          Write-Host "make_usb_stick -SelfTest OK ($n cases)"
+
       - name: exec_probe.ps1 -SelfTest + live (Windows PowerShell 5.1 writes ok|FullLanguage)
         shell: powershell
         run: |
@@ -3393,7 +3416,20 @@ jobs:
           # would turn them into terminating errors under redirection. The
           # script's exit code and its printed proof lines are the verdict.
           $ErrorActionPreference = 'Continue'
-          $out = (& .\tests\field_test.ps1 -BatPath .\doze_sec.bat -NoConsoleLog *>&1 | ForEach-Object { "$_" }) -join "`n"
+          # Run it the way docs\second-machine.md says: from a stick-equivalent
+          # copy made by tools\make_usb_stick.ps1 (the reduced file set, harness
+          # left off, batch files CRLF), not from the checkout. Same audit, same
+          # assertions, no extra run.
+          $stickRoot = Join-Path $env:RUNNER_TEMP 'dz_stick'
+          $store = Join-Path $env:RUNNER_TEMP 'dz_stick_manifests'
+          $mk = (& .\tools\make_usb_stick.ps1 -ToFolder $stickRoot -ManifestStore $store *>&1 | ForEach-Object { "$_" }) -join "`n"
+          Write-Host $mk
+          if ($LASTEXITCODE -ne 0) { throw 'make_usb_stick -ToFolder failed' }
+          $stick = Join-Path $stickRoot 'doze_sec'
+          foreach ($h in 'tests\manual_ci.ps1', 'tests\detection_selftest.ps1', 'tests\cleanup_selftest.ps1', 'tests\noadmin_smoke.ps1', '.git', '.github') {
+            if (Test-Path -LiteralPath (Join-Path $stick $h)) { throw ("the stick copy carries {0} -- the harness must stay off it" -f $h) }
+          }
+          $out = (& (Join-Path $stick 'tests\field_test.ps1') -BatPath (Join-Path $stick 'doze_sec.bat') -NoConsoleLog *>&1 | ForEach-Object { "$_" }) -join "`n"
           $rc = $LASTEXITCODE
           Write-Host $out
           Write-Host ("field_test.ps1 exit code: {0}" -f $rc)
@@ -3416,7 +3452,13 @@ jobs:
           # prints, so a rename fails loudly instead of passing vacuously.
           $ro = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce' -EA SilentlyContinue
           if ($ro -and ($ro.PSObject.Properties.Name -contains '*WIN11_SecurityAudit_resume')) { throw 'RunOnce resume value exists after a -readonly run' }
-          Write-Host 'read-only field test: proven on this runner.'
+          # The audit wrote nothing into its own folder: the stick copy is exactly
+          # what make_usb_stick put there, so a write-protected stick works and
+          # the reduced file set was enough.
+          $vf = (& .\tools\make_usb_stick.ps1 -ToFolder $stickRoot -ManifestStore $store -Verify *>&1 | ForEach-Object { "$_" }) -join "`n"
+          Write-Host $vf
+          if ($LASTEXITCODE -ne 0) { throw 'the audit changed files in its own folder (make_usb_stick -Verify differs) -- a write-protected stick would break' }
+          Write-Host 'read-only field test: proven on this runner, run from a stick-equivalent copy that it left unchanged.'
 
       # The report prints ~176 " Command: <X>" lines -- "here is how to check
       # this yourself". lint_report_echo proves each one PARSES. Parsing is not

@@ -537,6 +537,25 @@ before the first helper; anything but `ok|FullLanguage` prints
 `AUDIT NOT PERFORMED` with the evidence and exits 1. Found by reading, while
 writing `docs\second-machine.md`; CI plants both conditions.
 
+**A USB stick carries the tool; it is never formatted or booted by us.**
+`tools\make_usb_stick.ps1` copies only: no Format-Volume, diskpart or bcdboot
+(its self-test checks the AST), because picking the wrong disk erases it and a
+copy cannot. It accepts only a USB-bus disk that is not the boot/system disk,
+leaves the plant harness off (named), copies file contents so Mark of the Web
+cannot travel, and keeps the stick's SHA-256 manifest on the LAPTOP: whatever
+comes back on the stick, its manifest included, may have been rewritten by the
+machine it visited. For the same reason the checker never travels on the stick
+and refuses to run from the target, a walk of the stick never follows any
+reparse point (check the ROOT itself before Test-Path, which follows links),
+and `-Refresh` deletes only files the laptop manifest lists, and only when the
+copy is unchanged -- a returned stick can hold the owner's results or evidence. Booting is out on purpose: the audit checks the running
+Windows, so a booted stick would audit itself; Windows' own bootable stick has
+no PowerShell; and boot changes can push a BitLocker PC into recovery. And
+OneDrive Files On-Demand marks ordinary synced files as reparse points, so a
+walk that refuses "any reparse point" refuses the owner's checkout -- refuse
+LINKS (`LinkType` SymbolicLink/Junction) in the source, every reparse point on
+the stick.
+
 ### A section and the dashboard must not contradict each other (REQUIRED)
 
 One field report said both things about the same six `brave.exe` processes:

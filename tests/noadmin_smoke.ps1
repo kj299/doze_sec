@@ -247,6 +247,26 @@ try {
     $ledger1File = Get-NewestFile -Dir $outDir1 -Filter 'SecurityReport_*.ledger'
     $ledger1 = if ($ledger1File) { @(Get-Content -LiteralPath $ledger1File.FullName -EA SilentlyContinue) } else { @() }
 
+    # The console log of a -noAdmin run belongs in the user's own SecurityAudit
+    # folder, beside the report. It used to go to C:\SecurityAudit whatever the
+    # token, so a standard-user run that promises to write only its own output
+    # folder also created a folder at the root of C:. "-noAdmin -help" stops
+    # right after the wrapper has opened the log, so this costs seconds.
+    $tLog = (Get-Date).AddSeconds(-2)
+    $logOut = Join-Path $env:TEMP 'dz_noadmin_consolelog_out.txt'
+    $pl = Start-Process -FilePath $env:ComSpec -ArgumentList '/c', ('"{0}" -noAdmin -help' -f $bat) `
+        -Credential $cred -LoadUserProfile -WorkingDirectory $repo `
+        -RedirectStandardOutput $logOut -RedirectStandardError ($logOut + '.err') -PassThru
+    $null = $pl.Handle
+    if (-not $pl.WaitForExit(120000)) { & taskkill /T /F /PID $pl.Id 2>$null | Out-Null; throw 'the "-noAdmin -help" console-log run hung' }
+    $userLogs = @(Get-ChildItem -LiteralPath $outDir1 -Filter 'AuditConsole_*.log' -EA SilentlyContinue | Where-Object { $_.LastWriteTime -ge $tLog })
+    $rootLogs = @(Get-ChildItem -LiteralPath 'C:\SecurityAudit' -Filter 'AuditConsole_*.log' -EA SilentlyContinue | Where-Object { $_.LastWriteTime -ge $tLog })
+    Assert ($userLogs.Count -ge 1) ("a -noAdmin run's console log lands in the user's own folder ({0})" -f $outDir1) `
+        ("no new AuditConsole_*.log under {0} after a -noAdmin run (console output: {1})" -f $outDir1, ((Get-Content -LiteralPath $logOut -EA SilentlyContinue | Select-Object -First 3) -join ' | '))
+    Assert ($rootLogs.Count -eq 0) 'a -noAdmin run writes no console log at C:\SecurityAudit' `
+        ("a -noAdmin run wrote {0} at C:\SecurityAudit -- outside the folder a standard-user run promises to write" -f (($rootLogs | ForEach-Object { $_.Name }) -join ', '))
+    Remove-Item -LiteralPath $logOut, ($logOut + '.err') -Force -EA SilentlyContinue
+
     # field_test's own verdict on the standard-user path: exit 0, no [FAIL]
     # line, and its proof lines actually executed (not skipped).
     Assert ($ft1.Exit -eq 0) 'field_test.ps1 (the script a person runs) passed on the standard-user path' `
