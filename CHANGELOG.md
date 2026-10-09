@@ -6,6 +6,23 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### The USB stick script asks which drive
+Run `tools\make_usb_stick.ps1` with no drive letter and it lists the drives.
+Only the USB sticks it would accept get a number. Every other drive is listed
+with the reason it is not offered: the Windows disk, a disk not on the USB bus,
+a stick that already holds the tool (`-Refresh` replaces that copy, `-Verify`
+checks it). The person types a number, then that drive's letter to confirm.
+Nothing is written before that, and a wrong answer, an empty one or `Q` writes
+nothing. With `-Verify` it offers the sticks that hold `doze_sec`, including a
+write-protected one, since reading back needs no write. In a window that cannot
+ask (`powershell -NonInteractive`) it stops at once and names the `-Drive`
+form. It never waits. `-Drive E:` still skips the questions. Self-tested with
+injected answers (18 cases). Three mutations each fail the self-test:
+numbering refused drives, skipping the confirmation, and offering a stick with
+no copy to verify. On the Windows runner, CI checks that `-ListCandidates`
+refuses the system drive. It also checks that the picker run non-interactively
+exits 1 within two minutes without copying.
+
 ### The USB stick from a download is the stick CI tests; a re-identified stick still verifies
 The owner tried to make the stick before the PR adding the script was merged,
 so the script was not in their checkout. Making it from GitHub's Download ZIP
@@ -48,7 +65,7 @@ the tree in a nested folder, and runs the script with `-ExecutionPolicy Bypass
 -File` as a person does. It asserts that no bare LF and no mark reached the
 stick. field_test then runs from that stick with every existing assertion. A
 copy in a new place must verify by content, and a copy that was also changed
-must read UNVERIFIED (exit 2). The self-test grows to 85 cases on Windows.
+must read UNVERIFIED (exit 2). The self-test grows to 85 cases on Windows (103 with the drive picker below).
 Five mutations each fail it: normalisation limited to batch files again, no
 content fallback, a match that ignores differences, the NUL guard removed, and
 no root ranking.

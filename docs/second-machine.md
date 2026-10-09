@@ -41,15 +41,17 @@ security settings. Bring them back unrun so they can be reviewed.
 ## Step 1: put the tool on a USB stick (on your own laptop)
 
 The repository is private, and the other machine needs neither git nor a
-GitHub login. Open PowerShell **as administrator** on your laptop, go to your
-`doze_sec` folder, and run (use your stick's letter):
+GitHub login. Plug the stick in, open PowerShell **as administrator** on your
+laptop, go to your `doze_sec` folder, and run:
 
 ```
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1 -ListCandidates
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1 -Drive E:
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1
 ```
 
-It accepts only a drive on the USB bus that is not your Windows disk, and it
+It lists your drives and numbers only the USB sticks it accepts; every other
+drive is shown with the reason it is not offered. Type your stick's number,
+then its letter to confirm; nothing is written before that. (`-Drive E:` names
+the stick instead of asking.) It accepts only a drive on the USB bus that is not your Windows disk, and it
 **never formats anything**. It copies the tool to `E:\doze_sec`, leaves off
 `.git`, the test harness and itself (named as it goes -- the harness must never
 reach someone else's PC, and the checker you run later must never be one that
@@ -70,8 +72,7 @@ folder, and the default destination adds another. Then:
 ```
 $t = "C:\Users\<name>\Downloads\doze_sec-<branch>\tools\make_usb_stick.ps1"
 Test-Path $t
-powershell -NoProfile -ExecutionPolicy Bypass -File $t -ListCandidates
-powershell -NoProfile -ExecutionPolicy Bypass -File $t -Drive E:
+powershell -NoProfile -ExecutionPolicy Bypass -File $t
 ```
 
 `Test-Path` must print `True` first. The script writes every text file with
@@ -207,8 +208,11 @@ the RunOnce key, the boot configuration and the restore points.
 
   ```
   cd C:\path\to\your\doze_sec
-  powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1 -Drive E: -Verify
+  powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1 -Verify
   ```
+
+  With no drive named it lists the sticks that hold `doze_sec` and asks which
+  one to check (`-Drive E: -Verify` names it).
 
   It compares `E:\doze_sec` with the manifest kept on your laptop -- never the
   copy on the stick, which the visited PC could have rewritten -- and lists any
@@ -226,9 +230,10 @@ the RunOnce key, the boot configuration and the restore points.
   see exactly what changed.
 - Move `E:\results\` to your laptop and delete it from the stick before the
   stick goes anywhere else: those reports are that PC's private data. If the
-  tool verified unchanged, `-Drive E: -Refresh` (the same command with
-  `-Refresh` in place of `-Verify`) then makes a fresh copy. It deletes only files this laptop wrote,
-  and refuses if anything in `E:\doze_sec` changed.
+  tool verified unchanged, `-Refresh` (the same command with `-Refresh` in
+  place of `-Verify`; it asks which stick too) then makes a fresh copy. It
+  deletes only files this laptop wrote, and refuses if anything in
+  `E:\doze_sec` changed.
 - Read the `.txt` report first. The `.html` was written by the PC you were
   checking; if you suspect that PC, do not open its `.html` in your browser.
 - **Never run anything from the stick on your own laptop** -- the remediation

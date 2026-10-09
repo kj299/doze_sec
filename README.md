@@ -307,13 +307,19 @@ File Explorer, right-click the drive, **Format**, choose **exFAT**, **Start**.
 stick and that it holds nothing you need -- a stick locked by BitLocker or
 formatted on a Mac also looks unreadable -- before you click Start.**
 
-Open PowerShell as administrator (the script asks Windows which bus each disk
-is on), go to your `doze_sec` checkout, and run (use your stick's letter):
+Plug the stick in, open PowerShell as administrator (the script asks Windows
+which bus each disk is on), go to your `doze_sec` checkout, and run:
 
 ```
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1 -ListCandidates
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1 -Drive E:
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1
 ```
+
+It lists your drives. Only the USB sticks it accepts get a number; every other
+drive is listed with the reason it is not offered (your Windows disk, a disk
+not on the USB bus, a stick that already holds the tool). Type the number of
+your stick, then type its letter to confirm. Nothing is written before that,
+and a wrong answer or `Q` writes nothing. `-Drive E:` names the stick and skips
+the questions; `-ListCandidates` only lists the drives.
 
 **No git on this laptop, or the change you want is not merged yet?** The script
 needs no git. On GitHub, open the branch, **Code**, **Download ZIP**, then in
@@ -326,13 +332,13 @@ expect. Check before you run, and use the full path:
 ```
 $t = "C:\Users\<name>\Downloads\doze_sec-<branch>\tools\make_usb_stick.ps1"
 Test-Path $t
-powershell -NoProfile -ExecutionPolicy Bypass -File $t -Drive E:
+powershell -NoProfile -ExecutionPolicy Bypass -File $t
 ```
 
 The stick is the same either way: the script writes every text file with
 Windows line endings, which a download does not have.
 
-`-ListCandidates` only lists drives, and changes nothing. `-Drive E:`:
+Whichever way you pick the stick, the script:
 
 - accepts only a drive on the **USB bus** that is not the disk Windows started
   from and not the Windows drive. It **never formats, partitions or writes boot
@@ -401,8 +407,11 @@ console output says which policy; send it.
 
   ```
   cd C:\path\to\your\doze_sec
-  powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1 -Drive E: -Verify
+  powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1 -Verify
   ```
+
+  With no drive named it lists the sticks that hold `doze_sec` and asks which
+  one to check (`-Drive E: -Verify` names it).
 
   It compares the stick with the manifest kept on your laptop -- never the
   copy on the stick, which the visited PC could have rewritten -- and lists any
@@ -420,9 +429,10 @@ console output says which policy; send it.
   `-Manifest "<the path it lists>"` to see exactly what changed.
 - Move `E:\results\` to your laptop and delete it from the stick before the
   stick goes anywhere else: those reports are the visited PC's private data.
-  If the tool verified unchanged, `-Drive E: -Refresh` (the same command with
-  `-Refresh` in place of `-Verify`) then makes a fresh copy for the next PC. It deletes only files this
-  laptop wrote, and refuses if anything in `E:\doze_sec` changed.
+  If the tool verified unchanged, `-Refresh` (the same command with `-Refresh`
+  in place of `-Verify`; it asks which stick too) then makes a fresh copy for
+  the next PC. It deletes only files this laptop wrote, and refuses if
+  anything in `E:\doze_sec` changed.
 - Read the **.txt** report. The .html was written by the PC you were checking;
   if you suspect that PC, do not open its .html in your browser.
 - **Never run anything from the stick on your own laptop.** That includes the

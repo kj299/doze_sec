@@ -253,8 +253,12 @@ RUNNING FROM A USB STICK
   1. MAKE THE STICK (on your own laptop, PowerShell as administrator, in your
      doze_sec checkout):
 
-       powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1 -ListCandidates
-       powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1 -Drive E:
+       powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1
+
+     It lists your drives and numbers only the USB sticks it accepts (every
+     other drive is shown with the reason). Type the number, then the drive
+     letter to confirm; nothing is written before that. -Drive E: names the
+     stick instead; -ListCandidates only lists.
 
      It accepts only a drive on the USB bus that is not the Windows disk, and
      it NEVER formats anything. It copies the tool to E:\doze_sec without
@@ -270,7 +274,7 @@ RUNNING FROM A USB STICK
      GitHub: the branch, Code, Download ZIP; Extract All with the destination
      set to the folder the ZIP is in (the ZIP holds its own folder, and the
      default destination adds another). Then Test-Path the script's full path
-     (...\doze_sec-<branch>\tools\make_usb_stick.ps1) and run the commands
+     (...\doze_sec-<branch>\tools\make_usb_stick.ps1) and run the command
      above with that path. Every text file goes onto the stick with Windows
      line endings, which a download lacks, so the stick is the same.
 
@@ -293,7 +297,9 @@ RUNNING FROM A USB STICK
      this laptop (the -Verify command the make run printed, or from your
      checkout) -- never anything from the stick:
 
-       powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1 -Drive E: -Verify
+       powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1 -Verify
+
+     (with no drive named it asks which stick to check; -Drive E: names it)
 
      Any tool file the visited PC changed, any link, and any new file at the
      stick root that could run is listed -- that is itself worth reporting;

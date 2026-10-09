@@ -5,6 +5,11 @@
 # is on the stick.
 #
 # WHAT IT DOES
+#   (no drive named)     lists the drives, numbers only the USB sticks this
+#                        script accepts (every other drive is shown with the
+#                        reason it is not offered), asks which one, and asks
+#                        you to type that drive's letter before it writes.
+#                        With -Verify or -Refresh it asks the same way.
 #   -Drive E:            copies the tool into E:\doze_sec, reads every file back,
 #                        and writes a SHA-256 manifest -- one copy kept on this
 #                        laptop, one on the stick.
@@ -142,9 +147,11 @@ function Get-StickVerdict {
     #   -Volume  object with DriveLetter, FileSystem, DriveType, UniqueId,
     #            SizeRemaining (Get-Volume); $null when it could not be read
     #   -Context @{ SystemDrive = 'C'; ProtectedPaths = @(...); LookupError = '' }
+    #   -ForReading  the volume will only be read (-Verify): write protection
+    #            and the file system are then no reason to refuse
     # Returns @{ Ok; Reasons = @(); Info = @() }. Fails closed: anything it
     # cannot establish is a reason to refuse.
-    param($Disk, $Volume, [hashtable]$Context)
+    param($Disk, $Volume, [hashtable]$Context, [switch]$ForReading)
     $reasons = New-Object System.Collections.Generic.List[string]
     $info = New-Object System.Collections.Generic.List[string]
     $busOk = $false
@@ -163,7 +170,7 @@ function Get-StickVerdict {
         if ($Disk.IsBoot)     { $reasons.Add('this is the disk Windows booted from') }
         if ($Disk.IsSystem)   { $reasons.Add('this disk holds the system partition') }
         if ($Disk.IsOffline)  { $reasons.Add('the disk is offline') }
-        if ($Disk.IsReadOnly) { $reasons.Add('the disk is read-only (a write-protect switch?) -- turn protection off to make the stick, back on afterwards if you like') }
+        if ($Disk.IsReadOnly -and -not $ForReading) { $reasons.Add('the disk is read-only (a write-protect switch?) -- turn protection off to make the stick, back on afterwards if you like') }
     }
     if ($null -eq $Volume) {
         if (-not ($Context -and $Context.LookupError)) { $reasons.Add('could not read the volume') }
@@ -184,7 +191,7 @@ function Get-StickVerdict {
         # File-system advice only for a USB disk: for any other disk the bus
         # reason already refuses it, and format advice there is how a person is
         # talked into erasing a data drive.
-        if ($busOk) {
+        if ($busOk -and -not $ForReading) {
             $fs = [string]$Volume.FileSystem
             if ($fs -in @('FAT', 'FAT32', 'exFAT', 'NTFS')) {
                 # fine
@@ -210,6 +217,106 @@ function Test-SelfOnTarget {
     $a = ($ScriptRoot.TrimEnd('\', '/') + '\') -replace '/', '\'
     $b = ($Outer.TrimEnd('\', '/') + '\') -replace '/', '\'
     return $a.StartsWith($b, [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Format-Size {
+    param($Bytes)
+    if ($null -eq $Bytes) { return '?' }
+    $b = [double]$Bytes
+    if ($b -ge 1GB) { return ('{0:N1} GB' -f ($b / 1GB)) }
+    return ('{0:N0} MB' -f ($b / 1MB))
+}
+
+function Get-PickerRow {
+    # PURE. One lettered volume as the drive picker shows it.
+    #   -Mode 'make'    put the tool on it: offered when Get-StickVerdict
+    #                   accepts it and it does not already hold doze_sec
+    #                   (copying never overwrites a copy)
+    #         'refresh' replace a copy there: offered when Get-StickVerdict
+    #                   accepts it
+    #         'verify'  check the copy there: offered when it holds doze_sec
+    #                   and passes the same rule read-only (a write-protected
+    #                   stick reads back fine)
+    #   -HasTool  something named doze_sec is at its root
+    # Returns @{ Letter; Offer; Reasons; Name; Bus; FileSystem; Size; Free }.
+    param([string]$Letter, $Disk, $Volume, [hashtable]$Context, [string]$Mode = 'make', [bool]$HasTool = $false)
+    $v = Get-StickVerdict $Disk $Volume $Context -ForReading:($Mode -eq 'verify')
+    $reasons = New-Object System.Collections.Generic.List[string]
+    foreach ($r in $v.Reasons) { $reasons.Add($r) }
+    if ($Mode -eq 'verify' -and -not $HasTool) { $reasons.Add('it holds no doze_sec folder to check') }
+    if ($Mode -eq 'make' -and $HasTool) { $reasons.Add('it already holds doze_sec -- run with -Refresh to replace that copy, or -Verify to check it') }
+    $size = $null
+    if ($Volume -and $Volume.PSObject.Properties['Size']) { $size = $Volume.Size } elseif ($Disk) { $size = $Disk.Size }
+    return @{
+        Letter     = ([string]$Letter).Trim().TrimEnd(':').ToUpper()
+        Offer      = ($reasons.Count -eq 0)
+        Reasons    = $reasons.ToArray()
+        Name       = $(if ($Disk -and $Disk.FriendlyName) { [string]$Disk.FriendlyName } else { '?' })
+        Bus        = $(if ($Disk) { ConvertTo-BusName $Disk.BusType } else { '?' })
+        FileSystem = $(if ($Volume -and $Volume.FileSystem) { [string]$Volume.FileSystem } else { '?' })
+        Size       = $size
+        Free       = $(if ($Volume) { $Volume.SizeRemaining } else { $null })
+    }
+}
+
+function Invoke-StickPicker {
+    # Shows the drives, asks which one, then asks the person to type that
+    # drive's letter before anything is written. Returns the letter, or '' when
+    # nothing was chosen. Only an offered drive has a number; a refused one is
+    # listed with its reason and cannot be picked, by number or by letter.
+    # -Ask reads one answer (Read-Host) and -Say prints one line (Write-Host);
+    # the self-test injects both. A window that cannot ask (powershell
+    # -NonInteractive) returns '' and names the -Drive form to use instead.
+    param([object[]]$Rows, [string]$Mode = 'make', [scriptblock]$Ask, [scriptblock]$Say)
+    $offer = @($Rows | Where-Object { $_.Offer })
+    $refused = @($Rows | Where-Object { -not $_.Offer })
+    $what = switch ($Mode) { 'verify' { 'check' } 'refresh' { 'refresh' } default { 'put the tool on' } }
+    if ($offer.Count -gt 0) {
+        & $Say ('Drives this script can ' + $what + ':')
+        for ($i = 0; $i -lt $offer.Count; $i++) {
+            $o = $offer[$i]
+            & $Say ('  [{0}]  {1}:  {2}  ({3}, {4}, {5}, {6} free)' -f ($i + 1), $o.Letter, $o.Name, $o.Bus, $o.FileSystem, (Format-Size $o.Size), (Format-Size $o.Free))
+        }
+    }
+    if ($refused.Count -gt 0) {
+        & $Say 'Not offered:'
+        foreach ($r in $refused) {
+            & $Say ('        {0}:  {1}  ({2}, {3})' -f $r.Letter, $r.Name, $r.Bus, $r.FileSystem)
+            foreach ($x in $r.Reasons) { & $Say ('              - ' + $x) }
+        }
+    }
+    if ($offer.Count -eq 0) {
+        & $Say ('No drive this script can ' + $what + ' was found. Nothing was written.')
+        & $Say '  Plug the USB stick in (unlock it first if it uses BitLocker) and run this again. If every drive says'
+        & $Say '  its disk could not be identified, use PowerShell as administrator.'
+        return ''
+    }
+    $pick = $null
+    for ($try = 1; $try -le 3 -and -not $pick; $try++) {
+        try { $a = & $Ask ('Type the number of the drive (1-' + $offer.Count + '), or Q to quit') }
+        catch {
+            & $Say ('This window cannot ask (' + $_.Exception.Message + '). Nothing was written.')
+            & $Say ('  Name the drive instead, for example: -Drive ' + $offer[0].Letter + ':')
+            return ''
+        }
+        $a = ([string]$a).Trim()
+        if ($a -eq '' -or $a -ieq 'q') { & $Say 'Nothing chosen. Nothing was written.'; return '' }
+        $n = 0
+        if ([int]::TryParse($a, [ref]$n) -and $n -ge 1 -and $n -le $offer.Count) { $pick = $offer[$n - 1] }
+        else { & $Say ('"' + $a + '" is not one of the numbers above.') }
+    }
+    if (-not $pick) { & $Say 'No drive chosen after 3 tries. Nothing was written.'; return '' }
+    $L = $pick.Letter
+    & $Say ('You chose {0}:  {1}  ({2}, {3}).' -f $L, $pick.Name, $pick.FileSystem, (Format-Size $pick.Size))
+    switch ($Mode) {
+        'verify'  { & $Say ('This will check ' + $L + ':\doze_sec against the manifest kept on this laptop. It only reads the drive.') }
+        'refresh' { & $Say ('This will replace the copy in ' + $L + ':\doze_sec -- only if it is still exactly what this laptop wrote; anything else stops it, nothing deleted.') }
+        default   { & $Say ('This will copy the tool into ' + $L + ':\doze_sec. Nothing on the drive is formatted or erased; the files already on it stay.') }
+    }
+    try { $c = & $Ask ('Type ' + $L + ' to go ahead, anything else to cancel') }
+    catch { & $Say ('This window cannot ask (' + $_.Exception.Message + '). Nothing was written.'); return '' }
+    if (([string]$c).Trim().TrimEnd(':') -ine $L) { & $Say 'Cancelled. Nothing was written.'; return '' }
+    return $L
 }
 
 function Get-RelPath {
@@ -649,6 +756,20 @@ function Get-LiveTarget {
     return $r
 }
 
+function Get-LivePickerRows {
+    param([string]$Mode)
+    $rows = New-Object System.Collections.Generic.List[object]
+    foreach ($vol in (Get-Volume | Where-Object { $_.DriveLetter } | Sort-Object DriveLetter)) {
+        $l = [string]$vol.DriveLetter
+        $lt = Get-LiveTarget $l
+        # Anything named doze_sec counts, a link included: -Verify reports a
+        # link there, and a copy never writes over one.
+        $has = ((Get-EntryState ($l + ':\' + $script:StickFolder)) -ne 'missing')
+        $rows.Add((Get-PickerRow -Letter $l -Disk $lt.Disk -Volume $lt.Volume -Context (Get-LiveContext $lt.Error) -Mode $Mode -HasTool $has))
+    }
+    return ,$rows.ToArray()
+}
+
 function Get-LiveContext {
     param([string]$Err)
     return @{
@@ -724,6 +845,53 @@ if ($SelfTest) {
     T 'a USB disk reporting Fixed is accepted, with an INFO line (the bus decides)' ($v.Ok -and ($v.Info -join ' ') -match 'bus decides') (($v.Reasons + $v.Info) -join '; ')
     $v = Get-StickVerdict $null $null @{ SystemDrive = 'C:'; ProtectedPaths = @(); LookupError = 'Access denied' }
     T 'a lookup error refuses and suggests an elevated window' ((-not $v.Ok) -and ($v.Reasons -join ' ') -match 'elevated') ($v.Reasons -join '; ')
+
+    # --- the drive picker ------------------------------------------------------
+    # Answers come from a script-scoped queue and printed lines go to a
+    # script-scoped list (a plain scriptblock sees script scope on 5.1; a
+    # closure would not -- see CLAUDE.md on GetNewClosure).
+    function Pick { param([object[]]$Rows, [string]$Mode = 'make', [string[]]$Answers)
+        $script:PickQ = New-Object System.Collections.Generic.Queue[string]
+        foreach ($x in $Answers) { $script:PickQ.Enqueue($x) }
+        $script:PickSaid = New-Object System.Collections.Generic.List[string]
+        $script:PickAsked = 0
+        $letter = Invoke-StickPicker -Rows $Rows -Mode $Mode -Ask { param($p) $script:PickAsked++; if ($script:PickQ.Count -eq 0) { throw 'no more answers' }; $script:PickQ.Dequeue() } -Say { param($l) $script:PickSaid.Add($l) }
+        return @{ Letter = $letter; Said = ($script:PickSaid -join "`n"); Asked = $script:PickAsked }
+    }
+    $rowC = Get-PickerRow -Letter 'C' -Disk (D -Bus 'NVMe' -Boot $true -Sys $true) -Volume (V -L 'C' -Fs 'NTFS' -Dt 'Fixed') -Context $ctx
+    $rowE = Get-PickerRow -Letter 'E' -Disk (D) -Volume (V -L 'E') -Context $ctx
+    $rowF = Get-PickerRow -Letter 'F' -Disk (D) -Volume (V -L 'F' -Fs 'FAT32') -Context $ctx
+    T 'the picker offers a USB stick and refuses the Windows disk, with its reasons' ($rowE.Offer -and -not $rowC.Offer -and ($rowC.Reasons -join ' ') -match 'Windows drive' -and ($rowC.Reasons -join ' ') -match 'NVMe') ($rowC.Reasons -join '; ')
+    $r = Pick @($rowC, $rowE) 'make' @('1', 'E')
+    T 'one stick: number 1, then its letter, chooses it' ($r.Letter -eq 'E' -and $r.Asked -eq 2) ($r.Letter + ' asked=' + $r.Asked)
+    T 'a refused drive is listed with its reason and has no number' ($r.Said -match '(?m)^\s+C:\s' -and $r.Said -match 'Windows drive' -and $r.Said -notmatch '\[\d\]\s+C:') $r.Said
+    T 'the confirmation says nothing is formatted or erased' ($r.Said -match 'Nothing on the drive is formatted or erased') $r.Said
+    $r = Pick @($rowC, $rowE, $rowF) 'make' @('2', 'f')
+    T 'two sticks: the second number and a lower-case letter choose the second' ($r.Letter -eq 'F') $r.Letter
+    $r = Pick @($rowC, $rowE) 'make' @('9', 'x', '1', 'E:')
+    T 'a wrong number is asked again; the letter may be typed with a colon' ($r.Letter -eq 'E' -and $r.Asked -eq 4 -and $r.Said -match '"9" is not one of the numbers') ($r.Letter + ' asked=' + $r.Asked)
+    $r = Pick @($rowC, $rowE) 'make' @('C', '0', '7')
+    T 'three wrong answers -- typing a refused drive''s letter is one -- choose nothing' ($r.Letter -eq '' -and $r.Said -match 'after 3 tries' -and $r.Said -match 'Nothing was written') $r.Said
+    $r = Pick @($rowE) 'make' @('q')
+    T 'Q quits and nothing is written' ($r.Letter -eq '' -and $r.Said -match 'Nothing was written') $r.Said
+    $r = Pick @($rowE) 'make' @('')
+    T 'an empty answer quits too (an accidental Enter writes nothing)' ($r.Letter -eq '') $r.Letter
+    $r = Pick @($rowE, $rowF) 'make' @('1', 'F')
+    T 'confirming with a different letter cancels' ($r.Letter -eq '' -and $r.Said -match 'Cancelled') $r.Said
+    $r = Pick @($rowC) 'make' @('1', 'C')
+    T 'with no acceptable drive nothing is asked at all' ($r.Letter -eq '' -and $r.Asked -eq 0 -and $r.Said -match 'No drive this script can put the tool on was found') ($r.Said)
+    $r = Pick @($rowE) 'make' @()
+    T 'a window that cannot ask chooses nothing and names the -Drive form' ($r.Letter -eq '' -and $r.Said -match 'cannot ask' -and $r.Said -match '-Drive E:') $r.Said
+    $rowHas = Get-PickerRow -Letter 'E' -Disk (D) -Volume (V -L 'E') -Context $ctx -Mode 'make' -HasTool $true
+    T 'making: a stick that already holds doze_sec is not offered, and the reason names -Refresh and -Verify' ((-not $rowHas.Offer) -and ($rowHas.Reasons -join ' ') -match '-Refresh' -and ($rowHas.Reasons -join ' ') -match '-Verify') ($rowHas.Reasons -join '; ')
+    T 'refreshing: the same stick is offered' ((Get-PickerRow -Letter 'E' -Disk (D) -Volume (V -L 'E') -Context $ctx -Mode 'refresh' -HasTool $true).Offer) ''
+    $roV = Get-PickerRow -Letter 'E' -Disk (D -Ro $true) -Volume (V -L 'E') -Context $ctx -Mode 'verify' -HasTool $true
+    $roM = Get-PickerRow -Letter 'E' -Disk (D -Ro $true) -Volume (V -L 'E') -Context $ctx -Mode 'make'
+    T 'checking: a write-protected stick holding doze_sec is offered (reading back is fine); making on it is refused' ($roV.Offer -and -not $roM.Offer) (($roV.Reasons + $roM.Reasons) -join '; ')
+    T 'checking: a stick with no doze_sec is not offered' (-not (Get-PickerRow -Letter 'E' -Disk (D) -Volume (V -L 'E') -Context $ctx -Mode 'verify' -HasTool $false).Offer) ''
+    T 'checking: the boot disk is refused even when it holds doze_sec' (-not (Get-PickerRow -Letter 'E' -Disk (D -Boot $true) -Volume (V -L 'E') -Context $ctx -Mode 'verify' -HasTool $true).Offer) ''
+    $r = Pick @($roV) 'verify' @('1', 'E')
+    T 'checking: the confirmation says it only reads the drive' ($r.Letter -eq 'E' -and $r.Said -match 'only reads the drive') $r.Said
 
     T 'ConvertTo-Letter accepts E, E: and E:\' ((ConvertTo-Letter 'e') -eq 'E' -and (ConvertTo-Letter 'E:') -eq 'E' -and (ConvertTo-Letter 'E:\') -eq 'E') ''
     $threw = $false; try { [void](ConvertTo-Letter 'E:\stuff') } catch { $threw = $true }
@@ -967,9 +1135,16 @@ if ($ListCandidates) {
     exit 0
 }
 
-if (($Drive -and $ToFolder) -or (-not $Drive -and -not $ToFolder)) {
-    Write-Output 'Usage: make_usb_stick.ps1 -Drive E: [-Verify | -Refresh]   or   -ToFolder <dir> [-Verify | -Refresh]   or   -ListCandidates   or   -SelfTest'
+if (($Drive -and $ToFolder) -or ((-not $Drive) -and (-not $ToFolder) -and (-not $script:OnWindows))) {
+    Write-Output 'Usage: make_usb_stick.ps1 [-Drive E:] [-Verify | -Refresh]   or   -ToFolder <dir> [-Verify | -Refresh]   or   -ListCandidates   or   -SelfTest'
+    Write-Output '  With no -Drive it lists the drives, numbers the USB sticks it accepts, and asks which one.'
     exit 1
+}
+if (-not $Drive -and -not $ToFolder) {
+    $pmode = if ($Verify) { 'verify' } elseif ($Refresh) { 'refresh' } else { 'make' }
+    $picked = Invoke-StickPicker -Rows (Get-LivePickerRows $pmode) -Mode $pmode -Ask { param($q) Read-Host $q } -Say { param($l) Write-Host $l }
+    if (-not $picked) { exit 1 }
+    $Drive = $picked + ':'
 }
 
 $outer = ''
