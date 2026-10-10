@@ -97,6 +97,13 @@ Windows (CRLF) checkout. It now runs on Windows too. It also found that "a
 gap never counts as a match" was claimed but not asserted. It is asserted
 now, with a mutation that adds `IOC_HITS+=1` to a gap read.
 
+CI's first Windows run then failed on the new test itself, before it checked
+anything. Its repo root came from `$PSCommandPath` in a `param()` default,
+which Windows PowerShell 5.1 leaves empty when a script is run with
+`powershell -File`. pwsh 7 fills it in, so every Linux run had passed. The
+root is now derived in the script body from `$PSScriptRoot`. CLAUDE.md
+records the rule.
+
 ### Sections 18a, 18f and 18g: one matcher that cannot read clean on failure, and plants that prove 18a and 18f fire
 No test had ever planted a positive 18a match (a running process named on
 `ioc_processes.txt`) or 18f match (a C2 domain from `ioc_domains.txt` in the

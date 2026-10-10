@@ -52,11 +52,18 @@
 param(
     [ValidateSet('Missing', 'Shipped', 'Run')]
     [string]$Mode = 'Missing',
-    [string]$Root = (Split-Path -Parent (Split-Path -Parent $PSCommandPath)),
+    [string]$Root = '',
     [string]$ListDir = '',
     [string[]]$Sections = @(),
     [switch]$SelfTest
 )
+
+# The root is derived here, not as the param default: Windows PowerShell 5.1
+# run with -File leaves $PSCommandPath empty while the param block is
+# evaluated (CI's first run of this script died on exactly that), and
+# $PSScriptRoot is set by the time the body runs (tests\field_test.ps1 does
+# the same).
+if (-not $Root) { $Root = Split-Path -Parent $PSScriptRoot }
 
 # Continue, not Stop: on 5.1 a native command's redirected stderr under Stop is
 # a terminating error, and the blocks print errors on purpose (on Linux every

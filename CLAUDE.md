@@ -465,6 +465,13 @@ So, in every `.ps1`:
   cases were asserting on. They only failed because the assertion checks the
   **reason**, not just the verdict. Assert on `Why`, not only `Bucket`.
 
+- **No `$PSCommandPath` in a `param()` default of a script run with
+  `powershell -File`.** Windows PowerShell 5.1 leaves it empty while the param
+  block is evaluated; pwsh 7 does not. `tests\section18_gaps.ps1` derived its
+  repo root that way, passed every Linux run, and died on its first Windows
+  run before checking anything. Derive paths in the body from `$PSScriptRoot`
+  (as `field_test.ps1` does), or have the caller pass them.
+
 ```
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\lint_ps51_portability.ps1
 ```
