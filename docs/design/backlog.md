@@ -518,3 +518,18 @@ writes no marker, so its check reads OK. A stick made by `make_usb_stick.ps1`
 carries file contents only and is immune. A checkout is not. Proposed:
 exec_probe counts Zone.Identifier streams on `tools\*.ps1` and declares a gap
 when any is marked and the policy is RemoteSigned.
+
+## IOC process and DNS-cache matches have never fired in a test (found 2026-10-09)
+
+While checking the stick's line endings, a search found no test that plants a
+process name from `ioc_processes.txt` or puts a domain from `ioc_domains.txt`
+in the DNS cache (threat_list_seed's self-test only uses `ioc_domains.txt` as a
+seeding fixture). Section 18a (a running process whose name is on the list) and
+Section 18f (a C2 domain in the DNS cache) have never been exercised with a
+positive match, by CI or by the plant harness. Both read their list with `findstr /i /g:`, which is sensitive to
+line endings and has documented quirks with several search strings, so "it
+should match" is a claim nobody has checked. Next piece: plant a process
+started from a copy of a harmless binary renamed to a listed name, and a DNS
+cache entry for a listed domain (HOSTS-free, e.g. a resolver-side record), on
+the CI runner only. Each gets a benign twin that must not raise. Assert that
+each reaches the ledger under its own section and technique.

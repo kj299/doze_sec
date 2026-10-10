@@ -6,6 +6,135 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### The USB stick: an adversarial review of this PR, every finding fixed before merge
+Five lenses, each finding re-checked by a skeptic. All 24 findings held, some
+at lower severity; none deleted anything this laptop had not written or
+touched another disk. The ones that mattered for trust:
+- **A rollback read `[OK]`.** A visited machine could put back an OLDER copy
+  this laptop once wrote: the files and that copy's manifest, saved on an
+  earlier visit. If the stick came home under a new volume ID, the content
+  fallback found the old manifest and printed "exactly what this laptop put
+  there". `-Refresh` would then delete the evidence. `-Refresh` now retires
+  the manifest of the copy it replaces (`<file>.superseded`; the store lists
+  `*.sha256` only), so an old copy never matches again. The self-test plays
+  the attack through: v1 made, refreshed to v2, the saved v1 put back. It
+  reads UNVERIFIED under a new ID and shows differences under the old one.
+- **The root record was chosen by how little it reported.** Among exact
+  matches, the fallback preferred the manifest whose stick-root record hid
+  the most, so another stick's record could hide a planted `EFI\BOOT` file.
+  Matching on the stick's own manifest copy removes the choice: one stick,
+  one manifest, its own root record.
+- **The stick's own manifest copy was never checked.** -Verify ignored it and
+  -Refresh deleted it whatever it held. It is now compared byte for byte with
+  the laptop's: rewritten is `[CHANGED]`, missing is `[REMOVED]`, and -Refresh
+  refuses either way.
+- **A link or a file in place of `doze_sec`, under a new ID,** got "There are
+  no manifests" and exit 2, even when the store held manifests. It now
+  always reads `[LINK]` or `[CHANGED]` plus the evidence warning, exit 1.
+  Remove-StickCopy checks for a link before anything else.
+- **`-Manifest` accepted a file on the stick itself.** That is now refused.
+  With an empty store, the message says "this laptop cannot vouch for this
+  copy: do not run it".
+
+Smaller fixes:
+- PowerShell turns an exception thrown by a property getter into `$null`, so
+  `FileInfo.Attributes` on a BitLocker-locked or unrecognised volume read 0, an
+  ordinary file. The picker therefore offered an unreadable stick for checking.
+  `Get-EntryState` now calls `[IO.File]::GetAttributes` and returns
+  `unreadable`, and the picker refuses such a drive with that reason.
+- `-Refresh` with no exact match now lists the candidates and deletes
+  nothing. It used to say "this laptop holds no manifest".
+- The picker offers `-Refresh` only for sticks that hold a copy.
+- A failed drive listing in a window that is not elevated says so and names
+  `-Drive E:`.
+- The printed `-Verify` command carries the resolved folder (and
+  `-ManifestStore`), so it really works from any folder.
+- The content-match note says why the stick was matched by its files: a new
+  port, an unreadable volume, or a moved folder.
+- The stick is read once per check, and files are hashed by stream. Matching
+  against many manifests no longer re-reads the stick for each, and a planted
+  huge file cannot exhaust memory.
+
+Docs: the ZIP folder is `doze_sec-` plus the branch name with `/` turned into
+`-` (`doze_sec-claude-code-review-3qcjyn`). The no-argument `-Verify` needs an
+administrator window; `-Drive E: -Verify` works in a normal one. Three
+mutations of the new safeguards each fail the self-test: a retired manifest
+still listed, the manifest copy not compared when matching by content, and the
+link checked after the missing-manifest case.
+
+### The USB stick script asks which drive
+Run `tools\make_usb_stick.ps1` with no drive letter and it lists the drives.
+Only the USB sticks it would accept get a number. Every other drive is listed
+with the reason it is not offered: the Windows disk, a disk not on the USB bus,
+a stick that already holds the tool (`-Refresh` replaces that copy, `-Verify`
+checks it). The person types a number, then that drive's letter to confirm.
+Nothing is written before that, and a wrong answer, an empty one or `Q` writes
+nothing. With `-Verify` it offers the sticks that hold `doze_sec`, including a
+write-protected one, since reading back needs no write. In a window that cannot
+ask (`powershell -NonInteractive`) it stops at once and names the `-Drive`
+form. It never waits. `-Drive E:` still skips the questions. Self-tested with
+injected answers (18 cases, 20 with the review fixes above). Three mutations each fail the self-test:
+numbering refused drives, skipping the confirmation, and offering a stick with
+no copy to verify. On the Windows runner, CI checks that `-ListCandidates`
+refuses the system drive. It also checks that the picker run non-interactively
+exits 1 within two minutes without copying.
+
+### The USB stick from a download is the stick CI tests; a re-identified stick still verifies
+The owner tried to make the stick before the PR adding the script was merged,
+so the script was not in their checkout. Making it from GitHub's Download ZIP
+instead was then checked by reading the code (two tracers, seven skeptics and
+a completeness critic, reading only). The route works, and the check turned up
+four things, all fixed here. None of them deleted anything or vouched for a
+changed stick:
+- **Line endings.** Only `.bat`/`.cmd` were written with CRLF. From a ZIP,
+  which carries the repo's LF endings, every `.ps1` and `.txt` reached the stick
+  LF-only. A Windows checkout, the only thing CI ever built a stick from, is
+  CRLF throughout. findstr's `$` anchor needs a CR, so Section 18i printed a
+  stray blank line, and `findstr /g:` had never been run against an LF-only
+  list. Every text file (an extension allowlist; a file holding a NUL byte is
+  left alone) is now written with CRLF. The conversion is byte-exact through
+  Latin-1, safe for UTF-8, and much faster than the old per-byte loop.
+- **A stick with a new volume ID.** `-Verify` found the laptop manifest only by
+  volume ID. Windows can give a stick with no serial number a new ID in another
+  USB port, and the stick then read `[UNVERIFIED] ... make the stick again`. A
+  failed volume lookup was swallowed with the same result. `-Verify` and
+  `-Refresh` now fall back to the newest laptop manifest the copy matches
+  exactly, and say so. "Exactly" counts every file AND the stick's own copy of
+  that manifest, byte for byte. That copy is what makes a stick's manifest its
+  own: two sticks made from the same checkout hold the same files, but each
+  holds a different manifest. No exact match gives `[UNVERIFIED]` (exit 2),
+  never a TAMPERED verdict against a manifest that may belong to another
+  stick. The message lists every laptop manifest with its difference count
+  (or why it was not compared) and points to `-Manifest`. A manifest that
+  cannot be read is now listed with its reason; it used to be skipped in
+  silence.
+- **Which guide, where the results go.** The make run's last lines name the
+  guide on the stick (`E:\doze_sec\docs\second-machine.md`); an older checkout
+  can hold an older guide that has no warning about the results folder. They
+  also say to bring results back outside `E:\doze_sec`, since anything added
+  there reads as tampering.
+- **The ZIP route is documented**, including the trap that sends a first run
+  to the same "does not exist" error: the ZIP holds its own top folder, and
+  Extract All's default destination adds another.
+
+CI: the read-only job now builds its stick from a `git archive` with
+autocrlf off. It asserts the source really is LF-only, so the step cannot pass
+on a source that tests nothing. It plants Mark of the Web on every file, puts
+the tree in a nested folder, and runs the script with `-ExecutionPolicy Bypass
+-File` as a person does. It asserts that no bare LF and no mark reached the
+stick. field_test then runs from that stick with every existing assertion. A
+copy in a new place must verify by content, and a copy that was also changed
+must read UNVERIFIED (exit 2). The self-test grows to 84 cases on Windows (82
+on Linux, where the 3 stream cases skip and the case-collision case runs);
+113 on Windows with the drive picker and the review fixes below.
+Five mutations each fail it: normalisation limited to batch files again, no
+content fallback, a match that ignores differences, the NUL guard removed, and
+no root ranking.
+
+Found while reading, not fixed here: no test has ever planted a process name
+from `ioc_processes.txt` (Section 18a) or a domain from `ioc_domains.txt` in
+the DNS cache (Section 18f). Both detections have never fired in a test.
+
 ### Carry the tool on a USB stick; two defects found on the way
 README, readMe.txt and docs/second-machine.md now explain how to put doze_sec
 on a USB stick with tools built into Windows, and how to run it from there.
