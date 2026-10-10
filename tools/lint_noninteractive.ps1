@@ -52,24 +52,46 @@ $script:Generators = @{ 'tools\ttp_merge.ps1' = 3 }
 # The program token, followed (not consumed) by whitespace and a switch.
 $script:ExeRx = '(?i)("%PWSH%"|%PWSH%|!PWSH!|"?\bpowershell(\.exe)?"?|"?\bpwsh(\.exe)?"?)(?=\s+-)'
 # The switch that ends PowerShell's own options: everything after -File is the
-# script's, everything after -Command is the command. (-EncodedCommand takes
-# one value and switches may follow it, so it does not end them.)
-$script:PayloadRx = '(?i)\s-(File|Command|f|c)\b'
+# script's, everything after -Command is the command, in any abbreviation
+# powershell.exe accepts (-c, -com, -fi...). (-EncodedCommand takes one value
+# and switches may follow it, so it does not end them.)
+$script:PayloadRx = '(?i)\s-(c(o(m(m(a(n(d)?)?)?)?)?)?|f(i(l(e)?)?)?)\b'
+# The same program token for a generator, whose launch lines sit inside
+# PowerShell strings with escaped quotes around %PWSH%.
+$script:GenExeRx = '(?i)(%PWSH%|!PWSH!|\bpowershell(\.exe)?\b|\bpwsh(\.exe)?\b)\W{0,3}(?=\s+-)'
 # A line that runs a helper or a staged block: it must hold a launch.
 $script:RunsRx = '(?i)-File\s+"(%SCRIPT_DIR%tools\\|%PSRUN%)'
 
 function Test-Printed {
     # Pure. Is the launch at $Index printed text rather than run? Yes when an
     # echo comes earlier on the line and nothing between them starts another
-    # command: an unquoted & or | that is not escaped with ^.
+    # command: an unquoted & or | that is not escaped with ^, or -- when the
+    # echo opened a ( group -- the ) that closes it.
     param([string]$Line, [int]$Index)
     $before = $Line.Substring(0, $Index)
-    $e = [regex]::Matches($before, '(?i)(^|[\s(&|@])echo([\s.(:]|$)')
+    $e = [regex]::Matches($before, '(?i)(^|[\s(&|@])echo([\s.(:/,;=+\[\]]|$)')
     if ($e.Count -eq 0) { return $false }
     $last = $e[$e.Count - 1]
     $between = $before.Substring($last.Index + $last.Length)
     $bare = ($between -replace '\^.', '') -replace '"[^"]*"', ''
-    return ($bare -notmatch '[&|]')
+    if ($bare -match '[&|]') { return $false }
+    if ($last.Groups[1].Value -eq '(' -and $bare -match '\)') { return $false }
+    return $true
+}
+
+function Get-CommandSegments {
+    # Pure. The [start, end) spans of a line's commands: cut at each & or |
+    # that is not inside double quotes and not escaped with ^.
+    param([string]$Line)
+    $spans = @(); $start = 0; $inq = $false
+    for ($i = 0; $i -lt $Line.Length; $i++) {
+        $ch = $Line[$i]
+        if (-not $inq -and $ch -eq '^') { $i++; continue }
+        if ($ch -eq '"') { $inq = -not $inq; continue }
+        if (-not $inq -and ($ch -eq '&' -or $ch -eq '|')) { $spans += ,@($start, $i); $start = $i + 1 }
+    }
+    $spans += ,@($start, $Line.Length)
+    return ,$spans
 }
 
 function Get-PowerShellLaunches {
@@ -95,8 +117,18 @@ function Get-PowerShellLaunches {
             $cont = ($l -match '\^\s*$')
             $out += @{ Line = ($i + 1); Text = $l.Trim(); Has = ($has -and -not $cont); Late = $late; Cont = $cont; Unread = $false }
         }
-        if ($ms.Count -eq 0 -and $l -match $script:RunsRx -and -not (Test-Printed $l ($l.Length))) {
-            $out += @{ Line = ($i + 1); Text = $l.Trim(); Has = $false; Late = $false; Cont = $false; Unread = $true }
+        # Backstop, per command on the line: one that runs a helper or a staged
+        # block but holds no launch the scanner read. A set value is not run.
+        if ($l -match $script:RunsRx -and $l -notmatch '(?i)^\s*set\s') {
+            foreach ($sp in (Get-CommandSegments $l)) {
+                $a = $sp[0]; $z = $sp[1]
+                $seg = $l.Substring($a, $z - $a)
+                if ($seg -notmatch $script:RunsRx) { continue }
+                if (@($ms | Where-Object { $_.Index -ge $a -and $_.Index -lt $z }).Count -gt 0) { continue }
+                if (Test-Printed $l $z) { continue }
+                $out += @{ Line = ($i + 1); Text = $l.Trim(); Has = $false; Late = $false; Cont = $false; Unread = $true }
+                break
+            }
         }
     }
     return $out
@@ -134,12 +166,23 @@ function Invoke-Lint {
         $p = Join-Path $Dir $g
         if (-not (Test-Path -LiteralPath $p)) { $defects += ('{0}: not found' -f $g); continue }
         $gl = @(Get-Content -LiteralPath $p)
-        $hits = @(for ($i = 0; $i -lt $gl.Count; $i++) { if ($gl[$i] -notmatch '^\s*#' -and $gl[$i] -match '%PWSH%\W{0,3}\s+-NoProfile') { $i } })
-        $counts[$g] = $hits.Count
-        if ($hits.Count -lt $script:Generators[$g]) { $defects += ('{0}: only {1} generated PowerShell launch line(s) found, expected at least {2} -- the check is reading nothing' -f $g, $hits.Count, $script:Generators[$g]) }
-        foreach ($i in $hits) {
-            if ($gl[$i] -notmatch '-NoProfile -NonInteractive') { $defects += ('{0}:{1}: a launch line this script writes into a batch file the bats call has no -NonInteractive right after -NoProfile' -f $g, ($i + 1)) }
+        $n = 0
+        for ($i = 0; $i -lt $gl.Count; $i++) {
+            if ($gl[$i] -match '^\s*#') { continue }
+            $gm = @([regex]::Matches($gl[$i], $script:GenExeRx))
+            for ($k = 0; $k -lt $gm.Count; $k++) {
+                $n++
+                $end = $gl[$i].Length
+                if ($k + 1 -lt $gm.Count) { $end = $gm[$k + 1].Index }
+                $after = $gl[$i].Substring($gm[$k].Index + $gm[$k].Length, $end - ($gm[$k].Index + $gm[$k].Length))
+                $cut = [regex]::Match($after, $script:PayloadRx)
+                $head = $after
+                if ($cut.Success) { $head = $after.Substring(0, $cut.Index) }
+                if ($head -notmatch '(?i)\s-NonInteractive\b') { $defects += ('{0}:{1}: a launch line this script writes into a batch file the bats call has no -NonInteractive before -File/-Command' -f $g, ($i + 1)) }
+            }
         }
+        $counts[$g] = $n
+        if ($n -lt $script:Generators[$g]) { $defects += ('{0}: only {1} generated PowerShell launch line(s) found, expected at least {2} -- the check is reading nothing' -f $g, $n, $script:Generators[$g]) }
     }
     return @{ Defects = $defects; Counts = $counts }
 }
@@ -205,6 +248,8 @@ if ($SelfTest) {
             '@echo  Command: powershell -NoProfile -Command "Get-Date">> "%REPORT%"',
             'echo  Command: powershell -Command "Get-Process | Select-Object -First 1">> "%REPORT%"',
             'echo Get-Date ^| Out-String ^& powershell -NoProfile -File x.ps1 >> "%PSRUN%"',
+            'set "X=-File "%SCRIPT_DIR%tools\x.ps1""',
+            'echo/ powershell -NoProfile -File x.ps1>> "%REPORT%"',
             'where powershell >nul 2>&1',
             'rem powershell -NoProfile -File x.ps1',
             ':: "%PWSH%" -NoProfile -File x.ps1',
@@ -226,7 +271,10 @@ if ($SelfTest) {
             @{ N = 'a launch chained after an echo with an unquoted | is run, not printed, and fails'; L = 'echo x | "%PWSH%" -NoProfile -Command -'; Want = 'starts without -NonInteractive' },
             @{ N = 'a launch chained after an echo with & fails'; L = 'echo hi & "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%"'; Want = 'starts without -NonInteractive' },
             @{ N = 'two launches on one line cannot share one flag'; L = '"%PWSH%" -NoProfile -ExecutionPolicy Bypass & "%PWSH%" -NoProfile -NonInteractive -Command "Get-Date"'; Want = 'starts without -NonInteractive' },
-            @{ N = 'a launch continued onto the next line with ^ fails'; L = '"%PWSH%" -NoProfile -NonInteractive ^'; Want = 'continued onto the next line' }
+            @{ N = 'a launch continued onto the next line with ^ fails'; L = '"%PWSH%" -NoProfile -NonInteractive ^'; Want = 'continued onto the next line' },
+            @{ N = 'a launch after an echo that a closing ) ended fails'; L = 'if exist x (echo found) else "%PWSH%" -NoProfile -File "%PSRUN%">> "%REPORT%"'; Want = 'starts without -NonInteractive' },
+            @{ N = 'an unreadable launch beside a readable one on the same line fails'; L = '"%PWSH%" -NoProfile -NonInteractive -File a.ps1 & %DZPS% -NoProfile -File "%SCRIPT_DIR%tools\x.ps1"'; Want = 'no PowerShell launch the scanner can read' },
+            @{ N = 'an abbreviated -Com ends the options, so a flag inside the command does not count'; L = '"%PWSH%" -NoProfile -Com "Write-Output -NonInteractive"'; Want = 'comes after -File or -Command' }
         )
         foreach ($c in $more) {
             Reset-Copy
@@ -248,6 +296,10 @@ if ($SelfTest) {
         Set-Content -LiteralPath (Join-Path $work 'tools\ttp_merge.ps1') -Value $mut -Encoding ASCII
         $r = Invoke-Lint $work
         T 'a generated launch line without the flag fails' ($script:hit -eq 1 -and @($r.Defects | Where-Object { $_ -match 'ttp_merge\.ps1:\d+: a launch line this script writes' }).Count -eq 1) ($r.Defects -join ' | ')
+        $mut2 = @($gsrc) + @('                "powershell -NoProfile -ExecutionPolicy Bypass -File `"%PSRUN%`""')
+        Set-Content -LiteralPath (Join-Path $work 'tools\ttp_merge.ps1') -Value $mut2 -Encoding ASCII
+        $r = Invoke-Lint $work
+        T 'a generated launch written as powershell, not %PWSH%, is checked too' (@($r.Defects | Where-Object { $_ -match 'ttp_merge\.ps1:\d+: a launch line this script writes' }).Count -eq 1) ($r.Defects -join ' | ')
     } finally {
         Remove-Item -LiteralPath $work -Recurse -Force -EA SilentlyContinue
     }

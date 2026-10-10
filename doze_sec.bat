@@ -554,7 +554,9 @@ if not exist "%OUTDIR%\ThreatLists" mkdir "%OUTDIR%\ThreatLists" 2>nul
 :: left a per-user copy of ioc_registry.txt behind the |BadValue column, and it
 :: reported UAC ON and LSASS PPL ON as registry IOCs (2026-09-24).
 if exist "%SCRIPT_DIR%tools\threat_list_seed.ps1" (
-    powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\threat_list_seed.ps1" -ShippedDir "%SCRIPT_DIR%ThreatLists" -RuntimeDir "%OUTDIR%\ThreatLists" >nul 2>&1
+    rem -SkipGeneratedChecks: this early call reports nothing, so the CTI checks file is left
+    rem for the INIT call, whose output reaches the report.
+    powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\threat_list_seed.ps1" -ShippedDir "%SCRIPT_DIR%ThreatLists" -RuntimeDir "%OUTDIR%\ThreatLists" -SkipGeneratedChecks >nul 2>&1
 ) else (
     for %%f in (ioc_processes.txt ioc_named_pipes.txt ioc_services.txt ioc_registry.txt ioc_file_paths.txt ioc_scheduled_tasks.txt ioc_domains.txt ioc_hashes.txt ioc_lolbins.txt ttp_manifest.txt) do (
         if not exist "%OUTDIR%\ThreatLists\%%f" if exist "%SCRIPT_DIR%ThreatLists\%%f" copy /y "%SCRIPT_DIR%ThreatLists\%%f" "%OUTDIR%\ThreatLists\" >nul 2>&1

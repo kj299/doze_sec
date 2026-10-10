@@ -25,7 +25,10 @@ The CTI checks `-updateTTP` generates are launched too, from
 writes them with the flag. The file is appended to, so lines written by
 earlier runs stay as they were; `threat_list_seed.ps1`, which reconciles the
 runtime ThreatLists on every run, gives those lines the flag. It changes only
-the inserted flag, byte for byte, and prints how many lines it changed.
+the inserted flag, byte for byte. It writes beside the file and swaps it in,
+so a failed write leaves the original whole, and it prints how many lines it
+changed. On `-updateTTP` the early, unreported call skips the file, so the
+change shows in the report.
 
 `tools\lint_noninteractive.ps1` fails on any launch without the flag. It also
 fails on a launch with the flag after `-File` or `-Command`: PowerShell hands

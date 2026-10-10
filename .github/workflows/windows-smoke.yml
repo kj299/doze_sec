@@ -2315,7 +2315,7 @@ jobs:
           $st = (.\tools\threat_list_seed.ps1 -SelfTest) -join "`n"
           if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'threat_list_seed.ps1 -SelfTest failed' }
           $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($nst -lt 20) { throw "threat_list_seed self-test ran only $nst case(s)" }
+          if ($nst -lt 25) { throw "threat_list_seed self-test ran only $nst case(s)" }
           Write-Host "threat_list_seed -SelfTest OK ($nst cases)"
           # Live: the SHIPPED lists against a runtime copy of ioc_registry.txt that
           # lacks the BadValue column -- the exact file the field run read.
@@ -2326,16 +2326,20 @@ jobs:
           # added -NonInteractive: the launch line must get the flag, every other
           # byte must stay, and the report must say so.
           $gen = Join-Path $rt 'ttp_generated_checks.bat'
-          $genOld = ":: --- CTI block ---`r`necho Get-Date > `"%PSRUN%`"`r`n`"%PWSH%`" -NoProfile -ExecutionPolicy Bypass -File `"%PSRUN%`">> `"%REPORT%`" 2>&1`r`n"
-          [IO.File]::WriteAllText($gen, $genOld, [Text.Encoding]::ASCII)
+          # A non-ASCII byte (0xE9) and an LF-only line: a text-mode rewrite
+          # would change one of them, so the check below is byte-exact.
+          $L1 = [Text.Encoding]::GetEncoding(28591)
+          $genOld = ":: --- CTI block Caf" + [char]0xE9 + " ---`r`necho Get-Date > `"%PSRUN%`"`n`"%PWSH%`" -NoProfile -ExecutionPolicy Bypass -File `"%PSRUN%`">> `"%REPORT%`" 2>&1`r`n"
+          [IO.File]::WriteAllBytes($gen, $L1.GetBytes($genOld))
           $out = (.\tools\threat_list_seed.ps1 -ShippedDir .\ThreatLists -RuntimeDir $rt) -join "`n"
           Write-Host $out
           if ($out -notmatch 'ioc_registry\.txt: runtime copy replaced by the release baseline') { throw 'the stale registry list was not replaced' }
           if (-not (Select-String -Path (Join-Path $rt 'ioc_registry.txt') -Pattern 'EnableLUA\|0' -Quiet)) { throw 'the replaced file does not carry the release BadValue column' }
           if ($out -notmatch '9 seeded, 1 replaced') { throw "expected the nine other lists seeded and one replaced: $out" }
           if ($out -notmatch 'ttp_generated_checks\.bat: 1 PowerShell launch line\(s\) written by an earlier -updateTTP now run -NonInteractive') { throw "the old generated CTI launch was not reported as given the flag: $out" }
-          $genNew = [IO.File]::ReadAllText($gen)
-          if ($genNew -ne ($genOld -replace '-NoProfile -ExecutionPolicy', '-NoProfile -NonInteractive -ExecutionPolicy')) { throw "the generated CTI file changed beyond the inserted flag: $genNew" }
+          $genWant = [Convert]::ToBase64String($L1.GetBytes(($genOld -creplace '-NoProfile -ExecutionPolicy', '-NoProfile -NonInteractive -ExecutionPolicy')))
+          $genGot = [Convert]::ToBase64String([IO.File]::ReadAllBytes($gen))
+          if ($genGot -cne $genWant) { throw ("the generated CTI file changed beyond the inserted flag: {0}" -f $L1.GetString([IO.File]::ReadAllBytes($gen))) }
           Remove-Item $rt -Recurse -Force -EA SilentlyContinue
           exit 0
 
