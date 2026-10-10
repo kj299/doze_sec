@@ -493,16 +493,22 @@ regex reported six defects across four files on its first run. A lint people
 learn to work around is worse than no lint. `-SelfTest` proves it fails on each
 class **and stays quiet on the prose**. CI runs it in `lint.yml`.
 
-**A path never goes between single quotes in PowerShell the bats build.**
+**A path never goes into the PowerShell the bats build as pasted text.**
 A user named O'Brien has `C:\Users\O'Brien`, and `%TEMP%`, `%APPDATA%` and
 a standard user's whole output folder live under it. `$scf='%SUMCODE%'` was
-then a parse error, and that user got no dashboard and no remediation script.
-PowerShell also reads the typographic apostrophe as a quote. Read the path
-from the environment instead (`$env:SUMCODE`; cmd's variables are the child's
-environment). A printed `Command:` line, which a reader pastes, writes
-`'%X:'=''%'` so cmd doubles the apostrophe. `tools\lint_quoted_paths.ps1`
-derives the path variables from the bats' own `set` lines and enforces both
-rules. CI's standard-user account is named `dz o'smoke` for this reason.
+then a parse error, and that user got no dashboard and a remediation script
+holding only the header cmd writes before the dashboard runs. PowerShell also
+reads the typographic apostrophe as a quote. Read the path from the
+environment instead (`$env:SUMCODE`; cmd's variables are the child's
+environment), and never paste it in any quoting. Between single quotes an
+apostrophe ends the string; in double quotes a `$` or a backtick in the path
+is expanded; unquoted, a space splits it. A printed `Command:` line, which a
+reader pastes, writes `'%X:'=''%'` so cmd doubles the apostrophe; the
+variable must be defined, or that substitution leaves stray text that eats
+the line's redirection. `tools\lint_quoted_paths.ps1` derives the path
+variables from the bats' own `set` lines and enforces both rules, in every
+line shape the bats use. CI's standard-user account is named `dz o'smoke` for
+this reason.
 
 **Copied helpers stay identical.** The tools are self-contained on purpose (no
 module imports), so a helper several tools need is copied into each.

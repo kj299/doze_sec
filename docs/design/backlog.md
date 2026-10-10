@@ -535,7 +535,8 @@ lines per script are still exposed, in both scripts:
   `$scnt='%SUMCOUNT%'`, `$rem` / `$enf` / `$und` (the remediation paths) and
   `$lgp='%LEDGER%'`. `SUMCODE` and `SUMCOUNT` live in `%TEMP%`, which is under
   the user's profile even on an elevated run. An affected user gets no
-  dashboard and no remediation script, from either script.
+  dashboard, and a remediation script holding only the header cmd writes
+  before the dashboard runs, from either script.
 - **Section 11's PowerShell history check:**
   `Get-Content '%APPDATA%\...\ConsoleHost_history.txt'`.
 

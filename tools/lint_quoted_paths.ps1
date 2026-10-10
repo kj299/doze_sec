@@ -12,10 +12,14 @@
 # typographic apostrophe as a quote, so O'Brien typed on a phone breaks it too.
 #
 # RULE, both bats:
-#   - In PowerShell source (an echo line written into %PSRUN%, or a line that
-#     runs powershell -Command "..."), a path-valued variable must be read from
-#     the environment ($env:REPORT); cmd's variables are the child's
-#     environment. Pasting %X% or !X! between single quotes fails.
+#   - In PowerShell source (an echo line written into %PSRUN% in any shape --
+#     'echo X >> "%PSRUN%"', 'if ... echo X >> "%PSRUN%"', '>> "%PSRUN%" echo X',
+#     '(echo X)>> "%PSRUN%"' -- or a line that runs powershell -Command "..."),
+#     a path-valued variable must be read from the environment ($env:REPORT);
+#     cmd's variables are the child's environment. Pasting %X%, !X!, %~dp0 or a
+#     for variable's %%~f path fails in ANY quoting: between single quotes an
+#     apostrophe ends the string; in a double-quoted string a $ or a backtick
+#     in the path is expanded; unquoted, a space splits the argument.
 #   - In a printed Command: line, which a reader pastes, a path-valued
 #     variable between single quotes must be written %X:'=''%: cmd doubles any
 #     apostrophe, and a doubled apostrophe is a literal one inside a
@@ -80,7 +84,7 @@ function Get-PathVars {
 }
 
 function Get-QuotedRefs {
-    # The variable references inside single-quoted spans of $Text, as
+    # The variable references inside single-quoted spans of a printed line, as
     # @{ Name; Form } with Form 'plain' (%X% or !X!) or 'doubled' (%X:'=''%).
     param([string]$Text)
     $out = @()
@@ -90,6 +94,55 @@ function Get-QuotedRefs {
         $body = $span.Groups[1].Value
         foreach ($m in [regex]::Matches($body, '@@DOUBLED_([A-Za-z_][A-Za-z0-9_]*)@@')) { $out += @{ Name = $m.Groups[1].Value; Form = 'doubled' } }
         foreach ($m in [regex]::Matches($body, '[%!]([A-Za-z_][A-Za-z0-9_]*)(?::[^%!]*)?[%!]')) { $out += @{ Name = $m.Groups[1].Value; Form = 'plain' } }
+    }
+    return $out
+}
+
+function Get-CodePayload {
+    # The PowerShell a line hands to PowerShell, or $null when it hands none:
+    # the text an echo writes into %PSRUN% (whatever shape the line has), or
+    # the -Command "..." argument.
+    param([string]$Line)
+    if ($Line -match '>>?\s*"%PSRUN%"' -and $Line -match '(?i)\becho[\s(.]') {
+        $t = [regex]::Replace($Line, '>>?\s*"%PSRUN%"', '')
+        $m = [regex]::Match($t, '(?i)\becho[\s(.](.*)$')
+        if ($m.Success) { return $m.Groups[1].Value }
+        return $null
+    }
+    # \" is powershell.exe's escaped quote inside the -Command argument, so it
+    # belongs to the payload rather than ending it.
+    $m = [regex]::Match($Line, '(?i)-Command\s+"((?:\\"|[^"])*)"')
+    if ($m.Success) { return $m.Groups[1].Value }
+    return $null
+}
+
+function Get-CodeRefs {
+    # Every path-like reference in a PowerShell payload, as @{ Name; State }
+    # with State 'single', 'double' or 'none' (unquoted). %~dp0-style argument
+    # modifiers and %%~f for-variable modifiers are paths by construction and
+    # carry the name '~'.
+    param([string]$Payload)
+    $out = @()
+    $rx = [regex]'%~[a-zA-Z]*[0-9]|%%~[a-zA-Z]*[A-Za-z]|[%!]([A-Za-z_][A-Za-z0-9_]*)(?::[^%!]*)?[%!]'
+    $state = 'none'
+    $j = 0
+    while ($j -lt $Payload.Length) {
+        $m = $rx.Match($Payload, $j)
+        if ($m.Success -and $m.Index -eq $j) {
+            $name = if ($m.Groups[1].Success) { $m.Groups[1].Value } else { '~' }
+            $out += @{ Name = $name; State = $state; Text = $m.Value }
+            $j += $m.Length
+            continue
+        }
+        $ch = $Payload[$j]
+        if ($state -eq 'none') {
+            if ($ch -eq "'") { $state = 'single' } elseif ($ch -eq '"') { $state = 'double' }
+        } elseif ($state -eq 'single') {
+            if ($ch -eq "'") { if ($j + 1 -lt $Payload.Length -and $Payload[$j + 1] -eq "'") { $j++ } else { $state = 'none' } }
+        } else {
+            if ($ch -eq '`') { $j++ } elseif ($ch -eq '"') { $state = 'none' }
+        }
+        $j++
     }
     return $out
 }
@@ -105,16 +158,27 @@ function Get-Defects {
         $l = $lines[$i]
         if (Test-Comment $l) { continue }
         $isDisplay = ($l -match '^\s*echo\s+Command:')
-        $isCode = (-not $isDisplay) -and (($l -match '^\s*echo\s.*>>?\s*"%PSRUN%"\s*$') -or ($l -match '(?i)-Command\s+"'))
-        if (-not ($isDisplay -or $isCode)) { continue }
-        if ($isDisplay) { $nDisp++ } else { $nCode++ }
-        foreach ($r in (Get-QuotedRefs $l)) {
-            if (-not $vars.ContainsKey($r.Name.ToUpperInvariant())) { continue }
-            if ($isCode) {
-                $bad += ("{0}:{1}: PowerShell source pastes the path %{2}% between single quotes -- an apostrophe in it (C:\Users\O'Brien) ends the string and the whole script never runs; read `$env:{2}" -f $Name, ($i + 1), $r.Name)
-            } elseif ($r.Form -eq 'plain') {
-                $bad += ("{0}:{1}: the printed Command: line pastes the path %{2}% between single quotes, so a reader whose path holds an apostrophe cannot run it; write %{2}:'=''%" -f $Name, ($i + 1), $r.Name)
+        if ($isDisplay) {
+            $nDisp++
+            foreach ($r in (Get-QuotedRefs $l)) {
+                if (-not $vars.ContainsKey($r.Name.ToUpperInvariant())) { continue }
+                if ($r.Form -eq 'plain') {
+                    $bad += ("{0}:{1}: the printed Command: line pastes the path %{2}% between single quotes, so a reader whose path holds an apostrophe cannot run it; write %{2}:'=''%" -f $Name, ($i + 1), $r.Name)
+                }
             }
+            continue
+        }
+        $payload = Get-CodePayload $l
+        if ($null -eq $payload) { continue }
+        $nCode++
+        foreach ($r in (Get-CodeRefs $payload)) {
+            if ($r.Name -ne '~' -and -not $vars.ContainsKey($r.Name.ToUpperInvariant())) { continue }
+            $why = switch ($r.State) {
+                'single' { "between single quotes, where an apostrophe in it (C:\Users\O'Brien) ends the string" }
+                'double' { 'in a double-quoted string, where a $ or a backtick in it is expanded' }
+                default  { 'unquoted, where a space in it (C:\Users\Mary Smith) splits the argument' }
+            }
+            $bad += ("{0}:{1}: PowerShell source pastes the path {2} {3}, and the whole script then fails; read it from the environment (`$env:NAME)" -f $Name, ($i + 1), $r.Text, $why)
         }
     }
     return @{ Bad = $bad; Code = $nCode; Display = $nDisp; Vars = $vars }
@@ -153,14 +217,28 @@ if ($SelfTest) {
     T 'the shipped doze_sec.bat passes' ($d.Count -eq 0) ($d -join ' | ')
     T 'a state value between single quotes stays quiet (the dashboard reads PPL_STATE that way)' ($base.Contains("echo `$v='%PPL_STATE%'")) 'the PPL_STATE line moved; pick another state-value line'
     foreach ($c in @(
-        @{ L = 'the dashboard SUMCODE back between quotes'; F = 'echo $scf=$env:SUMCODE >> "%PSRUN%"'; T = "echo `$scf='%SUMCODE%' >> `"%PSRUN%`""; Need = 'pastes the path %SUMCODE%' },
-        @{ L = 'the census REPORT back between quotes'; F = '-LiteralPath $env:REPORT -Pattern'; T = "-LiteralPath '%REPORT%' -Pattern"; Need = 'pastes the path %REPORT%' },
-        @{ L = 'the Section 11 history APPDATA back between quotes'; F = "Get-Content -LiteralPath (Join-Path `$env:APPDATA 'Microsoft"; T = "Get-Content -LiteralPath ('%APPDATA%\Microsoft"; Need = 'pastes the path %APPDATA%' },
+        @{ L = 'the dashboard SUMCODE back between quotes'; F = 'echo $scf=$env:SUMCODE >> "%PSRUN%"'; T = "echo `$scf='%SUMCODE%' >> `"%PSRUN%`""; Need = 'pastes the path %SUMCODE% between single quotes' },
+        @{ L = 'the census REPORT back between quotes'; F = '-LiteralPath $env:REPORT -Pattern'; T = "-LiteralPath '%REPORT%' -Pattern"; Need = 'pastes the path %REPORT% between single quotes' },
+        @{ L = 'the Section 11 history APPDATA back between quotes'; F = "Get-Content -LiteralPath (Join-Path `$env:APPDATA 'Microsoft"; T = "Get-Content -LiteralPath ('%APPDATA%\Microsoft"; Need = 'pastes the path %APPDATA% between single quotes' },
         @{ L = 'a printed 18e Command: line without the apostrophe doubling'; F = "Get-Content '%IOCDIR:'=''%\ioc_scheduled_tasks.txt'"; T = "Get-Content '%IOCDIR%\ioc_scheduled_tasks.txt'"; Need = "write %IOCDIR:'=''%" },
-        @{ L = 'a delayed !REPORT! between quotes'; F = '-LiteralPath $env:REPORT -Pattern'; T = "-LiteralPath '!REPORT!' -Pattern"; Need = 'pastes the path %REPORT%' })) {
+        @{ L = 'a delayed !REPORT! between quotes'; F = '-LiteralPath $env:REPORT -Pattern'; T = "-LiteralPath '!REPORT!' -Pattern"; Need = 'pastes the path !REPORT! between single quotes' },
+        @{ L = 'the census REPORT pasted into a double-quoted string'; F = '-LiteralPath $env:REPORT -Pattern'; T = '-LiteralPath \"%REPORT%\" -Pattern'; Need = 'pastes the path %REPORT% in a double-quoted string' })) {
         $m = Mutate $base $c.F $c.T $c.L
         $d = @((Get-Defects $m 'mutated').Bad)
         T ("{0} fails" -f $c.L) (@($d | Where-Object { $_.Contains($c.Need) }).Count -gt 0) ($d -join ' | ')
+    }
+    # The line shapes the bats use or CLAUDE.md prescribes, each pasting a path.
+    foreach ($c in @(
+        @{ L = "an 'if ... echo ... >> PSRUN' line"; Add = "if `"%IS_ADMIN%`"==`"1`" echo `$p='%TEMP%\x' >> `"%PSRUN%`""; Need = 'pastes the path %TEMP% between single quotes' },
+        @{ L = 'the redirection-first form'; Add = ">> `"%PSRUN%`" echo `$p='%TEMP%\x'"; Need = 'pastes the path %TEMP% between single quotes' },
+        @{ L = "a parenthesised '(echo ...)>> PSRUN' line"; Add = "(echo `$p='%TEMP%\x')>> `"%PSRUN%`""; Need = 'pastes the path %TEMP% between single quotes' },
+        @{ L = 'an unquoted path'; Add = "echo Get-Content -LiteralPath %TEMP%\x >> `"%PSRUN%`""; Need = 'pastes the path %TEMP% unquoted' },
+        @{ L = 'a double-quoted path'; Add = "echo `$p=`"%TEMP%\x`" >> `"%PSRUN%`""; Need = 'pastes the path %TEMP% in a double-quoted string' },
+        @{ L = "a for variable's %%~f path"; Add = "for %%f in (x) do echo `$p='%%~ff' >> `"%PSRUN%`""; Need = "pastes the path %%~ff between single quotes" },
+        @{ L = 'the script folder %~dp0'; Add = "echo `$p='%~dp0tools' >> `"%PSRUN%`""; Need = 'pastes the path %~dp0 between single quotes' })) {
+        $m = $base + "`n" + $c.Add + "`n"
+        $d = @((Get-Defects $m 'mutated').Bad)
+        T ("{0} pasting a path fails" -f $c.L) (@($d | Where-Object { $_.Contains($c.Need) }).Count -gt 0) ($d -join ' | ')
     }
     $m = $base + "`n:: echo `$x='%TEMP%\dz' >> `"%PSRUN%`"`nrem echo `$y='%REPORT%' >> `"%PSRUN%`"`n"
     $d = @((Get-Defects $m 'mutated').Bad)
@@ -181,5 +259,5 @@ if ($all.Count) {
     Write-Output ("FAIL: {0} place(s) where a path can break the PowerShell it is pasted into." -f $all.Count)
     exit 1
 }
-Write-Output '[OK] lint_quoted_paths: no path is pasted between single quotes in the PowerShell either bat runs, and every printed Command: line doubles the apostrophe.'
+Write-Output '[OK] lint_quoted_paths: no path is pasted into the PowerShell either bat runs, quoted or not, and every printed Command: line doubles the apostrophe.'
 exit 0

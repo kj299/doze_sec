@@ -6,7 +6,7 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
-### A user named O'Brien gets a dashboard, a remediation script and a Section 11 history; the [CRITICAL] census counts again
+### A user named O'Brien gets a dashboard, remediation fixes and a Section 11 history; the [CRITICAL] census counts again
 The batch files build PowerShell as text, and wherever they pasted a path
 between single quotes, an apostrophe in it ended the string early. That
 covers `C:\Users\O'Brien`, `Mary O'Brien`, and `O’Brien` typed with a
@@ -16,7 +16,9 @@ five blocks were fixed in #242. A sweep of both scripts found the rest:
 - **The dashboard script** pasted `SUMCODE` and `SUMCOUNT`, which live in
   `%TEMP%` under the user's profile even on an elevated run, plus the three
   remediation paths and the ledger path. For such a user there was no
-  dashboard and no remediation script, from either script.
+  dashboard, from either script. The remediation script still appeared,
+  because cmd writes its safety header before the dashboard runs, but it held
+  only that header: no fixes and no closing lines.
 - **Section 11's PowerShell-history block** pasted `%APPDATA%`, so the
   history was never shown.
 - **The end-of-run `[CRITICAL]`-line census** pasted the report path, which
@@ -29,8 +31,10 @@ five blocks were fixed in #242. A sweep of both scripts found the rest:
   reads its count through a file and `set /p`. When it cannot read a count,
   the alarm says it checked nothing, instead of passing silently.
 - **The elevated script's console-log capture and its `-updateTTP` /
-  `-importTTP` sanitizer** pasted their paths too. The noAdmin script's
-  capture already read its path from the environment.
+  `-importTTP` sanitizer** pasted their paths too. On the elevated script
+  those paths sit under `C:\SecurityAudit`, so no user name reaches them;
+  changing them is hardening, not a fix anyone could have hit. The noAdmin
+  script's capture already read its path from the environment.
 
 Every code site now reads its path from the environment (`$env:REPORT`,
 `Join-Path $env:APPDATA ...`); cmd's variables are the child's environment.
@@ -44,19 +48,31 @@ there, so for that one case the printed line is still not pasteable.
 How it is proven:
 - **`tools\lint_quoted_paths.ps1`** works out which variables hold a path
   from the scripts' own `set` lines, followed to a fixpoint, so a path
-  variable added later is covered. It fails on any of them pasted between
-  single quotes in PowerShell code, and on a printed `Command:` line that
-  does not double the apostrophe. On `main` it reported the 32 sites above.
-  Its `-SelfTest` reverts each fix, and checks that a state value, a comment
-  and a newly added path variable are each handled correctly.
+  variable added later is covered. It fails on any of them pasted into
+  PowerShell code in any quoting. Between single quotes an apostrophe ends
+  the string; in double quotes a `$` or a backtick is expanded; unquoted, a
+  space splits the argument. It covers every line shape the scripts use or
+  CLAUDE.md prescribes (`if ... echo`, redirection first, `(echo ...)`),
+  `%~dp0` and `for`-variable paths. It also fails on a printed `Command:`
+  line that does not double the apostrophe. On `main` it reported the 32
+  sites above. Its `-SelfTest` reverts one fixed site of each kind (the
+  dashboard, the census, the history block, a printed line, the delayed
+  form), and plants each line shape and quoting with a path in it. It checks
+  that a state value, a comment and a newly added path variable are each
+  handled correctly. It does not revert every one of the 32 sites.
   `lint_report_echo` now renders cmd's `%X:'=''%` on a path holding an
   apostrophe before it parses a printed command.
 - **The standard-user CI job's test account is named `dz o'smoke`**, with an
   apostrophe and a space, so that user's report, ledger, remediation scripts,
   `%TEMP%` and `APPDATA` all sit under `C:\Users\dz o'smoke`. Run 1, through
-  `field_test.ps1`, must print the dashboard, write a stage-1 remediation
-  script that parses, and run the census. A PowerShell history planted in the
+  `field_test.ps1`, must print the dashboard, and the dashboard must fill in
+  the stage-1 remediation script: the file must parse and hold the closing
+  line only the dashboard writes. The census must run. A PowerShell history
+  planted in the
   profile before run 2 must show in Section 11.
+  An earlier draft checked only that the remediation file existed and parsed.
+  The review showed that passes on the old code, since cmd writes the header
+  either way.
 - **The full-run job** runs the audit with `TEMP` and `TMP` under
   `C:\dz_ci_o'brien`, and `APPDATA` under `C:\dz ci o'brien`, with a planted
   history. The same three things must hold.

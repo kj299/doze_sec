@@ -118,6 +118,14 @@ set "SCRIPT_PATH=%~dp0%~nx0"
 :: did, on CI, the first time this note was written.)
 set "SCRIPT_DIR=%~dp0"
 set "SCRIPT_FILE=%~nx0"
+:: The printed Command: lines double any apostrophe in APPDATA with cmd's
+:: string substitution, so the pasted PowerShell string stays whole. On an
+:: UNDEFINED variable that substitution does not expand to nothing: it leaves
+:: stray text that eats the line's own redirection into the report. Windows
+:: always sets APPDATA; this makes sure of it. IOCDIR, the other variable
+:: printed that way, is set before use. (No percent sign in this comment:
+:: cmd expands those even here.)
+if not defined APPDATA set "APPDATA=%USERPROFILE%\AppData\Roaming"
 :: Set UPDATE_URL to your GitHub raw base URL to enable self-update checks.
 :: Leave as-is to skip the update check (placeholder is detected and skipped).
 set "UPDATE_URL=https://raw.githubusercontent.com/kj299/doze_sec/main"

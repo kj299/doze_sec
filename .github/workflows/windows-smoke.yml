@@ -3381,7 +3381,7 @@ jobs:
       # into the PowerShell they run, and %TEMP% and %APPDATA% live under the
       # user's profile, so for such a user the dashboard script (in %TEMP%) and
       # Section 11's history block were parse errors that printed nothing: no
-      # dashboard, no remediation script. This run takes TEMP and TMP from a
+      # dashboard, and a remediation script holding only its header. This run takes TEMP and TMP from a
       # folder holding an apostrophe, and APPDATA from one holding an apostrophe
       # and a space ("Mary O'Brien"), with a PowerShell history planted there so
       # Section 11's block really runs. CI only. Touches: C:\dz_ci_o'brien\Temp
@@ -3546,7 +3546,10 @@ jobs:
           $rt = $null; $re = $null
           [void][System.Management.Automation.Language.Parser]::ParseFile($rem.FullName, [ref]$rt, [ref]$re)
           if ($re -and $re.Count) { throw ("the remediation script does not parse: {0}" -f $re[0].Message) }
-          Write-Host ("apostrophe paths: dashboard printed, {0} parses, Section 11 showed the planted history" -f $rem.Name)
+          # cmd writes the script's safety header before the dashboard runs, so
+          # the file existing proves nothing; only the dashboard writes this line.
+          if ([IO.File]::ReadAllText($rem.FullName) -notmatch 'All queued commands applied') { throw 'the remediation script holds only the header cmd writes: the dashboard never filled it in' }
+          Write-Host ("apostrophe paths: dashboard printed and filled in {0}, which parses; Section 11 showed the planted history" -f $rem.Name)
           # THE BITLOCKER TILE STATES SECTION 13'S VERDICT. It re-ran
           # Get-BitLockerVolume until 2026-10-04 -- the sixth tile that measured
           # twice. Section 13's evaluated line and the tile must agree.
