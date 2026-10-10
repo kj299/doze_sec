@@ -960,6 +960,65 @@ jobs:
           if ($ln -match 'AUDIT NOT PERFORMED') { throw "exec_probe wrote a banner on a healthy runner: $ln" }
           Write-Host "exec_probe OK ($st, Mark of the Web verdict $vd)"
 
+      # The bats start every PowerShell with -NonInteractive, so a question
+      # fails at once instead of waiting where nobody sees it (every helper's
+      # output goes to the report, >nul, the console-log tee or a pipe).
+      # Measured here, each in its own console as a person's run would be:
+      # Read-Host without the flag waits; with it before -File it fails at
+      # once; with it AFTER -File it still waits, because PowerShell hands it
+      # to the script (the order tools\lint_noninteractive.ps1 enforces); and a
+      # cmdlet's confirmation (Remove-Item on a folder that holds a file, no
+      # -Recurse) fails at once with the flag and leaves the folder.
+      # Touches: a folder under RUNNER_TEMP only, removed at the end.
+      - name: "-NonInteractive: a question fails at once, the flag after -File protects nothing, a confirmation refuses rather than proceeds"
+        shell: powershell
+        timeout-minutes: 4
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $d = Join-Path $env:RUNNER_TEMP 'dz_noni'
+          $keep = Join-Path $d 'keep'
+          New-Item -ItemType Directory -Path $keep -Force | Out-Null
+          Set-Content -LiteralPath (Join-Path $keep 'child.txt') -Value 'x' -Encoding ASCII
+          $ask = Join-Path $d 'ask.ps1'
+          Set-Content -LiteralPath $ask -Value "`$null = Read-Host 'dz question'" -Encoding ASCII
+          $rm = Join-Path $d 'rm.ps1'
+          Set-Content -LiteralPath $rm -Value ("Remove-Item -LiteralPath '{0}'" -f $keep) -Encoding ASCII
+          # taskkill /T writes to stderr when part of the tree is already gone,
+          # and under Stop on 5.1 a native stderr line throws: Continue here.
+          function Stop-Tree([int]$Id) {
+            $ErrorActionPreference = 'Continue'
+            $null = @(& taskkill /PID $Id /T /F 2>&1)
+            $global:LASTEXITCODE = 0
+          }
+          function Test-Waits([string]$ArgLine) {
+            # Its own console, so a question waits on real console input.
+            $p = Start-Process -FilePath 'powershell.exe' -ArgumentList $ArgLine -WindowStyle Hidden -PassThru
+            $null = $p.Handle
+            $waits = -not $p.WaitForExit(15000)
+            if ($waits) { Stop-Tree $p.Id }
+            return $waits
+          }
+          try {
+            $w1 = Test-Waits ('-NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $ask)
+            $w2 = Test-Waits ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}"' -f $ask)
+            $w3 = Test-Waits ('-NoProfile -ExecutionPolicy Bypass -File "{0}" -NonInteractive' -f $ask)
+            $w4 = Test-Waits ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}"' -f $rm)
+            $kept = Test-Path -LiteralPath (Join-Path $keep 'child.txt')
+            Write-Host ("Read-Host, no flag: {0}" -f $(if ($w1) { 'still waiting after 15 s (killed)' } else { 'exited' }))
+            Write-Host ("Read-Host, -NonInteractive before -File: {0}" -f $(if ($w2) { 'still waiting after 15 s (killed)' } else { 'failed at once' }))
+            Write-Host ("Read-Host, -NonInteractive after -File: {0}" -f $(if ($w3) { 'still waiting after 15 s (killed): the flag went to the script' } else { 'exited' }))
+            Write-Host ("Remove-Item on a folder holding a file, -NonInteractive: {0}; the folder {1}" -f $(if ($w4) { 'still waiting after 15 s (killed)' } else { 'exited at once' }), $(if ($kept) { 'is still there' } else { 'was REMOVED' }))
+            if (-not $w1) { throw 'Read-Host without -NonInteractive did not wait in its own console -- this runner cannot show a question waiting, so nothing here proves the flag matters' }
+            if ($w2) { throw 'Read-Host with -NonInteractive before -File still waited after 15 s' }
+            if (-not $w3) { throw 'with -NonInteractive AFTER -File, Read-Host did not wait -- then the order lint_noninteractive enforces would not matter' }
+            if ($w4) { throw 'Remove-Item on a folder holding a file, with -NonInteractive, still waited after 15 s' }
+            if (-not $kept) { throw 'with -NonInteractive the confirmation was answered yes: the folder was removed -- the flag would make a helper proceed where it used to ask' }
+            Write-Host 'a question fails at once under -NonInteractive placed before -File, and a confirmation refuses rather than proceeds'
+          } finally {
+            Remove-Item -LiteralPath $d -Recurse -Force -EA SilentlyContinue
+          }
+          exit 0
+
       - name: driver_audit.ps1 (BYOVD by hash + unsigned catch-all; renamed cannot evade)
         shell: powershell
         run: |

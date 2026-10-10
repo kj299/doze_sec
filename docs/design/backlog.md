@@ -524,10 +524,13 @@ unseen, first at `threat_list_seed`, which runs before the probe; the probe and
 every helper before it now run `-NonInteractive`. The zones are measured on a
 runner under both policies (windows-smoke, readonly-field-test).
 
-Not taken: `-NonInteractive` on every helper call after the probe. Once the
-probe passes, no helper carries a mark that policy checks, so it would be
-defence in depth against a question from some other cause, across about a
-hundred call sites. Revisit if a field run ever shows a helper waiting.
+`-NonInteractive` on every helper call after the probe was first recorded as
+not taken. DONE 2026-10-10, at the owner's request: every PowerShell either
+bat starts (133 and 127 launches) runs `-NonInteractive` before
+`-File`/`-Command`, enforced by `tools\lint_noninteractive.ps1`. A question
+from any other cause now fails at once with an error in the report: a
+cmdlet's confirmation, a provider bootstrap, a `Read-Host` in a future
+helper. The printed `Command:` lines a person pastes are unchanged.
 
 ## A user name with an apostrophe silently breaks staged PowerShell (found 2026-10-10, DONE 2026-10-10)
 
