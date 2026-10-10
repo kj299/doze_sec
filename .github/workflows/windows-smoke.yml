@@ -3265,7 +3265,10 @@ jobs:
           # exact case %PWSH% resolution exists for) a bare call no-ops and exit
           # code 8 is never raised. Assert the scrape line uses "%PWSH%".
           foreach ($f in 'doze_sec.bat','doze_sec_noAdmin.bat') {
-            $scrape = Select-String -Path $f -SimpleMatch "Select-String -LiteralPath '%REPORT%' -Pattern '\A\[CRITICAL\]'"
+            # The census reads the report path from the environment (an apostrophe
+          # in a pasted path ended the string); single quotes here so $env:REPORT
+          # is searched for literally, not expanded.
+          $scrape = Select-String -Path $f -SimpleMatch 'Select-String -LiteralPath $env:REPORT -Pattern ''\A\[CRITICAL\]'''
             if (-not $scrape) { Write-Host "FAILED: $f lost the CRITICAL-escalation scrape line"; exit 1 }
             if ($scrape.Line -notmatch '"%PWSH%"') {
               Write-Host "FAILED: $f CRITICAL-escalation scrape uses bare powershell, not %PWSH% -- $($scrape.Line.Trim())"; exit 1
