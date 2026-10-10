@@ -128,8 +128,11 @@ else {
     # Every check below would then fail for that one reason; name it once.
     if ($text -match '\*\*\* AUDIT NOT PERFORMED -- ([^*]+)\*\*\*') {
         Write-Host ("  [FAIL   ] AUDIT NOT PERFORMED -- {0}" -f $Matches[1].Trim())
-        $why = [regex]::Match($text, '(?m)^\s*(PowerShell refused[^\r\n]*|Scripts run here, but[^\r\n]*|Copy the whole doze_sec folder[^\r\n]*)')
-        if ($why.Success) { Write-Host ("            {0}" -f $why.Groups[1].Value.Trim()) }
+        # The reason, and for the Mark of the Web cases (a copy unzipped from a
+        # download, under a Group Policy RemoteSigned or Unrestricted policy)
+        # the policy line and the count, which say what to do about it.
+        $whys = [regex]::Matches($text, '(?m)^\s*(PowerShell refused[^\r\n]*|Scripts run here, but[^\r\n]*|Copy the whole doze_sec folder[^\r\n]*|Group Policy sets the execution policy to[^\r\n]*|Mark of the Web: \d+ of[^\r\n]*|Under that policy the mark[^\r\n]*)')
+        foreach ($w in @($whys | Select-Object -First 4)) { Write-Host ("            {0}" -f $w.Groups[1].Value.Trim()) }
         Write-Host '            Nothing was audited on this machine. The read-only proof above still holds. See docs\second-machine.md.'
         Write-Host ''
         Write-Host 'FAIL: the audit could not run its checks on this machine (not a finding about the machine).'

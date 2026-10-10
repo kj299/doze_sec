@@ -130,13 +130,16 @@ Read the answers:
 |---|---|---|
 | `MachinePolicy` or `UserPolicy` is `AllSigned` or `Restricted` | IT has set a script policy that overrides the audit's `-ExecutionPolicy Bypass`. The audit's checks cannot run. | **Stop.** Send the preflight output; it is useful data on its own. (If you run anyway, the audit now says `AUDIT NOT PERFORMED` and exits 1. It no longer reports CLEAN for checks that never ran.) |
 | Language mode is not `FullLanguage` | AppLocker or WDAC has locked PowerShell down. | **Stop**, same as above. |
+| `MachinePolicy` or `UserPolicy` is `RemoteSigned` or `Unrestricted` | IT has set a script policy that checks where each script came from. A script marked as downloaded from the internet (the Mark of the Web, which every file of an unzipped download carries) is refused under `RemoteSigned`. Under `Unrestricted`, PowerShell stops to ask about it first. | **Go, with a stick made by `tools\make_usb_stick.ps1`**: it copies file contents only, so the mark does not travel. A copy unzipped from a download is caught: the audit says `AUDIT NOT PERFORMED`, names the marked scripts (or counts them, when the whole copy is marked) and exits 1. If PowerShell will not load field_test itself (an error saying `tests\field_test.ps1` cannot be loaded, or `AuthorizationManager check failed.`, which is what `Unrestricted` says), that is the same cause. Make the stick on your own laptop instead. |
 | `DomainJoined : YES`, `AzureAdJoined : YES` or `EnterpriseJoined : YES` | A managed machine. | The IT warning above applies. Go ahead only with their permission. |
 | An antivirus other than Microsoft Defender is listed | A third-party security product is installed. | Expect Defender to read "passive mode" in the report. That is normal, not a finding. On a work machine, see the IT warning. |
 | `PowerShell 5.1...` | Normal for Windows 10 and 11. | Go on. |
 | A line with `S-1-16-12288` | This window is elevated. | Fine either way; see Step 4. |
 
 If the policy lines read `Undefined`, `RemoteSigned`, `Unrestricted` or
-`Bypass`, and the language mode is `FullLanguage`: **go.**
+`Bypass`, and the language mode is `FullLanguage`: **go.** (When
+`MachinePolicy` or `UserPolicy` is `RemoteSigned` or `Unrestricted`, only
+from a stick made by `tools\make_usb_stick.ps1`: see the table.)
 
 ## Step 4: run the audit (about 3 to 6 minutes each)
 
@@ -146,14 +149,14 @@ administrator**, then (way A, from the stick):
 
 ```
 New-Item -ItemType Directory -Force C:\SecurityAudit | Out-Null
-powershell -NoProfile -ExecutionPolicy Bypass -File E:\doze_sec\tests\field_test.ps1 | Tee-Object -FilePath C:\SecurityAudit\field_test_console.txt
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File E:\doze_sec\tests\field_test.ps1 | Tee-Object -FilePath C:\SecurityAudit\field_test_console.txt
 ```
 
 Then in a **normal** PowerShell window:
 
 ```
 New-Item -ItemType Directory -Force $env:USERPROFILE\SecurityAudit | Out-Null
-powershell -NoProfile -ExecutionPolicy Bypass -File E:\doze_sec\tests\field_test.ps1 | Tee-Object -FilePath $env:USERPROFILE\SecurityAudit\field_test_console.txt
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File E:\doze_sec\tests\field_test.ps1 | Tee-Object -FilePath $env:USERPROFILE\SecurityAudit\field_test_console.txt
 ```
 
 For way B, replace `E:\doze_sec` with `$env:USERPROFILE\doze_sec`.
@@ -164,7 +167,11 @@ doing. Checks that need admin are marked `[DEFERRED - ADMIN REQUIRED]`.
 `New-Item` creates the audit's own output folder (the audit would create it
 anyway), and `Tee-Object` saves what field_test prints there, so everything
 ends up in one place. The `-ExecutionPolicy Bypass` affects only
-that one PowerShell process; it changes no setting on the machine. You can keep
+that one PowerShell process; it changes no setting on the machine.
+`-NonInteractive` means PowerShell never stops to ask a question: under an
+`Unrestricted` script policy it would otherwise wait at a question about a
+marked script, and with `Tee-Object` in the way that question might not show,
+so the window would look stuck. You can keep
 using the machine while it runs. A write-protected stick is fine: the audit
 never writes into its own folder.
 

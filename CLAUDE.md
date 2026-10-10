@@ -569,10 +569,19 @@ the setting taking EFFECT, and grade on that.
 Group Policy OVERRIDES Bypass; AppLocker/WDAC run PowerShell in
 ConstrainedLanguage. A refused helper writes no marker and no marker reads OK,
 so the whole audit could read CLEAN having checked nothing -- the OK-default
-mistake at the scale of the entire run. `tools\exec_probe.ps1` runs once
-before the first helper; anything but `ok|FullLanguage` prints
+mistake at the scale of the entire run. `tools\exec_probe.ps1` runs once,
+before the checks; anything but `ok|FullLanguage` prints
 `AUDIT NOT PERFORMED` with the evidence and exits 1. Found by reading, while
-writing `docs\second-machine.md`; CI plants both conditions.
+writing `docs\second-machine.md`; CI plants both conditions. **And a probe
+that tests itself proves only itself.** Under a Group Policy RemoteSigned or
+Unrestricted policy an unmarked script runs, so the probe passed while a copy
+unzipped from a download (every file carrying the Mark of the Web) had each
+marked helper refused (no marker: OK) or held at a question nobody could see
+-- the audit hung, and not first at the probe: `threat_list_seed` runs before
+it, so "before the first helper" had been false. The probe now reads every
+helper's Zone.Identifier against the Group Policy, the zones it treats as
+downloaded are MEASURED on a runner under both policies, and the probe and
+every helper before it run `-NonInteractive`, so a question fails at once.
 
 **A USB stick carries the tool; it is never formatted or booted by us.**
 `tools\make_usb_stick.ps1` copies only: no Format-Volume, diskpart or bcdboot

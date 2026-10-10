@@ -607,6 +607,51 @@ jobs:
       # readonly-field-test: a planted MachinePolicy and __PSLockdownPolicy).
       - name: Run tools/exec_probe.ps1 -SelfTest
         run: pwsh -NoProfile -File tools/exec_probe.ps1 -SelfTest
+      # The bats must reach :exec_probe_ok ONLY through an ok Mark of the Web
+      # verdict (a missing verdict is never read as ok), and every helper that
+      # runs before the probe -- and the probe -- must be -NonInteractive: under
+      # a Group Policy Unrestricted policy a marked script stops at a question
+      # nobody sees, and the audit hung there. Windows proves the behaviour
+      # (windows-smoke, readonly-field-test); this keeps the two bats' wiring.
+      - name: "Both bats: only an ok verdict reaches :exec_probe_ok; everything before the probe is -NonInteractive"
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bad = @()
+          foreach ($f in 'doze_sec.bat', 'doze_sec_noAdmin.bat') {
+            $lines = Get-Content -LiteralPath $f
+            $probe = @(for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -match '-File "%SCRIPT_DIR%tools\\exec_probe\.ps1"') { $i } })
+            if ($probe.Count -ne 1) { $bad += "${f}: expected one exec_probe call, found $($probe.Count)"; continue }
+            $pl = $lines[$probe[0]]
+            if ($pl -notmatch ' -NonInteractive ') { $bad += "${f}:$($probe[0] + 1): the probe runs without -NonInteractive" }
+            if ($pl -notmatch '-MotwFile "%TEMP%\\dz_exec_motw\.txt"') { $bad += "${f}:$($probe[0] + 1): the probe is not asked for its Mark of the Web verdict" }
+            for ($i = 0; $i -lt $probe[0]; $i++) {
+              $l = $lines[$i]
+              if ($l -match '^\s*(::|rem\s)') { continue }
+              if ($l -match '-File "%SCRIPT_DIR%tools\\' -and $l -notmatch ' -NonInteractive ') { $bad += "${f}:$($i + 1): a helper runs before the probe without -NonInteractive" }
+            }
+            # Every jump to the label, in any spelling cmd accepts (goto x,
+            # goto:x, call :x), and no fall-through into it.
+            $toOk = @(for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -notmatch '^\s*(::|rem\s)' -and $lines[$i] -match '(?i)\b(goto|call)\s*:?exec_probe_ok\b') { $i } })
+            if ($toOk.Count -ne 1 -or $lines[$toOk[0]] -ne 'if "%EXEC_MOTW%"=="ok" goto :exec_probe_ok') { $bad += "${f}: :exec_probe_ok must be reached only by: if `"%EXEC_MOTW%`"==`"ok`" goto :exec_probe_ok" }
+            $lbl = [array]::IndexOf($lines, ':exec_probe_ok')
+            if ($lbl -lt 1 -or $lines[$lbl - 1] -ne 'goto :end_script') { $bad += "${f}: the line before :exec_probe_ok must be goto :end_script, or the blocked path falls through into it" }
+            # The verdict is read only after the language mode passed: under
+            # ConstrainedLanguage the probe still writes ok on a machine with
+            # no Group Policy.
+            $ran = [array]::IndexOf($lines, ':exec_probe_ran')
+            $first = -1
+            if ($ran -ge 0) { for ($i = $ran + 1; $i -lt $lines.Count; $i++) { if ($lines[$i] -notmatch '^\s*(::|rem\s|$)') { $first = $i; break } } }
+            if ($first -lt 0 -or $lines[$first] -ne 'if "%EXEC_MOTW%"=="ok" goto :exec_probe_ok') { $bad += "${f}: the EXEC_MOTW check must be the first command after :exec_probe_ran" }
+            $toRan = @(for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -notmatch '^\s*(::|rem\s)' -and $lines[$i] -match '(?i)\b(goto|call)\s*:?exec_probe_ran\b') { $i } })
+            if ($toRan.Count -ne 1 -or $lines[$toRan[0]] -ne 'if "%EXEC_STATE%"=="ok|FullLanguage" goto :exec_probe_ran') { $bad += "${f}: :exec_probe_ran must be reached only once the state line reads ok|FullLanguage" }
+            if ($ran -lt 1 -or $lines[$ran - 1] -ne 'goto :exec_blind') { $bad += "${f}: the line before :exec_probe_ran must be goto :exec_blind, or the refused path falls through into it" }
+            $clear = [array]::IndexOf($lines, 'set "EXEC_MOTW="')
+            $read = [array]::IndexOf($lines, 'if exist "%TEMP%\dz_exec_motw.txt" set /p EXEC_MOTW=<"%TEMP%\dz_exec_motw.txt"')
+            if ($clear -lt 0 -or $read -lt 0 -or $clear -gt $read) { $bad += "${f}: EXEC_MOTW must be cleared before its set /p (set /p from an empty file keeps the old value)" }
+          }
+          if ($bad) { $bad | ForEach-Object { Write-Host "FAIL: $_" }; exit 1 }
+          Write-Host 'OK: both bats reach :exec_probe_ok only through an ok verdict, and run the probe and everything before it -NonInteractive'
 
   shared-copies-lint:
     name: "Shared helpers: every copy stays identical"
