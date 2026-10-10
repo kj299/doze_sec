@@ -337,12 +337,86 @@ jobs:
           Write-Host 'report_html OK (Findings Index, section link, verdict-based counts, visible READ THIS FIRST)'
           exit 0
 
-      - name: ioc_hash_check.ps1 (real Get-FileHash, capped)
+      - name: ioc_hash_check.ps1 (real Get-FileHash, capped; a list it cannot use is NOT performed)
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
+          $gm = Join-Path $env:TEMP 'dz_iochit_18k_gap.txt'
+          Remove-Item -LiteralPath $gm -Force -EA SilentlyContinue
           .\tools\ioc_hash_check.ps1 -IocFile ThreatLists\ioc_hashes.txt -MaxFiles 3 | Out-Null
-          Write-Host "ioc_hash_check OK"
+          if (Test-Path -LiteralPath $gm) { throw 'the shipped hash list raised a NOT-performed gap' }
+          # A missing list, and one holding no valid SHA256 row, used to print
+          # "[INFO] ... skipped": raised nothing, and Section 18's summary did not
+          # count it as a gap. Both are now a raised gap with its own marker.
+          $cm = Join-Path $env:TEMP 'dz_ci_hashes_comments.txt'
+          Set-Content -LiteralPath $cm -Value @('# comments only', 'not-a-hash|x|y') -Encoding ASCII
+          foreach ($case in @(@{ F = (Join-Path $env:TEMP 'dz_ci_no_such_hashes.txt'); Why = 'not found' }, @{ F = $cm; Why = 'holds no valid SHA256 rows' })) {
+            Remove-Item -LiteralPath $gm -Force -EA SilentlyContinue
+            $o = (.\tools\ioc_hash_check.ps1 -IocFile $case.F) -join "`n"
+            Write-Host $o
+            if ($o -notmatch ('(?m)^\[WARNING\] File hash IOC match NOT performed -- .*' + [regex]::Escape($case.Why))) { throw ("a hash list that {0} did not print the NOT-performed line" -f $case.Why) }
+            if (-not (Test-Path -LiteralPath $gm)) { throw ("a hash list that {0} wrote no gap marker -- the gap reaches no ledger row" -f $case.Why) }
+          }
+          Remove-Item -LiteralPath $gm, $cm -Force -EA SilentlyContinue
+          Write-Host "ioc_hash_check OK (shipped list: no gap; missing and comment-only lists: NOT performed + gap marker)"
+          exit 0
+
+      # Sections 18b-18e and 18h are PowerShell the bats echo into a temp file,
+      # so their gap branches cannot be reached on a healthy runner by running
+      # the audit. tests\section18_gaps.ps1 renders each block as cmd writes it
+      # and runs it under Windows PowerShell 5.1: with no list it must say NOT
+      # performed and write its gap marker; with the shipped lists no gap may
+      # appear (every listing works here). Then a planted named pipe and planted
+      # scheduled tasks must be matched -- 18e moved from schtasks' English CSV
+      # columns to Get-ScheduledTask, so it is matched by task NAME and by an
+      # action argument past the ~261 characters schtasks CSV kept, and a twin
+      # task holding no list entry must stay out. CI only. Touches: an
+      # in-process named pipe dz_ci_s18_pipe_1; task:\dz_ci_s18_tasknm_A,
+      # task:\dz_ci_s18_plain_B, task:\dz_ci_s18_plain_C (removed in finally).
+      - name: "Section 18 matchers on 5.1: NOT performed with no list, no gap with the shipped lists, a planted pipe and task are matched"
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # -SelfTest here too: this checkout is CRLF, and the mutations are
+          # written with LF (the self-test normalises; the Linux job cannot show it).
+          foreach ($a in @(@('-SelfTest'), @('-Mode', 'Missing'), @('-Mode', 'Shipped'))) {
+            $ErrorActionPreference = 'Continue'
+            $o = (powershell -NoProfile -ExecutionPolicy Bypass -File tests\section18_gaps.ps1 @a 2>&1 | ForEach-Object { "$_" }) -join "`n"
+            $rc = $LASTEXITCODE
+            $ErrorActionPreference = 'Stop'
+            Write-Host $o
+            if ($rc -ne 0) { throw "section18_gaps $($a -join ' ') failed on Windows PowerShell 5.1" }
+            if ($a[0] -eq '-Mode' -and $o -notmatch 'Windows PowerShell 5\.1') { throw "section18_gaps $($a -join ' ') did not run its blocks under Windows PowerShell 5.1" }
+          }
+          $lists = Join-Path $env:TEMP ("dz_s18_lists_{0}" -f $PID)
+          New-Item -ItemType Directory -Path $lists -Force | Out-Null
+          Set-Content -LiteralPath (Join-Path $lists 'ioc_named_pipes.txt') -Value @('# CI list', 'dz_ci_s18_pipe') -Encoding ASCII
+          Set-Content -LiteralPath (Join-Path $lists 'ioc_scheduled_tasks.txt') -Value @('# CI list', 'dz_ci_s18_tasknm', 'dz_ci_s18_actarg') -Encoding ASCII
+          $names = 'dz_ci_s18_tasknm_A', 'dz_ci_s18_plain_B', 'dz_ci_s18_plain_C'
+          $pipe = $null
+          try {
+            $pipe = New-Object System.IO.Pipes.NamedPipeServerStream('dz_ci_s18_pipe_1')
+            $trig = New-ScheduledTaskTrigger -Once -At (Get-Date).AddYears(1)
+            Register-ScheduledTask -TaskName $names[0] -Trigger $trig -Action (New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/c rem nothing') -Force | Out-Null
+            Register-ScheduledTask -TaskName $names[1] -Trigger $trig -Action (New-ScheduledTaskAction -Execute 'cmd.exe' -Argument ('/c rem ' + ('x' * 300) + ' dz_ci_s18_actarg')) -Force | Out-Null
+            Register-ScheduledTask -TaskName $names[2] -Trigger $trig -Action (New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/c rem nothing') -Force | Out-Null
+            $ErrorActionPreference = 'Continue'
+            $o = (powershell -NoProfile -ExecutionPolicy Bypass -File tests\section18_gaps.ps1 -Mode Run -ListDir $lists -Sections '18b,18e' 2>&1 | ForEach-Object { "$_" }) -join "`n"
+            $ErrorActionPreference = 'Stop'
+            Write-Host $o
+            if ($o -notmatch 'S18 18b hit=1 gap=0 done=1') { throw 'the planted named pipe dz_ci_s18_pipe_1 was not matched by 18b (or the block did not reach its verdict)' }
+            if ($o -notmatch 'dz_ci_s18_pipe_1') { throw '18b matched but did not print the pipe it matched' }
+            if ($o -notmatch 'S18 18e hit=1 gap=0 done=1') { throw 'no planted scheduled task was matched by 18e (or the block did not reach its verdict)' }
+            if ($o -notmatch 'dz_ci_s18_tasknm_A') { throw '18e did not match a task by its NAME' }
+            if ($o -notmatch 'dz_ci_s18_plain_B') { throw '18e did not match a task by an action argument 300 characters in (schtasks CSV cut it at about 261)' }
+            if ($o -match 'dz_ci_s18_plain_C') { throw '18e listed the twin task, whose name and action hold no list entry' }
+          } finally {
+            if ($pipe) { $pipe.Dispose() }
+            foreach ($n in $names) { Unregister-ScheduledTask -TaskName $n -Confirm:$false -EA SilentlyContinue }
+            Remove-Item -LiteralPath $lists -Recurse -Force -EA SilentlyContinue
+          }
+          Write-Host 'Section 18 on 5.1: gaps raised with no list, none with the shipped lists; the planted pipe and tasks matched, the twin not'
+          $global:LASTEXITCODE = 0
           exit 0
 
       - name: startup_eval.ps1 (Startup folder + AppCert DLL evaluation)
@@ -3342,6 +3416,15 @@ jobs:
             throw ("{0} TOP FINDINGS entr(y|ies) have no analyst note -- add a whyTable entry in tools\top_findings.ps1 for the Finding: line(s) above" -f $unmapped)
           }
           Write-Host 'TOP FINDINGS: every finding carries an analyst note'
+          # A HEALTHY RUNNER RAISES NO SECTION 18 GAP. Each IOC match that cannot run
+          # now prints NOT performed and raises a gap row; every list ships with the
+          # tool and every listing works here, so a gap row is a false WARNING. 18e
+          # moved off schtasks' English column names to Get-ScheduledTask: it must
+          # print its [OK] or a match, never nothing.
+          $s18gap = @(Get-Content -LiteralPath $led.FullName | Where-Object { $_ -match '^\w+\|18\|[^|]*\|.*NOT performed' })
+          if ($s18gap.Count) { throw ("Section 18 raised gap row(s) on a healthy runner: {0}" -f ($s18gap -join ' ; ')) }
+          if ($text -notmatch '(?m)^\[OK\] No scheduled task IOC matches\.|^\[WARNING\] Scheduled task IOC matches found\.') { throw 'Section 18e printed neither its [OK] nor a match' }
+          Write-Host 'Section 18: no gap row on a healthy runner; 18e compared the tasks'
           # THE BITLOCKER TILE STATES SECTION 13'S VERDICT. It re-ran
           # Get-BitLockerVolume until 2026-10-04 -- the sixth tile that measured
           # twice. Section 13's evaluated line and the tile must agree.

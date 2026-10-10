@@ -1129,6 +1129,21 @@ try {
         if ($row) { Write-Host ("  [ OK       ] {0}: the ledger holds {1}" -f $chk.Case, $chk.Row) }
         else { Write-Host ("  [ REGRESS  ] {0}: no ledger row {1} -- the match printed but was not counted" -f $chk.Case, $chk.Row); $requiredFail++ }
     }
+    # Section 18's summary prints its tally when a category matched. The goto
+    # rewrite in PR #241 left the tally behind an IOC_HITS==0 test, which is
+    # never true on that branch, so with matches the summary printed nothing
+    # and no test read it.
+    if ([regex]::IsMatch($text, $ioc18aExpect) -or [regex]::IsMatch($text, $ioc18fExpect)) {
+        if ([regex]::IsMatch($text, '--- \[18 SUMMARY\] IOC Sweep Results ---\s*\r?\n\[INFO\] [1-9]\d* IOC category matches found')) {
+            Write-Host "  [ OK       ] Section 18 summary prints its match tally"
+        } else { Write-Host "  [ REGRESS  ] an IOC match was printed but the Section 18 summary printed no tally"; $requiredFail++ }
+    } else { Write-Host "  [ SKIP     ] Section 18 summary tally: no 18a or 18f match was printed, so there is no tally to check" }
+    # None of the harness plants takes away a list or a listing, so a Section 18
+    # gap row here is a gap raised on a healthy machine: a false WARNING.
+    $s18gaps = @()
+    if ($ledger) { $s18gaps = @(Get-Content -LiteralPath $ledger.FullName -EA SilentlyContinue | Where-Object { $_ -match '^\w+\|18\|[^|]*\|.*NOT performed' }) }
+    if ($s18gaps.Count -eq 0) { Write-Host "  [ OK       ] no Section 18 IOC match raised a NOT-performed gap on this healthy runner" }
+    else { Write-Host ("  [ REGRESS  ] Section 18 raised {0} gap row(s) on a healthy runner: {1}" -f $s18gaps.Count, ($s18gaps -join ' ; ')); $requiredFail++ }
 
     # Option B retrofit (PR 10): Section 5 now evaluates Winlogon Userinit in
     # -section. Compare against the live value (read-only ground truth -- we

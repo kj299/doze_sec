@@ -4064,9 +4064,14 @@ echo ====================================================================>> "%RE
 set "IOCDIR=%OUTDIR%\ThreatLists"
 if not exist "%IOCDIR%\ioc_processes.txt" set "IOCDIR=%SCRIPT_DIR%ThreatLists"
 if not exist "%IOCDIR%\ioc_processes.txt" (
-    echo  [SKIP] No ThreatLists directory found at:>> "%REPORT%"
-    echo    Checked: %OUTDIR%\ThreatLists\>> "%REPORT%"
-    echo    Checked: %SCRIPT_DIR%ThreatLists\>> "%REPORT%"
+    rem Nothing below can run without the lists. This used to print [SKIP],
+    rem raise nothing and leave IOC_GAPS at 0, so the dashboard tile read PASS.
+    rem Nine file-based matches are skipped: 18a to 18h and 18k.
+    echo [WARNING] IOC sweep NOT performed -- no ThreatLists folder was found, so none of the file-based IOC matches ran.>> "%REPORT%"
+    call :dz_finding WARNING 18 IOCSWEEP "IOC sweep NOT performed - no ThreatLists folder found"
+    set "IOC_GAPS=9"
+    echo    Checked: !OUTDIR!\ThreatLists\>> "%REPORT%"
+    echo    Checked: !SCRIPT_DIR!ThreatLists\>> "%REPORT%"
     echo  [INFO] Place IOC files in either location or run with -updateTTP.>> "%REPORT%"
     echo %C_MAGENTA%[18/18] Skipped%C_RESET% - no IOC files found.
     goto :sec18_verdict
@@ -4091,12 +4096,13 @@ echo  Matching running processes against ioc_processes.txt>> "%REPORT%"
 :: wmic was removed in Windows 11 24H2+; the old `wmic | findstr` pipeline
 :: printed [OK] with zero processes examined when wmic was absent. Enumerate
 :: via CIM into a temp file so a failed/empty enumeration is detectable and
-:: reported as [SKIPPED] instead of masquerading as a clean result.
+:: raised as a NOT-performed gap instead of masquerading as a clean result.
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object { $_.Name+'  '+$_.ProcessId+'  '+$_.ExecutablePath }" > "%TEMP%\dz_proc18a.tmp" 2>nul
 set "_ENUM18A="
 for %%z in ("%TEMP%\dz_proc18a.tmp") do if %%~zz GTR 100 set "_ENUM18A=1"
 if defined _ENUM18A goto :sec18a_match
-echo [SKIPPED] Process enumeration failed -- running processes could not be listed; IOC match NOT performed.>> "%REPORT%"
+echo [WARNING] Process IOC match NOT performed -- running processes could not be listed.>> "%REPORT%"
+call :dz_finding WARNING 18 T1057 "Process IOC match NOT performed - processes not enumerable"
 goto :sec18a_done
 :sec18a_match
 :: select_lines, not findstr /g: -- findstr took the list's comment lines as
@@ -4127,73 +4133,133 @@ echo.>> "%REPORT%"
 echo --- [18b] Named Pipe IOC Match --->> "%REPORT%"
 echo  Command: powershell -Command "Get-ChildItem \\.\pipe\ -EA SilentlyContinue">> "%REPORT%"
 echo  Matching named pipes against ioc_named_pipes.txt>> "%REPORT%"
-echo $iocFile='%IOCDIR%\ioc_named_pipes.txt' > "%PSRUN%"
+:: The list path comes from the environment (cmd's variables are the child's
+:: environment), never pasted between single quotes: a profile folder like
+:: C:\Users\O'Brien made each of these blocks a parse error that printed no
+:: verdict and raised nothing, and the summary then read [OK]. Each block also
+:: ends by writing its dz_iochit_18X_done.txt; without it, the check stopped
+:: before a verdict and that is a raised gap too.
+echo $iocFile = Join-Path $env:IOCDIR 'ioc_named_pipes.txt' > "%PSRUN%"
 echo $patterns=if(Test-Path $iocFile){Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'}} >> "%PSRUN%"
 echo $pipes=Get-ChildItem \\.\pipe\ -EA SilentlyContinue >> "%PSRUN%"
 echo $hits=@() >> "%PSRUN%"
 echo foreach($p in $patterns){try{$m=$pipes ^| Where-Object {$_.Name -match $p}; if($m){$hits+=$m}}catch{}} >> "%PSRUN%"
-echo if(-not $patterns){'[SKIPPED] ioc_named_pipes.txt missing or empty -- named pipe IOC match NOT performed.'}elseif(-not $pipes){'[SKIPPED] Named pipe enumeration failed -- named pipe IOC match NOT performed.'}elseif($hits.Count -gt 0){$hits ^| Select-Object -Unique Name; '[WARNING] Named pipe IOC matches found.'; New-Item "$env:TEMP\dz_iochit_18b.txt" -Force ^| Out-Null}else{'[OK] No named pipe IOC matches.'} >> "%PSRUN%"
+echo if(-not $patterns){'[WARNING] Named pipe IOC match NOT performed -- ioc_named_pipes.txt is missing or holds no entries.'; New-Item "$env:TEMP\dz_iochit_18b_gap.txt" -Force ^| Out-Null}elseif(-not $pipes){'[WARNING] Named pipe IOC match NOT performed -- the named pipes could not be listed.'; New-Item "$env:TEMP\dz_iochit_18b_gap.txt" -Force ^| Out-Null}elseif($hits.Count -gt 0){$hits ^| Select-Object -Unique Name; '[WARNING] Named pipe IOC matches found.'; New-Item "$env:TEMP\dz_iochit_18b.txt" -Force ^| Out-Null}else{'[OK] No named pipe IOC matches.'} >> "%PSRUN%"
+echo New-Item "$env:TEMP\dz_iochit_18b_done.txt" -Force ^| Out-Null >> "%PSRUN%"
 del "%TEMP%\dz_iochit_18b.txt" 2>nul
+del "%TEMP%\dz_iochit_18b_gap.txt" 2>nul
+del "%TEMP%\dz_iochit_18b_done.txt" 2>nul
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_iochit_18b.txt" (
     set /a IOC_HITS+=1
     call :dz_finding WARNING 18 T1071 "Named pipe IOC match"
     del "%TEMP%\dz_iochit_18b.txt" 2>nul
 )
+if exist "%TEMP%\dz_iochit_18b_gap.txt" (
+    call :dz_finding WARNING 18 T1071 "Named pipe IOC match NOT performed - list unreadable or empty, or pipes not enumerable"
+    del "%TEMP%\dz_iochit_18b_gap.txt" 2>nul
+)
+if not exist "%TEMP%\dz_iochit_18b_done.txt" (
+    echo [WARNING] Named pipe IOC match NOT performed -- its PowerShell check stopped before reaching a verdict; the error is above.>> "%REPORT%"
+    call :dz_finding WARNING 18 T1071 "Named pipe IOC match NOT performed - the check stopped before a verdict"
+)
+del "%TEMP%\dz_iochit_18b_done.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- [18c] Service IOC Match --->> "%REPORT%"
 echo  Command: powershell -Command "Get-CimInstance Win32_Service -EA SilentlyContinue">> "%REPORT%"
 echo  Matching services against ioc_services.txt>> "%REPORT%"
-echo $iocFile='%IOCDIR%\ioc_services.txt' > "%PSRUN%"
+echo $iocFile = Join-Path $env:IOCDIR 'ioc_services.txt' > "%PSRUN%"
 echo $patterns=if(Test-Path $iocFile){Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'}} >> "%PSRUN%"
 echo $svcs=Get-CimInstance Win32_Service -EA SilentlyContinue >> "%PSRUN%"
 echo $hits=@() >> "%PSRUN%"
 echo foreach($p in $patterns){try{$m=$svcs ^| Where-Object {$_.Name -match $p -or $_.DisplayName -match $p}; if($m){$hits+=$m}}catch{}} >> "%PSRUN%"
-echo if(-not $patterns){'[SKIPPED] ioc_services.txt missing or empty -- service IOC match NOT performed.'}elseif(-not $svcs){'[SKIPPED] Service enumeration failed -- service IOC match NOT performed.'}elseif($hits.Count -gt 0){$hits ^| Select-Object Name,State,PathName ^| Format-Table -AutoSize; '[WARNING] Service IOC matches found.'; New-Item "$env:TEMP\dz_iochit_18c.txt" -Force ^| Out-Null}else{'[OK] No service IOC matches.'} >> "%PSRUN%"
+echo if(-not $patterns){'[WARNING] Service IOC match NOT performed -- ioc_services.txt is missing or holds no entries.'; New-Item "$env:TEMP\dz_iochit_18c_gap.txt" -Force ^| Out-Null}elseif(-not $svcs){'[WARNING] Service IOC match NOT performed -- the services could not be listed.'; New-Item "$env:TEMP\dz_iochit_18c_gap.txt" -Force ^| Out-Null}elseif($hits.Count -gt 0){$hits ^| Select-Object Name,State,PathName ^| Format-Table -AutoSize; '[WARNING] Service IOC matches found.'; New-Item "$env:TEMP\dz_iochit_18c.txt" -Force ^| Out-Null}else{'[OK] No service IOC matches.'} >> "%PSRUN%"
+echo New-Item "$env:TEMP\dz_iochit_18c_done.txt" -Force ^| Out-Null >> "%PSRUN%"
 del "%TEMP%\dz_iochit_18c.txt" 2>nul
+del "%TEMP%\dz_iochit_18c_gap.txt" 2>nul
+del "%TEMP%\dz_iochit_18c_done.txt" 2>nul
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_iochit_18c.txt" (
     set /a IOC_HITS+=1
     call :dz_finding WARNING 18 T1543 "Service IOC match"
     del "%TEMP%\dz_iochit_18c.txt" 2>nul
 )
+if exist "%TEMP%\dz_iochit_18c_gap.txt" (
+    call :dz_finding WARNING 18 T1543 "Service IOC match NOT performed - list unreadable or empty, or services not enumerable"
+    del "%TEMP%\dz_iochit_18c_gap.txt" 2>nul
+)
+if not exist "%TEMP%\dz_iochit_18c_done.txt" (
+    echo [WARNING] Service IOC match NOT performed -- its PowerShell check stopped before reaching a verdict; the error is above.>> "%REPORT%"
+    call :dz_finding WARNING 18 T1543 "Service IOC match NOT performed - the check stopped before a verdict"
+)
+del "%TEMP%\dz_iochit_18c_done.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- [18d] Suspicious File Path IOC Check --->> "%REPORT%"
 echo  Command: powershell -Command "foreach($p in Get-Content '%IOCDIR%\ioc_file_paths.txt'){ if(Test-Path ([Environment]::ExpandEnvironmentVariables($p))){ $p } }">> "%REPORT%"
 echo  Checking for known malware staging paths from ioc_file_paths.txt>> "%REPORT%"
-echo $iocFile='%IOCDIR%\ioc_file_paths.txt' > "%PSRUN%"
+echo $iocFile = Join-Path $env:IOCDIR 'ioc_file_paths.txt' > "%PSRUN%"
 echo $paths=if(Test-Path $iocFile){Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'}} >> "%PSRUN%"
 echo $hits=@() >> "%PSRUN%"
 echo foreach($p in $paths){ >> "%PSRUN%"
 echo   $expanded=[System.Environment]::ExpandEnvironmentVariables($p.Trim()) >> "%PSRUN%"
 echo   if(Test-Path $expanded){$hits+=$expanded} >> "%PSRUN%"
 echo } >> "%PSRUN%"
-echo if(-not $paths){'[SKIPPED] ioc_file_paths.txt missing or empty -- staging path check NOT performed.'}elseif($hits.Count -gt 0){'[CRITICAL] Known malware staging files found:'; $hits; '[ACTION] Quarantine these files immediately.'; New-Item "$env:TEMP\dz_iochit_18d.txt" -Force ^| Out-Null}else{'[OK] No known malware staging files found.'} >> "%PSRUN%"
+echo if(-not $paths){'[WARNING] Staging file IOC match NOT performed -- ioc_file_paths.txt is missing or holds no entries.'; New-Item "$env:TEMP\dz_iochit_18d_gap.txt" -Force ^| Out-Null}elseif($hits.Count -gt 0){'[CRITICAL] Known malware staging files found:'; $hits; '[ACTION] Quarantine these files immediately.'; New-Item "$env:TEMP\dz_iochit_18d.txt" -Force ^| Out-Null}else{'[OK] No known malware staging files found.'} >> "%PSRUN%"
+echo New-Item "$env:TEMP\dz_iochit_18d_done.txt" -Force ^| Out-Null >> "%PSRUN%"
 del "%TEMP%\dz_iochit_18d.txt" 2>nul
+del "%TEMP%\dz_iochit_18d_gap.txt" 2>nul
+del "%TEMP%\dz_iochit_18d_done.txt" 2>nul
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_iochit_18d.txt" (
     set /a IOC_HITS+=1
     call :dz_finding CRITICAL 18 T1074 "Known malware staging files found"
     del "%TEMP%\dz_iochit_18d.txt" 2>nul
 )
+if exist "%TEMP%\dz_iochit_18d_gap.txt" (
+    call :dz_finding WARNING 18 T1074 "Staging file IOC match NOT performed - list unreadable or empty"
+    del "%TEMP%\dz_iochit_18d_gap.txt" 2>nul
+)
+if not exist "%TEMP%\dz_iochit_18d_done.txt" (
+    echo [WARNING] Staging file IOC match NOT performed -- its PowerShell check stopped before reaching a verdict; the error is above.>> "%REPORT%"
+    call :dz_finding WARNING 18 T1074 "Staging file IOC match NOT performed - the check stopped before a verdict"
+)
+del "%TEMP%\dz_iochit_18d_done.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- [18e] Scheduled Task IOC Match --->> "%REPORT%"
-echo  Command: powershell -Command "schtasks /query /fo CSV /v | ConvertFrom-Csv"   [matched against %IOCDIR%\ioc_scheduled_tasks.txt]>> "%REPORT%"
+echo  Command: powershell -Command "$f = @(Get-Content '%IOCDIR%\ioc_scheduled_tasks.txt' | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') } | ForEach-Object { $_.Trim().ToLower() }); Get-ScheduledTask | ForEach-Object { $t = ([string]$_.TaskPath).TrimEnd('\') + '\' + $_.TaskName; $a = @($_.Actions | ForEach-Object { ([string]$_.Execute + ' ' + [string]$_.Arguments).Trim() }) -join '; '; $l = ($t + '  ' + $a).ToLower(); if (@($f | Where-Object { $l.Contains($_) }).Count) { $t + '  ' + $a } }">> "%REPORT%"
 echo  Matching scheduled task NAMES and ACTIONS against ioc_scheduled_tasks.txt>> "%REPORT%"
-echo $iocFile = '%IOCDIR%\ioc_scheduled_tasks.txt' > "%PSRUN%"
-echo $patterns = if (Test-Path $iocFile) { Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'} } >> "%PSRUN%"
-echo $tasks = (schtasks /query /fo CSV /v 2^>$null) ^| ConvertFrom-Csv -EA SilentlyContinue >> "%PSRUN%"
-echo if (-not $tasks) { '[INFO] schtasks returned no data -- IOC check skipped.' } elseif (-not $patterns) { '[INFO] ioc_scheduled_tasks.txt missing or empty.' } else { $hits = @(); foreach ($p in $patterns) { $rx = [regex]::Escape($p.Trim()); $hits += $tasks ^| Where-Object { ($_.TaskName -match $rx) -or ($_."Task To Run" -match $rx) } }; $hits = @($hits ^| Sort-Object TaskName,'Task To Run' -Unique); if ($hits.Count -gt 0) { $hits ^| Select-Object TaskName,'Task To Run' ^| Format-Table -AutoSize; '[WARNING] Scheduled task IOC matches found.'; New-Item "$env:TEMP\dz_taskioc_hits.txt" -Force ^| Out-Null } else { '[OK] No scheduled task IOC matches.' } } >> "%PSRUN%"
-del "%TEMP%\dz_taskioc_hits.txt" 2>nul
+:: Get-ScheduledTask, not schtasks /query /fo CSV. schtasks takes its column
+:: names from its language resources, so on a non-English Windows TaskName
+:: and "Task To Run" did not exist, nothing was compared, and 18e printed
+:: [OK]. Its CSV also cuts "Task To Run" at about 261 characters, so an IOC
+:: later in a long command line was never seen. The task's full path and every
+:: action's Execute and Arguments are properties, the same in every language.
+echo $iocFile = Join-Path $env:IOCDIR 'ioc_scheduled_tasks.txt' > "%PSRUN%"
+echo $patterns = if (Test-Path $iocFile) { Get-Content $iocFile ^| Where-Object {$_.Trim() -and $_ -notmatch '^\s*#'} } >> "%PSRUN%"
+echo $tasks = @(Get-ScheduledTask -EA SilentlyContinue ^| ForEach-Object { [pscustomobject]@{ Task = ([string]$_.TaskPath).TrimEnd('\') + '\' + [string]$_.TaskName; Action = (@($_.Actions ^| ForEach-Object { ([string]$_.Execute + ' ' + [string]$_.Arguments).Trim() }) -join '; ') } }) >> "%PSRUN%"
+echo if (-not $patterns) { '[WARNING] Scheduled task IOC match NOT performed -- ioc_scheduled_tasks.txt is missing or holds no entries.'; New-Item "$env:TEMP\dz_iochit_18e_gap.txt" -Force ^| Out-Null } elseif ($tasks.Count -eq 0) { '[WARNING] Scheduled task IOC match NOT performed -- Get-ScheduledTask listed no tasks.'; New-Item "$env:TEMP\dz_iochit_18e_gap.txt" -Force ^| Out-Null } else { $hits = @(); foreach ($p in $patterns) { $rx = [regex]::Escape($p.Trim()); $hits += $tasks ^| Where-Object { ($_.Task -match $rx) -or ($_.Action -match $rx) } }; $hits = @($hits ^| Sort-Object Task,Action -Unique); if ($hits.Count -gt 0) { $hits ^| Format-List Task,Action; '[WARNING] Scheduled task IOC matches found.'; New-Item "$env:TEMP\dz_iochit_18e.txt" -Force ^| Out-Null } else { '[OK] No scheduled task IOC matches.' } } >> "%PSRUN%"
+echo New-Item "$env:TEMP\dz_iochit_18e_done.txt" -Force ^| Out-Null >> "%PSRUN%"
+del "%TEMP%\dz_iochit_18e.txt" 2>nul
+del "%TEMP%\dz_iochit_18e_gap.txt" 2>nul
+del "%TEMP%\dz_iochit_18e_done.txt" 2>nul
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
-if exist "%TEMP%\dz_taskioc_hits.txt" (
+if exist "%TEMP%\dz_iochit_18e.txt" (
     set /a IOC_HITS+=1
     call :dz_finding WARNING 18 T1053 "Scheduled task IOC match"
-    del "%TEMP%\dz_taskioc_hits.txt" 2>nul
+    del "%TEMP%\dz_iochit_18e.txt" 2>nul
 )
+if exist "%TEMP%\dz_iochit_18e_gap.txt" (
+    call :dz_finding WARNING 18 T1053 "Scheduled task IOC match NOT performed - list unreadable or empty, or tasks not enumerable"
+    del "%TEMP%\dz_iochit_18e_gap.txt" 2>nul
+)
+if not exist "%TEMP%\dz_iochit_18e_done.txt" (
+    echo [WARNING] Scheduled task IOC match NOT performed -- its PowerShell check stopped before reaching a verdict; the error is above.>> "%REPORT%"
+    call :dz_finding WARNING 18 T1053 "Scheduled task IOC match NOT performed - the check stopped before a verdict"
+)
+del "%TEMP%\dz_iochit_18e_done.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- [18f] DNS Cache C2 Domain Match --->> "%REPORT%"
@@ -4201,12 +4267,13 @@ echo  Command: powershell -Command "$f = @(Get-Content '%IOCDIR%\ioc_domains.txt
 echo  Matching DNS cache against ioc_domains.txt>> "%REPORT%"
 :: Capture the cache to a temp file first: a failed/denied ipconfig used to
 :: feed findstr nothing and print [OK], hiding the failure. Empty file ->
-:: [SKIPPED] instead.
+:: a raised NOT-performed gap instead.
 ipconfig /displaydns > "%TEMP%\dz_dns18f.tmp" 2>nul
 set "_ENUM18F="
 for %%z in ("%TEMP%\dz_dns18f.tmp") do if %%~zz GTR 0 set "_ENUM18F=1"
 if defined _ENUM18F goto :sec18f_match
-echo [SKIPPED] DNS cache could not be read -- C2 domain match NOT performed.>> "%REPORT%"
+echo [WARNING] C2 domain IOC match NOT performed -- ipconfig /displaydns printed nothing, so the DNS cache could not be read.>> "%REPORT%"
+call :dz_finding WARNING 18 T1071.004 "C2 domain IOC match NOT performed - DNS cache not readable"
 goto :sec18f_done
 :sec18f_match
 :: ipconfig prints its banner even when it cannot show the cache (the DNS
@@ -4252,12 +4319,13 @@ echo  Matching process command lines against ioc_lolbins.txt>> "%REPORT%"
 :: wmic was removed in Windows 11 24H2+; the old wmic enumeration silently
 :: produced an empty temp file there and select_lines reported no matches,
 :: so LOLBin abuse went undetected while the report said [OK]. Enumerate via
-:: CIM and report [SKIPPED] when the enumeration itself fails.
+:: CIM and raise a NOT-performed gap when the enumeration itself fails.
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object { $_.Name+'  '+$_.ProcessId+'  '+$_.CommandLine }" > "%TEMP%\dz_evt.tmp" 2>nul
 set "_ENUM18G="
 for %%z in ("%TEMP%\dz_evt.tmp") do if %%~zz GTR 100 set "_ENUM18G=1"
 if defined _ENUM18G goto :sec18g_match
-echo [SKIPPED] Process command-line enumeration failed -- LOLBin pattern match NOT performed.>> "%REPORT%"
+echo [WARNING] LOLBin pattern match NOT performed -- process command lines could not be listed.>> "%REPORT%"
+call :dz_finding WARNING 18 T1059 "LOLBin pattern match NOT performed - command lines not enumerable"
 del "%TEMP%\dz_evt.tmp" 2>nul
 goto :sec18g_done
 :sec18g_match
@@ -4286,7 +4354,7 @@ echo.>> "%REPORT%"
 echo --- [18h] Registry IOC Check --->> "%REPORT%"
 echo  Command: powershell -Command "Get-ItemProperty $psPath -Name $valName -EA Stop">> "%REPORT%"
 echo  Checking suspicious registry keys from ioc_registry.txt>> "%REPORT%"
-echo $iocFile='%IOCDIR%\ioc_registry.txt' > "%PSRUN%"
+echo $iocFile = Join-Path $env:IOCDIR 'ioc_registry.txt' > "%PSRUN%"
 echo $lines=if(Test-Path $iocFile){Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'}} >> "%PSRUN%"
 echo $hits=@() >> "%PSRUN%"
 echo foreach($line in $lines){ >> "%PSRUN%"
@@ -4297,14 +4365,26 @@ echo     if($valName){$v=Get-ItemProperty $psPath -Name $valName -EA Stop; $cur=
 echo     else{if(Test-Path $psPath){ $k=Get-Item -LiteralPath $psPath -EA SilentlyContinue; $n=0; if($k){$n=$k.ValueCount+$k.SubKeyCount}; if($n -gt 0){$hits+="$keyPath [EXISTS, $n entr(ies)]"} }} >> "%PSRUN%"
 echo   }catch{} >> "%PSRUN%"
 echo } >> "%PSRUN%"
-echo if(-not $lines){'[SKIPPED] ioc_registry.txt missing or empty -- registry IOC check NOT performed.'}elseif($hits.Count -gt 0){'[WARNING] Suspicious registry IOCs found:'; $hits; New-Item "$env:TEMP\dz_iochit_18h.txt" -Force ^| Out-Null}else{'[OK] No suspicious registry IOC matches.'} >> "%PSRUN%"
+echo if(-not $lines){'[WARNING] Registry IOC match NOT performed -- ioc_registry.txt is missing or holds no entries.'; New-Item "$env:TEMP\dz_iochit_18h_gap.txt" -Force ^| Out-Null}elseif($hits.Count -gt 0){'[WARNING] Suspicious registry IOCs found:'; $hits; New-Item "$env:TEMP\dz_iochit_18h.txt" -Force ^| Out-Null}else{'[OK] No suspicious registry IOC matches.'} >> "%PSRUN%"
+echo New-Item "$env:TEMP\dz_iochit_18h_done.txt" -Force ^| Out-Null >> "%PSRUN%"
 del "%TEMP%\dz_iochit_18h.txt" 2>nul
+del "%TEMP%\dz_iochit_18h_gap.txt" 2>nul
+del "%TEMP%\dz_iochit_18h_done.txt" 2>nul
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_iochit_18h.txt" (
     set /a IOC_HITS+=1
     call :dz_finding WARNING 18 T1112 "Registry IOC match"
     del "%TEMP%\dz_iochit_18h.txt" 2>nul
 )
+if exist "%TEMP%\dz_iochit_18h_gap.txt" (
+    call :dz_finding WARNING 18 T1112 "Registry IOC match NOT performed - list unreadable or empty"
+    del "%TEMP%\dz_iochit_18h_gap.txt" 2>nul
+)
+if not exist "%TEMP%\dz_iochit_18h_done.txt" (
+    echo [WARNING] Registry IOC match NOT performed -- its PowerShell check stopped before reaching a verdict; the error is above.>> "%REPORT%"
+    call :dz_finding WARNING 18 T1112 "Registry IOC match NOT performed - the check stopped before a verdict"
+)
+del "%TEMP%\dz_iochit_18h_done.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- [18i] TTP Coverage Summary --->> "%REPORT%"
@@ -4376,17 +4456,28 @@ echo  No network calls; complements [18j] -vt VirusTotal lookup.>> "%REPORT%"
 if exist "%SCRIPT_DIR%tools\ioc_hash_check.ps1" (
     if exist "%IOCDIR%\ioc_hashes.txt" (
         del "%TEMP%\dz_iochit_18k.txt" 2>nul
+        del "%TEMP%\dz_iochit_18k_gap.txt" 2>nul
         "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\ioc_hash_check.ps1" -IocFile "%IOCDIR%\ioc_hashes.txt" >> "%REPORT%" 2>&1
         if exist "%TEMP%\dz_iochit_18k.txt" (
             set /a IOC_HITS+=1
-            call :dz_finding WARNING 18 T1105 "File hash IOC match"
+            rem CRITICAL, as ioc_hash_check prints it: a file on disk with a known-bad
+            rem SHA256. Raised WARNING it ended the run at exit 2 beside a printed
+            rem [CRITICAL] line, and the ledger-divergence alarm fired.
+            call :dz_finding CRITICAL 18 T1105 "File hash IOC match"
             del "%TEMP%\dz_iochit_18k.txt" 2>nul
         )
+        if exist "%TEMP%\dz_iochit_18k_gap.txt" (
+            call :dz_finding WARNING 18 T1105 "File hash IOC match NOT performed - list holds no valid SHA256 rows"
+            del "%TEMP%\dz_iochit_18k_gap.txt" 2>nul
+        )
     ) else (
-        echo  [INFO] %IOCDIR%\ioc_hashes.txt not found -- local hash check skipped.>> "%REPORT%"
+        rem !IOCDIR!, not the percent form: a parenthesis in the path would end this block.
+        echo [WARNING] File hash IOC match NOT performed -- !IOCDIR!\ioc_hashes.txt not found.>> "%REPORT%"
+        call :dz_finding WARNING 18 T1105 "File hash IOC match NOT performed - list not found"
     )
 ) else (
-    echo  [INFO] tools\ioc_hash_check.ps1 not found -- local hash check skipped.>> "%REPORT%"
+    echo [WARNING] File hash IOC match NOT performed -- tools\ioc_hash_check.ps1 not found.>> "%REPORT%"
+    call :dz_finding WARNING 18 T1105 "File hash IOC match NOT performed - tool missing"
 )
 
 echo.>> "%REPORT%"
@@ -4408,12 +4499,14 @@ if "!IOC_GAPS!"=="-1" (
 echo [INFO] No threat indicator matches in the categories checked, but !IOC_GAPS! check^(s^) above could NOT run -- this is not an all-clear.>> "%REPORT%"
 goto :sec18_sum_done
 :sec18_sum_hits
-if "!IOC_HITS!"=="0" (
-    rem A tally, not a finding: every category above already raised its own
-    rem ledger row. Tagging the tally WARNING made a reader count one more
-    rem finding than the tool did (standard-user field run 2026-09-24).
-    echo [INFO] !IOC_HITS! IOC category matches found. Review [WARNING] and [CRITICAL] entries above.>> "%REPORT%"
-)
+:: A tally, not a finding: every category above already raised its own ledger
+:: row. Tagging the tally WARNING made a reader count one more finding than the
+:: tool did (standard-user field run 2026-09-24). It printed nothing at all
+:: from PR #241 to the next one: the goto rewrite left it behind an
+:: IOC_HITS==0 test, which is never true on this branch.
+echo [INFO] !IOC_HITS! IOC category matches found. Review [WARNING] and [CRITICAL] entries above.>> "%REPORT%"
+if "!IOC_GAPS!"=="-1" echo [INFO] How many checks above could not run is unknown, so a category without a match is not cleared.>> "%REPORT%"
+if not "!IOC_GAPS!"=="-1" if not "!IOC_GAPS!"=="0" echo [INFO] !IOC_GAPS! check^(s^) above could NOT run, so a category without a match is not cleared.>> "%REPORT%"
 :sec18_sum_done
 echo.>> "%REPORT%"
 

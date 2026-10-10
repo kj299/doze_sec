@@ -6,6 +6,97 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Section 18: every IOC match that cannot run says so and raises it; 18e reads tasks in any language
+Misses first, both mine:
+- **PR #241 broke the Section 18 summary.** Rewriting it into gotos left the
+  hits branch behind an `IOC_HITS==0` test, which is never true there, so
+  with any IOC match the summary printed nothing. No test read the summary.
+  It now prints its tally, and says when checks above could not run. The
+  plant harness asserts the tally line.
+- **The backlog note behind this change was incomplete.** It named 18b and
+  18e. The same unraised gap was in 18c, 18d, 18h and 18k, and in the
+  "could not list" branches of 18a, 18b, 18c, 18e and 18g. It also said the
+  summary counted these lines as gaps. That was false for 18e and 18k: their
+  `[INFO] ... skipped` lines match none of the words the summary counts.
+
+What changed:
+- **A matcher that cannot run raises a gap.** When its list is missing or
+  holds no entries, or Windows will not list processes, pipes, services,
+  tasks or command lines, each check prints `[WARNING] <check> IOC match NOT
+  performed -- <reason>`. It raises a gap-worded ledger row under its own
+  section and technique. It never reads `[OK]`, and a gap does not count as
+  an IOC match. The staged blocks write `dz_iochit_18X_gap.txt`, which both
+  bats read. `ioc_hash_check.ps1` does the same for a missing list, or one
+  with no valid SHA256 row.
+- **18e uses `Get-ScheduledTask` instead of schtasks' CSV.** It matched on
+  `TaskName` and `Task To Run`. schtasks takes its column names from its
+  language files, so on a non-English Windows those columns did not exist,
+  nothing was compared, and 18e printed `[OK]`. That is a permanent
+  all-clear for anyone not on English Windows. The CSV also cuts the command
+  line at about 261 characters, so a match later in a long command was never
+  seen. 18e now matches the task's full path and every action's complete
+  command line. Its `Command:` line is runnable PowerShell, and
+  `Get-ScheduledTask` joined the command probe's read-only allowlist.
+- **An 18k hash match is raised CRITICAL.** `ioc_hash_check` prints
+  `[CRITICAL] ... QUARANTINE IMMEDIATELY` for a file with a known-bad
+  SHA256, and both bats raised it as WARNING. A hash match alone ended the
+  run at exit 2 beside a printed `[CRITICAL]` line, and the bat's own
+  ledger-divergence alarm fired.
+- The noAdmin bat's 18e marker is renamed to match the elevated bat's, so
+  Section 18 is the same in both, apart from the noAdmin driver note.
+
+How it is proven:
+- The gap branches only run when something is missing, which no healthy
+  machine shows. `tests\section18_gaps.ps1` renders each staged block the
+  way cmd writes it and runs it. With no list, and with a comments-only
+  list, it must print the NOT-performed line and write its gap marker, with
+  no `[OK]` line and no hit. It also checks that both bats carry the same
+  blocks and that each bat deletes, reads and raises each gap under the right
+  technique. Its `-SelfTest` proves twelve named defects each fail for their
+  own reason, among them the summary guard restored. The `[SKIPPED]` revert
+  is caught both by reading the bat and by running the block.
+- lint.yml runs it on Linux, where the Windows listings do not exist, so
+  18b, 18c and 18e also prove their "could not be listed" branch.
+- The Windows helpers job runs it under 5.1. The shipped lists must give no
+  gap. A planted named pipe must be matched. Planted scheduled tasks must be
+  matched by name and by an action argument 300 characters in, and a twin
+  task holding no list entry must not be. A missing hash list and a
+  comment-only one must each print NOT performed and write the gap marker.
+- A healthy runner raises no Section 18 gap. The plant harness, the
+  full-run job and the standard-user smoke test all assert it. On the
+  standard-user path a false gap would not change the run's MAXSEV, so
+  nothing else would notice it.
+- `assert_printed_findings_raised` gained contracts for the 18b, 18c, 18d,
+  18e, 18h and 18k findings and their gap lines. `lint_shared_copies` pins
+  `Expand-CmdEscapes`, which the test copies from `lint_remediation`.
+
+**A read-only review of the change, before the first push, found three more
+ways Section 18 could read clean having checked nothing:**
+- **No ThreatLists folder at all.** The bat printed `[SKIP]`, jumped past
+  every match, raised nothing and left the gap count at 0, so the dashboard
+  tile read PASS: "no threat indicator matches across all categories". That
+  happens when someone copies the bat and `tools\` without `ThreatLists\`.
+  It is now `[WARNING] IOC sweep NOT performed`, with an `IOCSWEEP` ledger
+  row, and the tile reads "not an all-clear".
+- **An apostrophe in the folder path.** The five staged blocks pasted the
+  list folder between single quotes. The standard-user script keeps it under
+  the profile folder, so for a user named `O'Brien` each block was a
+  PowerShell parse error. It printed no verdict and raised nothing, and the
+  summary read `[OK]`. The blocks now read the folder from the environment
+  (`$env:IOCDIR`). Each block also writes a done marker as its last act, and
+  a block that stops before its verdict, for this reason or any other, is a
+  raised `NOT performed` line. The same flaw is in 7 more lines per script,
+  outside Section 18. It is recorded in the backlog as the next change.
+- **18f when `ipconfig /displaydns` printed nothing at all** was still an
+  unraised `[SKIPPED]`. It is now a raised gap. An empty cache while the DNS
+  Client is running stays `[SKIPPED]`: there the input is absent, not the
+  listing.
+
+The review also found that the new test's `-SelfTest` would break on a
+Windows (CRLF) checkout. It now runs on Windows too. It also found that "a
+gap never counts as a match" was claimed but not asserted. It is asserted
+now, with a mutation that adds `IOC_HITS+=1` to a gap read.
+
 ### Sections 18a, 18f and 18g: one matcher that cannot read clean on failure, and plants that prove 18a and 18f fire
 No test had ever planted a positive 18a match (a running process named on
 `ioc_processes.txt`) or 18f match (a C2 domain from `ioc_domains.txt` in the

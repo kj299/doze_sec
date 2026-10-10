@@ -91,6 +91,39 @@ $script:Contracts = @(
        Signature = '^\s*\[WARNING\] LOLBin pattern match NOT performed'
        Section   = '18'
        Technique = 'T1059' }
+    # Sections 18b-18e, 18h and 18k (marker idiom). A match raises the finding;
+    # a list that is missing or holds no entries, or a listing Windows would
+    # not give, prints NOT performed and raises a gap row under the same
+    # section and technique. None prints on an unplanted runner; these guard
+    # the raise on any report that does print one.
+    @{ Name      = 'Named pipe on ioc_named_pipes.txt, or the match not performed'
+       Signature = '^\s*\[WARNING\] Named pipe IOC (matches found|match NOT performed)'
+       Section   = '18'
+       Technique = 'T1071' }
+    @{ Name      = 'Service on ioc_services.txt, or the match not performed'
+       Signature = '^\s*\[WARNING\] Service IOC (matches found|match NOT performed)'
+       Section   = '18'
+       Technique = 'T1543' }
+    @{ Name      = 'Known malware staging file on disk, or the match not performed'
+       Signature = '^\s*(\[CRITICAL\] Known malware staging files found|\[WARNING\] Staging file IOC match NOT performed)'
+       Section   = '18'
+       Technique = 'T1074' }
+    @{ Name      = 'Scheduled task on ioc_scheduled_tasks.txt, or the match not performed'
+       Signature = '^\s*\[WARNING\] Scheduled task IOC (matches found|match NOT performed)'
+       Section   = '18'
+       Technique = 'T1053' }
+    @{ Name      = 'Registry IOC from ioc_registry.txt, or the match not performed'
+       Signature = '^\s*\[WARNING\] (Suspicious registry IOCs found|Registry IOC match NOT performed)'
+       Section   = '18'
+       Technique = 'T1112' }
+    @{ Name      = 'File with a known-bad SHA256 from ioc_hashes.txt, or the match not performed'
+       Signature = '^\s*(\[CRITICAL\] Local hash IOC:|\[WARNING\] File hash IOC match NOT performed)'
+       Section   = '18'
+       Technique = 'T1105' }
+    @{ Name      = 'No ThreatLists folder, so the whole file-based IOC sweep was not performed'
+       Signature = '^\s*\[WARNING\] IOC sweep NOT performed'
+       Section   = '18'
+       Technique = 'IOCSWEEP' }
 )
 
 function Get-UnraisedContracts {

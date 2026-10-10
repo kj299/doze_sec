@@ -51,7 +51,7 @@ $script:OkCmdlets = @(
     'Get-AuthenticodeSignature','Get-BitLockerVolume','Get-ChildItem','Get-CimInstance','Get-DnsClientCache',
     'Get-Content','Get-Date','Get-ExecutionPolicy','Get-HotFix','Get-Item','Get-ItemProperty',
     'Get-LocalUser','Get-MpComputerStatus','Get-MpPreference','Get-MpThreatDetection',
-    'Get-NetFirewallProfile','Get-PhysicalDisk','Get-Process','Get-Service',
+    'Get-NetFirewallProfile','Get-PhysicalDisk','Get-Process','Get-ScheduledTask','Get-Service',
     'Get-SmbServerConfiguration','Get-WindowsOptionalFeature','Get-WinEvent','Get-WMIObject',
     'Join-Path','Measure-Object','Select-Object','Sort-Object','Test-Path','Where-Object','Write-Output'
 )

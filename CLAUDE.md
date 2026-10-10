@@ -657,7 +657,12 @@ the errorlevel is the LAST stage's**: Sections 18a and 18f ran
 not read its list (or choked on a line) handed the second nothing, and the
 section printed `[OK]`. A matcher's "could not check" needs its own exit code
 and its own NOT-performed line (`select_lines` exits 2), and the plant that
-proves the match fires must be anchored inside its own subsection.
+proves the match fires must be anchored inside its own subsection. **And a
+matcher that reads another tool's column NAMES reads nothing on a localized
+Windows**: 18e matched `TaskName` and `Task To Run` from schtasks' CSV, whose
+headers come from its language files, so it printed `[OK]` on every
+non-English machine having compared nothing. Read objects
+(`Get-ScheduledTask`), not headers.
 
 **"All fail" is a different claim from "some fail".** `dns_probe` graded each
 domain on its own, so a laptop with no network -- nine domains, nine failures

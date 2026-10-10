@@ -519,14 +519,47 @@ carries file contents only and is immune. A checkout is not. Proposed:
 exec_probe counts Zone.Identifier streams on `tools\*.ps1` and declares a gap
 when any is marked and the policy is RemoteSigned.
 
+## A user name with an apostrophe silently breaks staged PowerShell (found 2026-10-10, NEXT)
+
+The batch files build PowerShell by echoing lines into `%PSRUN%`, and some of
+those lines paste a folder path between single quotes: `$x='%VAR%'`. A
+Windows user named `O'Brien` has `C:\Users\O'Brien`, so the pasted line is a
+parse error. The whole block then prints no verdict and raises nothing.
+Section 18's five blocks were fixed on 2026-10-10: they read `$env:IOCDIR`,
+and a done marker turns any block that stops early into a raised gap. Seven
+lines per script are still exposed, in both scripts:
+- **The end-of-run dashboard script:** `$scf='%SUMCODE%'`,
+  `$scnt='%SUMCOUNT%'`, `$rem` / `$enf` / `$und` (the remediation paths) and
+  `$lgp='%LEDGER%'`. `SUMCODE` and `SUMCOUNT` live in `%TEMP%`, which is under
+  the user's profile even on an elevated run. An affected user gets no
+  dashboard and no remediation script, from either script.
+- **Section 11's PowerShell history check:**
+  `Get-Content '%APPDATA%\...\ConsoleHost_history.txt'`.
+
+The printed `Command:` lines that embed `'%IOCDIR%...'` (18a, 18e, 18f, 18g)
+are display text, but a reader pasting one hits the same parse error.
+
+Fix: read each path from the environment (`$env:SUMCODE` and so on; cmd's
+variables are the child's environment). Prove it with a CI run of the whole
+audit under a `TEMP` whose name holds an apostrophe, which will also surface
+any site that reading missed. The CI run is the test this needs: only a run
+where the path really contains an apostrophe can show what breaks.
+
 ## IOC process and DNS-cache matches have never fired in a test (found 2026-10-09; DONE 2026-10-10)
 
 Done: Sections 18a, 18f and 18g now match with `tools\select_lines.ps1` (a list
 with nothing to match is NOT performed, never `[OK]`), and the plant harness
 fires 18a (a chisel-named process) and 18f (a HOSTS-loaded ngrok.io name),
-each with a benign twin and a ledger-row assertion. Still open: 18b and 18e
-print `[SKIPPED]` / `[INFO]` for a missing list without raising (the Section
-18 summary now counts them as gaps). What was found:
+each with a benign twin and a ledger-row assertion. The follow-up is done too
+(2026-10-10): every Section 18 matcher that cannot run (a list missing or
+empty, a listing Windows refuses) prints NOT performed and raises a gap row,
+18e reads tasks with `Get-ScheduledTask` instead of schtasks' localized CSV
+columns, and `tests\section18_gaps.ps1` runs the gap branches. The note that
+stood here was wrong twice: it named 18b and 18e when 18c, 18d, 18h and 18k
+had the same shape, and it said the summary counted their lines as gaps, which
+was false for 18e and 18k. Still open: no test plants a positive 18c, 18d or
+18h match through the audit itself (18b and 18e are matched on a planted pipe
+and tasks in the helpers job, through the rendered blocks). What was found:
 
 
 While checking the stick's line endings, a search found no test that plants a
