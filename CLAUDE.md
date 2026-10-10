@@ -479,9 +479,11 @@ class **and stays quiet on the prose**. CI runs it in `lint.yml`.
 **Copied helpers stay identical.** The tools are self-contained on purpose (no
 module imports), so a helper several tools need is copied into each.
 `tools/lint_shared_copies.ps1` pins the copies of `Get-RegKeyLastWrite`,
-`Get-WhenLine` and `Write-WhenCaveat` byte-identical (comments included);
-`pending_reboot_check`'s copy had already lost a line when it was added. When a
-helper is copied into a third tool, add its name to the lint's manifest.
+`Get-WhenLine`, `Write-WhenCaveat` and the harness's `Remove-HostsMarkerLines`
+(in `tests\`: the cold cleanup must run standalone) byte-identical (comments
+included); `pending_reboot_check`'s copy had already lost a line when it was
+added. When a helper is copied into a second script, add its name to the lint's
+manifest. With two copies there is no majority, so a drifted pair names both.
 
 ### "Unavailable" is not an answer (REQUIRED)
 
@@ -649,7 +651,13 @@ were XML element names run against `wevtutil /f:text` output, so it matched
 nothing and printed `[OK] No recent service install events` on every machine
 while Section 18 listed 26. **A filter that can never match is a permanent
 all-clear**; when a pipeline's vocabulary comes from another tool's output
-format, CI must run that pipeline against a real record.
+format, CI must run that pipeline against a real record. **And in a cmd pipe
+the errorlevel is the LAST stage's**: Sections 18a and 18f ran
+`findstr /g:<list> <file> | findstr /v "#"`, so a first findstr that could
+not read its list (or choked on a line) handed the second nothing, and the
+section printed `[OK]`. A matcher's "could not check" needs its own exit code
+and its own NOT-performed line (`select_lines` exits 2), and the plant that
+proves the match fires must be anchored inside its own subsection.
 
 **"All fail" is a different claim from "some fail".** `dns_probe` graded each
 domain on its own, so a laptop with no network -- nine domains, nine failures

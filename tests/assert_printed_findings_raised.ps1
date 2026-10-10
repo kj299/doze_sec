@@ -75,6 +75,22 @@ $script:Contracts = @(
        Signature = '^\s*\[WARNING\] (LSASS PPL not enabled|RunAsPPL=\S+ is set but LSASS did NOT start protected|LSA Protection state could NOT be determined)'
        Section   = '12'
        Technique = 'T1003.001' }
+    # Sections 18a, 18f and 18g (direct echo + :dz_finding). The plant harness
+    # fires 18a and 18f; on an unplanted runner neither prints, so here these
+    # guard the raise if a runner ever does. The NOT-performed lines are the
+    # gap rows: same section and technique, gap-worded.
+    @{ Name      = 'Running process on ioc_processes.txt, or the match not performed'
+       Signature = '^\s*\[WARNING\] Process IOC (matches found above|match NOT performed)'
+       Section   = '18'
+       Technique = 'T1057' }
+    @{ Name      = 'C2 domain from ioc_domains.txt in the DNS cache, or the match not performed'
+       Signature = '^\s*\[WARNING\] C2 domain IOC (matches found in DNS cache|match NOT performed)'
+       Section   = '18'
+       Technique = 'T1071.004' }
+    @{ Name      = 'LOLBin command-line match not performed'
+       Signature = '^\s*\[WARNING\] LOLBin pattern match NOT performed'
+       Section   = '18'
+       Technique = 'T1059' }
 )
 
 function Get-UnraisedContracts {

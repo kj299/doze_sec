@@ -519,7 +519,15 @@ carries file contents only and is immune. A checkout is not. Proposed:
 exec_probe counts Zone.Identifier streams on `tools\*.ps1` and declares a gap
 when any is marked and the policy is RemoteSigned.
 
-## IOC process and DNS-cache matches have never fired in a test (found 2026-10-09)
+## IOC process and DNS-cache matches have never fired in a test (found 2026-10-09; DONE 2026-10-10)
+
+Done: Sections 18a, 18f and 18g now match with `tools\select_lines.ps1` (a list
+with nothing to match is NOT performed, never `[OK]`), and the plant harness
+fires 18a (a chisel-named process) and 18f (a HOSTS-loaded ngrok.io name),
+each with a benign twin and a ledger-row assertion. Still open: 18b and 18e
+print `[SKIPPED]` / `[INFO]` for a missing list without raising (the Section
+18 summary now counts them as gaps). What was found:
+
 
 While checking the stick's line endings, a search found no test that plants a
 process name from `ioc_processes.txt` or puts a domain from `ioc_domains.txt`

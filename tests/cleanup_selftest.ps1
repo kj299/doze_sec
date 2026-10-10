@@ -101,6 +101,44 @@ function Strip-MultiString {
     } catch { Report $What 'ABSENT' }
 }
 
+# The harness's three HOSTS plants share this cleanup; tests\detection_selftest.ps1
+# carries an identical copy and tools\lint_shared_copies.ps1 keeps the two
+# byte-identical. Copied, not loaded: this script must run standalone.
+function Remove-HostsMarkerLines {
+    # Drop every HOSTS line that holds the marker and keep every other byte as
+    # it was -- encoding, BOM and line endings. The bytes go through Latin-1,
+    # which maps each byte to one character and back unchanged, and the text is
+    # split after each LF, so nothing is decoded or re-encoded. (Get-Content /
+    # Set-Content -Encoding UTF8 rewrote the whole file and, on 5.1, added a
+    # BOM.) The file is rewritten only when a line was removed. Another process
+    # (the DNS Client, an antivirus) can hold the file for a moment, so a failed
+    # read or write is retried; a cleanup that needed more than one attempt
+    # says so, and one that still fails after the last attempt throws with the
+    # error of the call that failed. Returns the number of lines removed.
+    param([string]$Path, [string]$Marker)
+    $latin1 = [Text.Encoding]::GetEncoding(28591)
+    $rx = [regex]::Escape($Marker)
+    $first = $null
+    $last = $null
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        try {
+            $lines = [regex]::Split($latin1.GetString([IO.File]::ReadAllBytes($Path)), '(?<=\n)')
+            $kept = @($lines | Where-Object { $_ -notmatch $rx })
+            $removed = $lines.Count - $kept.Count
+            if ($removed -gt 0) { [IO.File]::WriteAllBytes($Path, $latin1.GetBytes(-join $kept)) }
+            if ($attempt -gt 1) {
+                Write-Host ("  NOTE: HOSTS cleanup needed {0} attempts (first error: {1}: {2})" -f $attempt, $first.GetType().Name, $first.Message)
+            }
+            return $removed
+        } catch {
+            $last = $_.Exception
+            if ($null -eq $first) { $first = $last }
+            if ($attempt -lt 5) { Start-Sleep -Milliseconds 400 }
+        }
+    }
+    throw ("HOSTS cleanup failed after 5 attempts (last error: {0}: {1})" -f $last.GetType().Name, $last.Message)
+}
+
 Write-Host ''
 Write-Host '== Removing planted detection-harness artifacts (by marker) =='
 Write-Host ''
@@ -181,6 +219,14 @@ Get-Process -Name 'svchost' -EA SilentlyContinue |
     Where-Object { $_.Path -and $_.Path.StartsWith('C:\Users\Public\dz_selftest_masq', [StringComparison]::OrdinalIgnoreCase) } |
     Stop-Process -Force -EA SilentlyContinue
 Remove-Path 'C:\Users\Public\dz_selftest_masq'                 'Masquerading svchost.exe directory (Public\dz_selftest_masq)'
+# The Section 18a plants are RUNNING copies of ping.exe named after an IOC
+# entry and its benign twin; stopped by PATH before their directories go.
+Get-Process -EA SilentlyContinue |
+    Where-Object { $_.Path -and ($_.Path.StartsWith('C:\dz_selftest_ioc\', [StringComparison]::OrdinalIgnoreCase) -or $_.Path.StartsWith('C:\dz_selftest_ioc_benign\', [StringComparison]::OrdinalIgnoreCase)) } |
+    Stop-Process -Force -EA SilentlyContinue
+if (Test-Path -LiteralPath 'C:\dz_selftest_ioc' -PathType Container) { Start-Sleep -Milliseconds 500 }
+Remove-Path 'C:\dz_selftest_ioc'                                'IOC-named process directory (dz_selftest_ioc)'
+Remove-Path 'C:\dz_selftest_ioc_benign'                         'Benign twin process directory (dz_selftest_ioc_benign)'
 Remove-Path 'C:\Program Files\dz selftest fp'                   'FP-service directory'
 Remove-Path 'C:\dz_selftest_excl_dir'                           'Defender exclusion directory'
 Remove-Path (Join-Path $OutDir 'baseline.snapshot')            'Seeded baseline snapshot'
@@ -194,15 +240,21 @@ if (Test-Path -LiteralPath $stray) {
 }
 
 # --- HOSTS: drop only the marker lines -------------------------------------
+# A missing HOSTS file is ABSENT. A cleanup that FAILED is an error (exit 1),
+# never ABSENT: the recovery script must not report a plant it could not
+# remove as already gone.
 $hostsPath = Join-Path $env:SystemRoot 'System32\drivers\etc\hosts'
-try {
-    $lines = Get-Content -LiteralPath $hostsPath -Encoding UTF8 -EA Stop
-    $kept  = @($lines | Where-Object { $_ -notmatch $MARK })
-    if ($kept.Count -ne $lines.Count) {
-        Set-Content -LiteralPath $hostsPath -Value $kept -Encoding UTF8 -Force
-        Report 'HOSTS entry (DNS hijack line)' 'REMOVED'
-    } else { Report 'HOSTS entry (DNS hijack line)' 'ABSENT' }
-} catch { Report 'HOSTS entry (DNS hijack line)' 'ABSENT' }
+$hostsWhat = 'HOSTS entries (DNS hijack line; the 18f IOC domain and its twin)'
+if (-not (Test-Path -LiteralPath $hostsPath -PathType Leaf)) { Report $hostsWhat 'ABSENT' }
+else {
+    try {
+        if ((Remove-HostsMarkerLines -Path $hostsPath -Marker $MARK) -gt 0) { Report $hostsWhat 'REMOVED' }
+        else { Report $hostsWhat 'ABSENT' }
+    } catch {
+        $script:errors += ("{0}: {1}" -f $hostsWhat, $_.Exception.Message)
+        if (-not $Quiet) { Write-Host ("  [FAILED ] {0}" -f $hostsWhat) }
+    }
+}
 
 # --- PowerShell profile: delete ONLY if it is the planted download cradle ---
 $psProfile = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'WindowsPowerShell\Microsoft.PowerShell_profile.ps1'

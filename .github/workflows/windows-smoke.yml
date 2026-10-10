@@ -176,7 +176,7 @@ jobs:
           Write-Host "browser_extensions OK ($n self-test cases)"
           exit 0
 
-      - name: select_lines.ps1 incl. a 20,000-char line (findstr would hang)
+      - name: select_lines.ps1 incl. a 20,000-char line (findstr would hang); -SelfTest exit codes 0/1/2 on 5.1
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -189,6 +189,20 @@ jobs:
           .\tools\select_lines.ps1 -Path $f "ScreenConnect" "AnyDesk" | Out-Null
           if ($LASTEXITCODE -ne 1) { Write-Host "expected no RMM match (exit 1), got $LASTEXITCODE"; exit 1 }
           Write-Host "select_lines OK (matched through a 20KB line, no hang)"
+          # Sections 18a, 18f and 18g branch on these exit codes through
+          # powershell.exe -File on 5.1: 0 matched, 1 none, 2 nothing to match
+          # with (reported as NOT performed, never [OK]).
+          $st = (.\tools\select_lines.ps1 -SelfTest) -join "`n"
+          Write-Host $st
+          if ($LASTEXITCODE -ne 0) { throw 'select_lines -SelfTest failed on Windows PowerShell 5.1' }
+          $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($n -lt 12) { throw "select_lines self-test ran only $n case(s)" }
+          foreach ($must in 'a list holding only comments and blanks is exit 2', 'a missing list is exit 2', 'a hit on a line holding # is kept') {
+            if ($st -notmatch [regex]::Escape($must)) { throw ("select_lines case missing: {0}" -f $must) }
+          }
+          $cg = (.\tools\count_gaps.ps1 -SelfTest) -join "`n"
+          Write-Host $cg
+          if ($LASTEXITCODE -ne 0) { throw 'count_gaps -SelfTest failed on Windows PowerShell 5.1' }
           exit 0
 
       - name: top_findings.ps1 + report_format.ps1 on a sample report

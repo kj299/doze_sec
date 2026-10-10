@@ -114,11 +114,64 @@ $comDll      = 'C:\Users\Public\dz_selftest_evil_com.dll'
 # is the plant, the path is what the check grades.
 $masqDir     = 'C:\Users\Public\dz_selftest_masq'
 $masqExe     = Join-Path $masqDir 'svchost.exe'
+# Section 18a: a copy of ping.exe whose NAME holds an ioc_processes.txt entry
+# (chisel), and a twin whose name holds none (level_agent is an RMM name the
+# list deliberately dropped). A plain directory under C:\ -- not Temp, where
+# ioc_file_paths lists %TEMP%\chisel.exe, and not Users\Public, which Section
+# 4 grades -- so 18a is the only check the plant reaches.
+$iocProcDir    = 'C:\dz_selftest_ioc'
+$iocProcExe    = Join-Path $iocProcDir 'dz_selftest_evil_chisel.exe'
+$iocBenignDir  = 'C:\dz_selftest_ioc_benign'
+$iocBenignExe  = Join-Path $iocBenignDir 'dz_selftest_evil_benign_level_agent.exe'
+# What 18a and 18f print for the two plants, anchored inside each subsection
+# (the names also appear elsewhere: Section 3 copies the whole DNS cache).
+# Each benign twin is graded only when its sibling matched: a twin that is
+# absent because the matcher never ran has tested nothing.
+$ioc18aExpect = '(?s)--- \[18a\] Process IOC Match ---(?:(?!--- \[18b\]).)*?dz_selftest_evil_chisel\.exe\s+\d+\s+C:\\dz_selftest_ioc\\(?:(?!--- \[18b\]).)*?\[WARNING\] Process IOC matches found above'
+$ioc18fExpect = '(?s)--- \[18f\] DNS Cache C2 Domain Match ---(?:(?!--- \[18g\]).)*?dz-selftest-evil\.ngrok\.io(?:(?!--- \[18g\]).)*?\[WARNING\] C2 domain IOC matches found in DNS cache'
 # Baseline/diff: the audit auto-diffs when a snapshot exists at OUTDIR. The
 # harness seeds one BEFORE the audit runs, with the planted Run-key backdoor
 # deliberately absent from it, so the audit's diff must report that autorun as
 # NEW -- proving end-to-end wiring the isolated helpers test cannot cover.
 $baselineFile = Join-Path $OutDir 'baseline.snapshot'
+
+# The three HOSTS plants share one cleanup. tests\cleanup_selftest.ps1 carries
+# an identical copy (it must run standalone and cold); tools\lint_shared_copies.ps1
+# keeps the two byte-identical.
+function Remove-HostsMarkerLines {
+    # Drop every HOSTS line that holds the marker and keep every other byte as
+    # it was -- encoding, BOM and line endings. The bytes go through Latin-1,
+    # which maps each byte to one character and back unchanged, and the text is
+    # split after each LF, so nothing is decoded or re-encoded. (Get-Content /
+    # Set-Content -Encoding UTF8 rewrote the whole file and, on 5.1, added a
+    # BOM.) The file is rewritten only when a line was removed. Another process
+    # (the DNS Client, an antivirus) can hold the file for a moment, so a failed
+    # read or write is retried; a cleanup that needed more than one attempt
+    # says so, and one that still fails after the last attempt throws with the
+    # error of the call that failed. Returns the number of lines removed.
+    param([string]$Path, [string]$Marker)
+    $latin1 = [Text.Encoding]::GetEncoding(28591)
+    $rx = [regex]::Escape($Marker)
+    $first = $null
+    $last = $null
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        try {
+            $lines = [regex]::Split($latin1.GetString([IO.File]::ReadAllBytes($Path)), '(?<=\n)')
+            $kept = @($lines | Where-Object { $_ -notmatch $rx })
+            $removed = $lines.Count - $kept.Count
+            if ($removed -gt 0) { [IO.File]::WriteAllBytes($Path, $latin1.GetBytes(-join $kept)) }
+            if ($attempt -gt 1) {
+                Write-Host ("  NOTE: HOSTS cleanup needed {0} attempts (first error: {1}: {2})" -f $attempt, $first.GetType().Name, $first.Message)
+            }
+            return $removed
+        } catch {
+            $last = $_.Exception
+            if ($null -eq $first) { $first = $last }
+            if ($attempt -lt 5) { Start-Sleep -Milliseconds 400 }
+        }
+    }
+    throw ("HOSTS cleanup failed after 5 attempts (last error: {0}: {1})" -f $last.GetType().Name, $last.Message)
+}
 
 # Each case: Name, Tier, Plant/Cleanup script blocks, and Expect -- a regex that
 # must appear in the final report text for the detection to count as firing.
@@ -156,17 +209,17 @@ $cases = @(
         Touches= @('hosts:%SystemRoot%\System32\drivers\etc\hosts|drivers\etc\hosts')
         Affects= @('network')
         Expect = 'Non-standard entries found in HOSTS'
-        Plant  = { Add-Content -LiteralPath $hostsPath -Value ("203.0.113.5 {0}.example" -f $MARK) }
-        # Read and write with the SAME explicit encoding. The old cleanup read
-        # with Get-Content's default (the process ANSI codepage) and rewrote
-        # with -Encoding ASCII, so on a machine whose hosts file is UTF-8 with
-        # non-ASCII content -- a curated blocklist with non-English comments,
-        # a hostname note in Cyrillic or CJK -- every multi-byte sequence
-        # became mojibake and then '?'. A test harness must leave the machine
-        # as it found it; silently corrupting a system file it only borrowed is
-        # not an acceptable side effect of asserting a detection.
-        Cleanup= { $keep = Get-Content -LiteralPath $hostsPath -Encoding UTF8 | Where-Object { $_ -notmatch $MARK }
-                   Set-Content -LiteralPath $hostsPath -Value $keep -Encoding UTF8 }
+        # Add-Content joins a last line that has no newline, so add one only then.
+        Plant  = { $nl = ''; $b = [IO.File]::ReadAllBytes($hostsPath); if ($b.Length -gt 0 -and $b[$b.Length - 1] -ne 10) { $nl = "`r`n" }
+                   Add-Content -LiteralPath $hostsPath -Value ($nl + ("203.0.113.5 {0}.example" -f $MARK)) }
+        # Remove-HostsMarkerLines (top of this file) keeps every other byte of the
+        # file as it was. An earlier cleanup read with the ANSI codepage and
+        # rewrote ASCII, turning a UTF-8 hosts file's non-ASCII comments into '?';
+        # the one after it rewrote the whole file as UTF-8 with a BOM. A test
+        # harness must leave the machine as it found it; silently re-encoding a
+        # system file it only borrowed is not an acceptable side effect of
+        # asserting a detection.
+        Cleanup= { [void](Remove-HostsMarkerLines -Path $hostsPath -Marker $MARK) }
     },
     @{
         Name   = 'Run-key backdoor (encoded PowerShell) -> flagged as suspicious'
@@ -313,6 +366,71 @@ $cases = @(
                      Stop-Process -Force -EA SilentlyContinue
                    Start-Sleep -Milliseconds 500
                    Remove-Item -LiteralPath $masqDir -Recurse -Force -EA SilentlyContinue }
+    },
+    @{
+        Name   = 'Process whose name holds an ioc_processes.txt entry -> Section 18a Process IOC match (T1057)'
+        Attack = @('T1057')
+        Tier   = 'required'
+        Touches= @('file:C:\dz_selftest_ioc\dz_selftest_evil_chisel.exe|dz_selftest_ioc')
+        Affects= @()
+        Expect = $ioc18aExpect
+        Plant  = { New-Item -ItemType Directory -Path $iocProcDir -Force | Out-Null
+                   Copy-Item -LiteralPath (Join-Path $env:SystemRoot 'System32\ping.exe') -Destination $iocProcExe -Force
+                   Start-Process -FilePath $iocProcExe -ArgumentList '-n 1500 127.0.0.1' -WindowStyle Hidden | Out-Null
+                   Start-Sleep -Milliseconds 500
+                   if (-not @(Get-Process -EA SilentlyContinue | Where-Object { $_.Path -eq $iocProcExe }).Count) { throw 'the IOC-named process is not running' } }
+        Cleanup= { Get-Process -EA SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($iocProcDir + '\', [StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force -EA SilentlyContinue
+                   Start-Sleep -Milliseconds 500
+                   Remove-Item -LiteralPath $iocProcDir -Recurse -Force -EA SilentlyContinue }
+    },
+    @{
+        Name   = 'Process named like an RMM agent the list dropped -> NOT a Section 18a match (benign twin)'
+        Tier   = 'required'
+        Touches= @('file:C:\dz_selftest_ioc_benign\dz_selftest_evil_benign_level_agent.exe|dz_selftest_ioc_benign')
+        Affects= @()
+        Invert = $true
+        Expect = '(?s)--- \[18a\] Process IOC Match ---(?:(?!--- \[18b\]).)*?dz_selftest_evil_benign_level_agent'
+        TestableIf       = { [regex]::IsMatch($text, $ioc18aExpect) }
+        UntestableReason = 'the chisel-named plant did not reach 18a either, so 18a never matched anything this run'
+        Plant  = { New-Item -ItemType Directory -Path $iocBenignDir -Force | Out-Null
+                   Copy-Item -LiteralPath (Join-Path $env:SystemRoot 'System32\ping.exe') -Destination $iocBenignExe -Force
+                   Start-Process -FilePath $iocBenignExe -ArgumentList '-n 1500 127.0.0.1' -WindowStyle Hidden | Out-Null
+                   Start-Sleep -Milliseconds 500
+                   if (-not @(Get-Process -EA SilentlyContinue | Where-Object { $_.Path -eq $iocBenignExe }).Count) { throw 'the twin process is not running' } }
+        Cleanup= { Get-Process -EA SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($iocBenignDir + '\', [StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force -EA SilentlyContinue
+                   Start-Sleep -Milliseconds 500
+                   Remove-Item -LiteralPath $iocBenignDir -Recurse -Force -EA SilentlyContinue }
+    },
+    @{
+        Name   = 'DNS cache holds a domain on ioc_domains.txt -> Section 18f C2 domain match (T1071.004)'
+        Attack = @('T1071.004')
+        Tier   = 'required'
+        Touches= @('hosts:%SystemRoot%\System32\drivers\etc\hosts|drivers\etc\hosts')
+        Affects= @('network')
+        # A HOSTS line, not a lookup: Windows preloads HOSTS entries into the
+        # resolver cache that ipconfig /displaydns lists, so nothing is sent to
+        # the network. Loopback and not a security domain, so Section 3 grades
+        # it INFO. Anchored inside 18f: Section 3 copies the whole cache too.
+        Expect = $ioc18fExpect
+        VoidIf     = { -not ((& ipconfig /displaydns 2>$null | Out-String) -match 'dz-selftest-evil\.ngrok\.io') }
+        VoidReason = 'the DNS Client did not load the planted HOSTS line into its cache, so 18f had nothing to match'
+        # Add-Content joins a last line that has no newline, so add one only then.
+        Plant  = { $nl = ''; $b = [IO.File]::ReadAllBytes($hostsPath); if ($b.Length -gt 0 -and $b[$b.Length - 1] -ne 10) { $nl = "`r`n" }
+                   Add-Content -LiteralPath $hostsPath -Value ($nl + ("127.0.0.1 dz-selftest-evil.ngrok.io # {0}" -f $MARK)) }
+        Cleanup= { [void](Remove-HostsMarkerLines -Path $hostsPath -Marker $MARK) }
+    },
+    @{
+        Name   = 'DNS cache holds ngrok.com, the vendor site, not a tunnel -> NOT a Section 18f match (benign twin)'
+        Tier   = 'required'
+        Touches= @('hosts:%SystemRoot%\System32\drivers\etc\hosts|drivers\etc\hosts')
+        Affects= @('network')
+        Invert = $true
+        Expect = '(?s)--- \[18f\] DNS Cache C2 Domain Match ---(?:(?!--- \[18g\]).)*?dz-selftest-benign\.ngrok\.com'
+        TestableIf       = { [regex]::IsMatch($text, $ioc18fExpect) }
+        UntestableReason = 'the ngrok.io plant did not reach 18f either (the DNS Client did not load the HOSTS lines, or 18f could not run)'
+        Plant  = { $nl = ''; $b = [IO.File]::ReadAllBytes($hostsPath); if ($b.Length -gt 0 -and $b[$b.Length - 1] -ne 10) { $nl = "`r`n" }
+                   Add-Content -LiteralPath $hostsPath -Value ($nl + ("127.0.0.1 dz-selftest-benign.ngrok.com # {0}_benign" -f $MARK)) }
+        Cleanup= { [void](Remove-HostsMarkerLines -Path $hostsPath -Marker $MARK) }
     },
     @{
         Name   = 'Rogue LSA Authentication package -> flagged (T1547.002)'
@@ -866,6 +984,18 @@ try {
             }
             continue
         }
+        # A case may declare TestableIf: a precondition, read after the audit,
+        # without which its verdict means nothing -- a benign twin is "not
+        # matched" trivially when the matcher never matched anything. Reported
+        # as SKIP, never as a pass.
+        if ($c.TestableIf) {
+            $testable = $false
+            try { $testable = [bool](& $c.TestableIf) } catch { $testable = $false }
+            if (-not $testable) {
+                Write-Host ("  [ SKIP     ] {0}  -- NOT TESTED this run: {1}" -f $c.Name, $c.UntestableReason)
+                continue
+            }
+        }
         $hit  = [bool]([regex]::IsMatch($text, $c.Expect))
         # Invert cases plant a BENIGN state: the pattern must be ABSENT
         # (false-positive guard); a match means the audit cried wolf.
@@ -982,6 +1112,23 @@ try {
     if ($ledger) { $lg12 = [bool](@(Get-Content -LiteralPath $ledger.FullName -EA SilentlyContinue | Where-Object { $_ -like 'CRITICAL|12|*' }).Count) }
     if ($s12issues -and $lg12) { Write-Host "  [ OK       ] Section 12 WDigest verdict is ISSUES FOUND + ledger has CRITICAL|12| (dashboard retrofit)" }
     else { Write-Host ("  [ REGRESS  ] planted WDigest did not flip Section 12's own verdict/ledger (verdict={0} ledger={1})" -f $s12issues, $lg12); $requiredFail++ }
+    # Sections 18a and 18f: a planted match must reach the ledger under its OWN
+    # section and technique (Section 3 also raises T1071.004, so the section is
+    # part of the check). Gated on the plant having taken: a plant that could
+    # not run is reported by the scoreboard above, not here.
+    foreach ($chk in @(@{ Case = 'Section 18a Process IOC match'; Row = 'WARNING|18|T1057|Process IOC match' },
+                       @{ Case = 'Section 18f C2 domain match';   Row = 'WARNING|18|T1071.004|C2 domain IOC match in DNS cache' })) {
+        $cs = @($cases | Where-Object { $_.Name -like ('*' + $chk.Case + '*') -and -not $_.Invert })[0]
+        if (-not ($cs -and $cs.Planted)) { Write-Host ("  [ SKIP     ] {0}: the plant did not take, so its ledger row is not checked" -f $chk.Case); continue }
+        # The check is "printed but not counted": with nothing printed (a
+        # voided plant, or a regression the scoreboard already reported) there
+        # is nothing to count.
+        if (-not [regex]::IsMatch($text, $cs.Expect)) { Write-Host ("  [ SKIP     ] {0}: the match was not printed (see the scoreboard), so its ledger row is not checked" -f $chk.Case); continue }
+        $row = $false
+        if ($ledger) { $row = [bool](@(Get-Content -LiteralPath $ledger.FullName -EA SilentlyContinue | Where-Object { $_ -eq $chk.Row }).Count) }
+        if ($row) { Write-Host ("  [ OK       ] {0}: the ledger holds {1}" -f $chk.Case, $chk.Row) }
+        else { Write-Host ("  [ REGRESS  ] {0}: no ledger row {1} -- the match printed but was not counted" -f $chk.Case, $chk.Row); $requiredFail++ }
+    }
 
     # Option B retrofit (PR 10): Section 5 now evaluates Winlogon Userinit in
     # -section. Compare against the live value (read-only ground truth -- we
