@@ -507,9 +507,10 @@ rules. CI's standard-user account is named `dz o'smoke` for this reason.
 **Copied helpers stay identical.** The tools are self-contained on purpose (no
 module imports), so a helper several tools need is copied into each.
 `tools/lint_shared_copies.ps1` pins the copies of `Get-RegKeyLastWrite`,
-`Get-WhenLine`, `Write-WhenCaveat` and the harness's `Remove-HostsMarkerLines`
-(in `tests\`: the cold cleanup must run standalone) byte-identical (comments
-included); `pending_reboot_check`'s copy had already lost a line when it was
+`Get-WhenLine`, `Write-WhenCaveat`, the harness's `Remove-HostsMarkerLines`
+(in `tests\`: the cold cleanup must run standalone) and `Expand-CmdEscapes`
+(`tests\section18_gaps.ps1` renders staged blocks with `lint_remediation`'s
+copy) byte-identical (comments included); `pending_reboot_check`'s copy had already lost a line when it was
 added. When a helper is copied into a second script, add its name to the lint's
 manifest. With two copies there is no majority, so a drifted pair names both.
 
@@ -842,7 +843,7 @@ PowerShell 5.1 runtime behavior, real WMI/CIM, `findstr`, or detect a
 runtime hang. `windows-smoke.yml` runs on a real `windows-latest` runner on
 pushes to `main`, on manual dispatch, and **on any PR that touches functional
 code** (the bats, `tools/`, `tests/`, `ThreatLists/`, the workflows). Docs-only
-PRs skip it. The repo is private (metered minutes) and these five Windows
+PRs skip it. The repo is private (metered minutes) and these six Windows
 jobs bill at 2x, which exhausted a month's quota mid-cycle in 2026-08; the
 first response removed the suite from PRs entirely, which was wrong -- a diet
 must never cost coverage of a bug fix or feature. The `paths` filter and the

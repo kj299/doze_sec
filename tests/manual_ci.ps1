@@ -1,21 +1,25 @@
 # manual_ci.ps1 -- the Windows half of CI, as one elevated command.
 #
 # WHY THIS EXISTS: the repository is private, so GitHub Actions minutes are
-# metered -- and windows-smoke's five windows-latest jobs bill at 2x on every
-# PR push. One heavy week exhausted the month mid-cycle and every run "failed"
-# in seconds with zero compute. During that outage the verification that
-# actually caught bugs was a person running the checks on a real Windows
-# machine: five real defects in one afternoon, two of them false ACTIVE
-# COMPROMISE indicators, none of which CI had ever caught. This script makes
-# that manual pass one command instead of a chat scroll-back, and it remains
-# the PR gate: windows-smoke now runs on pushes to main and manual dispatch
-# only, so the reset quota survives the month.
+# metered -- and windows-smoke's six windows-latest jobs bill at 2x. One heavy
+# week exhausted the month mid-cycle and every run "failed" in seconds with
+# zero compute. During that outage the verification that actually caught bugs
+# was a person running the checks on a real Windows machine: five real
+# defects in one afternoon, two of them false ACTIVE COMPROMISE indicators,
+# none of which CI had ever caught. This script makes that manual pass one
+# command instead of a chat scroll-back. windows-smoke runs again on every PR
+# that touches functional code (and on main); this stays the second bench.
 #
 # WHAT IT RUNS (mirroring the CI jobs' exact invocations, in order):
-#   1. Windows PowerShell 5.1 parse of every tools/*.ps1  (helpers-ps51, parse half)
+#   0. tests\safety_invariants.ps1 (+ -SelfTest), then lint_readonly,
+#      lint_remediation and lint_report_echo, each with -SelfTest
+#                                                         (lint.yml; first, before anything is planted)
+#   1. Windows PowerShell 5.1 parse of every tools/*.ps1, then lint_orphan_else
+#                                                         (helpers-ps51, parse half; lint.yml)
 #   2. tests\marker_selftest.ps1                          (lint.yml marker job)
 #   3. tests\detection_selftest.ps1 -BatPath .\doze_sec.bat         (detection-selftest)
 #   4. tests\detection_selftest.ps1 -BatPath .\doze_sec_noAdmin.bat (detection-selftest-noadmin)
+# The other lints run on Linux in lint.yml and need no Windows machine.
 #
 # WHAT IT DELIBERATELY DOES NOT RUN (printed at the end with exact commands):
 # the full end-to-end audit (long) and the true standard-user smoke (creates a

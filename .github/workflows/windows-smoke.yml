@@ -17,9 +17,15 @@ name: windows-smoke
 # its timeout and FAIL, instead of silently shipping. -dev bypasses the
 # Server-edition OS gate; -sdu/-nosrp skip the network threat-list pull and
 # the restore point.
+#
+# Job 3 (readonly-field-test): tests\field_test.ps1, the script a person runs,
+# from a stick-equivalent copy, proving -readonly changes nothing. Jobs 4 and 5
+# (detection-selftest, detection-selftest-noadmin): the plant harness through
+# each bat. Job 6 (noadmin-true-run): doze_sec_noAdmin.bat as a real standard
+# user (tests\noadmin_smoke.ps1).
 
 # TRIGGER ECONOMICS: this repository is private, so Actions minutes are
-# metered, and these five windows-latest jobs bill at 2x with 20-35 minute
+# metered, and these six windows-latest jobs bill at 2x with 20-35 minute
 # timeouts. Running them on every PR push exhausted the month's quota
 # mid-cycle (2026-08). The first response removed the suite from PRs entirely
 # -- which meant a bug fix or feature got only the Linux lint before merge and
