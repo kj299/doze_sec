@@ -30,11 +30,21 @@
 #          readable, so the NON-ADMIN audit must still detect it, raise
 #          CRITICAL|12| in the ledger, and exit 8 (CRITICAL outranks 6).
 #
+# The test user is named "dz o'smoke": an apostrophe AND a space, as in
+# "Mary O'Brien". A standard user's output folder, report, ledger, remediation
+# scripts, temp folder and APPDATA all live under the profile, and the bats
+# used to paste paths between single quotes into the PowerShell they run, so
+# for such a user the dashboard, the remediation script, the [CRITICAL]
+# census and the Section 11 history check were parse errors that printed
+# nothing. Run 1 asserts the dashboard and remediation script exist; a
+# PowerShell history planted in the profile before run 2 must show in its
+# Section 11.
+#
 # Windows PowerShell 5.1 compatible. Never touches Userinit/UAC/event logs.
 
 param(
     [string]$BatPath  = '.\doze_sec_noAdmin.bat',
-    [string]$UserName = 'dzsmoke',
+    [string]$UserName = "dz o'smoke",
     [int]$TimeoutSec  = 900
 )
 
@@ -45,7 +55,8 @@ $ErrorActionPreference = 'Stop'
 # plant verb below (New-LocalUser, icacls, Set-Service, WDigest) with no
 # matching kind here fails the build.
 $Touches = @(
-    'account:local user dzsmoke (created for the run, removed in finally; a pre-existing user of that name is REMOVED first)',
+    'account:local user "dz o''smoke" (created for the run, removed in finally; a pre-existing user of that name is REMOVED first)',
+    'file:<the test user''s profile>\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt (planted before run 2 in the profile created for the run)',
     'service:seclogon startup type -> Manual and started (not reverted; Manual is the Windows default)',
     'file:<repo> ACL grant BUILTIN\Users (OI)(CI)RX (not reverted; read/execute on a checkout)',
     'registry:HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest\UseLogonCredential (restored to the prior value in finally)',
@@ -247,6 +258,27 @@ try {
     $ledger1File = Get-NewestFile -Dir $outDir1 -Filter 'SecurityReport_*.ledger'
     $ledger1 = if ($ledger1File) { @(Get-Content -LiteralPath $ledger1File.FullName -EA SilentlyContinue) } else { @() }
 
+    # The user's own paths hold an apostrophe and a space, or this proves
+    # nothing about them.
+    if ($outDir1.IndexOf("'") -lt 0 -or $outDir1.IndexOf(' ') -lt 0) { throw ("the test profile path '{0}' holds no apostrophe or no space -- the apostrophe assertions below would test nothing" -f $outDir1) }
+    Assert ($text1 -match 'DASHBOARD CHECKS PASSED') `
+        "the dashboard printed for a user whose profile path holds an apostrophe" `
+        "no dashboard status line: the dashboard script did not run for a profile path holding an apostrophe"
+    # Stage 1 by name: the _enforce and _undo scripts are written after it.
+    $rem1 = @(Get-ChildItem -LiteralPath $outDir1 -Filter 'Remediation_*.ps1' -File -EA SilentlyContinue | Where-Object { $_.Name -notmatch '_(enforce|undo)\.ps1$' } | Sort-Object LastWriteTime -Descending | Select-Object -First 1)[0]
+    $remOk = $false
+    if ($rem1) {
+        $rt = $null; $re = $null
+        [void][System.Management.Automation.Language.Parser]::ParseFile($rem1.FullName, [ref]$rt, [ref]$re)
+        $remOk = (-not $re -or $re.Count -eq 0)
+    }
+    Assert $remOk `
+        "the remediation script was written and parses for a user whose profile path holds an apostrophe" `
+        ("no parseable stage-1 remediation script under {0}" -f $outDir1)
+    Assert ($text1 -notmatch "census could not run") `
+        'the [CRITICAL]-line census ran (it reads the report path from the environment)' `
+        "the [CRITICAL]-line census could not run on a profile path holding an apostrophe"
+
     # The console log of a -noAdmin run belongs in the user's own SecurityAudit
     # folder, beside the report. It used to go to C:\SecurityAudit whatever the
     # token, so a standard-user run that promises to write only its own output
@@ -416,6 +448,12 @@ try {
     Set-ItemProperty -LiteralPath $wdKey -Name UseLogonCredential -Value 1 -Type DWord
     # Run 1's report stays in place (timestamped filenames never collide);
     # newest-file selection plus the inequality check below pick out run 2's.
+    # A PowerShell history in the user's own profile, so Section 11's block
+    # (Get-Content of a path under APPDATA) runs for this run: its path holds
+    # the apostrophe and the space.
+    $histDir = Join-Path $prof 'AppData\Roaming\Microsoft\Windows\PowerShell\PSReadLine'
+    New-Item -ItemType Directory -Path $histDir -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $histDir 'ConsoleHost_history.txt') -Value @('Get-Date', 'Write-Output dz_smoke_history_marker_4e2') -Encoding ASCII
     $code2 = Invoke-NonAdminAudit -Cred $cred -Label 'run2'
     $report2 = Get-NewestFile -Dir $outDir -Filter 'SecurityReport_*.txt'
     if (-not $report2) { throw "run 2 produced no report under $outDir (exit $code2)" }
@@ -432,6 +470,9 @@ try {
         'no CRITICAL|12| ledger entry for the planted WDigest'
     Assert ($code2 -eq 8) 'exit code 8 (CRITICAL outranks partial-audit 6)' `
                           ("exit code {0} expected 8 with a planted CRITICAL" -f $code2)
+    Assert ($text2 -match 'dz_smoke_history_marker_4e2') `
+        "Section 11 showed the PowerShell history from a profile path holding an apostrophe" `
+        "Section 11 did not show the planted PowerShell history: its block did not run for an apostrophe path"
     [void](Assert-LedgerConsistency -Text $text2 -Ledger $ledger2 -Label 'run 2')
 
     # Stage artifacts where the workflow can upload them: run 1 (field_test,

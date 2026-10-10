@@ -6,6 +6,67 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### A user named O'Brien gets a dashboard, a remediation script and a Section 11 history; the [CRITICAL] census counts again
+The batch files build PowerShell as text, and wherever they pasted a path
+between single quotes, an apostrophe in it ended the string early. That
+covers `C:\Users\O'Brien`, `Mary O'Brien`, and `O’Brien` typed with a
+typographic apostrophe, which PowerShell also reads as a quote. The whole
+script was then a parse error that printed and raised nothing. Section 18's
+five blocks were fixed in #242. A sweep of both scripts found the rest:
+- **The dashboard script** pasted `SUMCODE` and `SUMCOUNT`, which live in
+  `%TEMP%` under the user's profile even on an elevated run, plus the three
+  remediation paths and the ledger path. For such a user there was no
+  dashboard and no remediation script, from either script.
+- **Section 11's PowerShell-history block** pasted `%APPDATA%`, so the
+  history was never shown.
+- **The end-of-run `[CRITICAL]`-line census** pasted the report path, which
+  sits under the profile for a standard user. It also never worked for
+  anyone. It was a `for /f` backtick command that began with `"%PWSH%"`, the
+  shape CLAUDE.md records as running nothing: `cmd /c` strips the outer
+  quotes and the command is mangled. So `CRIT_COUNT` kept its 0, and the
+  alarm it feeds could never fire. That alarm is the one that notices a
+  section printing `[CRITICAL]` but raising something lower. The census now
+  reads its count through a file and `set /p`. When it cannot read a count,
+  the alarm says it checked nothing, instead of passing silently.
+- **The elevated script's console-log capture and its `-updateTTP` /
+  `-importTTP` sanitizer** pasted their paths too. The noAdmin script's
+  capture already read its path from the environment.
+
+Every code site now reads its path from the environment (`$env:REPORT`,
+`Join-Path $env:APPDATA ...`); cmd's variables are the child's environment.
+No quoting is involved, so apostrophes, typographic apostrophes, spaces and
+`$` are all safe. The six printed `Command:` lines per script that a reader
+pastes (five `IOCDIR`, one `APPDATA`) write `'%IOCDIR:'=''%...'`. cmd doubles
+the apostrophe, and a doubled apostrophe is a literal one inside a
+single-quoted PowerShell string. A typographic apostrophe is not doubled
+there, so for that one case the printed line is still not pasteable.
+
+How it is proven:
+- **`tools\lint_quoted_paths.ps1`** works out which variables hold a path
+  from the scripts' own `set` lines, followed to a fixpoint, so a path
+  variable added later is covered. It fails on any of them pasted between
+  single quotes in PowerShell code, and on a printed `Command:` line that
+  does not double the apostrophe. On `main` it reported the 32 sites above.
+  Its `-SelfTest` reverts each fix, and checks that a state value, a comment
+  and a newly added path variable are each handled correctly.
+  `lint_report_echo` now renders cmd's `%X:'=''%` on a path holding an
+  apostrophe before it parses a printed command.
+- **The standard-user CI job's test account is named `dz o'smoke`**, with an
+  apostrophe and a space, so that user's report, ledger, remediation scripts,
+  `%TEMP%` and `APPDATA` all sit under `C:\Users\dz o'smoke`. Run 1, through
+  `field_test.ps1`, must print the dashboard, write a stage-1 remediation
+  script that parses, and run the census. A PowerShell history planted in the
+  profile before run 2 must show in Section 11.
+- **The full-run job** runs the audit with `TEMP` and `TMP` under
+  `C:\dz_ci_o'brien`, and `APPDATA` under `C:\dz ci o'brien`, with a planted
+  history. The same three things must hold.
+- **The helpers job** takes the census lines from the bat and runs them in
+  cmd against a report under an apostrophe-and-space folder holding two
+  `[CRITICAL]` lines. They must count 2. The old `for /f` form, run the same
+  way on a plain path, must count nothing: measured, not argued. The printed
+  18e command, echoed by cmd with an apostrophe in `IOCDIR`, must parse and
+  run, and the undoubled form must not parse.
+
 ### Section 18: every IOC match that cannot run says so and raises it; 18e reads tasks in any language
 Misses first, both mine:
 - **PR #241 broke the Section 18 summary.** Rewriting it into gotos left the

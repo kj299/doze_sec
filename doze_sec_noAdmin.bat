@@ -2799,10 +2799,10 @@ if exist "%TEMP%\dz_sbl_hit.txt" (
 
 echo.>> "%REPORT%"
 echo --- Recent PS Command History --->> "%REPORT%"
-echo  Command: powershell -Command "Get-Content '%APPDATA%\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt' -EA SilentlyContinue | Select-Object -Last 50">> "%REPORT%"
+echo  Command: powershell -Command "Get-Content '%APPDATA:'=''%\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt' -EA SilentlyContinue | Select-Object -Last 50">> "%REPORT%"
 if not exist "%APPDATA%\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt" goto :pshistnone
 echo [FOUND] PS history file. Last 50 commands:>> "%REPORT%"
-echo Get-Content '%APPDATA%\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt' -EA SilentlyContinue ^| Select-Object -Last 50 > "%PSRUN%"
+echo Get-Content -LiteralPath (Join-Path $env:APPDATA 'Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt') -EA SilentlyContinue ^| Select-Object -Last 50 > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 goto :pshistdone
 :pshistnone
@@ -4091,7 +4091,7 @@ for %%z in ("%REPORT%") do set "IOC_FROM=%%~zz"
 
 echo.>> "%REPORT%"
 echo --- [18a] Process IOC Match --->> "%REPORT%"
-echo  Command: powershell -Command "$f = @(Get-Content '%IOCDIR%\ioc_processes.txt' | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') } | ForEach-Object { $_.Trim().ToLower() }); Get-CimInstance Win32_Process | Where-Object { $l = ($_.Name + '  ' + $_.ProcessId + '  ' + $_.ExecutablePath).ToLower(); @($f | Where-Object { $l.Contains($_) }).Count } | Select-Object Name, ProcessId, ExecutablePath">> "%REPORT%"
+echo  Command: powershell -Command "$f = @(Get-Content '%IOCDIR:'=''%\ioc_processes.txt' | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') } | ForEach-Object { $_.Trim().ToLower() }); Get-CimInstance Win32_Process | Where-Object { $l = ($_.Name + '  ' + $_.ProcessId + '  ' + $_.ExecutablePath).ToLower(); @($f | Where-Object { $l.Contains($_) }).Count } | Select-Object Name, ProcessId, ExecutablePath">> "%REPORT%"
 echo  Matching running processes against ioc_processes.txt>> "%REPORT%"
 :: wmic was removed in Windows 11 24H2+; the old `wmic | findstr` pipeline
 :: printed [OK] with zero processes examined when wmic was absent. Enumerate
@@ -4197,7 +4197,7 @@ del "%TEMP%\dz_iochit_18c_done.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- [18d] Suspicious File Path IOC Check --->> "%REPORT%"
-echo  Command: powershell -Command "foreach($p in Get-Content '%IOCDIR%\ioc_file_paths.txt'){ if(Test-Path ([Environment]::ExpandEnvironmentVariables($p))){ $p } }">> "%REPORT%"
+echo  Command: powershell -Command "foreach($p in Get-Content '%IOCDIR:'=''%\ioc_file_paths.txt'){ if(Test-Path ([Environment]::ExpandEnvironmentVariables($p))){ $p } }">> "%REPORT%"
 echo  Checking for known malware staging paths from ioc_file_paths.txt>> "%REPORT%"
 echo $iocFile = Join-Path $env:IOCDIR 'ioc_file_paths.txt' > "%PSRUN%"
 echo $paths=if(Test-Path $iocFile){Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'}} >> "%PSRUN%"
@@ -4229,7 +4229,7 @@ del "%TEMP%\dz_iochit_18d_done.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- [18e] Scheduled Task IOC Match --->> "%REPORT%"
-echo  Command: powershell -Command "$f = @(Get-Content '%IOCDIR%\ioc_scheduled_tasks.txt' | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') } | ForEach-Object { $_.Trim().ToLower() }); Get-ScheduledTask | ForEach-Object { $t = ([string]$_.TaskPath).TrimEnd('\') + '\' + $_.TaskName; $a = @($_.Actions | ForEach-Object { ([string]$_.Execute + ' ' + [string]$_.Arguments).Trim() }) -join '; '; $l = ($t + '  ' + $a).ToLower(); if (@($f | Where-Object { $l.Contains($_) }).Count) { $t + '  ' + $a } }">> "%REPORT%"
+echo  Command: powershell -Command "$f = @(Get-Content '%IOCDIR:'=''%\ioc_scheduled_tasks.txt' | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') } | ForEach-Object { $_.Trim().ToLower() }); Get-ScheduledTask | ForEach-Object { $t = ([string]$_.TaskPath).TrimEnd('\') + '\' + $_.TaskName; $a = @($_.Actions | ForEach-Object { ([string]$_.Execute + ' ' + [string]$_.Arguments).Trim() }) -join '; '; $l = ($t + '  ' + $a).ToLower(); if (@($f | Where-Object { $l.Contains($_) }).Count) { $t + '  ' + $a } }">> "%REPORT%"
 echo  Matching scheduled task NAMES and ACTIONS against ioc_scheduled_tasks.txt>> "%REPORT%"
 :: Get-ScheduledTask, not schtasks /query /fo CSV. schtasks takes its column
 :: names from its language resources, so on a non-English Windows TaskName
@@ -4263,7 +4263,7 @@ del "%TEMP%\dz_iochit_18e_done.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- [18f] DNS Cache C2 Domain Match --->> "%REPORT%"
-echo  Command: powershell -Command "$f = @(Get-Content '%IOCDIR%\ioc_domains.txt' | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') } | ForEach-Object { $_.Trim().ToLower() }); Get-DnsClientCache | Where-Object { $e = ([string]$_.Entry + ' ' + [string]$_.Data).ToLower(); @($f | Where-Object { $e.Contains($_) }).Count }">> "%REPORT%"
+echo  Command: powershell -Command "$f = @(Get-Content '%IOCDIR:'=''%\ioc_domains.txt' | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') } | ForEach-Object { $_.Trim().ToLower() }); Get-DnsClientCache | Where-Object { $e = ([string]$_.Entry + ' ' + [string]$_.Data).ToLower(); @($f | Where-Object { $e.Contains($_) }).Count }">> "%REPORT%"
 echo  Matching DNS cache against ioc_domains.txt>> "%REPORT%"
 :: Capture the cache to a temp file first: a failed/denied ipconfig used to
 :: feed findstr nothing and print [OK], hiding the failure. Empty file ->
@@ -4314,7 +4314,7 @@ del "%TEMP%\dz_dns18f.tmp" 2>nul
 
 echo.>> "%REPORT%"
 echo --- [18g] LOLBin Command-Line Pattern Match --->> "%REPORT%"
-echo  Command: powershell -Command "$f = @(Get-Content '%IOCDIR%\ioc_lolbins.txt' | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') } | ForEach-Object { $_.Trim().ToLower() }); Get-CimInstance Win32_Process | Where-Object { $l = ($_.Name + '  ' + $_.CommandLine).ToLower(); @($f | Where-Object { $l.Contains($_) }).Count } | Select-Object Name, ProcessId, CommandLine">> "%REPORT%"
+echo  Command: powershell -Command "$f = @(Get-Content '%IOCDIR:'=''%\ioc_lolbins.txt' | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') } | ForEach-Object { $_.Trim().ToLower() }); Get-CimInstance Win32_Process | Where-Object { $l = ($_.Name + '  ' + $_.CommandLine).ToLower(); @($f | Where-Object { $l.Contains($_) }).Count } | Select-Object Name, ProcessId, CommandLine">> "%REPORT%"
 echo  Matching process command lines against ioc_lolbins.txt>> "%REPORT%"
 :: wmic was removed in Windows 11 24H2+; the old wmic enumeration silently
 :: produced an empty temp file there and select_lines reported no matches,
@@ -4840,7 +4840,23 @@ echo.
 :: not count. Runs BEFORE the summary is appended, so summary lines (which
 :: escalate separately via the CRIT token) are not double-counted.
 set "CRIT_COUNT=0"
-for /f "usebackq" %%c in (`"%PWSH%" -NoProfile -Command "@(Select-String -LiteralPath '%REPORT%' -Pattern '\A\[CRITICAL\]').Count" 2^>nul`) do set "CRIT_COUNT=%%c"
+:: Read through a file and set /p. This was a for /f backtick command that
+:: began with "%PWSH%", the shape cmd /c mangles (it strips the outer quotes),
+:: so it never produced a number: CRIT_COUNT kept its 0 and the alarm it feeds
+:: could never fire. The report path comes from the environment, never pasted
+:: between single quotes, where a profile folder like C:\Users\O'Brien ended
+:: the string early. CRIT_READ says whether a count was read at all.
+set "CRIT_READ=0"
+del "%TEMP%\dz_critcount.txt" 2>nul
+"%PWSH%" -NoProfile -Command "@(Select-String -LiteralPath $env:REPORT -Pattern '\A\[CRITICAL\]').Count" > "%TEMP%\dz_critcount.txt" 2>nul
+:: Undefined first, so an empty file cannot pass the old 0 off as a count.
+:: Percent, not delayed, expansion on the pipe line: each side of a pipe runs
+:: in a new cmd, where delayed expansion is off.
+set "CRIT_COUNT="
+if exist "%TEMP%\dz_critcount.txt" set /p CRIT_COUNT=<"%TEMP%\dz_critcount.txt"
+del "%TEMP%\dz_critcount.txt" 2>nul
+echo(%CRIT_COUNT%| findstr /r /x "[0-9][0-9]*" >nul && set "CRIT_READ=1"
+if "%CRIT_READ%"=="0" set "CRIT_COUNT=0"
 rem Flip step 2: the count above no longer raises the exit code or the
 rem findings tally -- it feeds the ledger-divergence alarm in the exit
 rem block below. The ledger (via :dz_finding) is the only findings source.
@@ -4865,16 +4881,20 @@ call :dz_seed_rem "%REMEDIATION_UNDO%" "UNDO -- reverse what the other two appli
 :: ---- Write PS summary script ----------------------------------------
 echo $sw='%SMART_WARN%' > "%PSRUN%"
 echo $isAdmin='%IS_ADMIN%' >> "%PSRUN%"
-echo $scf='%SUMCODE%' >> "%PSRUN%"
-echo $scnt='%SUMCOUNT%' >> "%PSRUN%"
-echo $rem='%REMEDIATION%' >> "%PSRUN%"
-echo $enf='%REMEDIATION_ENF%' >> "%PSRUN%"
-echo $und='%REMEDIATION_UNDO%' >> "%PSRUN%"
+:: Every path below is read from the environment (cmd's variables are the
+:: child's environment), never pasted between single quotes: a profile
+:: folder like C:\Users\O'Brien made the whole dashboard script a parse
+:: error, so that user got no dashboard and no remediation script.
+echo $scf=$env:SUMCODE >> "%PSRUN%"
+echo $scnt=$env:SUMCOUNT >> "%PSRUN%"
+echo $rem=$env:REMEDIATION >> "%PSRUN%"
+echo $enf=$env:REMEDIATION_ENF >> "%PSRUN%"
+echo $und=$env:REMEDIATION_UNDO >> "%PSRUN%"
 rem The findings ledger is COMPLETE by the time this block runs (the last
 rem :dz_finding call site precedes it), so fixes can key off it instead of
 rem off rendered dashboard prose. That is what lets a ledger-only finding
 rem such as the ASR rules queue a fix at all.
-echo $lgp='%LEDGER%' >> "%PSRUN%"
+echo $lgp=$env:LEDGER >> "%PSRUN%"
 echo $r=@();$cr=0;$wa=0;$pa=0;$inf=0 >> "%PSRUN%"
 echo function ck($s,$m,$d=''){$icon=if($s-eq 'CRIT'){'[^^!^^! CRITICAL ^^!^^!]'}elseif($s-eq 'WARN'){'[  WARNING   ]'}elseif($s-eq 'PASS'){'[    OK      ]'}else{'[    INFO    ]'};$script:r+='  '+$icon+'  '+$m;if($d){$script:r+='                     Fix: '+$d};switch($s){'CRIT'{$script:cr++}'WARN'{$script:wa++}'PASS'{$script:pa++}'INFO'{$script:inf++}}} >> "%PSRUN%"
 echo function sec($t){$script:r+='';$script:r+=('  --- '+$t+' ').PadRight(70,'-')} >> "%PSRUN%"
@@ -5230,6 +5250,7 @@ rem some check prints [CRITICAL] or trips the dashboard without a matching
 rem :dz_finding raise. The harness fails on these lines.
 if not "!LEDGER_MAXSEV!"=="CRITICAL" (
     if !CRIT_COUNT! GTR 0 (echo  [INFO] Report has !CRIT_COUNT! [CRITICAL] line^(s^) but ledger max severity is !LEDGER_MAXSEV! -- a raise is missing; exit code unaffected.)>> "%REPORT%"
+    if "!CRIT_READ!"=="0" (echo  [INFO] The report's [CRITICAL]-line census could not run, so the alarm above checked nothing this run.)>> "%REPORT%"
     if /i "!SUM_RESULT!"=="CRIT" (echo  [INFO] Dashboard verdict is CRIT but ledger max severity is !LEDGER_MAXSEV! -- a raise is missing; exit code unaffected.)>> "%REPORT%"
 )
 rem Reconcile FINDINGS with the dashboard's own tally. Dashboard ck checks

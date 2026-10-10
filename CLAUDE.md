@@ -210,6 +210,16 @@ evidence the primary path FAILED, never that it worked.**
 So: **read a helper's output through a file and `set /p`**, the marker idiom
 already used everywhere else. No backticks, no `cmd /c`, no quote stripping.
 
+**It was there a second time, and nothing noticed.** The end-of-run
+`[CRITICAL]`-line census, the input to the alarm that catches a section
+printing `[CRITICAL]` while raising something lower, was the same shape:
+`` for /f ... in (`"%PWSH%" -Command "@(Select-String ...).Count"`) ``. It
+never produced a number, so the alarm could never fire. Every CI run read
+"no divergence alarm", which was true and proved nothing. An alarm that has
+never fired in a test is a promise. It was found only while fixing that
+line for another reason; it now reads through a file, and the helpers job
+measures the old form counting nothing.
+
 **And never default a grade to `OK`.** `DZ_BLKSEV` now starts at `DZ_NOGRADE`;
 if no grade is read the sentinel survives and is declared an `AUDITGAP`. An `OK`
 default made a broken grader indistinguishable from a clean block — the same
@@ -482,6 +492,17 @@ markdown-style (`` `else` ``, `` `echo` ``, `` `event ID` ``) — a naive file-w
 regex reported six defects across four files on its first run. A lint people
 learn to work around is worse than no lint. `-SelfTest` proves it fails on each
 class **and stays quiet on the prose**. CI runs it in `lint.yml`.
+
+**A path never goes between single quotes in PowerShell the bats build.**
+A user named O'Brien has `C:\Users\O'Brien`, and `%TEMP%`, `%APPDATA%` and
+a standard user's whole output folder live under it. `$scf='%SUMCODE%'` was
+then a parse error, and that user got no dashboard and no remediation script.
+PowerShell also reads the typographic apostrophe as a quote. Read the path
+from the environment instead (`$env:SUMCODE`; cmd's variables are the child's
+environment). A printed `Command:` line, which a reader pastes, writes
+`'%X:'=''%'` so cmd doubles the apostrophe. `tools\lint_quoted_paths.ps1`
+derives the path variables from the bats' own `set` lines and enforces both
+rules. CI's standard-user account is named `dz o'smoke` for this reason.
 
 **Copied helpers stay identical.** The tools are self-contained on purpose (no
 module imports), so a helper several tools need is copied into each.
