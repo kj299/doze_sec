@@ -509,15 +509,25 @@ offline mode, and a research pass (wf_a41f91ca-3fd) sized it.
 - Estimate: 3,000-5,000 new lines plus changes across about 21 tools, over
   several PRs.
 
-## exec_probe: partial Mark of the Web (found 2026-10-09)
+## exec_probe: partial Mark of the Web (found 2026-10-09, DONE 2026-10-10)
 
 Under a Group Policy RemoteSigned execution policy, a checkout extracted from a
 downloaded ZIP carries Mark of the Web on some files. exec_probe tests only
 itself, so it can pass while a marked helper is refused, and a refused helper
 writes no marker, so its check reads OK. A stick made by `make_usb_stick.ps1`
-carries file contents only and is immune. A checkout is not. Proposed:
-exec_probe counts Zone.Identifier streams on `tools\*.ps1` and declares a gap
-when any is marked and the policy is RemoteSigned.
+carries file contents only and is immune. A checkout is not.
+
+Done, and wider than proposed. The probe reads every helper's Zone.Identifier
+against the Group Policy (RemoteSigned refuses, Unrestricted stops to ask) and
+blocks with the names. The question Unrestricted asks could hang the audit
+unseen, first at `threat_list_seed`, which runs before the probe; the probe and
+every helper before it now run `-NonInteractive`. The zones are measured on a
+runner under both policies (windows-smoke, readonly-field-test).
+
+Not taken: `-NonInteractive` on every helper call after the probe. Once the
+probe passes, no helper carries a mark that policy checks, so it would be
+defence in depth against a question from some other cause, across about a
+hundred call sites. Revisit if a field run ever shows a helper waiting.
 
 ## A user name with an apostrophe silently breaks staged PowerShell (found 2026-10-10, DONE 2026-10-10)
 

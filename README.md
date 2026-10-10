@@ -354,7 +354,10 @@ Whichever way you pick the stick, the script:
   which belongs on someone else's PC -- and **itself**, so the checker you run
   later is never one that travelled. It names each file it leaves off;
 - copies file **contents** only, so Mark of the Web never travels. A PC whose
-  IT sets a RemoteSigned script policy would otherwise refuse some helpers. It
+  IT sets a RemoteSigned script policy would otherwise refuse the marked
+  helpers, and an Unrestricted one would stop to ask about each; the audit
+  detects either, names the marked scripts and stops with `AUDIT NOT
+  PERFORMED` rather than read clean. It
   also writes every text file with Windows line endings, as a Windows checkout
   has them (cmd.exe needs them in the batch files);
 - reads every file back, records anything already at the stick's root that
@@ -378,7 +381,7 @@ back. Keep a plain folder name such as `E:\doze_sec` -- no `( ) ! % & ^`.
 **A. Straight from the stick** -- nothing of the tool is copied onto the PC:
 
 ```
-powershell -NoProfile -ExecutionPolicy Bypass -File E:\doze_sec\tests\field_test.ps1
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File E:\doze_sec\tests\field_test.ps1
 ```
 
 Run it once in PowerShell **as administrator** if you can, then once in a
@@ -391,7 +394,7 @@ folder.
 `E:\doze_sec` to `C:\Users\<name>\doze_sec`. Not into Documents, which
 OneDrive may upload to the owner's cloud, and not into a Temp folder, where the
 audit refuses to run (exit code 5). Run
-`powershell -NoProfile -ExecutionPolicy Bypass -File $env:USERPROFILE\doze_sec\tests\field_test.ps1`
+`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $env:USERPROFILE\doze_sec\tests\field_test.ps1`
 the same way, and delete that folder when you are done.
 
 Either way the results are written **on that PC**: `C:\SecurityAudit\` for the

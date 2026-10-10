@@ -554,7 +554,7 @@ if not exist "%OUTDIR%\ThreatLists" mkdir "%OUTDIR%\ThreatLists" 2>nul
 :: left a per-user copy of ioc_registry.txt behind the |BadValue column, and it
 :: reported UAC ON and LSASS PPL ON as registry IOCs (2026-09-24).
 if exist "%SCRIPT_DIR%tools\threat_list_seed.ps1" (
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\threat_list_seed.ps1" -ShippedDir "%SCRIPT_DIR%ThreatLists" -RuntimeDir "%OUTDIR%\ThreatLists" >nul 2>&1
+    powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\threat_list_seed.ps1" -ShippedDir "%SCRIPT_DIR%ThreatLists" -RuntimeDir "%OUTDIR%\ThreatLists" >nul 2>&1
 ) else (
     for %%f in (ioc_processes.txt ioc_named_pipes.txt ioc_services.txt ioc_registry.txt ioc_file_paths.txt ioc_scheduled_tasks.txt ioc_domains.txt ioc_hashes.txt ioc_lolbins.txt ttp_manifest.txt) do (
         if not exist "%OUTDIR%\ThreatLists\%%f" if exist "%SCRIPT_DIR%ThreatLists\%%f" copy /y "%SCRIPT_DIR%ThreatLists\%%f" "%OUTDIR%\ThreatLists\" >nul 2>&1
@@ -857,7 +857,7 @@ echo :: --- Update: %date% %time% --->> "%TTP_BLOCKS%"
 :: indicators leak into the committed baseline. Curation now lives upstream
 :: (the threat-intel skill), not in -updateTTP's runtime output.
 if exist "%SCRIPT_DIR%tools\ttp_merge.ps1" (
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\ttp_merge.ps1" -TtpOutput "%TTP_OUTPUT%" -BlocksFile "%TTP_BLOCKS%" -ThreatListsDir "%OUTDIR%\ThreatLists"
+    powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\ttp_merge.ps1" -TtpOutput "%TTP_OUTPUT%" -BlocksFile "%TTP_BLOCKS%" -ThreatListsDir "%OUTDIR%\ThreatLists"
 ) else (
     echo  [WARN] tools\ttp_merge.ps1 not found -- TTP detection blocks, IOC merge, and ttp_manifest.txt update all skipped.
 )
@@ -944,7 +944,7 @@ if not exist "%OUTDIR%\ThreatLists" mkdir "%OUTDIR%\ThreatLists"
 :: left a per-user copy of ioc_registry.txt behind the |BadValue column, and it
 :: reported UAC ON and LSASS PPL ON as registry IOCs (2026-09-24).
 if exist "%SCRIPT_DIR%tools\threat_list_seed.ps1" (
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\threat_list_seed.ps1" -ShippedDir "%SCRIPT_DIR%ThreatLists" -RuntimeDir "%OUTDIR%\ThreatLists" > "%TEMP%\dz_seed.txt" 2>&1
+    powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\threat_list_seed.ps1" -ShippedDir "%SCRIPT_DIR%ThreatLists" -RuntimeDir "%OUTDIR%\ThreatLists" > "%TEMP%\dz_seed.txt" 2>&1
 ) else (
     for %%f in (ioc_processes.txt ioc_named_pipes.txt ioc_services.txt ioc_registry.txt ioc_file_paths.txt ioc_scheduled_tasks.txt ioc_domains.txt ioc_hashes.txt ioc_lolbins.txt ttp_manifest.txt) do (
         if not exist "%OUTDIR%\ThreatLists\%%f" if exist "%SCRIPT_DIR%ThreatLists\%%f" copy /y "%SCRIPT_DIR%ThreatLists\%%f" "%OUTDIR%\ThreatLists\" >nul 2>&1
@@ -1052,17 +1052,31 @@ echo.>> "%REPORT%"
 :: UserPolicy) OVERRIDES Bypass, and AppLocker or WDAC run PowerShell in
 :: ConstrainedLanguage. Either way a refused helper writes no marker, no
 :: marker reads OK, and the sections said CLEAN for checks that never ran.
-:: Probe once, before the first helper, and refuse to run blind.
+:: Probe once, before the checks, and refuse to run blind.
+:: A Group Policy RemoteSigned or Unrestricted policy lets an UNMARKED script
+:: run, which is all the probe used to prove about itself. A copy unzipped
+:: from a download carries the Mark of the Web on its files: RemoteSigned
+:: refuses each marked helper, Unrestricted stops to ask about each one where
+:: nobody sees the question. The probe now reads every helper's mark, and
+:: runs -NonInteractive (as do the helpers that run before it) so a question
+:: fails at once instead of hanging the audit.
 echo --- PowerShell script execution (can this machine run the audit's helper scripts?) --->> "%REPORT%"
 echo  Command: powershell -Command "Get-ExecutionPolicy -List">> "%REPORT%"
+echo  Command: powershell -Command "Get-ChildItem -LiteralPath '%SCRIPT_DIR:'=''%tools' -Filter *.ps1 | Get-Item -Stream Zone.Identifier -ErrorAction SilentlyContinue | Select-Object FileName">> "%REPORT%"
 del "%TEMP%\dz_exec_state.txt" 2>nul
+del "%TEMP%\dz_exec_motw.txt" 2>nul
+del "%TEMP%\dz_exec_motw_lines.txt" 2>nul
 set "EXEC_STATE="
 set "EXEC_MODE="
+set "EXEC_MOTW="
+set "EXEC_REFUSED=0"
 if not exist "%SCRIPT_DIR%tools\exec_probe.ps1" goto :exec_probe_missing
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\exec_probe.ps1" -StateFile "%TEMP%\dz_exec_state.txt" >nul 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\exec_probe.ps1" -StateFile "%TEMP%\dz_exec_state.txt" -MotwFile "%TEMP%\dz_exec_motw.txt" -MotwLinesFile "%TEMP%\dz_exec_motw_lines.txt" >nul 2>&1
 if exist "%TEMP%\dz_exec_state.txt" set /p EXEC_STATE=<"%TEMP%\dz_exec_state.txt"
 del "%TEMP%\dz_exec_state.txt" 2>nul
-if "%EXEC_STATE%"=="ok|FullLanguage" goto :exec_probe_ok
+if exist "%TEMP%\dz_exec_motw.txt" set /p EXEC_MOTW=<"%TEMP%\dz_exec_motw.txt"
+del "%TEMP%\dz_exec_motw.txt" 2>nul
+if "%EXEC_STATE%"=="ok|FullLanguage" goto :exec_probe_ran
 echo.>> "%REPORT%"
 echo *** AUDIT NOT PERFORMED -- PowerShell will not run this audit's helper scripts on this machine ***>> "%REPORT%"
 if "%EXEC_STATE%"=="" goto :exec_refused
@@ -1071,9 +1085,22 @@ echo  Scripts run here, but in %EXEC_MODE% mode, not FullLanguage: AppLocker or 
 echo  [!] PowerShell runs in %EXEC_MODE% mode on this machine -- the checks cannot run.
 goto :exec_blind
 :exec_refused
+set "EXEC_REFUSED=1"
 echo  PowerShell refused to run a script file here. An execution policy set by Group Policy, MachinePolicy or UserPolicy, overrides -ExecutionPolicy Bypass; AppLocker or WDAC script rules, or an antivirus product, can also block scripts.>> "%REPORT%"
 echo  [!] PowerShell refused to run the audit's helper scripts on this machine.
+goto :exec_blind
+:exec_probe_ran
+:: The probe ran in FullLanguage. Its Mark of the Web verdict decides, and a
+:: verdict that is missing or anything but ok blocks: never an OK default.
+if "%EXEC_MOTW%"=="ok" goto :exec_probe_ok
+set "EXEC_BANNER=0"
+if exist "%TEMP%\dz_exec_motw_lines.txt" findstr /l /b /c:"*** AUDIT NOT PERFORMED" "%TEMP%\dz_exec_motw_lines.txt" >nul 2>&1 && set "EXEC_BANNER=1"
+if "%EXEC_BANNER%"=="0" echo.>> "%REPORT%"
+if "%EXEC_BANNER%"=="0" echo *** AUDIT NOT PERFORMED -- the script-policy probe ran but did not say which helper scripts PowerShell will run ***>> "%REPORT%"
+if exist "%TEMP%\dz_exec_motw_lines.txt" type "%TEMP%\dz_exec_motw_lines.txt">> "%REPORT%"
+echo  [!] PowerShell will not run some of the audit's helper scripts on this machine -- usually the Mark of the Web on a copy unzipped from a download.
 :exec_blind
+del "%TEMP%\dz_exec_motw_lines.txt" 2>nul
 echo  What PowerShell reports for this machine:>> "%REPORT%"
 :: Read from the registry, where Group Policy stores it, not through PowerShell:
 :: under AllSigned even a -Command can stop at an interactive "untrusted
@@ -1085,6 +1112,25 @@ for /f "tokens=3" %%a in ('reg query "HKCU\SOFTWARE\Policies\Microsoft\Windows\P
 echo     MachinePolicy = %EP_MACHINE%   [HKLM\SOFTWARE\Policies\Microsoft\Windows\PowerShell]>> "%REPORT%"
 echo     UserPolicy    = %EP_USER%   [HKCU\SOFTWARE\Policies\Microsoft\Windows\PowerShell]>> "%REPORT%"
 if defined EXEC_MODE echo     LanguageMode  = %EXEC_MODE%>> "%REPORT%"
+if not "%EXEC_REFUSED%"=="1" goto :exec_blind_tail
+:: PowerShell refused even the probe, so count the marked helpers in cmd: a
+:: Zone.Identifier stream naming zone 3 or 4 (internet, restricted sites),
+:: the zones PowerShell treats as downloaded. Printed after the policy
+:: evidence, and named as the cause only under a policy that checks it.
+set "EXEC_MOTW_N=0"
+set "EXEC_PS1_N=0"
+for %%m in ("%SCRIPT_DIR%tools\*.ps1") do set /a EXEC_PS1_N+=1
+:: 2>nul comes first so a helper with no stream, whose < fails, prints nothing.
+for %%m in ("%SCRIPT_DIR%tools\*.ps1") do 2>nul findstr /i /r /c:"^ZoneId=[34]" <"%%~fm:Zone.Identifier" >nul && set /a EXEC_MOTW_N+=1
+if not "%EXEC_MOTW_N%"=="0" echo  Mark of the Web: %EXEC_MOTW_N% of the %EXEC_PS1_N% helper scripts in tools are marked as downloaded from the internet.>> "%REPORT%"
+set "EP_EFF=%EP_USER%"
+if not "%EP_MACHINE%"=="not set" set "EP_EFF=%EP_MACHINE%"
+set "EP_MOTW=0"
+if /i "%EP_EFF%"=="RemoteSigned" set "EP_MOTW=1"
+if /i "%EP_EFF%"=="Unrestricted" set "EP_MOTW=1"
+if not "%EXEC_MOTW_N%"=="0" if "%EP_MOTW%"=="1" echo  Under that policy the mark is why PowerShell would not run them. A copy made by tools\make_usb_stick.ps1 never carries it.>> "%REPORT%"
+if "%SCRIPT_DIR:~0,2%"=="\\" echo  This copy runs from a network path. Windows can place a network share in the Internet zone, where such a policy treats every script as downloaded. Copy it to a local folder or a stick.>> "%REPORT%"
+:exec_blind_tail
 echo  Running anyway would print CLEAN for checks that never ran, so nothing was audited.>> "%REPORT%"
 echo  Ask whoever manages this machine to allow it, or run the audit on a machine you control.>> "%REPORT%"
 echo  See docs\second-machine.md in the doze_sec folder.>> "%REPORT%"
@@ -1102,6 +1148,8 @@ set "EXIT_CODE=1"
 goto :end_script
 :exec_probe_ok
 echo [OK] PowerShell runs this audit's helper scripts (FullLanguage; the execution policy allows them).>> "%REPORT%"
+if exist "%TEMP%\dz_exec_motw_lines.txt" type "%TEMP%\dz_exec_motw_lines.txt">> "%REPORT%"
+del "%TEMP%\dz_exec_motw_lines.txt" 2>nul
 echo.>> "%REPORT%"
 rem Tier 0 truthful-reporting preamble: what a clean result does and does
 rem not mean, at-risk-user safety warnings, and where to get expert help.

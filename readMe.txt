@@ -282,7 +282,7 @@ RUNNING FROM A USB STICK
 
   2. RUN IT on the other PC, straight from the stick (nothing copied):
 
-       powershell -NoProfile -ExecutionPolicy Bypass -File E:\doze_sec\tests\field_test.ps1
+       powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File E:\doze_sec\tests\field_test.ps1
 
      Once as administrator if you can, then once in a normal window. Leave
      the stick in until it prints OK or FAIL, and take it out before the PC

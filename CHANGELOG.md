@@ -6,6 +6,52 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### The script-policy probe reads every helper's Mark of the Web, and a hidden question can no longer hang the audit
+`tools\exec_probe.ps1` proved that PowerShell runs one script here: itself.
+On a PC whose IT sets a Group Policy RemoteSigned or Unrestricted policy, an
+unmarked script runs. A copy unzipped from a download carries the Mark of the
+Web (a Zone.Identifier stream) on every file, and some of its files may have
+been replaced since. RemoteSigned refused each marked helper; a refused helper
+writes no marker, so its check read OK. Unrestricted stopped to ask about each
+marked script, and every helper's output goes into the report, so the question
+waited where nobody could see it and the audit hung. Microsoft documents both
+(about_Execution_Policies). The probe now reads each helper's mark against the
+Group Policy:
+
+- RemoteSigned or Unrestricted with marked helpers prints
+  `AUDIT NOT PERFORMED`, names each marked script with its zone, says what to
+  do (carry the tool on a stick made by `make_usb_stick.ps1`, which never
+  carries the mark) and exits 1. A missing verdict is never read as ok.
+- No Group Policy with marked helpers prints an `[INFO]` line: the marks are
+  harmless here and would not be on a managed PC.
+- When PowerShell refuses even the probe, cmd counts the zone-3 and zone-4
+  marks itself. The report names the mark as the cause only under a policy
+  that checks it, and notes a network path, which Windows can place in the
+  Internet zone.
+
+A new printed `Command:` line shows the reader how to list the marks
+themselves.
+
+**What I had wrong.** CLAUDE.md said the probe "runs once before the first
+helper". It never did: `threat_list_seed.ps1` runs before it on every run, and
+`ttp_merge.ps1` does on `-updateTTP`. A fully marked copy under Unrestricted
+would have hung there before the probe could say anything. A read-only review
+of the plan found this before any code was written. The probe and every helper
+before it now run `-NonInteractive`, so a question fails at once. The
+documented field_test commands do the same, because under `Tee-Object` a
+marked field_test's own question might not show.
+
+**Measured, not argued.** The readonly job plants each Group Policy on a copy
+of the checkout and asks Windows itself which marks it treats as downloaded:
+zones 0 to 5, a stream with no header and an empty stream, under both
+policies. The probe's rule is pinned to that answer: the job fails if Windows
+refuses a script the probe reads as local. Both bats must then stop and name
+two zone-3 helpers and not a zone-2 one. With the probe marked too, cmd must
+count 3 and not 4. The hang itself is measured: a marked probe in its own
+console, without and then with `-NonInteractive`. A fully marked copy run the
+way a person runs it, in its own console with the console log on, must stop
+within three minutes. A Linux guard keeps the bats' wiring.
+
 ### Sections 18c, 18d and 18h are proven to fire, each beside a look-alike that must not
 18a and 18f had been proven by harness plants, and 18b and 18e by planted
 pipes and tasks in the helpers job. 18c (services), 18d (staging files) and
