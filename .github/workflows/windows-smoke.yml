@@ -200,6 +200,9 @@ jobs:
           foreach ($must in 'a list holding only comments and blanks is exit 2', 'a missing list is exit 2', 'a hit on a line holding # is kept') {
             if ($st -notmatch [regex]::Escape($must)) { throw ("select_lines case missing: {0}" -f $must) }
           }
+          $cg = (.\tools\count_gaps.ps1 -SelfTest) -join "`n"
+          Write-Host $cg
+          if ($LASTEXITCODE -ne 0) { throw 'count_gaps -SelfTest failed on Windows PowerShell 5.1' }
           exit 0
 
       - name: top_findings.ps1 + report_format.ps1 on a sample report

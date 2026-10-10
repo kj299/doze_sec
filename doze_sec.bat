@@ -187,6 +187,8 @@ set "NO_CONSOLE_LOG=0"
 set "SELFTEST_MODE=0"
 set "READONLY_MODE=0"
 set "IOC_HITS=0"
+set "IOC_GAPS=0"
+set "IOC_FROM=0"
 set "NETWORK_AVAIL=0"
 set "SAFE_MODE=0"
 set "RUNONCE_CREATED=0"
@@ -4213,13 +4215,16 @@ echo  and refreshed with -updateTTP ^(online^) or -importTTP ^(offline^). They>>
 echo  go STALE between refreshes -- see ttp_manifest.txt for the generation>> "%REPORT%"
 echo  date. A match is an INDICATOR to investigate, not proof of compromise;>> "%REPORT%"
 echo  no match is not proof of cleanliness ^(only these known IOCs were checked^).>> "%REPORT%"
+:: Where the IOC sweep begins in the report: the summary counts the checks
+:: below that could not run, so it never calls a partial sweep an all-clear.
+for %%z in ("%REPORT%") do set "IOC_FROM=%%~zz"
 :: (No copy needed -- runtime IS the source of truth from this point on.
 :: The early seed step at OUTDIR setup already pre-populated runtime from
 :: the repo baseline; INIT 10/14 refreshed it with upstream content.)
 
 echo.>> "%REPORT%"
 echo --- [18a] Process IOC Match --->> "%REPORT%"
-echo  Command: powershell Get-CimInstance Win32_Process ^| select_lines.ps1 -PatternFile "%IOCDIR%\ioc_processes.txt">> "%REPORT%"
+echo  Command: powershell -Command "$f = @(Get-Content '%IOCDIR%\ioc_processes.txt' | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') } | ForEach-Object { $_.Trim().ToLower() }); Get-CimInstance Win32_Process | Where-Object { $l = ($_.Name + '  ' + $_.ProcessId + '  ' + $_.ExecutablePath).ToLower(); @($f | Where-Object { $l.Contains($_) }).Count } | Select-Object Name, ProcessId, ExecutablePath">> "%REPORT%"
 echo  Matching running processes against ioc_processes.txt>> "%REPORT%"
 :: wmic was removed in Windows 11 24H2+; the old `wmic | findstr` pipeline
 :: printed [OK] with zero processes examined when wmic was absent. Enumerate
@@ -4330,7 +4335,7 @@ if exist "%TEMP%\dz_iochit_18e.txt" (
 
 echo.>> "%REPORT%"
 echo --- [18f] DNS Cache C2 Domain Match --->> "%REPORT%"
-echo  Command: ipconfig /displaydns ^| select_lines.ps1 -PatternFile "%IOCDIR%\ioc_domains.txt">> "%REPORT%"
+echo  Command: powershell -Command "$f = @(Get-Content '%IOCDIR%\ioc_domains.txt' | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') } | ForEach-Object { $_.Trim().ToLower() }); Get-DnsClientCache | Where-Object { $e = ([string]$_.Entry + ' ' + [string]$_.Data).ToLower(); @($f | Where-Object { $e.Contains($_) }).Count }">> "%REPORT%"
 echo  Matching DNS cache against ioc_domains.txt>> "%REPORT%"
 :: Capture the cache to a temp file first: a failed/denied ipconfig used to
 :: feed findstr nothing and print [OK], hiding the failure. Empty file ->
@@ -4342,6 +4347,21 @@ if defined _ENUM18F goto :sec18f_match
 echo [SKIPPED] DNS cache could not be read -- C2 domain match NOT performed.>> "%REPORT%"
 goto :sec18f_done
 :sec18f_match
+:: ipconfig prints its banner even when it cannot show the cache (the DNS
+:: Client service stopped), so a non-empty file proves nothing. Every cached
+:: record has a dashed underline, in every language: none means the cache
+:: was empty or not shown, never "no C2 domain matched".
+findstr /c:"----------" "%TEMP%\dz_dns18f.tmp" >nul 2>&1
+if not errorlevel 1 goto :sec18f_records
+sc query Dnscache 2>nul | findstr /c:"RUNNING" >nul 2>&1
+if not errorlevel 1 goto :sec18f_empty
+echo [WARNING] C2 domain IOC match NOT performed -- the DNS Client service is not running, so the DNS cache could not be read.>> "%REPORT%"
+call :dz_finding WARNING 18 T1071.004 "C2 domain IOC match NOT performed - DNS Client service not running"
+goto :sec18f_done
+:sec18f_empty
+echo [SKIPPED] The DNS cache holds no records -- C2 domain match NOT performed; nothing was resolved recently.>> "%REPORT%"
+goto :sec18f_done
+:sec18f_records
 :: select_lines for the reasons given at 18a. A missing ioc_domains.txt
 :: (only ioc_processes.txt is checked above) is exit 2 here: NOT performed.
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_dns18f.tmp" -PatternFile "%IOCDIR%\ioc_domains.txt">> "%REPORT%" 2>&1
@@ -4365,7 +4385,7 @@ del "%TEMP%\dz_dns18f.tmp" 2>nul
 
 echo.>> "%REPORT%"
 echo --- [18g] LOLBin Command-Line Pattern Match --->> "%REPORT%"
-echo  Command: powershell Get-CimInstance Win32_Process ^| select_lines.ps1 -PatternFile "%IOCDIR%\ioc_lolbins.txt">> "%REPORT%"
+echo  Command: powershell -Command "$f = @(Get-Content '%IOCDIR%\ioc_lolbins.txt' | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') } | ForEach-Object { $_.Trim().ToLower() }); Get-CimInstance Win32_Process | Where-Object { $l = ($_.Name + '  ' + $_.CommandLine).ToLower(); @($f | Where-Object { $l.Contains($_) }).Count } | Select-Object Name, ProcessId, CommandLine">> "%REPORT%"
 echo  Matching process command lines against ioc_lolbins.txt>> "%REPORT%"
 :: wmic was removed in Windows 11 24H2+; the old wmic enumeration silently
 :: produced an empty temp file there and select_lines reported no matches,
@@ -4508,14 +4528,30 @@ if exist "%SCRIPT_DIR%tools\ioc_hash_check.ps1" (
 
 echo.>> "%REPORT%"
 echo --- [18 SUMMARY] IOC Sweep Results --->> "%REPORT%"
-if "!IOC_HITS!"=="0" (
+del "%TEMP%\dz_iocgaps.txt" 2>nul
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\count_gaps.ps1" -Report "%REPORT%" -FromByte %IOC_FROM% -StateFile "%TEMP%\dz_iocgaps.txt" >nul 2>&1
+set "IOC_GAPS=-1"
+if exist "%TEMP%\dz_iocgaps.txt" set /p IOC_GAPS=<"%TEMP%\dz_iocgaps.txt"
+del "%TEMP%\dz_iocgaps.txt" 2>nul
+if not "!IOC_HITS!"=="0" goto :sec18_sum_hits
+if "!IOC_GAPS!"=="0" (
     echo [OK] No threat indicator matches found across all IOC categories.>> "%REPORT%"
-) else (
+    goto :sec18_sum_done
+)
+if "!IOC_GAPS!"=="-1" (
+    echo [INFO] No threat indicator matches in the categories checked; how many could not run is unknown -- this is not an all-clear.>> "%REPORT%"
+    goto :sec18_sum_done
+)
+echo [INFO] No threat indicator matches in the categories checked, but !IOC_GAPS! check^(s^) above could NOT run -- this is not an all-clear.>> "%REPORT%"
+goto :sec18_sum_done
+:sec18_sum_hits
+if "!IOC_HITS!"=="0" (
     rem A tally, not a finding: every category above already raised its own
     rem ledger row. Tagging the tally WARNING made a reader count one more
     rem finding than the tool did (standard-user field run 2026-09-24).
     echo [INFO] !IOC_HITS! IOC category matches found. Review [WARNING] and [CRITICAL] entries above.>> "%REPORT%"
 )
+:sec18_sum_done
 echo.>> "%REPORT%"
 
 :: Entry point for the inline CTI checks. Reached either by falling through
@@ -4948,7 +4984,8 @@ echo. >> "%PSRUN%"
 :: ===== CTI IOC SWEEP ================================================
 echo sec 'CTI IOC SWEEP  (Section 18 - SENTINEL-X)' >> "%PSRUN%"
 echo $iocHits='%IOC_HITS%' >> "%PSRUN%"
-echo if($iocHits -gt 0){ck 'WARN' "CTI IOC sweep: $iocHits category matches found" 'Review Section 18. An IOC CATEGORY match is a lead to check, not proof of compromise -- Section 18 grades each hit on its own line.'}else{ck 'PASS' 'CTI IOC sweep: no threat indicator matches across all categories'} >> "%PSRUN%"
+echo $iocGaps='%IOC_GAPS%' >> "%PSRUN%"
+echo if([int]$iocHits -gt 0){ck 'WARN' "CTI IOC sweep: $iocHits category matches found" 'Review Section 18. An IOC CATEGORY match is a lead to check, not proof of compromise -- Section 18 grades each hit on its own line.'}elseif([int]$iocGaps -ne 0){ck 'INFO' 'CTI IOC sweep: no matches in the categories checked, but not every check could run (Section 18)' 'Not an all-clear: read the NOT performed and SKIPPED lines in Section 18.'}else{ck 'PASS' 'CTI IOC sweep: no threat indicator matches across all categories'} >> "%PSRUN%"
 echo. >> "%PSRUN%"
 
 :: ===== COMPOSE AND OUTPUT SUMMARY ====================================

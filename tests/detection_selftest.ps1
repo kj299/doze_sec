@@ -123,6 +123,12 @@ $iocProcDir    = 'C:\dz_selftest_ioc'
 $iocProcExe    = Join-Path $iocProcDir 'dz_selftest_evil_chisel.exe'
 $iocBenignDir  = 'C:\dz_selftest_ioc_benign'
 $iocBenignExe  = Join-Path $iocBenignDir 'dz_selftest_evil_benign_level_agent.exe'
+# What 18a and 18f print for the two plants, anchored inside each subsection
+# (the names also appear elsewhere: Section 3 copies the whole DNS cache).
+# Each benign twin is graded only when its sibling matched: a twin that is
+# absent because the matcher never ran has tested nothing.
+$ioc18aExpect = '(?s)--- \[18a\] Process IOC Match ---(?:(?!--- \[18b\]).)*?dz_selftest_evil_chisel\.exe\s+\d+\s+C:\\dz_selftest_ioc\\(?:(?!--- \[18b\]).)*?\[WARNING\] Process IOC matches found above'
+$ioc18fExpect = '(?s)--- \[18f\] DNS Cache C2 Domain Match ---(?:(?!--- \[18g\]).)*?dz-selftest-evil\.ngrok\.io(?:(?!--- \[18g\]).)*?\[WARNING\] C2 domain IOC matches found in DNS cache'
 # Baseline/diff: the audit auto-diffs when a snapshot exists at OUTDIR. The
 # harness seeds one BEFORE the audit runs, with the planted Run-key backdoor
 # deliberately absent from it, so the audit's diff must report that autorun as
@@ -165,7 +171,9 @@ $cases = @(
         Touches= @('hosts:%SystemRoot%\System32\drivers\etc\hosts|drivers\etc\hosts')
         Affects= @('network')
         Expect = 'Non-standard entries found in HOSTS'
-        Plant  = { Add-Content -LiteralPath $hostsPath -Value ("203.0.113.5 {0}.example" -f $MARK) }
+        # Add-Content joins a last line that has no newline, so add one only then.
+        Plant  = { $nl = ''; $b = [IO.File]::ReadAllBytes($hostsPath); if ($b.Length -gt 0 -and $b[$b.Length - 1] -ne 10) { $nl = "`r`n" }
+                   Add-Content -LiteralPath $hostsPath -Value ($nl + ("203.0.113.5 {0}.example" -f $MARK)) }
         # Read and write with the SAME explicit encoding. The old cleanup read
         # with Get-Content's default (the process ANSI codepage) and rewrote
         # with -Encoding ASCII, so on a machine whose hosts file is UTF-8 with
@@ -329,8 +337,7 @@ $cases = @(
         Tier   = 'required'
         Touches= @('file:C:\dz_selftest_ioc\dz_selftest_evil_chisel.exe|dz_selftest_ioc')
         Affects= @()
-        # Anchored inside 18a: the process name also appears in other sections.
-        Expect = '(?s)--- \[18a\] Process IOC Match ---(?:(?!--- \[18b\]).)*?dz_selftest_evil_chisel\.exe\s+\d+\s+C:\\dz_selftest_ioc\\(?:(?!--- \[18b\]).)*?\[WARNING\] Process IOC matches found above'
+        Expect = $ioc18aExpect
         Plant  = { New-Item -ItemType Directory -Path $iocProcDir -Force | Out-Null
                    Copy-Item -LiteralPath (Join-Path $env:SystemRoot 'System32\ping.exe') -Destination $iocProcExe -Force
                    Start-Process -FilePath $iocProcExe -ArgumentList '-n 1500 127.0.0.1' -WindowStyle Hidden | Out-Null
@@ -347,6 +354,8 @@ $cases = @(
         Affects= @()
         Invert = $true
         Expect = '(?s)--- \[18a\] Process IOC Match ---(?:(?!--- \[18b\]).)*?dz_selftest_evil_benign_level_agent'
+        TestableIf       = { [regex]::IsMatch($text, $ioc18aExpect) }
+        UntestableReason = 'the chisel-named plant did not reach 18a either, so 18a never matched anything this run'
         Plant  = { New-Item -ItemType Directory -Path $iocBenignDir -Force | Out-Null
                    Copy-Item -LiteralPath (Join-Path $env:SystemRoot 'System32\ping.exe') -Destination $iocBenignExe -Force
                    Start-Process -FilePath $iocBenignExe -ArgumentList '-n 1500 127.0.0.1' -WindowStyle Hidden | Out-Null
@@ -366,7 +375,7 @@ $cases = @(
         # resolver cache that ipconfig /displaydns lists, so nothing is sent to
         # the network. Loopback and not a security domain, so Section 3 grades
         # it INFO. Anchored inside 18f: Section 3 copies the whole cache too.
-        Expect = '(?s)--- \[18f\] DNS Cache C2 Domain Match ---(?:(?!--- \[18g\]).)*?dz-selftest-evil\.ngrok\.io(?:(?!--- \[18g\]).)*?\[WARNING\] C2 domain IOC matches found in DNS cache'
+        Expect = $ioc18fExpect
         VoidIf     = { -not ((& ipconfig /displaydns 2>$null | Out-String) -match 'dz-selftest-evil\.ngrok\.io') }
         VoidReason = 'the DNS Client did not load the planted HOSTS line into its cache, so 18f had nothing to match'
         # Add-Content joins a last line that has no newline, so add one only then.
@@ -382,6 +391,8 @@ $cases = @(
         Affects= @('network')
         Invert = $true
         Expect = '(?s)--- \[18f\] DNS Cache C2 Domain Match ---(?:(?!--- \[18g\]).)*?dz-selftest-benign\.ngrok\.com'
+        TestableIf       = { [regex]::IsMatch($text, $ioc18fExpect) }
+        UntestableReason = 'the ngrok.io plant did not reach 18f either (the DNS Client did not load the HOSTS lines, or 18f could not run)'
         Plant  = { $nl = ''; $b = [IO.File]::ReadAllBytes($hostsPath); if ($b.Length -gt 0 -and $b[$b.Length - 1] -ne 10) { $nl = "`r`n" }
                    Add-Content -LiteralPath $hostsPath -Value ($nl + ("127.0.0.1 dz-selftest-benign.ngrok.com # {0}_benign" -f $MARK)) }
         Cleanup= { $keep = Get-Content -LiteralPath $hostsPath -Encoding UTF8 | Where-Object { $_ -notmatch $MARK }
@@ -939,6 +950,18 @@ try {
             }
             continue
         }
+        # A case may declare TestableIf: a precondition, read after the audit,
+        # without which its verdict means nothing -- a benign twin is "not
+        # matched" trivially when the matcher never matched anything. Reported
+        # as SKIP, never as a pass.
+        if ($c.TestableIf) {
+            $testable = $false
+            try { $testable = [bool](& $c.TestableIf) } catch { $testable = $false }
+            if (-not $testable) {
+                Write-Host ("  [ SKIP     ] {0}  -- NOT TESTED this run: {1}" -f $c.Name, $c.UntestableReason)
+                continue
+            }
+        }
         $hit  = [bool]([regex]::IsMatch($text, $c.Expect))
         # Invert cases plant a BENIGN state: the pattern must be ABSENT
         # (false-positive guard); a match means the audit cried wolf.
@@ -1063,6 +1086,10 @@ try {
                        @{ Case = 'Section 18f C2 domain match';   Row = 'WARNING|18|T1071.004|C2 domain IOC match in DNS cache' })) {
         $cs = @($cases | Where-Object { $_.Name -like ('*' + $chk.Case + '*') -and -not $_.Invert })[0]
         if (-not ($cs -and $cs.Planted)) { Write-Host ("  [ SKIP     ] {0}: the plant did not take, so its ledger row is not checked" -f $chk.Case); continue }
+        # The check is "printed but not counted": with nothing printed (a
+        # voided plant, or a regression the scoreboard already reported) there
+        # is nothing to count.
+        if (-not [regex]::IsMatch($text, $cs.Expect)) { Write-Host ("  [ SKIP     ] {0}: the match was not printed (see the scoreboard), so its ledger row is not checked" -f $chk.Case); continue }
         $row = $false
         if ($ledger) { $row = [bool](@(Get-Content -LiteralPath $ledger.FullName -EA SilentlyContinue | Where-Object { $_ -eq $chk.Row }).Count) }
         if ($row) { Write-Host ("  [ OK       ] {0}: the ledger holds {1}" -f $chk.Case, $chk.Row) }

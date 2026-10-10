@@ -50,6 +50,11 @@ param(
 # with (the list missing or only comments), which the bats report as NOT
 # performed. findstr /g: used to read a broken list as [OK].
 if ($SelfTest) {
+    # The exit-2 cases make the child write to stderr. Windows PowerShell 5.1
+    # turns redirected native stderr into a terminating error when the
+    # caller's preference is Stop (CI's is), so the test would die on the
+    # very cases it exists to prove.
+    $ErrorActionPreference = 'Continue'
     $exe = (Get-Process -Id $PID).Path
     $tmp = Join-Path ([IO.Path]::GetTempPath()) ('dz_select_lines_selftest_' + $PID)
     $fails = 0

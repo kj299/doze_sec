@@ -614,6 +614,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run tools/select_lines.ps1 -SelfTest
         run: pwsh -NoProfile -File tools/select_lines.ps1 -SelfTest
+      # Section 18's summary counts the checks that could not run, so a
+      # partial sweep is never an all-clear.
+      - name: Run tools/count_gaps.ps1 -SelfTest
+        run: pwsh -NoProfile -File tools/count_gaps.ps1 -SelfTest
       # findstr /g: read a broken list as [OK]: the errorlevel checked was the
       # SECOND findstr's in the pipe. Each of 18a, 18f and 18g must call
       # select_lines with its list and give exit 0 a raise, exit 1 the [OK]
@@ -621,30 +625,63 @@ jobs:
       - name: 18a, 18f and 18g branch three ways on select_lines' exit, in both bats
         shell: pwsh
         run: |
+          # Structural, line by line: the select_lines call, the exit captured
+          # on the next line, then exactly 0 -> :<sec>_hit, 1 -> :<sec>_clean,
+          # and anything else straight into the raised NOT-performed line. No
+          # other way into :<sec>_clean, and the hit label raises.
           $specs = @(
             @{ S = '18a'; List = 'ioc_processes.txt'; Var = '_SEL18A';      Gap = 'Process IOC match NOT performed' },
             @{ S = '18f'; List = 'ioc_domains.txt';   Var = '_SEL18F';      Gap = 'C2 domain IOC match NOT performed' },
             @{ S = '18g'; List = 'ioc_lolbins.txt';   Var = '_SELECT_EXIT'; Gap = 'LOLBin pattern match NOT performed' })
+          function Get-Code([string[]]$lines) { @($lines | Where-Object { $_.Trim() -and $_ -notmatch '^\s*(::|rem\s)' }) }
           function Get-Defects([string]$text, [string]$name) {
             $bad = @()
             foreach ($sp in $specs) {
               $m = [regex]::Match($text, '(?s)--- \[' + $sp.S + '\].*?(?=--- \[18[a-z]\]|$)')
               if (-not $m.Success) { $bad += ("{0}: section {1} not found -- this check is broken, not the code" -f $name, $sp.S); continue }
-              $b = $m.Value
-              if ($b -notmatch ('select_lines\.ps1" -Path "[^"]+" -PatternFile "%IOCDIR%\\' + [regex]::Escape($sp.List) + '"')) { $bad += ("{0} {1}: does not match with select_lines -PatternFile {2}" -f $name, $sp.S, $sp.List) }
-              if ($b -match 'findstr /i /g:') { $bad += ("{0} {1}: still matches with findstr /g:" -f $name, $sp.S) }
-              if ($b -notmatch ('if "!' + $sp.Var + '!"=="0" goto') -or $b -notmatch ('if "!' + $sp.Var + '!"=="1" goto')) { $bad += ("{0} {1}: exit 0 and exit 1 are not both branched on" -f $name, $sp.S) }
-              if ($b -notmatch ('echo \[WARNING\] ' + [regex]::Escape($sp.Gap) + '.*\r?\ncall :dz_finding WARNING 18 ')) { $bad += ("{0} {1}: any other exit does not print and raise '{2}'" -f $name, $sp.S, $sp.Gap) }
+              $code = Get-Code ($m.Value -split "\r?\n")
+              $tag = $name + ' ' + $sp.S
+              if (@($code | Where-Object { $_ -match 'findstr /i /g:' }).Count) { $bad += "${tag}: still matches with findstr /g:" }
+              $ci = [array]::FindIndex([string[]]$code, [Predicate[string]]{ param($l) $l -match ('select_lines\.ps1" -Path "[^"]+" -PatternFile "%IOCDIR%\\' + [regex]::Escape($sp.List) + '"') })
+              if ($ci -lt 0) { $bad += "${tag}: no select_lines -PatternFile $($sp.List) call outside a comment"; continue }
+              $want = @(
+                ('^set "' + $sp.Var + '=!errorlevel!"$'),
+                ('^if "!' + $sp.Var + '!"=="0" goto :sec' + $sp.S + '_hit$'),
+                ('^if "!' + $sp.Var + '!"=="1" goto :sec' + $sp.S + '_clean$'),
+                ('^echo \[WARNING\] ' + [regex]::Escape($sp.Gap)),
+                '^call :dz_finding WARNING 18 ')
+              for ($k = 0; $k -lt $want.Count; $k++) {
+                $l = if ($ci + 1 + $k -lt $code.Count) { $code[$ci + 1 + $k].Trim() } else { '' }
+                # 18g deletes its temp file between the call and the branch.
+                if ($k -eq 1 -and $l -match '^del ') { $ci++; $l = $code[$ci + 1 + $k].Trim() }
+                if ($l -notmatch $want[$k]) { $bad += ("{0}: line {1} after the select_lines call should match /{2}/, found: {3}" -f $tag, ($k + 1), $want[$k], $l); break }
+              }
+              $cleanGotos = @($code | Where-Object { $_ -match ('goto :sec' + $sp.S + '_clean\b') }).Count
+              if ($cleanGotos -ne 1) { $bad += "${tag}: $cleanGotos ways into :sec$($sp.S)_clean -- only exit 1 may lead there" }
+              $hi = [array]::FindIndex([string[]]$code, [Predicate[string]]{ param($l) $l.Trim() -eq (':sec' + $sp.S + '_hit') })
+              if ($hi -lt 0 -or $code[$hi + 1] -notmatch '^echo \[(WARNING|CRITICAL)\]' -or -not (@($code[($hi + 1)..([Math]::Min($code.Count - 1, $hi + 3))] | Where-Object { $_ -match '^call :dz_finding (WARNING|CRITICAL) 18 ' }).Count)) { $bad += "${tag}: :sec$($sp.S)_hit does not print and raise the finding" }
             }
             return $bad
           }
           $all = @()
           foreach ($bat in 'doze_sec.bat', 'doze_sec_noAdmin.bat') { $all += Get-Defects ([IO.File]::ReadAllText($bat)) $bat }
-          # Mutation: the old two-way branch (anything but 0 reads [OK]) must fail.
-          $mut = [IO.File]::ReadAllText('doze_sec.bat') -replace 'if "!_SEL18F!"=="1" goto :sec18f_clean', 'goto :sec18f_clean'
-          if (-not @(Get-Defects $mut 'mutated' | Where-Object { $_ -match '18f' }).Count) { throw 'the check did not fail on a copy where any non-zero exit reads [OK] -- it cannot catch the defect' }
+          # Every mutation the review named must fail this check.
+          $base = [IO.File]::ReadAllText('doze_sec.bat')
+          $mutations = @(
+            @{ N = 'exit 0 sent to [OK]';             F = 'if "!_SEL18A!"=="0" goto :sec18a_hit';   T = 'if "!_SEL18A!"=="0" goto :sec18a_clean' },
+            @{ N = 'exit 1 sent to the raise';        F = 'if "!_SEL18A!"=="1" goto :sec18a_clean'; T = 'if "!_SEL18A!"=="1" goto :sec18a_hit' },
+            @{ N = 'the old two-way branch';          F = 'if "!_SEL18F!"=="1" goto :sec18f_clean'; T = 'goto :sec18f_clean' },
+            @{ N = 'errorlevel tested before capture'; F = 'set "_SEL18F=!errorlevel!"';            T = ("if errorlevel 1 goto :sec18f_clean`r`n" + 'set "_SEL18F=!errorlevel!"') },
+            @{ N = 'a second way into [OK]';          F = 'if "!_SELECT_EXIT!"=="1" goto :sec18g_clean'; T = ('if "!_SELECT_EXIT!"=="1" goto :sec18g_clean' + "`r`n" + 'goto :sec18g_clean') },
+            @{ N = 'the select_lines call commented out'; F = '"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_proc18a.tmp"'; T = ':: "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_proc18a.tmp"' })
+          foreach ($mu in $mutations) {
+            if (-not $base.Contains($mu.F)) { throw ("mutation '{0}' found nothing to change -- this check no longer looks at the code it was written for" -f $mu.N) }
+            $idx = $base.IndexOf($mu.F)
+            $mut = $base.Substring(0, $idx) + $mu.T + $base.Substring($idx + $mu.F.Length)
+            if (-not @(Get-Defects $mut 'mutated').Count) { throw ("the check did not fail on the mutation '{0}' -- it cannot catch that defect" -f $mu.N) }
+          }
           if ($all.Count) { $all | ForEach-Object { Write-Host "[FAIL] $_" }; exit 1 }
-          Write-Host '[OK] 18a, 18f and 18g match with select_lines and report a list with nothing to match as NOT performed, in both bats; the two-way mutation fails as it should.'
+          Write-Host ("[OK] 18a, 18f and 18g branch exactly three ways on select_lines' exit in both bats; all {0} mutations fail as they should." -f $mutations.Count)
           exit 0
 
   usb-stick-selftest:

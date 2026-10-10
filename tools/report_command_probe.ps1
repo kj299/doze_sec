@@ -48,7 +48,7 @@ $ErrorActionPreference = 'Stop'
 # pure query. A name absent here is never executed.
 $script:OkCmdlets = @(
     'Confirm-SecureBootUEFI','ConvertFrom-Csv','ForEach-Object','Format-List','Format-Table',
-    'Get-AuthenticodeSignature','Get-BitLockerVolume','Get-ChildItem','Get-CimInstance',
+    'Get-AuthenticodeSignature','Get-BitLockerVolume','Get-ChildItem','Get-CimInstance','Get-DnsClientCache',
     'Get-Content','Get-Date','Get-ExecutionPolicy','Get-HotFix','Get-Item','Get-ItemProperty',
     'Get-LocalUser','Get-MpComputerStatus','Get-MpPreference','Get-MpThreatDetection',
     'Get-NetFirewallProfile','Get-PhysicalDisk','Get-Process','Get-Service',

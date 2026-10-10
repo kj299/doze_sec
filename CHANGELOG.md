@@ -23,8 +23,9 @@ DNS cache). Reading the two sections showed they could also print
   separator comes from the culture. Where it is `.`, the header holds a
   pattern character and the whole list silently became patterns.
 - **Comment lines were search strings,** although the header said findstr
-  ignored them. The six bare `#` lines matched any line containing `#`, which
-  the second findstr then removed, so a real hit on such a line vanished.
+  ignored them. The bare `#` lines (9 in `ioc_processes.txt`, 6 in
+  `ioc_domains.txt`) matched any line containing `#`, which the second
+  findstr then removed, so a real hit on such a line vanished.
 
 All three sections now match with `tools\select_lines.ps1 -PatternFile`,
 already used by 18g. It skips comments and blank lines and matches as a
@@ -37,7 +38,13 @@ the script as a child process, so the exit codes it checks are the ones
 cmd.exe sees. It has 12 cases: comments never searched, a literal `.`, a hit
 on a line holding `#` kept, a comment-only or missing list is 2, and others.
 The list headers that said "matched via findstr" now say how each list is
-really matched.
+really matched. That reaches a machine's runtime copy only when the copy is
+replaced. The seed keeps a copy whose verified date is newer than the
+release's, and every online sync re-stamps that date, so a synced machine
+keeps the old comments until `-resetTTP`. On a machine whose copies are still
+dated 2026-06-06, the first run prints five `runtime copy replaced by the
+release baseline` lines: the dates tie and the content differs, so the
+release wins. The change is in comments only, not entries.
 
 The plant harness gains four cases:
 - A copy of ping.exe named `dz_selftest_evil_chisel.exe`, running from
@@ -60,8 +67,48 @@ the three findings and the gap lines. lint.yml checks that each section in
 both bats branches three ways on the exit code, and that the old two-way
 branch fails that check.
 
+**An adversarial review of this change (four lenses, a skeptic per finding)
+found 13 defects, all fixed before the first push:**
+- The new `select_lines -SelfTest` would have failed on every Windows
+  PowerShell 5.1 run. Under the CI step's `Stop` preference, 5.1 turns a
+  child's redirected stderr into a terminating error, and that hits exactly
+  the exit-2 cases the test exists to prove. Three reviewers found it
+  independently. The self-test now sets `Continue` first.
+- The Section 18 summary still said "[OK] No threat indicator matches found
+  across all IOC categories" when a category above it had printed NOT
+  performed, and the dashboard showed a PASS tile with the same words.
+  `tools\count_gaps.ps1` now counts the section's NOT-performed, `[SKIPPED]`
+  and `[DEFERRED` lines from the byte offset where the sweep began. With
+  any, the summary reads "not an all-clear" and the tile reads INFO. An
+  unreadable count is -1, never 0.
+- 18f read `[OK]` when the DNS Client service was stopped. `ipconfig` prints
+  its banner even when it cannot show the cache, so a non-empty file proved
+  nothing. 18f now requires a record's dashed underline, which appears in
+  every language. With none, a stopped service is a raised NOT-performed
+  line, and a running service with an empty cache is a declared `[SKIPPED]`.
+- The harness's ledger check ignored a voided 18f plant, so the job would
+  have failed when the DNS client did not load HOSTS. It now checks a row
+  only when the match was printed. Each benign twin was also graded `[OK]`
+  when its matcher never matched anything. A new `TestableIf` precondition
+  grades the twin only when its sibling plant matched, and reports SKIP
+  otherwise.
+- The new CI check accepted five ways of breaking the branch it guards. It
+  now reads the block line by line, from the call through the five lines
+  after it, with exactly one way into `[OK]`. It runs all six named
+  mutations and requires each to fail.
+- The printed `Command:` lines (`... | select_lines.ps1 -PatternFile ...`)
+  could not be run. They are now PowerShell a reader can paste: the list's
+  entries, then the same literal, case-insensitive match over
+  `Get-CimInstance Win32_Process` or `Get-DnsClientCache`. The command probe
+  runs them; `Get-DnsClientCache` was added to its read-only allowlist.
+- The older HOSTS plant got the same trailing-newline guard as the new ones.
+- The CHANGELOG had two inaccuracies: the bare `#` line count, and the
+  header fix reaching runtime copies.
+
 Not changed, noted: 18b and 18e read their lists in PowerShell, and a missing
-list there prints `[SKIPPED]` / `[INFO]` without raising.
+list there prints `[SKIPPED]` / `[INFO]` without raising. The summary now
+counts those lines as gaps.
+
 ### The USB stick: an adversarial review of this PR, every finding fixed before merge
 Five lenses, each finding re-checked by a skeptic. All 24 findings held, some
 at lower severity; none deleted anything this laptop had not written or
