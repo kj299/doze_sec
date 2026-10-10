@@ -54,7 +54,12 @@ two zone-3 helpers and not a zone-2 one. With the probe marked too, cmd must
 count 3 and not 4. The hang itself is measured: a marked probe in its own
 console, without and then with `-NonInteractive`. A fully marked copy run the
 way a person runs it, in its own console with the console log on, must stop
-within three minutes. A Linux guard keeps the bats' wiring.
+within three minutes. A Linux guard keeps the bats' wiring. The first run
+answered: both policies run zones 0 to 2, a header-less stream and an empty
+one, and refuse zones 3 to 5. Without `-NonInteractive` the marked probe was
+still waiting after 20 seconds, so the hang was real. With it, PowerShell
+refused at once, and under Unrestricted its message is
+`AuthorizationManager check failed.`, which names no file.
 
 ### Sections 18c, 18d and 18h are proven to fire, each beside a look-alike that must not
 18a and 18f had been proven by harness plants, and 18b and 18e by planted
