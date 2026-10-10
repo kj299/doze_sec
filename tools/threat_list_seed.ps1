@@ -26,6 +26,12 @@
 #                                                   different content is a
 #                                                   fork nobody chose.
 #
+# ttp_generated_checks.bat, which -updateTTP appends to and Section 18 calls,
+# is reconciled too: a PowerShell launch line an earlier release wrote without
+# -NonInteractive gets it (every PowerShell the bats start runs it, so a
+# question fails at once instead of waiting where nobody sees it). Rewritten
+# byte for byte apart from the inserted flag, and the report says how many.
+#
 # Prints one line per file it changed, and a one-line summary. Read-only apart
 # from the runtime directory. Windows PowerShell 5.1 and pwsh.
 
@@ -40,6 +46,39 @@ $ErrorActionPreference = 'Continue'
 $script:Files = @('ioc_processes.txt', 'ioc_named_pipes.txt', 'ioc_services.txt', 'ioc_registry.txt',
                   'ioc_file_paths.txt', 'ioc_scheduled_tasks.txt', 'ioc_domains.txt', 'ioc_hashes.txt',
                   'ioc_lolbins.txt', 'ttp_manifest.txt')
+
+function ConvertTo-NonInteractiveLaunch {
+    # Pure. A launch line ("%PWSH%" or %PWSH% then -NoProfile) without
+    # -NonInteractive gets it straight after -NoProfile, before -File or
+    # -Command. An echo line is text being written somewhere, never a launch.
+    param([string[]]$Lines)
+    $out = @(); $changed = 0
+    foreach ($l in $Lines) {
+        if ($l -notmatch '(?i)^\s*@?(echo|rem\s|::)' -and $l -match '(?i)("%PWSH%"|%PWSH%)\s+-NoProfile(?!\s+-NonInteractive)') {
+            $l = [regex]::Replace($l, '(?i)("%PWSH%"|%PWSH%)(\s+-NoProfile)(?!\s+-NonInteractive)', '$1$2 -NonInteractive')
+            $changed++
+        }
+        $out += $l
+    }
+    return @{ Lines = $out; Changed = $changed }
+}
+
+function Update-GeneratedChecks {
+    # The file -updateTTP appends to. Read and written through Latin-1 so every
+    # byte (encoding, line endings) stays as it was except the inserted flag.
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    $enc = [Text.Encoding]::GetEncoding(28591)
+    $text = $enc.GetString([IO.File]::ReadAllBytes($Path))
+    $parts = [regex]::Split($text, '(\r?\n)')
+    $n = 0
+    for ($i = 0; $i -lt $parts.Count; $i += 2) {
+        $c = ConvertTo-NonInteractiveLaunch @($parts[$i])
+        if ($c.Changed -gt 0) { $parts[$i] = $c.Lines[0]; $n++ }
+    }
+    if ($n -gt 0) { [IO.File]::WriteAllBytes($Path, $enc.GetBytes(($parts -join ''))) }
+    return $n
+}
 
 # The date threat_list_sync.ps1 writes on -updateTTP; $null when absent.
 function Get-VerifiedDate {
@@ -100,6 +139,10 @@ function Invoke-Seed {
         }
     }
     $lines += ('[INFO] ThreatLists: ' + $seeded + ' seeded, ' + $replaced + ' replaced from the release baseline, ' + $kept + ' kept.')
+    $gen = $null
+    try { $gen = Update-GeneratedChecks (Join-Path $Runtime 'ttp_generated_checks.bat') }
+    catch { $lines += ('[INFO] ThreatLists\ttp_generated_checks.bat could not be checked for -NonInteractive: ' + $_.Exception.Message) }
+    if ($gen -gt 0) { $lines += ('[INFO] ThreatLists\ttp_generated_checks.bat: ' + $gen + ' PowerShell launch line(s) written by an earlier -updateTTP now run -NonInteractive.') }
     return $lines
 }
 
@@ -154,6 +197,29 @@ if ($SelfTest) {
         T 'directory pass: the replaced file now equals the release file' (((Get-Content (Join-Path $rd 'ioc_registry.txt')) -join "`n") -eq ($shipped -join "`n")) ''
         T 'directory pass: the summary counts 1 seeded, 1 replaced, 1 kept' (($out -join "`n") -match '\[INFO\] ThreatLists: 1 seeded, 1 replaced from the release baseline, 1 kept') ($out -join ' | ')
     } finally { Remove-Item -LiteralPath $tmp -Recurse -Force -EA SilentlyContinue }
+
+    # The generated CTI checks: an old launch line gets the flag, an echo line
+    # and a flagged line do not, the bytes around it survive, and a second
+    # pass changes nothing.
+    $c = ConvertTo-NonInteractiveLaunch @(
+        '"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1',
+        'echo Get-CimInstance Win32_Process ^| Format-Table > "%PSRUN%"',
+        '"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1')
+    T 'an old generated launch gets -NonInteractive before -File' ($c.Changed -eq 1 -and $c.Lines[0] -eq '"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1') ($c.Lines -join ' | ')
+    T 'an echo line and an already-flagged launch are left alone' ($c.Lines[1] -eq 'echo Get-CimInstance Win32_Process ^| Format-Table > "%PSRUN%"' -and $c.Lines[2] -match '^"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy') ($c.Lines -join ' | ')
+    $gtmp = Join-Path ([IO.Path]::GetTempPath()) ('dz_seed_gen_{0}' -f $PID)
+    New-Item -ItemType Directory -Path $gtmp -Force | Out-Null
+    try {
+        $g = Join-Path $gtmp 'ttp_generated_checks.bat'
+        $orig = ":: --- block ---`r`necho x > `"%PSRUN%`"`r`n`"%PWSH%`" -NoProfile -ExecutionPolicy Bypass -File `"%PSRUN%`">> `"%REPORT%`" 2>&1`r`n"
+        [IO.File]::WriteAllBytes($g, [Text.Encoding]::GetEncoding(28591).GetBytes($orig))
+        $n1 = Update-GeneratedChecks $g
+        $after = [Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes($g))
+        T 'the file: one launch flagged, CRLF and every other byte kept' ($n1 -eq 1 -and $after -eq ($orig -replace '-NoProfile -ExecutionPolicy', '-NoProfile -NonInteractive -ExecutionPolicy')) ("n=$n1")
+        $n2 = Update-GeneratedChecks $g
+        T 'a second pass changes nothing' ($n2 -eq 0) ("n=$n2")
+        T 'no generated checks file: nothing to do' ($null -eq (Update-GeneratedChecks (Join-Path $gtmp 'absent.bat')))
+    } finally { Remove-Item -LiteralPath $gtmp -Recurse -Force -EA SilentlyContinue }
 
     if ($fails) { Write-Output "[FAIL] $fails threat_list_seed self-test expectation(s) unmet"; exit 1 }
     Write-Output '[OK] threat_list_seed self-test: a runtime list older than or forked from the release is replaced and reported; one -updateTTP refreshed after the release is kept.'

@@ -527,10 +527,12 @@ runner under both policies (windows-smoke, readonly-field-test).
 `-NonInteractive` on every helper call after the probe was first recorded as
 not taken. DONE 2026-10-10, at the owner's request: every PowerShell either
 bat starts (133 and 127 launches) runs `-NonInteractive` before
-`-File`/`-Command`, enforced by `tools\lint_noninteractive.ps1`. A question
-from any other cause now fails at once with an error in the report: a
-cmdlet's confirmation, a provider bootstrap, a `Read-Host` in a future
-helper. The printed `Command:` lines a person pastes are unchanged.
+`-File`/`-Command`, enforced by `tools\lint_noninteractive.ps1`, and so do
+the CTI checks `ttp_merge.ps1` generates (`threat_list_seed.ps1` gives lines
+an earlier run wrote the flag). A question from any other cause now fails at
+once instead of waiting: a cmdlet's confirmation, a provider bootstrap, a
+`Read-Host` in a future helper. The printed `Command:` lines a person pastes
+are unchanged.
 
 ## A user name with an apostrophe silently breaks staged PowerShell (found 2026-10-10, DONE 2026-10-10)
 

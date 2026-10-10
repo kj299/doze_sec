@@ -753,7 +753,7 @@ jobs:
             @{ N = 'the old two-way branch';          F = 'if "!_SEL18F!"=="1" goto :sec18f_clean'; T = 'goto :sec18f_clean' },
             @{ N = 'errorlevel tested before capture'; F = 'set "_SEL18F=!errorlevel!"';            T = ("if errorlevel 1 goto :sec18f_clean`r`n" + 'set "_SEL18F=!errorlevel!"') },
             @{ N = 'a second way into [OK]';          F = 'if "!_SELECT_EXIT!"=="1" goto :sec18g_clean'; T = ('if "!_SELECT_EXIT!"=="1" goto :sec18g_clean' + "`r`n" + 'goto :sec18g_clean') },
-            @{ N = 'the select_lines call commented out'; F = '"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_proc18a.tmp"'; T = ':: "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_proc18a.tmp"' })
+            @{ N = 'the select_lines call commented out'; F = '"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_proc18a.tmp"'; T = ':: "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_proc18a.tmp"' })
           foreach ($mu in $mutations) {
             if (-not $base.Contains($mu.F)) { throw ("mutation '{0}' found nothing to change -- this check no longer looks at the code it was written for" -f $mu.N) }
             $idx = $base.IndexOf($mu.F)
