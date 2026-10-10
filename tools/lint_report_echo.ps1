@@ -185,7 +185,13 @@ function Invoke-Lint {
             $pm = [regex]::Match($disp, '^\s*Command:\s*powershell(?:\s+-Command)?\s+"(.*)"(?:\s{2,}\[.*\])?\s*$')
             if ($pm.Success) {
                 $errs = $null; $toks = $null
-                [void][System.Management.Automation.Language.Parser]::ParseInput($pm.Groups[1].Value, [ref]$toks, [ref]$errs)
+                # cmd's %VAR:x=y% substitution is rendered the way cmd would,
+                # on a path holding an apostrophe: the printed lines write
+                # '%IOCDIR:'=''%\...' so a profile folder like C:\Users\O'Brien
+                # still pastes as one single-quoted string. A substitution that
+                # does not double the apostrophe then fails to parse here.
+                $payload = [regex]::Replace($pm.Groups[1].Value, '%([A-Za-z_][A-Za-z0-9_]*):([^=%]+)=([^%]*)%', { param($mm) "C:\Users\O'Brien".Replace($mm.Groups[2].Value, $mm.Groups[3].Value) })
+                [void][System.Management.Automation.Language.Parser]::ParseInput($payload, [ref]$toks, [ref]$errs)
                 if ($errs -and $errs.Count) {
                     $bad += "${name}:${ln}: the PowerShell command this line tells the reader to run does not parse -- $($errs[0].Message)"
                 }

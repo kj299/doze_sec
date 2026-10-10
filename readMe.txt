@@ -439,8 +439,11 @@ PROJECT STRUCTURE
       report_format.ps1 / top_findings.ps1 / select_lines.ps1
                               Report formatting helpers
       lint_batch_comments.ps1 Batch comment lint (run by CI)
+      (a selection: tools\ holds about 70 helpers, lints and self-tests)
     .github/workflows/
-      lint.yml                CI: batch comment lint on every push/PR
+      lint.yml                CI: every lint and self-test, on every push/PR
+      windows-smoke.yml       CI: real-Windows jobs (5.1 helpers, full run,
+                              field test, plant harness, standard user)
 
 
 LICENSE

@@ -48,7 +48,10 @@ echo  [*] Console output also being captured to: %DOZE_CONSOLE_LOG%
 :: in NativeCommandError objects when 2>&1 is done inside -Command, which
 :: would clutter the log with PS diagnostic noise. CMD-side 2>&1 + CMD pipe
 :: into Tee-Object gives a clean stream.
-call "%~f0" %* 2>&1 | powershell -NoProfile -ExecutionPolicy Bypass -Command "$input | Tee-Object -FilePath '%DOZE_CONSOLE_LOG%'"
+:: The log path is read from the environment, never pasted between single
+:: quotes (the noAdmin bat already did): an apostrophe in it would end the
+:: string early and lose the whole console capture. -LiteralPath: no wildcards.
+call "%~f0" %* 2>&1 | powershell -NoProfile -ExecutionPolicy Bypass -Command "$input | Tee-Object -LiteralPath $env:DOZE_CONSOLE_LOG"
 set "DOZE_EXIT_CODE=0"
 if exist "%DOZE_EXIT_FILE%" (
     set /p DOZE_EXIT_CODE=<"%DOZE_EXIT_FILE%"
@@ -127,6 +130,14 @@ set "SCRIPT_PATH=%~dp0%~nx0"
 :: did, on CI, the first time this note was written.)
 set "SCRIPT_DIR=%~dp0"
 set "SCRIPT_FILE=%~nx0"
+:: The printed Command: lines double any apostrophe in APPDATA with cmd's
+:: string substitution, so the pasted PowerShell string stays whole. On an
+:: UNDEFINED variable that substitution does not expand to nothing: it leaves
+:: stray text that eats the line's own redirection into the report. Windows
+:: always sets APPDATA; this makes sure of it. IOCDIR, the other variable
+:: printed that way, is set before use. (No percent sign in this comment:
+:: cmd expands those even here.)
+if not defined APPDATA set "APPDATA=%USERPROFILE%\AppData\Roaming"
 :: Set UPDATE_URL to your GitHub raw base URL to enable self-update checks.
 :: Leave as-is to skip the update check (placeholder is detected and skipped).
 set "UPDATE_URL=https://raw.githubusercontent.com/kj299/doze_sec/main"
@@ -785,7 +796,7 @@ if not exist "%TTP_OUTPUT%" (
 :: verbatim as an analyst artifact (never parsed or executed by this
 :: script), then sanitize only the rows above the marker. Applies to the
 :: -importTTP path too so a skill-generated file imports identically.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$src='%TTP_OUTPUT%'; $dst='%OUTDIR%\ThreatLists\siem_queries_%TTP_TODAY%.txt'; $lines=@(Get-Content -LiteralPath $src -ErrorAction SilentlyContinue); $ix=-1; for($i=0;$i -lt $lines.Count;$i++){ if($lines[$i] -match '^\s*=+\s*SIEM QUERIES\s*=+\s*$'){ $ix=$i; break } }; if($ix -ge 0){ if($ix -lt ($lines.Count-1)){ $q=$lines[($ix+1)..($lines.Count-1)] } else { $q=@() }; if($q.Count -gt 0){ Set-Content -LiteralPath $dst -Value $q -Encoding UTF8; Write-Output ('  [OK] SIEM starter queries saved for analysts: '+$dst) } else { Write-Output '  [INFO] SIEM QUERIES marker present but section empty.' }; if($ix -gt 0){ Set-Content -LiteralPath $src -Value $lines[0..($ix-1)] -Encoding ASCII } else { Set-Content -LiteralPath $src -Value @() -Encoding ASCII } }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$src=$env:TTP_OUTPUT; $dst=Join-Path $env:OUTDIR ('ThreatLists\siem_queries_' + $env:TTP_TODAY + '.txt'); $lines=@(Get-Content -LiteralPath $src -ErrorAction SilentlyContinue); $ix=-1; for($i=0;$i -lt $lines.Count;$i++){ if($lines[$i] -match '^\s*=+\s*SIEM QUERIES\s*=+\s*$'){ $ix=$i; break } }; if($ix -ge 0){ if($ix -lt ($lines.Count-1)){ $q=$lines[($ix+1)..($lines.Count-1)] } else { $q=@() }; if($q.Count -gt 0){ Set-Content -LiteralPath $dst -Value $q -Encoding UTF8; Write-Output ('  [OK] SIEM starter queries saved for analysts: '+$dst) } else { Write-Output '  [INFO] SIEM QUERIES marker present but section empty.' }; if($ix -gt 0){ Set-Content -LiteralPath $src -Value $lines[0..($ix-1)] -Encoding ASCII } else { Set-Content -LiteralPath $src -Value @() -Encoding ASCII } }"
 
 :: Ensure IOC_GUID is set (the -importTTP path skips the earlier
 :: EXISTING_IOCS computation that sets it).
@@ -795,7 +806,7 @@ if not defined IOC_GUID (
 if not defined IOC_GUID set "IOC_GUID=%RANDOM%%RANDOM%%RANDOM%"
 set "TTP_SANITIZER_REPORT=%TEMP%\ttp_sanitize_%IOC_GUID%.log"
 :: Note: %PWSH% is not resolved until later in setup; use plain 'powershell' here.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$src='%TTP_OUTPUT%'; $lines=Get-Content -LiteralPath $src -ErrorAction SilentlyContinue; $allow=@('registry key','event id','process name','file path','named pipe','wmi query'); $bad=[char[]]@(34,39,96,36,59,124,38,60,62,40,41,123,125,94); $safe=New-Object System.Collections.Generic.List[string]; $sample=New-Object System.Collections.Generic.List[string]; $dropFields=0; $norm8=0; $dropLen=0; $dropMethod=0; $dropMeta=0; $dropAscii=0; foreach($l in $lines){ if(-not $l -or $l.Trim() -eq ''){continue}; $p=$l -split '\|'; if($p.Count -ne 6 -and $p.Count -ne 8){$dropFields++; if($sample.Count -lt 3){$sample.Add('  - wrong field count: '+($l.Substring(0,[math]::Min(120,$l.Length))))}; continue}; if($p.Count -eq 8){$norm8++; $l=($p[0..5] -join '|')}; $m=$p[2].Trim().ToLower(); $v=$p[3].Trim(); if($v.Length -eq 0 -or $v.Length -gt 260){$dropLen++; if($sample.Count -lt 3){$sample.Add('  - length out of range: '+($l.Substring(0,[math]::Min(120,$l.Length))))}; continue}; if($allow -notcontains $m){$dropMethod++; if($sample.Count -lt 3){$sample.Add('  - method ['+$m+'] not in allowlist: '+($l.Substring(0,[math]::Min(120,$l.Length))))}; continue}; if($v.IndexOfAny($bad) -ne -1){$dropMeta++; if($sample.Count -lt 3){$sample.Add('  - shell metacharacter in value: '+($l.Substring(0,[math]::Min(120,$l.Length))))}; continue}; if($v -notmatch '^[\x20-\x7E]+$'){$dropAscii++; if($sample.Count -lt 3){$sample.Add('  - non-ASCII printable in value: '+($l.Substring(0,[math]::Min(120,$l.Length))))}; continue}; $safe.Add($l) }; Set-Content -LiteralPath $src -Value $safe -Encoding ASCII; $totalDrop = $dropFields + $dropLen + $dropMethod + $dropMeta + $dropAscii; Write-Output ('  [SANITIZE] Kept: '+$safe.Count+'  Dropped: '+$totalDrop); if ($norm8 -gt 0) { Write-Output ('  [SANITIZE] 8-field skill rows trimmed to 6 - source/confidence dropped: '+$norm8) }; if ($totalDrop -gt 0) { Write-Output ('  [SANITIZE]   - wrong field count   : '+$dropFields); Write-Output ('  [SANITIZE]   - length out of range : '+$dropLen); Write-Output ('  [SANITIZE]   - method not allowlist: '+$dropMethod); Write-Output ('  [SANITIZE]   - shell metacharacter : '+$dropMeta); Write-Output ('  [SANITIZE]   - non-ASCII printable : '+$dropAscii) }; if ($safe.Count -eq 0 -and $sample.Count -gt 0) { Write-Output '  [SANITIZE] First dropped row(s) (first 120 chars):'; $sample | ForEach-Object { Write-Output $_ } }" > "%TTP_SANITIZER_REPORT%" 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$src=$env:TTP_OUTPUT; $lines=Get-Content -LiteralPath $src -ErrorAction SilentlyContinue; $allow=@('registry key','event id','process name','file path','named pipe','wmi query'); $bad=[char[]]@(34,39,96,36,59,124,38,60,62,40,41,123,125,94); $safe=New-Object System.Collections.Generic.List[string]; $sample=New-Object System.Collections.Generic.List[string]; $dropFields=0; $norm8=0; $dropLen=0; $dropMethod=0; $dropMeta=0; $dropAscii=0; foreach($l in $lines){ if(-not $l -or $l.Trim() -eq ''){continue}; $p=$l -split '\|'; if($p.Count -ne 6 -and $p.Count -ne 8){$dropFields++; if($sample.Count -lt 3){$sample.Add('  - wrong field count: '+($l.Substring(0,[math]::Min(120,$l.Length))))}; continue}; if($p.Count -eq 8){$norm8++; $l=($p[0..5] -join '|')}; $m=$p[2].Trim().ToLower(); $v=$p[3].Trim(); if($v.Length -eq 0 -or $v.Length -gt 260){$dropLen++; if($sample.Count -lt 3){$sample.Add('  - length out of range: '+($l.Substring(0,[math]::Min(120,$l.Length))))}; continue}; if($allow -notcontains $m){$dropMethod++; if($sample.Count -lt 3){$sample.Add('  - method ['+$m+'] not in allowlist: '+($l.Substring(0,[math]::Min(120,$l.Length))))}; continue}; if($v.IndexOfAny($bad) -ne -1){$dropMeta++; if($sample.Count -lt 3){$sample.Add('  - shell metacharacter in value: '+($l.Substring(0,[math]::Min(120,$l.Length))))}; continue}; if($v -notmatch '^[\x20-\x7E]+$'){$dropAscii++; if($sample.Count -lt 3){$sample.Add('  - non-ASCII printable in value: '+($l.Substring(0,[math]::Min(120,$l.Length))))}; continue}; $safe.Add($l) }; Set-Content -LiteralPath $src -Value $safe -Encoding ASCII; $totalDrop = $dropFields + $dropLen + $dropMethod + $dropMeta + $dropAscii; Write-Output ('  [SANITIZE] Kept: '+$safe.Count+'  Dropped: '+$totalDrop); if ($norm8 -gt 0) { Write-Output ('  [SANITIZE] 8-field skill rows trimmed to 6 - source/confidence dropped: '+$norm8) }; if ($totalDrop -gt 0) { Write-Output ('  [SANITIZE]   - wrong field count   : '+$dropFields); Write-Output ('  [SANITIZE]   - length out of range : '+$dropLen); Write-Output ('  [SANITIZE]   - method not allowlist: '+$dropMethod); Write-Output ('  [SANITIZE]   - shell metacharacter : '+$dropMeta); Write-Output ('  [SANITIZE]   - non-ASCII printable : '+$dropAscii) }; if ($safe.Count -eq 0 -and $sample.Count -gt 0) { Write-Output '  [SANITIZE] First dropped row(s) (first 120 chars):'; $sample | ForEach-Object { Write-Output $_ } }" > "%TTP_SANITIZER_REPORT%" 2>&1
 type "%TTP_SANITIZER_REPORT%"
 del "%TTP_SANITIZER_REPORT%" >nul 2>&1
 
@@ -3094,10 +3105,10 @@ if exist "%TEMP%\dz_sbl_hit.txt" (
 
 echo.>> "%REPORT%"
 echo --- Recent PS Command History --->> "%REPORT%"
-echo  Command: powershell -Command "Get-Content '%APPDATA%\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt' -EA SilentlyContinue | Select-Object -Last 50">> "%REPORT%"
+echo  Command: powershell -Command "Get-Content '%APPDATA:'=''%\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt' -EA SilentlyContinue | Select-Object -Last 50">> "%REPORT%"
 if not exist "%APPDATA%\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt" goto :pshistnone
 echo [FOUND] PS history file. Last 50 commands:>> "%REPORT%"
-echo Get-Content '%APPDATA%\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt' -EA SilentlyContinue ^| Select-Object -Last 50 > "%PSRUN%"
+echo Get-Content -LiteralPath (Join-Path $env:APPDATA 'Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt') -EA SilentlyContinue ^| Select-Object -Last 50 > "%PSRUN%"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 goto :pshistdone
 :pshistnone
@@ -4229,7 +4240,7 @@ for %%z in ("%REPORT%") do set "IOC_FROM=%%~zz"
 
 echo.>> "%REPORT%"
 echo --- [18a] Process IOC Match --->> "%REPORT%"
-echo  Command: powershell -Command "$f = @(Get-Content '%IOCDIR%\ioc_processes.txt' | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') } | ForEach-Object { $_.Trim().ToLower() }); Get-CimInstance Win32_Process | Where-Object { $l = ($_.Name + '  ' + $_.ProcessId + '  ' + $_.ExecutablePath).ToLower(); @($f | Where-Object { $l.Contains($_) }).Count } | Select-Object Name, ProcessId, ExecutablePath">> "%REPORT%"
+echo  Command: powershell -Command "$f = @(Get-Content '%IOCDIR:'=''%\ioc_processes.txt' | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') } | ForEach-Object { $_.Trim().ToLower() }); Get-CimInstance Win32_Process | Where-Object { $l = ($_.Name + '  ' + $_.ProcessId + '  ' + $_.ExecutablePath).ToLower(); @($f | Where-Object { $l.Contains($_) }).Count } | Select-Object Name, ProcessId, ExecutablePath">> "%REPORT%"
 echo  Matching running processes against ioc_processes.txt>> "%REPORT%"
 :: wmic was removed in Windows 11 24H2+; the old `wmic | findstr` pipeline
 :: printed [OK] with zero processes examined when wmic was absent. Enumerate
@@ -4335,7 +4346,7 @@ del "%TEMP%\dz_iochit_18c_done.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- [18d] Suspicious File Path IOC Check --->> "%REPORT%"
-echo  Command: powershell -Command "foreach($p in Get-Content '%IOCDIR%\ioc_file_paths.txt'){ if(Test-Path ([Environment]::ExpandEnvironmentVariables($p))){ $p } }">> "%REPORT%"
+echo  Command: powershell -Command "foreach($p in Get-Content '%IOCDIR:'=''%\ioc_file_paths.txt'){ if(Test-Path ([Environment]::ExpandEnvironmentVariables($p))){ $p } }">> "%REPORT%"
 echo  Checking for known malware staging paths from ioc_file_paths.txt>> "%REPORT%"
 echo $iocFile = Join-Path $env:IOCDIR 'ioc_file_paths.txt' > "%PSRUN%"
 echo $paths=if(Test-Path $iocFile){Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'}} >> "%PSRUN%"
@@ -4367,7 +4378,7 @@ del "%TEMP%\dz_iochit_18d_done.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- [18e] Scheduled Task IOC Match --->> "%REPORT%"
-echo  Command: powershell -Command "$f = @(Get-Content '%IOCDIR%\ioc_scheduled_tasks.txt' | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') } | ForEach-Object { $_.Trim().ToLower() }); Get-ScheduledTask | ForEach-Object { $t = ([string]$_.TaskPath).TrimEnd('\') + '\' + $_.TaskName; $a = @($_.Actions | ForEach-Object { ([string]$_.Execute + ' ' + [string]$_.Arguments).Trim() }) -join '; '; $l = ($t + '  ' + $a).ToLower(); if (@($f | Where-Object { $l.Contains($_) }).Count) { $t + '  ' + $a } }">> "%REPORT%"
+echo  Command: powershell -Command "$f = @(Get-Content '%IOCDIR:'=''%\ioc_scheduled_tasks.txt' | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') } | ForEach-Object { $_.Trim().ToLower() }); Get-ScheduledTask | ForEach-Object { $t = ([string]$_.TaskPath).TrimEnd('\') + '\' + $_.TaskName; $a = @($_.Actions | ForEach-Object { ([string]$_.Execute + ' ' + [string]$_.Arguments).Trim() }) -join '; '; $l = ($t + '  ' + $a).ToLower(); if (@($f | Where-Object { $l.Contains($_) }).Count) { $t + '  ' + $a } }">> "%REPORT%"
 echo  Matching scheduled task NAMES and ACTIONS against ioc_scheduled_tasks.txt>> "%REPORT%"
 :: Get-ScheduledTask, not schtasks /query /fo CSV. schtasks takes its column
 :: names from its language resources, so on a non-English Windows TaskName
@@ -4401,7 +4412,7 @@ del "%TEMP%\dz_iochit_18e_done.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- [18f] DNS Cache C2 Domain Match --->> "%REPORT%"
-echo  Command: powershell -Command "$f = @(Get-Content '%IOCDIR%\ioc_domains.txt' | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') } | ForEach-Object { $_.Trim().ToLower() }); Get-DnsClientCache | Where-Object { $e = ([string]$_.Entry + ' ' + [string]$_.Data).ToLower(); @($f | Where-Object { $e.Contains($_) }).Count }">> "%REPORT%"
+echo  Command: powershell -Command "$f = @(Get-Content '%IOCDIR:'=''%\ioc_domains.txt' | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') } | ForEach-Object { $_.Trim().ToLower() }); Get-DnsClientCache | Where-Object { $e = ([string]$_.Entry + ' ' + [string]$_.Data).ToLower(); @($f | Where-Object { $e.Contains($_) }).Count }">> "%REPORT%"
 echo  Matching DNS cache against ioc_domains.txt>> "%REPORT%"
 :: Capture the cache to a temp file first: a failed/denied ipconfig used to
 :: feed findstr nothing and print [OK], hiding the failure. Empty file ->
@@ -4452,7 +4463,7 @@ del "%TEMP%\dz_dns18f.tmp" 2>nul
 
 echo.>> "%REPORT%"
 echo --- [18g] LOLBin Command-Line Pattern Match --->> "%REPORT%"
-echo  Command: powershell -Command "$f = @(Get-Content '%IOCDIR%\ioc_lolbins.txt' | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') } | ForEach-Object { $_.Trim().ToLower() }); Get-CimInstance Win32_Process | Where-Object { $l = ($_.Name + '  ' + $_.CommandLine).ToLower(); @($f | Where-Object { $l.Contains($_) }).Count } | Select-Object Name, ProcessId, CommandLine">> "%REPORT%"
+echo  Command: powershell -Command "$f = @(Get-Content '%IOCDIR:'=''%\ioc_lolbins.txt' | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') } | ForEach-Object { $_.Trim().ToLower() }); Get-CimInstance Win32_Process | Where-Object { $l = ($_.Name + '  ' + $_.CommandLine).ToLower(); @($f | Where-Object { $l.Contains($_) }).Count } | Select-Object Name, ProcessId, CommandLine">> "%REPORT%"
 echo  Matching process command lines against ioc_lolbins.txt>> "%REPORT%"
 :: wmic was removed in Windows 11 24H2+; the old wmic enumeration silently
 :: produced an empty temp file there and select_lines reported no matches,
@@ -4954,7 +4965,23 @@ echo.
 :: not count. Runs BEFORE the summary is appended, so summary lines (which
 :: escalate separately via the CRIT token) are not double-counted.
 set "CRIT_COUNT=0"
-for /f "usebackq" %%c in (`"%PWSH%" -NoProfile -Command "@(Select-String -LiteralPath '%REPORT%' -Pattern '\A\[CRITICAL\]').Count" 2^>nul`) do set "CRIT_COUNT=%%c"
+:: Read through a file and set /p. This was a for /f backtick command that
+:: began with "%PWSH%", the shape cmd /c mangles (it strips the outer quotes),
+:: so it never produced a number: CRIT_COUNT kept its 0 and the alarm it feeds
+:: could never fire. The report path comes from the environment, never pasted
+:: between single quotes, where a profile folder like C:\Users\O'Brien ended
+:: the string early. CRIT_READ says whether a count was read at all.
+set "CRIT_READ=0"
+del "%TEMP%\dz_critcount.txt" 2>nul
+"%PWSH%" -NoProfile -Command "@(Select-String -LiteralPath $env:REPORT -Pattern '\A\[CRITICAL\]').Count" > "%TEMP%\dz_critcount.txt" 2>nul
+:: Undefined first, so an empty file cannot pass the old 0 off as a count.
+:: Percent, not delayed, expansion on the pipe line: each side of a pipe runs
+:: in a new cmd, where delayed expansion is off.
+set "CRIT_COUNT="
+if exist "%TEMP%\dz_critcount.txt" set /p CRIT_COUNT=<"%TEMP%\dz_critcount.txt"
+del "%TEMP%\dz_critcount.txt" 2>nul
+echo(%CRIT_COUNT%| findstr /r /x "[0-9][0-9]*" >nul && set "CRIT_READ=1"
+if "%CRIT_READ%"=="0" set "CRIT_COUNT=0"
 rem Flip step 2: the count above no longer raises the exit code or the
 rem findings tally -- it feeds the ledger-divergence alarm in the exit
 rem block below. The ledger (via :dz_finding) is the only findings source.
@@ -4981,16 +5008,20 @@ call :dz_seed_rem "%REMEDIATION_UNDO%" "UNDO -- reverse what the other two appli
 :: Uses echo >> PSRUN approach (proven reliable, avoids all batch/PS escaping issues)
 echo $sw='%SMART_WARN%' > "%PSRUN%"
 echo $isAdmin='1' >> "%PSRUN%"
-echo $scf='%SUMCODE%' >> "%PSRUN%"
-echo $scnt='%SUMCOUNT%' >> "%PSRUN%"
-echo $rem='%REMEDIATION%' >> "%PSRUN%"
-echo $enf='%REMEDIATION_ENF%' >> "%PSRUN%"
-echo $und='%REMEDIATION_UNDO%' >> "%PSRUN%"
+:: Every path below is read from the environment (cmd's variables are the
+:: child's environment), never pasted between single quotes: a profile
+:: folder like C:\Users\O'Brien made the whole dashboard script a parse
+:: error, so that user got no dashboard and no remediation script.
+echo $scf=$env:SUMCODE >> "%PSRUN%"
+echo $scnt=$env:SUMCOUNT >> "%PSRUN%"
+echo $rem=$env:REMEDIATION >> "%PSRUN%"
+echo $enf=$env:REMEDIATION_ENF >> "%PSRUN%"
+echo $und=$env:REMEDIATION_UNDO >> "%PSRUN%"
 rem The findings ledger is COMPLETE by the time this block runs (the last
 rem :dz_finding call site precedes it), so fixes can key off it instead of
 rem off rendered dashboard prose. That is what lets a ledger-only finding
 rem such as the ASR rules queue a fix at all.
-echo $lgp='%LEDGER%' >> "%PSRUN%"
+echo $lgp=$env:LEDGER >> "%PSRUN%"
 echo $r=@();$cr=0;$wa=0;$pa=0;$inf=0 >> "%PSRUN%"
 echo function ck($s,$m,$d=''){$icon=if($s-eq 'CRIT'){'[^^!^^! CRITICAL ^^!^^!]'}elseif($s-eq 'WARN'){'[  WARNING   ]'}elseif($s-eq 'PASS'){'[    OK      ]'}else{'[    INFO    ]'};$script:r+='  '+$icon+'  '+$m;if($d){$script:r+='                     Fix: '+$d};switch($s){'CRIT'{$script:cr++}'WARN'{$script:wa++}'PASS'{$script:pa++}'INFO'{$script:inf++}}} >> "%PSRUN%"
 echo function sec($t){$script:r+='';$script:r+=('  --- '+$t+' ').PadRight(70,'-')} >> "%PSRUN%"
@@ -5302,6 +5333,7 @@ rem some check prints [CRITICAL] or trips the dashboard without a matching
 rem :dz_finding raise. The harness fails on these lines.
 if not "!LEDGER_MAXSEV!"=="CRITICAL" (
     if !CRIT_COUNT! GTR 0 (echo  [INFO] Report has !CRIT_COUNT! [CRITICAL] line^(s^) but ledger max severity is !LEDGER_MAXSEV! -- a raise is missing; exit code unaffected.)>> "%REPORT%"
+    if "!CRIT_READ!"=="0" (echo  [INFO] The report's [CRITICAL]-line census could not run, so the alarm above checked nothing this run.)>> "%REPORT%"
     if /i "!SUM_RESULT!"=="CRIT" (echo  [INFO] Dashboard verdict is CRIT but ledger max severity is !LEDGER_MAXSEV! -- a raise is missing; exit code unaffected.)>> "%REPORT%"
 )
 rem Reconcile FINDINGS with the dashboard's own tally. Dashboard ck checks

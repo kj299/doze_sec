@@ -565,6 +565,21 @@ jobs:
       - name: The lint must fail on each reintroduced class
         run: pwsh -NoProfile -File tools/lint_report_echo.ps1 -SelfTest
 
+  quoted-paths-lint:
+    name: "No path between single quotes in the PowerShell the bats run (a user named O'Brien)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # A profile folder like C:\Users\O'Brien holds the apostrophe that ends a
+      # single-quoted PowerShell string: the dashboard, the remediation script,
+      # the [CRITICAL] census and the Section 11 history were parse errors that
+      # printed nothing for such a user. Paths are read from the environment;
+      # a printed Command: line doubles the apostrophe with %X:'=''%.
+      - name: Run tools/lint_quoted_paths.ps1
+        run: pwsh -NoProfile -File tools/lint_quoted_paths.ps1
+      - name: Run tools/lint_quoted_paths.ps1 -SelfTest
+        run: pwsh -NoProfile -File tools/lint_quoted_paths.ps1 -SelfTest
+
   report-command-probe-selftest:
     name: "Probe self-test: a printed command that cannot run must fail the build"
     runs-on: ubuntu-latest

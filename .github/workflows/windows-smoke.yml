@@ -17,9 +17,15 @@ name: windows-smoke
 # its timeout and FAIL, instead of silently shipping. -dev bypasses the
 # Server-edition OS gate; -sdu/-nosrp skip the network threat-list pull and
 # the restore point.
+#
+# Job 3 (readonly-field-test): tests\field_test.ps1, the script a person runs,
+# from a stick-equivalent copy, proving -readonly changes nothing. Jobs 4 and 5
+# (detection-selftest, detection-selftest-noadmin): the plant harness through
+# each bat. Job 6 (noadmin-true-run): doze_sec_noAdmin.bat as a real standard
+# user (tests\noadmin_smoke.ps1).
 
 # TRIGGER ECONOMICS: this repository is private, so Actions minutes are
-# metered, and these five windows-latest jobs bill at 2x with 20-35 minute
+# metered, and these six windows-latest jobs bill at 2x with 20-35 minute
 # timeouts. Running them on every PR push exhausted the month's quota
 # mid-cycle (2026-08). The first response removed the suite from PRs entirely
 # -- which meant a bug fix or feature got only the Linux lint before merge and
@@ -359,6 +365,81 @@ jobs:
           }
           Remove-Item -LiteralPath $gm, $cm -Force -EA SilentlyContinue
           Write-Host "ioc_hash_check OK (shipped list: no gap; missing and comment-only lists: NOT performed + gap marker)"
+          exit 0
+
+      # THE [CRITICAL]-LINE CENSUS, AND A PRINTED COMMAND, WITH AN APOSTROPHE.
+      # The census was a for /f backtick command beginning with "%PWSH%", the
+      # shape cmd /c mangles (it strips the outer quotes), so it never produced
+      # a number and the ledger-divergence alarm it feeds could not fire. The
+      # census lines are taken from the bat and run by cmd against a report in
+      # a folder named with an apostrophe and a space, holding two [CRITICAL]
+      # lines; then the OLD form is run the same way on a plain path: measured,
+      # not argued. And the printed 18e Command: line, echoed by cmd with an
+      # apostrophe in IOCDIR, must parse and run as PowerShell (cmd doubles the
+      # apostrophe), where the undoubled form does not parse.
+      - name: "Census and a printed Command: line under an apostrophe path (the old census form counts nothing)"
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pw = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+          $dir = "C:\dz ci census o'brien"
+          $plain = 'C:\dz_ci_census_plain'
+          foreach ($d in $dir, $plain) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
+          $sample = @('[CRITICAL] one', '  [CRITICAL] indented, not counted', '[INFO] x', '[CRITICAL] two')
+          $rep = Join-Path $dir 'SecurityReport_ci.txt'; Set-Content -LiteralPath $rep -Value $sample -Encoding ASCII
+          $rep2 = Join-Path $plain 'SecurityReport_ci.txt'; Set-Content -LiteralPath $rep2 -Value $sample -Encoding ASCII
+          $bat = [IO.File]::ReadAllLines((Resolve-Path .\doze_sec.bat))
+          $a = [array]::IndexOf($bat, 'set "CRIT_READ=0"')
+          $b = [array]::IndexOf($bat, 'if "%CRIT_READ%"=="0" set "CRIT_COUNT=0"')
+          if ($a -lt 0 -or $b -lt $a) { throw 'the census lines were not found in doze_sec.bat -- this step no longer looks at the code it was written for' }
+          function Invoke-Cmd([string[]]$Lines, [string]$Name) {
+            $f = Join-Path $env:TEMP ($Name + '.cmd')
+            [IO.File]::WriteAllLines($f, $Lines, [Text.Encoding]::ASCII)
+            $ErrorActionPreference = 'Continue'
+            $o = (& cmd.exe /d /c ('"' + $f + '"') 2>&1 | ForEach-Object { "$_" }) -join "`n"
+            $ErrorActionPreference = 'Stop'
+            Remove-Item -LiteralPath $f -Force -EA SilentlyContinue
+            return $o
+          }
+          $head = @('@echo off', 'setlocal enabledelayedexpansion', ('set "PWSH={0}"' -f $pw), 'set "CRIT_COUNT=0"')
+          $o1 = Invoke-Cmd ($head + @(('set "REPORT={0}"' -f $rep)) + $bat[$a..$b] + @('echo CC=!CRIT_COUNT! CR=!CRIT_READ!')) 'dz_ci_census_new'
+          Write-Host "fixed census, report under an apostrophe and a space: $o1"
+          if ($o1 -notmatch 'CC=2 CR=1') { throw 'the fixed census did not count the two [CRITICAL] lines under a path holding an apostrophe' }
+          $oldLine = 'for /f "usebackq" %%c in (`"%PWSH%" -NoProfile -Command "@(Select-String -LiteralPath ''%REPORT%'' -Pattern ''\A\[CRITICAL\]'').Count" 2^>nul`) do set "CRIT_COUNT=%%c"'
+          $o2 = Invoke-Cmd ($head + @(('set "REPORT={0}"' -f $rep2), $oldLine, 'echo CC=!CRIT_COUNT!')) 'dz_ci_census_old'
+          Write-Host "old census form, plain path: $o2"
+          if ($o2 -match 'CC=2') { throw 'the OLD census form counted the lines after all -- the claim that it never produced a number is wrong; correct the CHANGELOG and CLAUDE.md' }
+          # The printed 18e Command: line, as cmd writes it into the report.
+          $line = @($bat | Where-Object { $_ -like "echo  Command: powershell -Command *ioc_scheduled_tasks.txt*" })[0]
+          if (-not $line) { throw 'the 18e Command: line was not found' }
+          $ioc = Join-Path $dir 'ThreatLists'
+          New-Item -ItemType Directory -Path $ioc -Force | Out-Null
+          Set-Content -LiteralPath (Join-Path $ioc 'ioc_scheduled_tasks.txt') -Value @('# CI', 'dz_ci_no_such_task_9f3') -Encoding ASCII
+          $out = Join-Path $env:TEMP 'dz_ci_cmdline.txt'
+          foreach ($case in @(@{ L = $line; Want = 'parses' }, @{ L = $line.Replace("%IOCDIR:'=''%", '%IOCDIR%'); Want = 'fails' })) {
+            Remove-Item -LiteralPath $out -Force -EA SilentlyContinue
+            [void](Invoke-Cmd @('@echo off', 'setlocal enabledelayedexpansion', ('set "IOCDIR={0}"' -f $ioc), ('set "REPORT={0}"' -f $out), $case.L) 'dz_ci_cmdline')
+            $printed = [IO.File]::ReadAllText($out).Trim()
+            $pm = [regex]::Match($printed, '^Command:\s*powershell\s+-Command\s+"(.*)"\s*$')
+            if (-not $pm.Success) { throw ("cmd did not print a Command: line: {0}" -f $printed) }
+            $errs = $null; $toks = $null
+            [void][System.Management.Automation.Language.Parser]::ParseInput($pm.Groups[1].Value, [ref]$toks, [ref]$errs)
+            $parses = (-not $errs -or $errs.Count -eq 0)
+            Write-Host ("{0}: {1}" -f $case.Want, $printed)
+            if ($case.Want -eq 'parses' -and -not $parses) { throw ("the printed 18e command does not parse with an apostrophe in the path: {0}" -f $errs[0].Message) }
+            if ($case.Want -eq 'fails' -and $parses) { throw 'the undoubled form parsed too -- this test cannot tell the fix from the bug' }
+            if ($case.Want -eq 'parses') {
+              $ErrorActionPreference = 'Continue'
+              $r = (& $pw -NoProfile -Command $pm.Groups[1].Value 2>&1 | ForEach-Object { "$_" }) -join "`n"
+              $rc = $LASTEXITCODE
+              $ErrorActionPreference = 'Stop'
+              if ($rc -ne 0 -or $r -match 'Exception|Error|not recognized') { throw ("the printed 18e command parsed but did not run: {0}" -f $r) }
+            }
+          }
+          Remove-Item -LiteralPath $dir, $plain -Recurse -Force -EA SilentlyContinue
+          Remove-Item -LiteralPath $out -Force -EA SilentlyContinue
+          Write-Host 'census: 2 counted under an apostrophe path, old form counted nothing; the printed 18e command parses and runs, the undoubled one does not parse'
+          $global:LASTEXITCODE = 0
           exit 0
 
       # Sections 18b-18e and 18h are PowerShell the bats echo into a temp file,
@@ -3184,7 +3265,10 @@ jobs:
           # exact case %PWSH% resolution exists for) a bare call no-ops and exit
           # code 8 is never raised. Assert the scrape line uses "%PWSH%".
           foreach ($f in 'doze_sec.bat','doze_sec_noAdmin.bat') {
-            $scrape = Select-String -Path $f -SimpleMatch "Select-String -LiteralPath '%REPORT%' -Pattern '\A\[CRITICAL\]'"
+            # The census reads the report path from the environment (an apostrophe
+          # in a pasted path ended the string); single quotes here so $env:REPORT
+          # is searched for literally, not expanded.
+          $scrape = Select-String -Path $f -SimpleMatch 'Select-String -LiteralPath $env:REPORT -Pattern ''\A\[CRITICAL\]'''
             if (-not $scrape) { Write-Host "FAILED: $f lost the CRITICAL-escalation scrape line"; exit 1 }
             if ($scrape.Line -notmatch '"%PWSH%"') {
               Write-Host "FAILED: $f CRITICAL-escalation scrape uses bare powershell, not %PWSH% -- $($scrape.Line.Trim())"; exit 1
@@ -3296,11 +3380,40 @@ jobs:
           }
           Write-Host 'planted two empty keys: ADFS and Azure AD Connect'
 
+      # A USER NAMED O'BRIEN. The bats used to paste paths between single quotes
+      # into the PowerShell they run, and %TEMP% and %APPDATA% live under the
+      # user's profile, so for such a user the dashboard script (in %TEMP%) and
+      # Section 11's history block were parse errors that printed nothing: no
+      # dashboard, and a remediation script holding only its header. This run takes TEMP and TMP from a
+      # folder holding an apostrophe, and APPDATA from one holding an apostrophe
+      # and a space ("Mary O'Brien"), with a PowerShell history planted there so
+      # Section 11's block really runs. CI only. Touches: C:\dz_ci_o'brien\Temp
+      # and "C:\dz ci o'brien\AppData\Roaming\...\ConsoleHost_history.txt".
+      - name: "Plant an apostrophe in TEMP and APPDATA (a user named O'Brien), with a PowerShell history"
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path "C:\dz_ci_o'brien\Temp" -Force | Out-Null
+          $h = "C:\dz ci o'brien\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadLine"
+          New-Item -ItemType Directory -Path $h -Force | Out-Null
+          Set-Content -LiteralPath (Join-Path $h 'ConsoleHost_history.txt') -Value @('Get-Date', 'Write-Output dz_ci_history_marker_7c1') -Encoding ASCII
+          Write-Host "planted: TEMP/TMP C:\dz_ci_o'brien\Temp, APPDATA C:\dz ci o'brien\AppData\Roaming, and a history file with a marker line"
+
       - name: Run the full audit; fail on hang (timeout), fatal error, or early exit
         shell: cmd
         run: |
+          rem The audit alone runs under the apostrophe paths planted above.
+          set "DZ_REAL_TEMP=%TEMP%"
+          set "DZ_REAL_TMP=%TMP%"
+          set "DZ_REAL_APPDATA=%APPDATA%"
+          set "TEMP=C:\dz_ci_o'brien\Temp"
+          set "TMP=C:\dz_ci_o'brien\Temp"
+          set "APPDATA=C:\dz ci o'brien\AppData\Roaming"
           call doze_sec.bat -dev -sdu -nosrp -resetTTP -dnsprobe
           set RC=%ERRORLEVEL%
+          set "TEMP=%DZ_REAL_TEMP%"
+          set "TMP=%DZ_REAL_TMP%"
+          set "APPDATA=%DZ_REAL_APPDATA%"
           echo doze_sec.bat exit code: %RC%
           if "%RC%"=="1" ( echo FATAL ERROR exit code 1 & exit /b 1 )
           rem THE PENDING-REBOOT PATH. The step above planted PendingFileRenameOperations,
@@ -3425,6 +3538,21 @@ jobs:
           if ($s18gap.Count) { throw ("Section 18 raised gap row(s) on a healthy runner: {0}" -f ($s18gap -join ' ; ')) }
           if ($text -notmatch '(?m)^\[OK\] No scheduled task IOC matches\.|^\[WARNING\] Scheduled task IOC matches found\.') { throw 'Section 18e printed neither its [OK] nor a match' }
           Write-Host 'Section 18: no gap row on a healthy runner; 18e compared the tasks'
+          # THE APOSTROPHE RUN. TEMP held an apostrophe and APPDATA an apostrophe and
+          # a space: the dashboard (its script and SUMCODE/SUMCOUNT in TEMP) must
+          # have printed, the stage-1 remediation script must exist and parse, and
+          # Section 11 must show the planted history.
+          if ($text -notmatch 'DASHBOARD CHECKS PASSED') { throw "no dashboard status line: the dashboard script did not run with an apostrophe in TEMP" }
+          if ($text -notmatch 'dz_ci_history_marker_7c1') { throw "Section 11 did not show the planted PowerShell history from an APPDATA holding an apostrophe and a space" }
+          $rem = @(Get-ChildItem -LiteralPath 'C:\SecurityAudit' -Filter 'Remediation_*.ps1' -File | Where-Object { $_.Name -notmatch '_(enforce|undo)\.ps1$' } | Sort-Object LastWriteTime -Descending | Select-Object -First 1)[0]
+          if (-not $rem) { throw 'no stage-1 remediation script was written with an apostrophe in TEMP' }
+          $rt = $null; $re = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile($rem.FullName, [ref]$rt, [ref]$re)
+          if ($re -and $re.Count) { throw ("the remediation script does not parse: {0}" -f $re[0].Message) }
+          # cmd writes the script's safety header before the dashboard runs, so
+          # the file existing proves nothing; only the dashboard writes this line.
+          if ([IO.File]::ReadAllText($rem.FullName) -notmatch 'All queued commands applied') { throw 'the remediation script holds only the header cmd writes: the dashboard never filled it in' }
+          Write-Host ("apostrophe paths: dashboard printed and filled in {0}, which parses; Section 11 showed the planted history" -f $rem.Name)
           # THE BITLOCKER TILE STATES SECTION 13'S VERDICT. It re-ran
           # Get-BitLockerVolume until 2026-10-04 -- the sixth tile that measured
           # twice. Section 13's evaluated line and the tile must agree.

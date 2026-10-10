@@ -519,7 +519,10 @@ carries file contents only and is immune. A checkout is not. Proposed:
 exec_probe counts Zone.Identifier streams on `tools\*.ps1` and declares a gap
 when any is marked and the policy is RemoteSigned.
 
-## A user name with an apostrophe silently breaks staged PowerShell (found 2026-10-10, NEXT)
+## A user name with an apostrophe silently breaks staged PowerShell (found 2026-10-10, DONE 2026-10-10)
+
+Done: every code site reads its path from the environment, the printed `Command:` lines double the apostrophe with `%X:'=''%`, `tools\lint_quoted_paths.ps1` keeps it that way, and CI runs the audit as a user named `dz o'smoke` and under an apostrophe `TEMP` and `APPDATA`. The sweep also found the end-of-run `[CRITICAL]` census had never counted (a `for /f` backtick beginning with a quote); it now reads through a file. What was found:
+
 
 The batch files build PowerShell by echoing lines into `%PSRUN%`, and some of
 those lines paste a folder path between single quotes: `$x='%VAR%'`. A
@@ -532,7 +535,8 @@ lines per script are still exposed, in both scripts:
   `$scnt='%SUMCOUNT%'`, `$rem` / `$enf` / `$und` (the remediation paths) and
   `$lgp='%LEDGER%'`. `SUMCODE` and `SUMCOUNT` live in `%TEMP%`, which is under
   the user's profile even on an elevated run. An affected user gets no
-  dashboard and no remediation script, from either script.
+  dashboard, and a remediation script holding only the header cmd writes
+  before the dashboard runs, from either script.
 - **Section 11's PowerShell history check:**
   `Get-Content '%APPDATA%\...\ConsoleHost_history.txt'`.
 

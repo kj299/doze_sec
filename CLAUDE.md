@@ -210,6 +210,16 @@ evidence the primary path FAILED, never that it worked.**
 So: **read a helper's output through a file and `set /p`**, the marker idiom
 already used everywhere else. No backticks, no `cmd /c`, no quote stripping.
 
+**It was there a second time, and nothing noticed.** The end-of-run
+`[CRITICAL]`-line census, the input to the alarm that catches a section
+printing `[CRITICAL]` while raising something lower, was the same shape:
+`` for /f ... in (`"%PWSH%" -Command "@(Select-String ...).Count"`) ``. It
+never produced a number, so the alarm could never fire. Every CI run read
+"no divergence alarm", which was true and proved nothing. An alarm that has
+never fired in a test is a promise. It was found only while fixing that
+line for another reason; it now reads through a file, and the helpers job
+measures the old form counting nothing.
+
 **And never default a grade to `OK`.** `DZ_BLKSEV` now starts at `DZ_NOGRADE`;
 if no grade is read the sentinel survives and is declared an `AUDITGAP`. An `OK`
 default made a broken grader indistinguishable from a clean block — the same
@@ -483,12 +493,30 @@ regex reported six defects across four files on its first run. A lint people
 learn to work around is worse than no lint. `-SelfTest` proves it fails on each
 class **and stays quiet on the prose**. CI runs it in `lint.yml`.
 
+**A path never goes into the PowerShell the bats build as pasted text.**
+A user named O'Brien has `C:\Users\O'Brien`, and `%TEMP%`, `%APPDATA%` and
+a standard user's whole output folder live under it. `$scf='%SUMCODE%'` was
+then a parse error, and that user got no dashboard and a remediation script
+holding only the header cmd writes before the dashboard runs. PowerShell also
+reads the typographic apostrophe as a quote. Read the path from the
+environment instead (`$env:SUMCODE`; cmd's variables are the child's
+environment), and never paste it in any quoting. Between single quotes an
+apostrophe ends the string; in double quotes a `$` or a backtick in the path
+is expanded; unquoted, a space splits it. A printed `Command:` line, which a
+reader pastes, writes `'%X:'=''%'` so cmd doubles the apostrophe; the
+variable must be defined, or that substitution leaves stray text that eats
+the line's redirection. `tools\lint_quoted_paths.ps1` derives the path
+variables from the bats' own `set` lines and enforces both rules, in every
+line shape the bats use. CI's standard-user account is named `dz o'smoke` for
+this reason.
+
 **Copied helpers stay identical.** The tools are self-contained on purpose (no
 module imports), so a helper several tools need is copied into each.
 `tools/lint_shared_copies.ps1` pins the copies of `Get-RegKeyLastWrite`,
-`Get-WhenLine`, `Write-WhenCaveat` and the harness's `Remove-HostsMarkerLines`
-(in `tests\`: the cold cleanup must run standalone) byte-identical (comments
-included); `pending_reboot_check`'s copy had already lost a line when it was
+`Get-WhenLine`, `Write-WhenCaveat`, the harness's `Remove-HostsMarkerLines`
+(in `tests\`: the cold cleanup must run standalone) and `Expand-CmdEscapes`
+(`tests\section18_gaps.ps1` renders staged blocks with `lint_remediation`'s
+copy) byte-identical (comments included); `pending_reboot_check`'s copy had already lost a line when it was
 added. When a helper is copied into a second script, add its name to the lint's
 manifest. With two copies there is no majority, so a drifted pair names both.
 
@@ -821,7 +849,7 @@ PowerShell 5.1 runtime behavior, real WMI/CIM, `findstr`, or detect a
 runtime hang. `windows-smoke.yml` runs on a real `windows-latest` runner on
 pushes to `main`, on manual dispatch, and **on any PR that touches functional
 code** (the bats, `tools/`, `tests/`, `ThreatLists/`, the workflows). Docs-only
-PRs skip it. The repo is private (metered minutes) and these five Windows
+PRs skip it. The repo is private (metered minutes) and these six Windows
 jobs bill at 2x, which exhausted a month's quota mid-cycle in 2026-08; the
 first response removed the suite from PRs entirely, which was wrong -- a diet
 must never cost coverage of a bug fix or feature. The `paths` filter and the
