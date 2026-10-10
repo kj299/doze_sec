@@ -465,6 +465,13 @@ So, in every `.ps1`:
   cases were asserting on. They only failed because the assertion checks the
   **reason**, not just the verdict. Assert on `Why`, not only `Bucket`.
 
+- **No `$PSCommandPath` in a `param()` default of a script run with
+  `powershell -File`.** Windows PowerShell 5.1 leaves it empty while the param
+  block is evaluated; pwsh 7 does not. `tests\section18_gaps.ps1` derived its
+  repo root that way, passed every Linux run, and died on its first Windows
+  run before checking anything. Derive paths in the body from `$PSScriptRoot`
+  (as `field_test.ps1` does), or have the caller pass them.
+
 ```
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\lint_ps51_portability.ps1
 ```
@@ -657,7 +664,12 @@ the errorlevel is the LAST stage's**: Sections 18a and 18f ran
 not read its list (or choked on a line) handed the second nothing, and the
 section printed `[OK]`. A matcher's "could not check" needs its own exit code
 and its own NOT-performed line (`select_lines` exits 2), and the plant that
-proves the match fires must be anchored inside its own subsection.
+proves the match fires must be anchored inside its own subsection. **And a
+matcher that reads another tool's column NAMES reads nothing on a localized
+Windows**: 18e matched `TaskName` and `Task To Run` from schtasks' CSV, whose
+headers come from its language files, so it printed `[OK]` on every
+non-English machine having compared nothing. Read objects
+(`Get-ScheduledTask`), not headers.
 
 **"All fail" is a different claim from "some fail".** `dns_probe` graded each
 domain on its own, so a laptop with no network -- nine domains, nine failures

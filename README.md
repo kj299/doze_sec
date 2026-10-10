@@ -174,18 +174,20 @@ Reads structured IOC files from `ThreatLists/` and matches against the live syst
 
 | Sub | Check | Method |
 |-----|-------|--------|
-| 18a | Process name IOC match | `wmic process` vs `ioc_processes.txt` |
+| 18a | Process name IOC match | `Get-CimInstance Win32_Process` vs `ioc_processes.txt` (`select_lines`) |
 | 18b | Named pipe IOC match | PowerShell pipe enum vs `ioc_named_pipes.txt` |
 | 18c | Service IOC match | PowerShell service enum vs `ioc_services.txt` |
 | 18d | Malware staging paths | `Test-Path` vs `ioc_file_paths.txt` |
-| 18e | Scheduled task IOC match | `schtasks` (PS CSV) vs `ioc_scheduled_tasks.txt` -- TaskName + Task To Run columns only |
+| 18e | Scheduled task IOC match | `Get-ScheduledTask` vs `ioc_scheduled_tasks.txt` -- task path and every action's full command line, the same in every Windows language |
 | 18f | DNS cache C2 domains | `ipconfig /displaydns` vs `ioc_domains.txt` |
-| 18g | LOLBin command patterns | `wmic process` vs `ioc_lolbins.txt` |
-| 18h | Registry IOC check | `reg query` vs `ioc_registry.txt` |
+| 18g | LOLBin command patterns | `Get-CimInstance Win32_Process` command lines vs `ioc_lolbins.txt` (`select_lines`) |
+| 18h | Registry IOC check | `Get-ItemProperty` vs `ioc_registry.txt` |
 | 18i | TTP coverage summary | `ttp_manifest.txt` dump |
 | 18j | VirusTotal hash reputation (opt-in via `-vt`) | `Get-FileHash` SHA256 -> VT API; capped at 20 priority files; rate-limited for free tier |
 | 18k | Local hash IOC match (always-on) | `Get-FileHash` SHA256 vs `ioc_hashes.txt`; offline complement to 18j |
 | 18l | VirusTotal IP reputation (opt-in via `-vt`) | `Get-NetTCPConnection` (Established) -> VT API; capped at 10 public remote IPs; rate-limited for free tier |
+
+A sub-check that cannot run prints `[WARNING] ... NOT performed` and raises it as a finding of its own. That covers a list that is missing or holds no entries, a listing Windows will not give, and a check that stops before reaching a verdict. A missing `ThreatLists` folder does the same for the whole sweep. None of these reads `[OK]`, and the Section 18 summary and the dashboard never call such a sweep an all-clear.
 
 **Inline CTI checks:**
 - Sliver / Havoc / Brute Ratel named pipes

@@ -19,6 +19,12 @@
 #
 # Writes "$env:TEMP\dz_iochit_18k.txt" if any file is flagged so the .bat
 # can increment IOC_HITS via the same marker-file pattern as 18b/c/d/e/h/j.
+# A list that is missing or holds no valid row means the match did NOT run:
+# it prints a [WARNING] ... NOT performed line and writes
+# "$env:TEMP\dz_iochit_18k_gap.txt", which the .bat raises as its own
+# gap-worded ledger row. It used to print "[INFO] ... skipped", which raised
+# nothing and which Section 18's summary did not count as a gap, so the
+# summary could call the sweep an all-clear.
 
 param(
     [Parameter(Mandatory=$true)]
@@ -31,7 +37,8 @@ param(
 $ErrorActionPreference = 'Continue'
 
 if (-not (Test-Path -LiteralPath $IocFile)) {
-    "[INFO] Local hash IOC check skipped -- $IocFile not found."
+    "[WARNING] File hash IOC match NOT performed -- $IocFile not found."
+    New-Item "$env:TEMP\dz_iochit_18k_gap.txt" -Force | Out-Null
     return
 }
 
@@ -53,7 +60,8 @@ foreach ($line in (Get-Content -LiteralPath $IocFile -EA SilentlyContinue)) {
 }
 
 if ($rowCount -eq 0) {
-    "[INFO] Local hash IOC check skipped -- $IocFile contains no valid SHA256 rows."
+    "[WARNING] File hash IOC match NOT performed -- $IocFile holds no valid SHA256 rows."
+    New-Item "$env:TEMP\dz_iochit_18k_gap.txt" -Force | Out-Null
     return
 }
 

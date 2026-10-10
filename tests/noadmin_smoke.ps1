@@ -378,6 +378,16 @@ try {
     Assert ($text1 -match '\[INFO\] \d+ IFEO entr(y|ies) not readable from this token: [^\r\n]*dzsmoke_ifeo\.exe') `
         'the unreadable IFEO subkey is named as not graded from this token' `
         'the unreadable IFEO subkey was not named (silently cleared, or absent)'
+    # Section 18 on a standard-user token: every IOC list ships with the tool
+    # and processes, pipes, services and scheduled tasks are all listable by a
+    # standard user, so a NOT-performed gap row here is a false WARNING -- and
+    # it would not move this run's MAXSEV, so nothing else would notice it.
+    Assert (-not @($ledger1 | Where-Object { $_ -match '^\w+\|18\|[^|]*\|.*NOT performed' }).Count) `
+        'no Section 18 IOC match raised a NOT-performed gap on a standard-user token' `
+        ("Section 18 raised a gap a standard user should not have: {0}" -f (($ledger1 | Where-Object { $_ -match '\|18\|[^|]*\|.*NOT performed' }) -join ' ; '))
+    Assert ($text1 -match '\[OK\] No scheduled task IOC matches\.|\[WARNING\] Scheduled task IOC matches found\.') `
+        'Section 18e compared the scheduled tasks a standard user can list' `
+        'Section 18e printed neither its [OK] nor a match on a standard-user token'
     $max1 = Assert-LedgerConsistency -Text $text1 -Ledger $ledger1 -Label 'run 1'
     # The bat escalates to 6 ONLY from 0 and 4: 2 is the ledger-derived
     # "findings were raised" verdict and is never discarded (its rem block

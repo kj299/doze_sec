@@ -618,6 +618,17 @@ jobs:
       # partial sweep is never an all-clear.
       - name: Run tools/count_gaps.ps1 -SelfTest
         run: pwsh -NoProfile -File tools/count_gaps.ps1 -SelfTest
+      # The staged matchers (18b, 18c, 18d, 18e, 18h) printed [SKIPPED] or
+      # [INFO] and raised nothing when their list was missing or Windows would
+      # not list what they match; 18a, 18g and 18k did the same in the bat.
+      # Render each block as cmd writes it and RUN it with no list and with a
+      # comments-only list; check the bats raise each gap under its technique.
+      - name: Run tests/section18_gaps.ps1 -SelfTest
+        run: pwsh -NoProfile -File tests/section18_gaps.ps1 -SelfTest
+      - name: "Section 18: every matcher that cannot run says NOT performed and raises it (both bats)"
+        run: pwsh -NoProfile -File tests/section18_gaps.ps1 -Mode Missing
+      - name: "Section 18: the shipped lists on Linux (no Windows listings: 18b/18c/18e gap, 18d/18h OK)"
+        run: pwsh -NoProfile -File tests/section18_gaps.ps1 -Mode Shipped
       # findstr /g: read a broken list as [OK]: the errorlevel checked was the
       # SECOND findstr's in the pipe. Each of 18a, 18f and 18g must call
       # select_lines with its list and give exit 0 a raise, exit 1 the [OK]
