@@ -6,6 +6,45 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Sections 18c, 18d and 18h are proven to fire, each beside a look-alike that must not
+18a and 18f had been proven by harness plants, and 18b and 18e by planted
+pipes and tasks in the helpers job. 18c (services), 18d (staging files) and
+18h (registry) had never matched anything in a test. The plant harness now
+plants one indicator each that the lists name, and one look-alike each that
+only resembles one:
+- **18c** matches a service's name or display name as a substring. A
+  never-started service named `dz_selftest_ioc_PSEXESVC` (PsExec's service
+  name) must be matched. Its twin carries the real Windows name
+  `SecurityHealthService`, and the list's look-alike entry
+  `securityhealthservice2` must not match it. Both run `notepad.exe`, a validly
+  signed Microsoft binary, so Section 7 grades them clean and cannot satisfy
+  the Section 7 case for its own plant. The names avoid the harness's
+  `dz_selftest_evil` marker for the same reason.
+- **18d** tests an exact path. A harmless text file at the listed
+  `%TEMP%\beacon.bin` must be matched. The same name in a folder the list does
+  not name must not be.
+- **18h** looks a value up by exact name. A per-user Run value named
+  `ChromeUpdate` must be matched; it points at a file that does not exist, so
+  nothing can run at logon. A value whose name only contains it
+  (`ChromeUpdateHelper_dz_selftest`) must not be.
+
+Each match must reach the ledger under its own section and technique
+(`WARNING|18|T1543`, `CRITICAL|18|T1074`, `WARNING|18|T1112`). Each twin is
+graded only when its sibling matched, and is catalogued in
+`tests\benign_corpus.txt`. The cold cleanup removes each plant only by its
+marker: a `beacon.bin` or `ChromeUpdate` value that is not the harness's is a
+real indicator, and evidence, so it is kept and named. T1074 and T1112 are now
+CORE in `tests\emulation_corpus.txt`. T1112 used to be UNTESTABLE ("no single
+safe artifact to plant"); the Run value is that artifact.
+
+The list's other registry entries are not planted on purpose. Defender
+policy, UAC, LSA, the COM hijacks and the proxy setting would each change how
+the machine behaves. 18h's bad-value judgement is pinned instead on real
+machine state: the full-run job asserts 18h does not list `EnableLUA` on a
+runner with UAC on. That was the 2026-09-24 field bug, where a runtime list
+missing its bad-value column turned UAC ON into an IOC. `top_findings` gained
+analyst notes for the service, named-pipe and scheduled-task hit lines.
+
 ### A user named O'Brien gets a dashboard, remediation fixes and a Section 11 history; the [CRITICAL] census counts again
 The batch files build PowerShell as text, and wherever they pasted a path
 between single quotes, an apostrophe in it ended the string early. That

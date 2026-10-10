@@ -38,6 +38,8 @@ CORE|T1562.001|BYOVD / unsigned kernel driver
 CORE|T1564.002|account hidden from the sign-in screen
 CORE|T1543.003|Windows service creation with a suspicious path
 CORE|T1546.008|accessibility-binary IFEO hijack (sethc.exe)
+CORE|T1074|staging file at a path on ioc_file_paths.txt (Section 18d)
+CORE|T1112|Run value named on ioc_registry.txt (Section 18h); a HKCU Run value pointing at a file that does not exist is the safe artifact
 CORE|T1547.002|LSA authentication package
 CORE|T1562.004|firewall profile disabled
 CORE|T1036|system-process name running outside its canonical directory
@@ -60,7 +62,6 @@ UNTESTABLE|T1548|disabling UAC lowers the machine's protection; verified read-on
 UNTESTABLE|T1548.002|see T1548 -- UAC bypass/disable is not safe to plant
 UNTESTABLE|T1553.006|enabling testsigning changes the kernel driver-signing policy and needs a reboot
 UNTESTABLE|T1562.002|disabling Windows auditing would blind other checks; verified read-only against the live audit policy instead
-UNTESTABLE|T1112|generic Modify Registry has no single safe artifact to plant
 UNTESTABLE|T1113|enabling RDP session shadowing changes the machine's remote-access policy
 UNTESTABLE|T1123|audio-capture consent is informational only (ordinary apps hold it); no raised finding to assert
 UNTESTABLE|T1125|video-capture consent is informational only; no raised finding to assert

@@ -129,6 +129,35 @@ $iocBenignExe  = Join-Path $iocBenignDir 'dz_selftest_evil_benign_level_agent.ex
 # absent because the matcher never ran has tested nothing.
 $ioc18aExpect = '(?s)--- \[18a\] Process IOC Match ---(?:(?!--- \[18b\]).)*?dz_selftest_evil_chisel\.exe\s+\d+\s+C:\\dz_selftest_ioc\\(?:(?!--- \[18b\]).)*?\[WARNING\] Process IOC matches found above'
 $ioc18fExpect = '(?s)--- \[18f\] DNS Cache C2 Domain Match ---(?:(?!--- \[18g\]).)*?dz-selftest-evil\.ngrok\.io(?:(?!--- \[18g\]).)*?\[WARNING\] C2 domain IOC matches found in DNS cache'
+# Sections 18c, 18d and 18h: one plant each that the list names, and a twin
+# that only looks like one. 18c matches a service's name or display name as a
+# substring (PSEXESVC is PsExec's service); its twin carries the real Windows
+# service name SecurityHealthService, which the list's look-alike entry
+# securityhealthservice2 must not match. Both services run notepad.exe, a
+# validly signed Microsoft binary, and are never started, so Section 7 grades
+# them clean and cannot hide the Section 7 case's own plant; their names carry
+# dz_selftest, which the Event 7045 check excludes. 18d tests an exact expanded
+# path; its twin is the same file name in a folder the list does not name. 18h
+# looks a value up by exact name; its twin's name only contains a listed one.
+# The Run value points at a file that does not exist, so nothing runs at
+# logon, and its data holds dz_selftest but not dz_selftest_evil, so it cannot
+# satisfy the Run-key backdoor case's expectation on that case's behalf.
+# Not dz_selftest_evil_*: a [WARNING] line elsewhere (the baseline diff lists a
+# new service) holding the marker would satisfy the Run-key backdoor case's
+# expectation for it. dz_selftest alone is still what the 7045 check excludes.
+$iocSvcName    = 'dz_selftest_ioc_PSEXESVC'
+$iocSvcTwin    = 'dz_selftest_SecurityHealthService'
+$iocSvcImage   = Join-Path $env:SystemRoot 'System32\notepad.exe'
+$iocStageFile  = Join-Path $env:TEMP 'beacon.bin'
+$iocStageTwinDir = Join-Path $env:TEMP 'dz_selftest_ioc_twin'
+$iocRunName    = 'ChromeUpdate'
+$iocRunTwin    = 'ChromeUpdateHelper_dz_selftest'
+$iocRunData    = '"C:\dz_selftest_ioc_absent\ChromeUpdate.exe"'
+$ioc18cExpect = '(?s)--- \[18c\] Service IOC Match ---(?:(?!--- \[18d\]).)*?dz_selftest_ioc_PSEXESVC(?:(?!--- \[18d\]).)*?\[WARNING\] Service IOC matches found\.'
+# The exact planted path, not the bare file name: the twin's path also ends in
+# \beacon.bin, so a bare-name expectation would pass on the twin alone.
+$ioc18dExpect = '(?s)--- \[18d\] Suspicious File Path IOC Check ---(?:(?!--- \[18e\]).)*?\[CRITICAL\] Known malware staging files found:(?:(?!--- \[18e\]).)*?' + [regex]::Escape($iocStageFile) + '\r?\n'
+$ioc18hExpect = '(?s)--- \[18h\] Registry IOC Check ---(?:(?!--- \[18i\]).)*?\[WARNING\] Suspicious registry IOCs found:(?:(?!--- \[18i\]).)*?\\Run\\ChromeUpdate = '
 # Baseline/diff: the audit auto-diffs when a snapshot exists at OUTDIR. The
 # harness seeds one BEFORE the audit runs, with the planted Run-key backdoor
 # deliberately absent from it, so the audit's diff must report that autorun as
@@ -400,6 +429,81 @@ $cases = @(
         Cleanup= { Get-Process -EA SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($iocBenignDir + '\', [StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force -EA SilentlyContinue
                    Start-Sleep -Milliseconds 500
                    Remove-Item -LiteralPath $iocBenignDir -Recurse -Force -EA SilentlyContinue }
+    },
+    @{
+        Name   = 'Service whose name holds an ioc_services.txt entry -> Section 18c Service IOC match (T1543)'
+        Attack = @('T1543')
+        Tier   = 'required'
+        Touches= @('service:dz_selftest_ioc_PSEXESVC|dz_selftest_ioc_PSEXESVC')
+        Affects= @()
+        Expect = $ioc18cExpect
+        Plant  = { $r = & sc.exe create $iocSvcName 'binPath=' $iocSvcImage 'start=' 'demand' 'DisplayName=' 'PSEXESVC dz_selftest plant'
+                   if ($LASTEXITCODE -ne 0) { throw ("sc create failed: {0}" -f ($r -join ' ')) } }
+        Cleanup= { & sc.exe delete $iocSvcName | Out-Null }
+    },
+    @{
+        Name   = 'Service carrying the real SecurityHealthService name -> NOT a Section 18c match (benign twin)'
+        Tier   = 'required'
+        Touches= @('service:dz_selftest_SecurityHealthService|dz_selftest_SecurityHealthService')
+        Affects= @()
+        Invert = $true
+        Expect = '(?s)--- \[18c\] Service IOC Match ---(?:(?!--- \[18d\]).)*?dz_selftest_SecurityHealthService'
+        TestableIf       = { [regex]::IsMatch($text, $ioc18cExpect) }
+        UntestableReason = 'the PSEXESVC-named plant did not reach 18c either, so 18c never matched anything this run'
+        Plant  = { $r = & sc.exe create $iocSvcTwin 'binPath=' $iocSvcImage 'start=' 'demand' 'DisplayName=' 'Windows Security Service dz_selftest twin'
+                   if ($LASTEXITCODE -ne 0) { throw ("sc create failed: {0}" -f ($r -join ' ')) } }
+        Cleanup= { & sc.exe delete $iocSvcTwin | Out-Null }
+    },
+    @{
+        Name   = 'File at a staging path on ioc_file_paths.txt -> Section 18d staging file match (T1074)'
+        Attack = @('T1074')
+        Tier   = 'required'
+        Touches= @('file:%TEMP%\beacon.bin (harmless text holding the marker)|beacon.bin')
+        Affects= @()
+        Expect = $ioc18dExpect
+        Plant  = { if ((Test-Path -LiteralPath $iocStageFile) -and ((Get-Content -LiteralPath $iocStageFile -Raw -EA SilentlyContinue) -notmatch $MARK)) { throw ("{0} already exists and is not ours -- inspect it before planting over it" -f $iocStageFile) }
+                   Set-Content -LiteralPath $iocStageFile -Value ("{0} 18d plant: harmless text at a listed staging path" -f $MARK) -Encoding ASCII }
+        Cleanup= { if ((Test-Path -LiteralPath $iocStageFile) -and ((Get-Content -LiteralPath $iocStageFile -Raw -EA SilentlyContinue) -match $MARK)) { Remove-Item -LiteralPath $iocStageFile -Force -EA SilentlyContinue } }
+    },
+    @{
+        Name   = 'Same file name in a folder the list does not name -> NOT a Section 18d match (benign twin)'
+        Tier   = 'required'
+        Touches= @('file:%TEMP%\dz_selftest_ioc_twin\beacon.bin|dz_selftest_ioc_twin')
+        Affects= @()
+        Invert = $true
+        Expect = '(?s)--- \[18d\] Suspicious File Path IOC Check ---(?:(?!--- \[18e\]).)*?dz_selftest_ioc_twin'
+        TestableIf       = { [regex]::IsMatch($text, $ioc18dExpect) }
+        UntestableReason = 'the planted staging file did not reach 18d either, so 18d never matched anything this run'
+        Plant  = { New-Item -ItemType Directory -Path $iocStageTwinDir -Force | Out-Null
+                   Set-Content -LiteralPath (Join-Path $iocStageTwinDir 'beacon.bin') -Value ("{0} 18d twin" -f $MARK) -Encoding ASCII }
+        Cleanup= { Remove-Item -LiteralPath $iocStageTwinDir -Recurse -Force -EA SilentlyContinue }
+    },
+    @{
+        Name   = 'Run value named on ioc_registry.txt -> Section 18h registry IOC match (T1112)'
+        Attack = @('T1112')
+        Tier   = 'required'
+        Touches= @('registry:HKCU:\Software\Microsoft\Windows\CurrentVersion\Run\ChromeUpdate (points at a file that does not exist)|dz_selftest_ioc_absent')
+        Affects= @()
+        Expect = $ioc18hExpect
+        Plant  = { if (-not (Test-Path $runKey)) { New-Item -Path $runKey -Force | Out-Null }
+                   $prior = (Get-ItemProperty -Path $runKey -Name $iocRunName -EA SilentlyContinue).$iocRunName
+                   if ($prior -and $prior -notmatch 'dz_selftest_ioc_absent') { throw ("a Run value named {0} already exists and is not ours -- inspect it before planting over it" -f $iocRunName) }
+                   Set-ItemProperty -Path $runKey -Name $iocRunName -Value $iocRunData -Force }
+        Cleanup= { $v = (Get-ItemProperty -Path $runKey -Name $iocRunName -EA SilentlyContinue).$iocRunName
+                   if ($v -and $v -match 'dz_selftest_ioc_absent') { Remove-ItemProperty -Path $runKey -Name $iocRunName -EA SilentlyContinue } }
+    },
+    @{
+        Name   = 'Run value whose name only contains a listed name -> NOT a Section 18h match (benign twin)'
+        Tier   = 'required'
+        Touches= @('registry:HKCU:\Software\Microsoft\Windows\CurrentVersion\Run\ChromeUpdateHelper_dz_selftest|ChromeUpdateHelper_dz_selftest')
+        Affects= @()
+        Invert = $true
+        Expect = '(?s)--- \[18h\] Registry IOC Check ---(?:(?!--- \[18i\]).)*?ChromeUpdateHelper_dz_selftest'
+        TestableIf       = { [regex]::IsMatch($text, $ioc18hExpect) }
+        UntestableReason = 'the planted ChromeUpdate value did not reach 18h either, so 18h never matched anything this run'
+        Plant  = { if (-not (Test-Path $runKey)) { New-Item -Path $runKey -Force | Out-Null }
+                   Set-ItemProperty -Path $runKey -Name $iocRunTwin -Value '"C:\dz_selftest_ioc_absent\ChromeUpdateHelper.exe"' -Force }
+        Cleanup= { Remove-ItemProperty -Path $runKey -Name $iocRunTwin -EA SilentlyContinue }
     },
     @{
         Name   = 'DNS cache holds a domain on ioc_domains.txt -> Section 18f C2 domain match (T1071.004)'
@@ -1112,12 +1216,15 @@ try {
     if ($ledger) { $lg12 = [bool](@(Get-Content -LiteralPath $ledger.FullName -EA SilentlyContinue | Where-Object { $_ -like 'CRITICAL|12|*' }).Count) }
     if ($s12issues -and $lg12) { Write-Host "  [ OK       ] Section 12 WDigest verdict is ISSUES FOUND + ledger has CRITICAL|12| (dashboard retrofit)" }
     else { Write-Host ("  [ REGRESS  ] planted WDigest did not flip Section 12's own verdict/ledger (verdict={0} ledger={1})" -f $s12issues, $lg12); $requiredFail++ }
-    # Sections 18a and 18f: a planted match must reach the ledger under its OWN
+    # Sections 18a, 18c, 18d, 18f and 18h: a planted match must reach the ledger under its OWN
     # section and technique (Section 3 also raises T1071.004, so the section is
     # part of the check). Gated on the plant having taken: a plant that could
     # not run is reported by the scoreboard above, not here.
     foreach ($chk in @(@{ Case = 'Section 18a Process IOC match'; Row = 'WARNING|18|T1057|Process IOC match' },
-                       @{ Case = 'Section 18f C2 domain match';   Row = 'WARNING|18|T1071.004|C2 domain IOC match in DNS cache' })) {
+                       @{ Case = 'Section 18c Service IOC match'; Row = 'WARNING|18|T1543|Service IOC match' },
+                       @{ Case = 'Section 18d staging file match'; Row = 'CRITICAL|18|T1074|Known malware staging files found' },
+                       @{ Case = 'Section 18f C2 domain match';   Row = 'WARNING|18|T1071.004|C2 domain IOC match in DNS cache' },
+                       @{ Case = 'Section 18h registry IOC match'; Row = 'WARNING|18|T1112|Registry IOC match' })) {
         $cs = @($cases | Where-Object { $_.Name -like ('*' + $chk.Case + '*') -and -not $_.Invert })[0]
         if (-not ($cs -and $cs.Planted)) { Write-Host ("  [ SKIP     ] {0}: the plant did not take, so its ledger row is not checked" -f $chk.Case); continue }
         # The check is "printed but not counted": with nothing printed (a

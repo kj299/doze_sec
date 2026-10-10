@@ -152,6 +152,20 @@ Remove-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\AppCertD
 Remove-RegValue 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList' $MARK 'Hidden account (UserList)'
 Remove-RegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' 'EnableScriptBlockLogging' 'ScriptBlockLogging policy'
 Remove-RegValue 'HKCU:\Environment' 'UserInitMprLogonScript' 'UserInitMprLogonScript logon script'
+Remove-RegValue 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' 'ChromeUpdateHelper_dz_selftest' 'Section 18h benign twin Run value (ChromeUpdateHelper_dz_selftest)'
+# The Section 18h plant carries a REAL list name, ChromeUpdate, so it is removed
+# only when its data is the plant's (dz_selftest_ioc_absent): a ChromeUpdate
+# value that is not ours is a real indicator, and evidence -- it is kept.
+try {
+    $cu = (Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'ChromeUpdate' -EA Stop).ChromeUpdate
+    if ($cu -and ("$cu" -match 'dz_selftest_ioc_absent')) {
+        Remove-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'ChromeUpdate' -Force
+        Report 'Section 18h Run value ChromeUpdate (dz_selftest_ioc_absent)' 'REMOVED'
+    } elseif ($cu) {
+        if (-not $Quiet) { Write-Host ("  [NOTE   ] HKCU Run value ChromeUpdate = {0} is NOT the harness's plant and was left alone -- it is on ioc_registry.txt; investigate it." -f $cu) }
+        Report 'Section 18h Run value ChromeUpdate (dz_selftest_ioc_absent)' 'ABSENT'
+    } else { Report 'Section 18h Run value ChromeUpdate (dz_selftest_ioc_absent)' 'ABSENT' }
+} catch { Report 'Section 18h Run value ChromeUpdate (dz_selftest_ioc_absent)' 'ABSENT' }
 
 # --- Registry keys (pure adds) ---------------------------------------------
 Remove-RegKey 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\notepad.exe' 'IFEO hijack (notepad.exe)'
@@ -198,7 +212,7 @@ try {
 } catch { Report 'Malicious screensaver (SCRNSAVE.EXE)' 'ABSENT' }
 
 # --- Services --------------------------------------------------------------
-foreach ($svc in @('dz_selftest_fp_svc', 'dz_selftest_flag_svc')) {
+foreach ($svc in @('dz_selftest_fp_svc', 'dz_selftest_flag_svc', 'dz_selftest_ioc_PSEXESVC', 'dz_selftest_SecurityHealthService')) {
     $exists = $false
     try { if (Get-Service -Name $svc -EA Stop) { $exists = $true } } catch {}
     if ($exists) { & sc.exe delete $svc | Out-Null; Report ("Service {0}" -f $svc) 'REMOVED' }
@@ -227,6 +241,20 @@ Get-Process -EA SilentlyContinue |
 if (Test-Path -LiteralPath 'C:\dz_selftest_ioc' -PathType Container) { Start-Sleep -Milliseconds 500 }
 Remove-Path 'C:\dz_selftest_ioc'                                'IOC-named process directory (dz_selftest_ioc)'
 Remove-Path 'C:\dz_selftest_ioc_benign'                         'Benign twin process directory (dz_selftest_ioc_benign)'
+Remove-Path (Join-Path $env:TEMP 'dz_selftest_ioc_twin')        'Section 18d benign twin folder (%TEMP%\dz_selftest_ioc_twin)'
+# The Section 18d plant sits at a REAL listed staging path, %TEMP%\beacon.bin,
+# so it is removed only when it holds the marker: a beacon.bin that is not ours
+# is a real indicator, and evidence -- it is kept.
+$beacon = Join-Path $env:TEMP 'beacon.bin'
+if (Test-Path -LiteralPath $beacon -PathType Leaf) {
+    $body = ''
+    try { $body = [IO.File]::ReadAllText($beacon) } catch {}
+    if ($body -match $MARK) { Remove-Path $beacon 'Section 18d staging plant (%TEMP%\beacon.bin)' }
+    else {
+        if (-not $Quiet) { Write-Host ("  [NOTE   ] {0} is NOT the harness's plant and was left alone -- it is on ioc_file_paths.txt; investigate it." -f $beacon) }
+        Report 'Section 18d staging plant (%TEMP%\beacon.bin)' 'ABSENT'
+    }
+} else { Report 'Section 18d staging plant (%TEMP%\beacon.bin)' 'ABSENT' }
 Remove-Path 'C:\Program Files\dz selftest fp'                   'FP-service directory'
 Remove-Path 'C:\dz_selftest_excl_dir'                           'Defender exclusion directory'
 Remove-Path (Join-Path $OutDir 'baseline.snapshot')            'Seeded baseline snapshot'
