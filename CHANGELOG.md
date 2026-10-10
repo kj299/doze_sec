@@ -105,6 +105,30 @@ found 13 defects, all fixed before the first push:**
 - The CHANGELOG had two inaccuracies: the bare `#` line count, and the
   header fix reaching runtime copies.
 
+**CI's first run found one more, and reading it found two beside it.** One
+of the three HOSTS cleanups failed with `Stream was not readable`. It healed
+in the same run, because each cleanup drops every marker line and the next
+two succeeded, but a cleanup that fails on someone's VM leaves a DNS-hijack
+line in their HOSTS file. Reading the code showed two more defects:
+- The cleanup rewrote HOSTS through `Get-Content` / `Set-Content -Encoding
+  UTF8`. On Windows PowerShell 5.1 that writes a BOM and re-encodes every
+  line, so the owner's own HOSTS file came back changed.
+- `cleanup_selftest.ps1` caught any HOSTS failure and reported it as
+  `ABSENT`. The recovery script said a plant was gone when it could not
+  remove it.
+
+All three HOSTS cases and the cold cleanup now call one helper,
+`Remove-HostsMarkerLines`. It drops only the marker lines and leaves every
+other byte as it was: encoding, BOM and line endings. It writes only when it
+removed something. A failed read or write is retried up to five times, 400 ms
+apart. When it takes more than one attempt it prints how many and the first
+error. When it still fails, it throws with the error of the call that failed.
+In the cold cleanup a missing HOSTS file is `ABSENT`, and a failure is an
+error that sets exit code 1. The cold cleanup carries its own copy, because it
+must run standalone. `lint_shared_copies` now scans `tests\` as well as
+`tools\` and keeps the two copies identical. Two copies have no majority
+text, so when they differ the lint names both.
+
 Not changed, noted: 18b and 18e read their lists in PowerShell, and a missing
 list there prints `[SKIPPED]` / `[INFO]` without raising. The summary now
 counts those lines as gaps.

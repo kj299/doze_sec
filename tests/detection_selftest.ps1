@@ -135,6 +135,44 @@ $ioc18fExpect = '(?s)--- \[18f\] DNS Cache C2 Domain Match ---(?:(?!--- \[18g\])
 # NEW -- proving end-to-end wiring the isolated helpers test cannot cover.
 $baselineFile = Join-Path $OutDir 'baseline.snapshot'
 
+# The three HOSTS plants share one cleanup. tests\cleanup_selftest.ps1 carries
+# an identical copy (it must run standalone and cold); tools\lint_shared_copies.ps1
+# keeps the two byte-identical.
+function Remove-HostsMarkerLines {
+    # Drop every HOSTS line that holds the marker and keep every other byte as
+    # it was -- encoding, BOM and line endings. The bytes go through Latin-1,
+    # which maps each byte to one character and back unchanged, and the text is
+    # split after each LF, so nothing is decoded or re-encoded. (Get-Content /
+    # Set-Content -Encoding UTF8 rewrote the whole file and, on 5.1, added a
+    # BOM.) The file is rewritten only when a line was removed. Another process
+    # (the DNS Client, an antivirus) can hold the file for a moment, so a failed
+    # read or write is retried; a cleanup that needed more than one attempt
+    # says so, and one that still fails after the last attempt throws with the
+    # error of the call that failed. Returns the number of lines removed.
+    param([string]$Path, [string]$Marker)
+    $latin1 = [Text.Encoding]::GetEncoding(28591)
+    $rx = [regex]::Escape($Marker)
+    $first = $null
+    $last = $null
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        try {
+            $lines = [regex]::Split($latin1.GetString([IO.File]::ReadAllBytes($Path)), '(?<=\n)')
+            $kept = @($lines | Where-Object { $_ -notmatch $rx })
+            $removed = $lines.Count - $kept.Count
+            if ($removed -gt 0) { [IO.File]::WriteAllBytes($Path, $latin1.GetBytes(-join $kept)) }
+            if ($attempt -gt 1) {
+                Write-Host ("  NOTE: HOSTS cleanup needed {0} attempts (first error: {1}: {2})" -f $attempt, $first.GetType().Name, $first.Message)
+            }
+            return $removed
+        } catch {
+            $last = $_.Exception
+            if ($null -eq $first) { $first = $last }
+            if ($attempt -lt 5) { Start-Sleep -Milliseconds 400 }
+        }
+    }
+    throw ("HOSTS cleanup failed after 5 attempts (last error: {0}: {1})" -f $last.GetType().Name, $last.Message)
+}
+
 # Each case: Name, Tier, Plant/Cleanup script blocks, and Expect -- a regex that
 # must appear in the final report text for the detection to count as firing.
 #
@@ -174,16 +212,14 @@ $cases = @(
         # Add-Content joins a last line that has no newline, so add one only then.
         Plant  = { $nl = ''; $b = [IO.File]::ReadAllBytes($hostsPath); if ($b.Length -gt 0 -and $b[$b.Length - 1] -ne 10) { $nl = "`r`n" }
                    Add-Content -LiteralPath $hostsPath -Value ($nl + ("203.0.113.5 {0}.example" -f $MARK)) }
-        # Read and write with the SAME explicit encoding. The old cleanup read
-        # with Get-Content's default (the process ANSI codepage) and rewrote
-        # with -Encoding ASCII, so on a machine whose hosts file is UTF-8 with
-        # non-ASCII content -- a curated blocklist with non-English comments,
-        # a hostname note in Cyrillic or CJK -- every multi-byte sequence
-        # became mojibake and then '?'. A test harness must leave the machine
-        # as it found it; silently corrupting a system file it only borrowed is
-        # not an acceptable side effect of asserting a detection.
-        Cleanup= { $keep = Get-Content -LiteralPath $hostsPath -Encoding UTF8 | Where-Object { $_ -notmatch $MARK }
-                   Set-Content -LiteralPath $hostsPath -Value $keep -Encoding UTF8 }
+        # Remove-HostsMarkerLines (top of this file) keeps every other byte of the
+        # file as it was. An earlier cleanup read with the ANSI codepage and
+        # rewrote ASCII, turning a UTF-8 hosts file's non-ASCII comments into '?';
+        # the one after it rewrote the whole file as UTF-8 with a BOM. A test
+        # harness must leave the machine as it found it; silently re-encoding a
+        # system file it only borrowed is not an acceptable side effect of
+        # asserting a detection.
+        Cleanup= { [void](Remove-HostsMarkerLines -Path $hostsPath -Marker $MARK) }
     },
     @{
         Name   = 'Run-key backdoor (encoded PowerShell) -> flagged as suspicious'
@@ -381,8 +417,7 @@ $cases = @(
         # Add-Content joins a last line that has no newline, so add one only then.
         Plant  = { $nl = ''; $b = [IO.File]::ReadAllBytes($hostsPath); if ($b.Length -gt 0 -and $b[$b.Length - 1] -ne 10) { $nl = "`r`n" }
                    Add-Content -LiteralPath $hostsPath -Value ($nl + ("127.0.0.1 dz-selftest-evil.ngrok.io # {0}" -f $MARK)) }
-        Cleanup= { $keep = Get-Content -LiteralPath $hostsPath -Encoding UTF8 | Where-Object { $_ -notmatch $MARK }
-                   Set-Content -LiteralPath $hostsPath -Value $keep -Encoding UTF8 }
+        Cleanup= { [void](Remove-HostsMarkerLines -Path $hostsPath -Marker $MARK) }
     },
     @{
         Name   = 'DNS cache holds ngrok.com, the vendor site, not a tunnel -> NOT a Section 18f match (benign twin)'
@@ -395,8 +430,7 @@ $cases = @(
         UntestableReason = 'the ngrok.io plant did not reach 18f either (the DNS Client did not load the HOSTS lines, or 18f could not run)'
         Plant  = { $nl = ''; $b = [IO.File]::ReadAllBytes($hostsPath); if ($b.Length -gt 0 -and $b[$b.Length - 1] -ne 10) { $nl = "`r`n" }
                    Add-Content -LiteralPath $hostsPath -Value ($nl + ("127.0.0.1 dz-selftest-benign.ngrok.com # {0}_benign" -f $MARK)) }
-        Cleanup= { $keep = Get-Content -LiteralPath $hostsPath -Encoding UTF8 | Where-Object { $_ -notmatch $MARK }
-                   Set-Content -LiteralPath $hostsPath -Value $keep -Encoding UTF8 }
+        Cleanup= { [void](Remove-HostsMarkerLines -Path $hostsPath -Marker $MARK) }
     },
     @{
         Name   = 'Rogue LSA Authentication package -> flagged (T1547.002)'
