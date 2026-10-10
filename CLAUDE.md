@@ -580,8 +580,14 @@ marked helper refused (no marker: OK) or held at a question nobody could see
 -- the audit hung, and not first at the probe: `threat_list_seed` runs before
 it, so "before the first helper" had been false. The probe now reads every
 helper's Zone.Identifier against the Group Policy, the zones it treats as
-downloaded are MEASURED on a runner under both policies, and the probe and
-every helper before it run `-NonInteractive`, so a question fails at once.
+downloaded are MEASURED on a runner under both policies, and every
+PowerShell the bats start runs `-NonInteractive`, so a question fails at
+once instead of waiting where nobody sees it. The flag goes BEFORE `-File`
+or `-Command`: after `-File` PowerShell hands it to the script, which the
+helpers job measures (a `Read-Host` still waits with the flag there).
+`tools\lint_noninteractive.ps1` enforces both rules on every launch, and on
+the launch lines `ttp_merge` writes into the CTI checks Section 18 calls;
+`threat_list_seed` gives lines an earlier run wrote there the flag.
 
 **A USB stick carries the tool; it is never formatted or booted by us.**
 `tools\make_usb_stick.ps1` copies only: no Format-Volume, diskpart or bcdboot

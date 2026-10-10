@@ -960,6 +960,82 @@ jobs:
           if ($ln -match 'AUDIT NOT PERFORMED') { throw "exec_probe wrote a banner on a healthy runner: $ln" }
           Write-Host "exec_probe OK ($st, Mark of the Web verdict $vd)"
 
+      # The bats start every PowerShell with -NonInteractive, so a question
+      # fails at once instead of waiting where nobody sees it (every helper's
+      # output goes to the report, >nul, the console-log tee or a pipe).
+      # Measured here, each in its own console as a person's run would be:
+      # Read-Host without the flag waits; with it before -File it fails at
+      # once; with it AFTER -File it still waits, because PowerShell hands it
+      # to the script (the order tools\lint_noninteractive.ps1 enforces); and a
+      # cmdlet's confirmation (Remove-Item on a folder that holds a file, no
+      # -Recurse) waits without it, and with it fails at once and leaves the
+      # folder. Each refusal must carry PowerShell's NonInteractive-mode error,
+      # so a fast exit for some other reason cannot pass.
+      # Touches: a folder under RUNNER_TEMP only, removed at the end.
+      - name: "-NonInteractive: a question fails at once, the flag after -File protects nothing, a confirmation refuses rather than proceeds"
+        shell: powershell
+        timeout-minutes: 5
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $d = Join-Path $env:RUNNER_TEMP 'dz_noni'
+          $keep = Join-Path $d 'keep'
+          New-Item -ItemType Directory -Path $keep -Force | Out-Null
+          Set-Content -LiteralPath (Join-Path $keep 'child.txt') -Value 'x' -Encoding ASCII
+          # Each script records the error that ended it, so a fast exit is
+          # proven to be the refusal, not some other failure.
+          $askErr = Join-Path $d 'ask_err.txt'
+          $rmErr = Join-Path $d 'rm_err.txt'
+          $ask = Join-Path $d 'ask.ps1'
+          Set-Content -LiteralPath $ask -Value ("try {{ `$null = Read-Host 'dz question' }} catch {{ Set-Content -LiteralPath '{0}' -Value `$_.Exception.Message }}" -f $askErr) -Encoding ASCII
+          $rm = Join-Path $d 'rm.ps1'
+          Set-Content -LiteralPath $rm -Value ("try {{ Remove-Item -LiteralPath '{0}' -ErrorAction Stop }} catch {{ Set-Content -LiteralPath '{1}' -Value `$_.Exception.Message }}" -f $keep, $rmErr) -Encoding ASCII
+          function Read-Err([string]$Path) { if (Test-Path -LiteralPath $Path) { return [string](Get-Content -LiteralPath $Path -Raw) } return '' }
+          # taskkill /T writes to stderr when part of the tree is already gone,
+          # and under Stop on 5.1 a native stderr line throws: Continue here.
+          function Stop-Tree([int]$Id) {
+            $ErrorActionPreference = 'Continue'
+            $null = @(& taskkill /PID $Id /T /F 2>&1)
+            $global:LASTEXITCODE = 0
+          }
+          function Test-Waits([string]$ArgLine) {
+            # Its own console, so a question waits on real console input.
+            $p = Start-Process -FilePath 'powershell.exe' -ArgumentList $ArgLine -WindowStyle Hidden -PassThru
+            $null = $p.Handle
+            $waits = -not $p.WaitForExit(15000)
+            if ($waits) { Stop-Tree $p.Id }
+            return $waits
+          }
+          try {
+            $w1 = Test-Waits ('-NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $ask)
+            $w2 = Test-Waits ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}"' -f $ask)
+            $e2 = Read-Err $askErr
+            Remove-Item -LiteralPath $askErr -Force -EA SilentlyContinue
+            $w3 = Test-Waits ('-NoProfile -ExecutionPolicy Bypass -File "{0}" -NonInteractive' -f $ask)
+            $w4 = Test-Waits ('-NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $rm)
+            $kept4 = Test-Path -LiteralPath (Join-Path $keep 'child.txt')
+            $w5 = Test-Waits ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}"' -f $rm)
+            $e5 = Read-Err $rmErr
+            $kept5 = Test-Path -LiteralPath (Join-Path $keep 'child.txt')
+            function Say([bool]$Waited) { if ($Waited) { 'still waiting after 15 s (killed)' } else { 'ended' } }
+            Write-Host ("Read-Host, no flag: {0}" -f (Say $w1))
+            Write-Host ("Read-Host, -NonInteractive before -File: {0}; its error: {1}" -f (Say $w2), $e2.Trim())
+            Write-Host ("Read-Host, -NonInteractive after -File: {0}" -f (Say $w3))
+            Write-Host ("Remove-Item on a folder holding a file, no flag: {0}; the folder {1}" -f (Say $w4), $(if ($kept4) { 'is still there' } else { 'was REMOVED' }))
+            Write-Host ("Remove-Item on a folder holding a file, -NonInteractive: {0}; the folder {1}; its error: {2}" -f (Say $w5), $(if ($kept5) { 'is still there' } else { 'was REMOVED' }), $e5.Trim())
+            if (-not $w1) { throw 'Read-Host without -NonInteractive did not wait in its own console -- this runner cannot show a question waiting, so nothing here proves the flag matters' }
+            if ($w2) { throw 'Read-Host with -NonInteractive before -File still waited after 15 s' }
+            if ($e2 -notmatch 'NonInteractive') { throw ("Read-Host with -NonInteractive ended, but not with PowerShell's NonInteractive-mode error: '{0}'" -f $e2.Trim()) }
+            if (-not $w3) { throw 'with -NonInteractive AFTER -File, Read-Host did not wait -- then the order lint_noninteractive enforces would not matter' }
+            if (-not $w4 -or -not $kept4) { throw 'Remove-Item on a folder holding a file, without -NonInteractive, did not stop to ask -- the confirmation case below would prove nothing' }
+            if ($w5) { throw 'Remove-Item on a folder holding a file, with -NonInteractive, still waited after 15 s' }
+            if (-not $kept5) { throw 'with -NonInteractive the confirmation was answered yes: the folder was removed -- the flag would make a helper proceed where it used to ask' }
+            if ($e5 -notmatch 'NonInteractive') { throw ("Remove-Item with -NonInteractive ended, but not with PowerShell's NonInteractive-mode error: '{0}'" -f $e5.Trim()) }
+            Write-Host 'a question fails at once under -NonInteractive placed before -File, and a confirmation refuses rather than proceeds'
+          } finally {
+            Remove-Item -LiteralPath $d -Recurse -Force -EA SilentlyContinue
+          }
+          exit 0
+
       - name: driver_audit.ps1 (BYOVD by hash + unsigned catch-all; renamed cannot evade)
         shell: powershell
         run: |
@@ -2232,25 +2308,38 @@ jobs:
           }
           exit 0
 
-      - name: threat_list_seed.ps1 -SelfTest + live (a runtime IOC copy behind the release is replaced)
+      - name: threat_list_seed.ps1 -SelfTest + live (a runtime IOC copy behind the release is replaced; an old generated CTI launch gets -NonInteractive)
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           $st = (.\tools\threat_list_seed.ps1 -SelfTest) -join "`n"
           if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'threat_list_seed.ps1 -SelfTest failed' }
           $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($nst -lt 14) { throw "threat_list_seed self-test ran only $nst case(s)" }
+          if ($nst -lt 25) { throw "threat_list_seed self-test ran only $nst case(s)" }
           Write-Host "threat_list_seed -SelfTest OK ($nst cases)"
           # Live: the SHIPPED lists against a runtime copy of ioc_registry.txt that
           # lacks the BadValue column -- the exact file the field run read.
           $rt = Join-Path $env:TEMP ('dz_ci_seed_' + $PID)
           New-Item -ItemType Directory -Path $rt -Force | Out-Null
           Set-Content (Join-Path $rt 'ioc_registry.txt') -Value @('# Last verified by doze_sec: 2026-05-01 09:00:00', 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System|EnableLUA') -Encoding ASCII
+          # And the CTI checks an earlier -updateTTP wrote, before the generator
+          # added -NonInteractive: the launch line must get the flag, every other
+          # byte must stay, and the report must say so.
+          $gen = Join-Path $rt 'ttp_generated_checks.bat'
+          # A non-ASCII byte (0xE9) and an LF-only line: a text-mode rewrite
+          # would change one of them, so the check below is byte-exact.
+          $L1 = [Text.Encoding]::GetEncoding(28591)
+          $genOld = ":: --- CTI block Caf" + [char]0xE9 + " ---`r`necho Get-Date > `"%PSRUN%`"`n`"%PWSH%`" -NoProfile -ExecutionPolicy Bypass -File `"%PSRUN%`">> `"%REPORT%`" 2>&1`r`n"
+          [IO.File]::WriteAllBytes($gen, $L1.GetBytes($genOld))
           $out = (.\tools\threat_list_seed.ps1 -ShippedDir .\ThreatLists -RuntimeDir $rt) -join "`n"
           Write-Host $out
           if ($out -notmatch 'ioc_registry\.txt: runtime copy replaced by the release baseline') { throw 'the stale registry list was not replaced' }
           if (-not (Select-String -Path (Join-Path $rt 'ioc_registry.txt') -Pattern 'EnableLUA\|0' -Quiet)) { throw 'the replaced file does not carry the release BadValue column' }
           if ($out -notmatch '9 seeded, 1 replaced') { throw "expected the nine other lists seeded and one replaced: $out" }
+          if ($out -notmatch 'ttp_generated_checks\.bat: 1 PowerShell launch line\(s\) written by an earlier -updateTTP now run -NonInteractive') { throw "the old generated CTI launch was not reported as given the flag: $out" }
+          $genWant = [Convert]::ToBase64String($L1.GetBytes(($genOld -creplace '-NoProfile -ExecutionPolicy', '-NoProfile -NonInteractive -ExecutionPolicy')))
+          $genGot = [Convert]::ToBase64String([IO.File]::ReadAllBytes($gen))
+          if ($genGot -cne $genWant) { throw ("the generated CTI file changed beyond the inserted flag: {0}" -f $L1.GetString([IO.File]::ReadAllBytes($gen))) }
           Remove-Item $rt -Recurse -Force -EA SilentlyContinue
           exit 0
 

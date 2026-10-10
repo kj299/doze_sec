@@ -20,7 +20,7 @@ where powershell >nul 2>&1 || goto :_console_log_done
 set "DOZE_LOG_DIR=C:\SecurityAudit"
 for %%a in (%*) do if /i "%%~a"=="-noAdmin" set "DOZE_LOG_DIR=%USERPROFILE%\SecurityAudit"
 if not exist "%DOZE_LOG_DIR%" mkdir "%DOZE_LOG_DIR%" >nul 2>&1
-for /f "usebackq" %%t in (`powershell -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmmss"`) do set "DOZE_LOG_TS=%%t"
+for /f "usebackq" %%t in (`powershell -NoProfile -NonInteractive -Command "Get-Date -Format yyyyMMdd_HHmmss"`) do set "DOZE_LOG_TS=%%t"
 if not defined DOZE_LOG_TS set "DOZE_LOG_TS=unknown"
 set "DOZE_CONSOLE_LOG=%DOZE_LOG_DIR%\AuditConsole_%DOZE_LOG_TS%.log"
 set "DOZE_EXIT_FILE=%TEMP%\dz_rc_%DOZE_LOG_TS%_%RANDOM%.tmp"
@@ -30,7 +30,7 @@ echo  [*] Console output also being captured to: %DOZE_CONSOLE_LOG%
 :: profile folder such as C:\Users\o'neil -- or one with a typographic
 :: apostrophe, which PowerShell also treats as a quote -- would end a quoted
 :: string early and lose the whole console capture. -LiteralPath: no wildcards.
-call "%~f0" %* 2>&1 | powershell -NoProfile -ExecutionPolicy Bypass -Command "$input | Tee-Object -LiteralPath $env:DOZE_CONSOLE_LOG"
+call "%~f0" %* 2>&1 | powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$input | Tee-Object -LiteralPath $env:DOZE_CONSOLE_LOG"
 set "DOZE_EXIT_CODE=0"
 if exist "%DOZE_EXIT_FILE%" (
     set /p DOZE_EXIT_CODE=<"%DOZE_EXIT_FILE%"
@@ -538,7 +538,7 @@ if defined DOZE_LOG_TS (
     rem above. The old wmic derivation is gone: wmic does not exist on
     rem Win11 24H2+ / Server 2025, and the date/time slicing fallback was
     rem locale-dependent and mangled the filename on such systems.
-    for /f "usebackq" %%t in (`powershell -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmmss" 2^>nul`) do set "TIMESTAMP=%%t"
+    for /f "usebackq" %%t in (`powershell -NoProfile -NonInteractive -Command "Get-Date -Format yyyyMMdd_HHmmss" 2^>nul`) do set "TIMESTAMP=%%t"
     rem Last-ditch fallback: a collision-resistant name rather than garbage.
     if not defined TIMESTAMP set "TIMESTAMP=NODATE_!RANDOM!_!RANDOM!"
 )
@@ -578,6 +578,11 @@ set "PSRUN=%TEMP%\AuditPS_!TIMESTAMP!.ps1"
 set "SCRIPT_CHANGED=0"
 
 :: Locate PowerShell
+:: Every PowerShell this script starts runs -NoProfile -NonInteractive, the
+:: flag BEFORE -File or -Command (after -File PowerShell hands it to the
+:: script). Every helper's output goes to the report, nul or a pipe, so a
+:: question it asked would wait where nobody sees it; with the flag it fails
+:: at once. tools\lint_noninteractive.ps1 enforces it on every launch.
 where powershell >nul 2>&1
 if %errorlevel% equ 0 (
     set "PWSH=powershell"
@@ -751,7 +756,7 @@ rem Tier 0 truthful-reporting preamble: what a clean result does and does
 rem not mean, at-risk-user safety warnings, and where to get expert help.
 rem In a tools\*.ps1 (not echoed into PSRUN) because it is long static text.
 if exist "%SCRIPT_DIR%tools\report_safety.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\report_safety.ps1" -Mode Preamble>> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\report_safety.ps1" -Mode Preamble>> "%REPORT%" 2>&1
     echo.>> "%REPORT%"
 )
 :: What the seed step did to the runtime ThreatLists (see
@@ -804,7 +809,7 @@ echo --- [INIT 3/14] Windows and IE Version Detection --->> "%REPORT%"
 :: Primary: PowerShell Get-CimInstance -- works on all Win10/11 including
 :: 24H2+, where wmic is removed. One call emits Build|Version|ProductType.
 echo $o=Get-CimInstance Win32_OperatingSystem -EA SilentlyContinue; if($o){('{0}^|{1}^|{2}' -f $o.BuildNumber,$o.Version,$o.ProductType)} > "%PSRUN%"
-for /f "usebackq tokens=1,2,3 delims=|" %%a in (`%PWSH% -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" 2^>nul`) do (
+for /f "usebackq tokens=1,2,3 delims=|" %%a in (`%PWSH% -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%" 2^>nul`) do (
     set "OS_BUILD=%%a"
     set "OS_VER=%%b"
     set "OS_PTYPE=%%c"
@@ -894,7 +899,7 @@ echo  Command: powershell "(Get-CimInstance Win32_ComputerSystem).BootupState"  
 :: Primary: CIM (works on 24H2+ where wmic is gone); wmic fallback for older hosts.
 set "BOOTSTATE="
 echo (Get-CimInstance Win32_ComputerSystem -EA SilentlyContinue).BootupState > "%PSRUN%"
-for /f "usebackq delims=" %%a in (`%PWSH% -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" 2^>nul`) do set "BOOTSTATE=%%a"
+for /f "usebackq delims=" %%a in (`%PWSH% -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%" 2^>nul`) do set "BOOTSTATE=%%a"
 if not defined BOOTSTATE for /f "tokens=2 delims==" %%a in ('wmic computersystem get BootupState /value 2^>nul') do set "BOOTSTATE=%%a"
 echo %BOOTSTATE%| findstr /i "safe" >nul 2>&1
 if %errorlevel% equ 0 (
@@ -1017,7 +1022,7 @@ if "%NETWORK_AVAIL%"=="1" if "%VT_SELF_SKIP%"=="0" if exist "%USERPROFILE%\.vt_t
     echo --- [INIT 9/14] VT Pre-flight Integrity Check --->> "%REPORT%"
     echo  Command: powershell -File tools\vt_self_check.ps1>> "%REPORT%"
     if exist "%SCRIPT_DIR%tools\vt_self_check.ps1" (
-        "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\vt_self_check.ps1" -Binaries "%PWSH%","%SystemRoot%\System32\wbem\wmic.exe","%SystemRoot%\System32\wevtutil.exe","%SystemRoot%\System32\reg.exe" >> "%REPORT%" 2>&1
+        "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\vt_self_check.ps1" -Binaries "%PWSH%","%SystemRoot%\System32\wbem\wmic.exe","%SystemRoot%\System32\wevtutil.exe","%SystemRoot%\System32\reg.exe" >> "%REPORT%" 2>&1
         rem PS script exit codes: 0=clean, 1=MALICIOUS (HARD FAIL), 2=skipped/error.
         rem Use delayed expansion since we are inside a parenthesized block;
         rem percent-errorlevel-percent would expand at block-parse time, not runtime.
@@ -1098,8 +1103,8 @@ if %errorlevel% equ 0 (
 )
 
 echo  Fetching remote version from: %UPDATE_URL%/version.txt>> "%REPORT%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\self_update_check.ps1" -LocalVer "%SCRIPT_VERSION%" -RemoteUrl "%UPDATE_URL%/version.txt" -DownloadUrl "%UPDATE_URL%/%SCRIPT_NAME%.bat">> "%REPORT%" 2>&1
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\self_update_check.ps1" -LocalVer "%SCRIPT_VERSION%" -RemoteUrl "%UPDATE_URL%/version.txt" -DownloadUrl "%UPDATE_URL%/%SCRIPT_NAME%.bat"
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\self_update_check.ps1" -LocalVer "%SCRIPT_VERSION%" -RemoteUrl "%UPDATE_URL%/version.txt" -DownloadUrl "%UPDATE_URL%/%SCRIPT_NAME%.bat">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\self_update_check.ps1" -LocalVer "%SCRIPT_VERSION%" -RemoteUrl "%UPDATE_URL%/version.txt" -DownloadUrl "%UPDATE_URL%/%SCRIPT_NAME%.bat"
 
 :: Threat intel list update (use -sdu to skip)
 if "%SKIP_THREAT_UPDATE%"=="1" (
@@ -1115,7 +1120,7 @@ if exist "%SCRIPT_DIR%tools\threat_list_sync.ps1" (
     rem inside parens use rem -- :: comments containing ) close the block
     rem prematurely (CMD parses :: as a label inside parenthesized scopes).
     rem closes #108
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\threat_list_sync.ps1" -BaseUrl "%UPDATE_URL%/ThreatLists" -LocalDir "%OUTDIR%\ThreatLists" -StaleDays 60>> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\threat_list_sync.ps1" -BaseUrl "%UPDATE_URL%/ThreatLists" -LocalDir "%OUTDIR%\ThreatLists" -StaleDays 60>> "%REPORT%" 2>&1
 ) else (
     echo  [INFO] tools\threat_list_sync.ps1 not found -- threat list update skipped.>> "%REPORT%"
 )
@@ -1266,7 +1271,7 @@ if "%WIN_GEN%"=="Win7" (
 
 echo  Creating... (can take 30-60 seconds)
 del "%TEMP%\dz_srp_created.txt" 2>nul
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\srp_check.ps1" -Description "Pre-WIN11-Security-Audit-v%SCRIPT_VERSION%" -MarkerFile "%TEMP%\dz_srp_created.txt">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\srp_check.ps1" -Description "Pre-WIN11-Security-Audit-v%SCRIPT_VERSION%" -MarkerFile "%TEMP%\dz_srp_created.txt">> "%REPORT%" 2>&1
 
 rem Log the restore point to the changelog ONLY if one was actually created.
 rem srp_check.ps1 writes the marker only when Get-ComputerRestorePoint's max
@@ -1296,14 +1301,14 @@ echo  Determines: SSD/HDD/VM/error. Sets SKIP_DEFRAG flag accordingly.>> "%REPOR
 echo  SKIP_DEFRAG values: no=HDD, yes_ssd=SSD, yes_vm=VirtualDisk, yes_error=SmartCTL error>> "%REPORT%"
 
 :: VM detection (report) -- extracted to tools\disk_info.ps1 (no cmd escaping)
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\disk_info.ps1" -Mode VmReport>> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\disk_info.ps1" -Mode VmReport>> "%REPORT%" 2>&1
 
 :: Get a single word output to set SKIP_DEFRAG variable in cmd
-for /f "usebackq" %%a in (`%PWSH% -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\disk_info.ps1" -Mode VmFlag 2^>nul`) do set "VM_CHECK=%%a"
+for /f "usebackq" %%a in (`%PWSH% -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\disk_info.ps1" -Mode VmFlag 2^>nul`) do set "VM_CHECK=%%a"
 if /i "%VM_CHECK%"=="yes_vm" set "SKIP_DEFRAG=yes_vm"
 
 :: SSD detection
-for /f "usebackq" %%a in (`%PWSH% -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\disk_info.ps1" -Mode SsdFlag 2^>nul`) do set "SSD_CHECK=%%a"
+for /f "usebackq" %%a in (`%PWSH% -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\disk_info.ps1" -Mode SsdFlag 2^>nul`) do set "SSD_CHECK=%%a"
 if /i "%SSD_CHECK%"=="yes_ssd" set "SKIP_DEFRAG=yes_ssd"
 
 echo.>> "%REPORT%"
@@ -1314,13 +1319,13 @@ echo  no=HDD (defrag OK)  yes_ssd=SSD (skip defrag)  yes_vm=VM (skip defrag)>> "
 echo.>> "%REPORT%"
 echo --- Physical Disk Details --->> "%REPORT%"
 echo  Command: powershell -Command "Get-PhysicalDisk -EA SilentlyContinue">> "%REPORT%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\disk_info.ps1" -Mode DiskDetail>> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\disk_info.ps1" -Mode DiskDetail>> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- Free Space on System Drive Before Audit --->> "%REPORT%"
 echo  Command: tools\disk_info.ps1 -Mode FreeSpace -SystemDrive %SystemDrive%   [wmic logicaldisk fallback]>> "%REPORT%"
 :: Primary: PowerShell Get-CimInstance via tools\disk_info.ps1 (works on all Win10/11 incl. 24H2+)
-for /f "usebackq" %%a in (`%PWSH% -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\disk_info.ps1" -Mode FreeSpace -SystemDrive "%SystemDrive%" 2^>nul`) do (
+for /f "usebackq" %%a in (`%PWSH% -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\disk_info.ps1" -Mode FreeSpace -SystemDrive "%SystemDrive%" 2^>nul`) do (
     if not "%%a"=="" if not "%%a"=="0" set "FREE_BEFORE=%%a"
 )
 :: Fallback: wmic (for older systems)
@@ -1404,10 +1409,10 @@ echo --- WMI Disk Health (smartctl not found - WMI fallback) --->> "%REPORT%"
 echo  Command: powershell -Command "Get-CimInstance Win32_DiskDrive -EA SilentlyContinue">> "%REPORT%"
 echo For full SMART attribute data install smartmontools.>> "%REPORT%"
 echo.>> "%REPORT%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\smart_health.ps1" -Mode Report>> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\smart_health.ps1" -Mode Report>> "%REPORT%" 2>&1
 
 :: Capture WMI health status for SMART_WARN flag
-for /f "usebackq" %%a in (`%PWSH% -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\smart_health.ps1" -Mode Flag 2^>nul`) do set "WMI_HEALTH=%%a"
+for /f "usebackq" %%a in (`%PWSH% -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\smart_health.ps1" -Mode Flag 2^>nul`) do set "WMI_HEALTH=%%a"
 if /i "%WMI_HEALTH%"=="warn" set "SMART_WARN=1"
 goto :eof
 
@@ -1465,7 +1470,7 @@ echo.>> "%REPORT%"
 echo --- Last 20 Hotfixes (newest first) --->> "%REPORT%"
 echo  Command: powershell -Command "Get-HotFix">> "%REPORT%"
 echo Get-HotFix ^| Sort-Object InstalledOn -Descending -EA SilentlyContinue ^| Select-Object -First 20 HotFixID,InstalledOn,Description ^| Format-Table -AutoSize > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- Pending Reboot Check (what is queued, and whether the flag predates the last boot) --->> "%REPORT%"
@@ -1480,7 +1485,7 @@ del "%TEMP%\dz_reboot.txt" 2>nul
 del "%TEMP%\dz_reboot_gap.txt" 2>nul
 del "%TEMP%\dz_reboot_state.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\pending_reboot_check.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\pending_reboot_check.ps1">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\pending_reboot_check.ps1">> "%REPORT%" 2>&1
 ) else (
     echo  [WARNING] tools\pending_reboot_check.ps1 not found -- pending-reboot check NOT performed.>> "%REPORT%"
     call :dz_finding WARNING 1 REBOOT "Pending-reboot check NOT performed - tool missing"
@@ -1516,7 +1521,7 @@ echo.>> "%REPORT%"
 echo --- Windows Update Last Run --->> "%REPORT%"
 echo  Command: powershell -Command "try{$r=(New-Object -ComObject Microsoft.Update.AutoUpdate).Results; $r | Select-Object LastSearchSuccessDate,LastInstallationSuccessDate | Format-List}catch{'WU COM object unavailable.'}">> "%REPORT%"
 echo try{$r=(New-Object -ComObject Microsoft.Update.AutoUpdate).Results; $r ^| Select-Object LastSearchSuccessDate,LastInstallationSuccessDate ^| Format-List}catch{'WU COM object unavailable.'} > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 echo.>> "%REPORT%"
 
 :: ====================================================================
@@ -1554,7 +1559,7 @@ echo.>> "%REPORT%"
 echo --- Detailed Account Info: LastLogon, PasswordLastSet, SID --->> "%REPORT%"
 echo  Command: powershell -Command "Get-LocalUser">> "%REPORT%"
 echo Get-LocalUser ^| Select-Object Name,Enabled,LastLogon,PasswordLastSet,PasswordExpires,SID ^| Format-Table -AutoSize > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- Local Administrators Group --->> "%REPORT%"
@@ -1572,7 +1577,7 @@ echo  Command: net user guest>> "%REPORT%"
 net user guest>> "%REPORT%" 2>&1
 del "%TEMP%\dz_guest_hit.txt" 2>nul
 echo $g=Get-CimInstance Win32_UserAccount -Filter "LocalAccount=True" -EA SilentlyContinue ^| Where-Object {$_.SID -like '*-501'};if($g -and -not $g.Disabled){'[WARNING] Guest account (SID -501) is ENABLED -- disable it: net user guest /active:no';Set-Content -LiteralPath "$env:TEMP\dz_guest_hit.txt" -Value hit}else{'[OK] Guest account is disabled or absent.'} > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_guest_hit.txt" (
     call :dz_finding WARNING 2 T1078.001 "Guest account SID -501 is ENABLED"
     del "%TEMP%\dz_guest_hit.txt" 2>nul
@@ -1587,7 +1592,7 @@ echo.>> "%REPORT%"
 echo --- All Account SIDs --->> "%REPORT%"
 echo  Command: powershell -Command "Get-CimInstance Win32_UserAccount -EA SilentlyContinue">> "%REPORT%"
 echo Get-CimInstance Win32_UserAccount -EA SilentlyContinue ^| Select-Object Name,SID,Disabled,PasswordExpires,PasswordChangeable ^| Format-List > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 echo.>> "%REPORT%"
 
 :: ====================================================================
@@ -1664,7 +1669,7 @@ type "%WINDIR%\System32\drivers\etc\hosts">> "%REPORT%" 2>&1
 del "%TEMP%\dz_hosts.txt" 2>nul
 del "%TEMP%\dz_hosts_gap.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\hosts_check.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\hosts_check.ps1">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\hosts_check.ps1">> "%REPORT%" 2>&1
 ) else (
     echo  [INFO] tools\hosts_check.ps1 not found -- HOSTS grading skipped.>> "%REPORT%"
 )
@@ -1687,7 +1692,7 @@ echo --- DNS Integrity Probe (active resolution of legitimate update/security do
 if "%DNS_PROBE%"=="1" (
     echo %C_GREEN%[3/18]%C_RESET% DNS integrity probe via -dnsprobe...
     del "%TEMP%\dz_dnsprobe_warn.txt" 2>nul
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\dns_probe.ps1">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\dns_probe.ps1">> "%REPORT%" 2>&1
     rem The marker carries a VALUE: blackhole (some domains resolved, some did
     rem not, or only to a non-public address) or unverified (NOTHING resolved:
     rem offline or resolver down). An offline laptop used to raise nine
@@ -1711,10 +1716,10 @@ echo --- Proxy Settings --->> "%REPORT%"
 echo  Command: powershell -Command "Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -EA SilentlyContinue">> "%REPORT%"
 echo $p=Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -EA SilentlyContinue > "%PSRUN%"
 echo if($p){$pe=if($p.ProxyEnable){'1 [ENABLED]'}else{'0 [DISABLED]'};Write-Output "ProxyEnable : $pe";if($p.ProxyServer){Write-Output "ProxyServer : $($p.ProxyServer)"}else{Write-Output 'ProxyServer : [OK] Not configured'};if($p.AutoConfigURL){Write-Output "AutoConfigURL: $($p.AutoConfigURL)"}else{Write-Output 'AutoConfigURL: [OK] Not configured'}}else{Write-Output '[OK] No proxy settings in registry'} >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 echo $p=(Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -EA SilentlyContinue).ProxyServer > "%PSRUN%"
 echo if($p){Write-Output ('HKLM ProxyServer: '+$p)}else{Write-Output 'HKLM ProxyServer: [OK] Not configured'} >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- Saved WiFi Profiles --->> "%REPORT%"
@@ -1757,13 +1762,13 @@ rem The previous version called Get-CimInstance once PER process to resolve the
 rem parent PID (N+1 WMI round-trips) -- on a host with hundreds of processes
 rem that took minutes and looked like a hang. (perf fix)
 echo Get-CimInstance Win32_Process -EA SilentlyContinue ^| Select-Object @{N='Id';E={$_.ProcessId}},@{N='PPID';E={$_.ParentProcessId}},Name,@{N='Path';E={$_.ExecutablePath}} ^| Sort-Object Name ^| Format-Table -AutoSize > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- Full Command Lines --->> "%REPORT%"
 echo  Command: powershell -Command "Get-CimInstance Win32_Process -EA SilentlyContinue">> "%REPORT%"
 echo Get-CimInstance Win32_Process -EA SilentlyContinue ^| Select-Object Name,ProcessId,ParentProcessId,ExecutablePath,CommandLine ^| Format-List > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- Running-process enumeration for the checks below --->> "%REPORT%"
@@ -1776,7 +1781,7 @@ echo --- Running-process enumeration for the checks below --->> "%REPORT%"
 :: (Electron apps, the self-tee powershell line) blow past that. The three
 :: checks below match process NAMES and PATH fragments, not args. Command-
 :: line abuse patterns are handled in Section 18g via select_lines.ps1.
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object { $_.Name+'  '+$_.ProcessId+'  '+$_.ExecutablePath }" > "%TEMP%\dz_proc4.tmp" 2>nul
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object { $_.Name+'  '+$_.ProcessId+'  '+$_.ExecutablePath }" > "%TEMP%\dz_proc4.tmp" 2>nul
 set "_ENUM4="
 for %%z in ("%TEMP%\dz_proc4.tmp") do if %%~zz GTR 100 set "_ENUM4=1"
 
@@ -1791,7 +1796,7 @@ echo  Command: Get-CimInstance Win32_Process ^| select_lines.ps1 \Temp\ \AppData
 :: not close the argument and the patterns fuse into one garbage string that
 :: never matches -- a silent false-negative for this whole check.
 if not defined _ENUM4 goto :sec4_susp_skip
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_proc4.tmp" "\Temp\\" "\AppData\\" "\Downloads\\" "\Recycle" "\Users\Public">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_proc4.tmp" "\Temp\\" "\AppData\\" "\Downloads\\" "\Recycle" "\Users\Public">> "%REPORT%" 2>&1
 if errorlevel 2 (
     echo [SKIPPED] select_lines.ps1 helper error -- suspicious-path check NOT performed.>> "%REPORT%"
 ) else if errorlevel 1 (
@@ -1810,7 +1815,7 @@ if errorlevel 2 (
     rem installer finished between the two enumerations. One measurement now.
     del "%TEMP%\dz_proc4_hit.txt" 2>nul
     del "%TEMP%\dz_proc4_state.txt" 2>nul
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\proc_path_grade.ps1" -Path "%TEMP%\dz_proc4.tmp" -MarkerFile "%TEMP%\dz_proc4_hit.txt" -StateFile "%TEMP%\dz_proc4_state.txt">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\proc_path_grade.ps1" -Path "%TEMP%\dz_proc4.tmp" -MarkerFile "%TEMP%\dz_proc4_hit.txt" -StateFile "%TEMP%\dz_proc4_state.txt">> "%REPORT%" 2>&1
     if exist "%TEMP%\dz_proc4_hit.txt" (
         call :dz_finding WARNING 4 T1057 "Suspicious process paths found"
         del "%TEMP%\dz_proc4_hit.txt" 2>nul
@@ -1845,7 +1850,7 @@ echo.>> "%REPORT%"
 echo --- LOLBin Processes (mshta, certutil, regsvr32, cmstp, wscript) [T1218.005 mshta, T1218.010 regsvr32] --->> "%REPORT%"
 echo  Command: Get-CimInstance Win32_Process ^| select_lines.ps1 mshta regsvr32 certutil ...>> "%REPORT%"
 if not defined _ENUM4 goto :sec4_lol_skip
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_proc4.tmp" "mshta" "regsvr32" "certutil" "cmstp" "wscript" "cscript" "msiexec" "installutil">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_proc4.tmp" "mshta" "regsvr32" "certutil" "cmstp" "wscript" "cscript" "msiexec" "installutil">> "%REPORT%" 2>&1
 if errorlevel 2 (
     echo [SKIPPED] select_lines.ps1 helper error -- LOLBin process check NOT performed.>> "%REPORT%"
 ) else if errorlevel 1 echo [OK] No LOLBin processes currently running.>> "%REPORT%"
@@ -1858,7 +1863,7 @@ echo.>> "%REPORT%"
 echo --- Remote Monitoring and Management Tools (DPRK/Iran C2 vector) [T1219] --->> "%REPORT%"
 echo  Command: Get-CimInstance Win32_Process ^| select_lines.ps1 ScreenConnect AnyDesk TeamViewer ...>> "%REPORT%"
 if not defined _ENUM4 goto :sec4_rmm_skip
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_proc4.tmp" "ScreenConnect" "AnyDesk" "TeamViewer" "Ammyy" "RustDesk" "Splashtop" "Atera" "Kaseya" "ConnectWise">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_proc4.tmp" "ScreenConnect" "AnyDesk" "TeamViewer" "Ammyy" "RustDesk" "Splashtop" "Atera" "Kaseya" "ConnectWise">> "%REPORT%" 2>&1
 if errorlevel 2 (
     echo [SKIPPED] select_lines.ps1 helper error -- RMM tool check NOT performed.>> "%REPORT%"
 ) else if errorlevel 1 echo [OK] No common RMM tools running.>> "%REPORT%"
@@ -1874,7 +1879,7 @@ echo  the other Windows names run only from fixed directories, so a familiar nam
 echo  AppData, ProgramData, Temp or a vendor folder is an impostor by path alone.>> "%REPORT%"
 if not defined _ENUM4 goto :sec4_masq_skip
 del "%TEMP%\dz_masq.txt" 2>nul
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\masquerade_check.ps1" -Path "%TEMP%\dz_proc4.tmp" -MarkerFile "%TEMP%\dz_masq.txt">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\masquerade_check.ps1" -Path "%TEMP%\dz_proc4.tmp" -MarkerFile "%TEMP%\dz_masq.txt">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_masq.txt" (
     call :dz_finding WARNING 4 T1036 "System-process name running outside its canonical directory"
     del "%TEMP%\dz_masq.txt" 2>nul
@@ -1901,12 +1906,12 @@ rem in module_inspect below and for Section 12, which prints and raises it.
 rem The state file lives until Section 12 reads it; do not delete it here.
 del "%TEMP%\dz_lsa_state.txt" 2>nul
 del "%TEMP%\dz_lsa_lines.txt" 2>nul
-if exist "%SCRIPT_DIR%tools\lsa_protection_check.ps1" "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\lsa_protection_check.ps1" -Mode Measure>> "%REPORT%" 2>&1
+if exist "%SCRIPT_DIR%tools\lsa_protection_check.ps1" "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\lsa_protection_check.ps1" -Mode Measure>> "%REPORT%" 2>&1
 del "%TEMP%\dz_module.txt" 2>nul
 del "%TEMP%\dz_module_gap.txt" 2>nul
 del "%TEMP%\dz_module_deferred.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\module_inspect.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\module_inspect.ps1">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\module_inspect.ps1">> "%REPORT%" 2>&1
 ) else (
     echo  [INFO] tools\module_inspect.ps1 not found -- loaded-module inspection skipped.>> "%REPORT%"
 )
@@ -1980,7 +1985,7 @@ echo  Evaluates the raw autorun dumps above: flags encoded/hidden-window/>> "%RE
 echo  LOLBin-download autoruns and any IFEO Debugger hijack.>> "%REPORT%"
 del "%TEMP%\dz_persist_hit.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\persistence_eval.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\persistence_eval.ps1" -MarkerFile "%TEMP%\dz_persist_hit.txt">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\persistence_eval.ps1" -MarkerFile "%TEMP%\dz_persist_hit.txt">> "%REPORT%" 2>&1
 ) else (
     echo  [INFO] tools\persistence_eval.ps1 not found -- autorun/IFEO evaluation skipped.>> "%REPORT%"
 )
@@ -1998,7 +2003,7 @@ del "%TEMP%\dz_startup_folder_gap.txt" 2>nul
 del "%TEMP%\dz_appcert.txt" 2>nul
 del "%TEMP%\dz_appcert_gap.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\startup_eval.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\startup_eval.ps1">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\startup_eval.ps1">> "%REPORT%" 2>&1
 ) else (
     echo  [INFO] tools\startup_eval.ps1 not found -- Startup/AppCert evaluation skipped.>> "%REPORT%"
 )
@@ -2047,7 +2052,7 @@ del "%TEMP%\dz_psprofile.txt" 2>nul
 del "%TEMP%\dz_timeprov.txt" 2>nul
 del "%TEMP%\dz_timeprov_gap.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\persistence_extra.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\persistence_extra.ps1">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\persistence_extra.ps1">> "%REPORT%" 2>&1
 ) else (
     echo  [INFO] tools\persistence_extra.ps1 not found -- long-tail persistence evaluation skipped.>> "%REPORT%"
 )
@@ -2135,7 +2140,7 @@ del "%TEMP%\dz_logon_lsa.txt" 2>nul
 del "%TEMP%\dz_logon_scr.txt" 2>nul
 del "%TEMP%\dz_logon_logonscript.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\logon_persistence.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\logon_persistence.ps1">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\logon_persistence.ps1">> "%REPORT%" 2>&1
 ) else (
     echo  [INFO] tools\logon_persistence.ps1 not found -- logon/unlock checks skipped.>> "%REPORT%"
 )
@@ -2194,7 +2199,7 @@ echo     } >> "%PSRUN%"
 echo   } >> "%PSRUN%"
 echo } >> "%PSRUN%"
 echo if ($hits.Count -gt 0) { '[INFO] Run/RunOnce entries in loaded hives:'; $hits } else { '[OK] No Run/RunOnce entries in other loaded hives.' } >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- Startup Folders --->> "%REPORT%"
@@ -2226,7 +2231,7 @@ echo if($ui -and ($ui.Trim().TrimEnd(',') -ine (Join-Path $env:SystemRoot 'syste
 echo if($sh -and ($sh.Trim() -ine 'explorer.exe')){'[CRITICAL] Winlogon Shell MODIFIED (T1547.004): '+$sh;Set-Content -LiteralPath "$env:TEMP\dz_winlogon_hit.txt" -Value hit}elseif($sh){'[OK] Winlogon Shell is the default explorer.exe.'}else{'[SKIPPED] Winlogon Shell not readable.'} >> "%PSRUN%"
 echo $ai=@();foreach($k in 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows','HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows NT\CurrentVersion\Windows'){$v=(Get-ItemProperty $k -Name AppInit_DLLs -EA SilentlyContinue).AppInit_DLLs;if($v -and $v.Trim()){$ai+=$v.Trim()}} >> "%PSRUN%"
 echo if($ai.Count -gt 0){'[CRITICAL] AppInit_DLLs is set (T1546.010) -- DLL loaded into every GUI process: '+($ai -join '; ');Set-Content -LiteralPath "$env:TEMP\dz_appinit_hit.txt" -Value hit}else{'[OK] AppInit_DLLs empty.'} >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_winlogon_hit.txt" (
     call :dz_finding CRITICAL 5 T1547.004 "Winlogon Userinit or Shell modified"
     del "%TEMP%\dz_winlogon_hit.txt" 2>nul
@@ -2278,7 +2283,7 @@ echo ====================================================================>> "%RE
 echo --- Full Task Listing --->> "%REPORT%"
 echo  Command: powershell -File tools\scheduled_tasks_full.ps1>> "%REPORT%"
 if exist "%SCRIPT_DIR%tools\scheduled_tasks_full.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\scheduled_tasks_full.ps1">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\scheduled_tasks_full.ps1">> "%REPORT%" 2>&1
 ) else (
     schtasks /query /fo LIST /v>> "%REPORT%" 2>&1
 )
@@ -2289,7 +2294,7 @@ echo  Command: powershell -File tools\scheduled_tasks_full.ps1 -Mode Suspicious>
 rem Clear any stale dashboard marker so the live summary reflects THIS run.
 del "%TEMP%\dz_susptask_crit.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\scheduled_tasks_full.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\scheduled_tasks_full.ps1" -Mode Suspicious>> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\scheduled_tasks_full.ps1" -Mode Suspicious>> "%REPORT%" 2>&1
 ) else (
     echo  [INFO] Helper missing; falling back to truncated schtasks CSV scan.>> "%REPORT%"
     schtasks /query /fo CSV /v 2>nul | findstr /i /c:"\Temp" /c:"\AppData" /c:"\Downloads" /c:"\Users\Public" /c:"\ProgramData\update">> "%REPORT%" 2>&1
@@ -2307,7 +2312,7 @@ echo.>> "%REPORT%"
 echo --- Tasks Running as SYSTEM --->> "%REPORT%"
 echo  Command: powershell -File tools\scheduled_tasks_full.ps1 -Mode System>> "%REPORT%"
 if exist "%SCRIPT_DIR%tools\scheduled_tasks_full.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\scheduled_tasks_full.ps1" -Mode System>> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\scheduled_tasks_full.ps1" -Mode System>> "%REPORT%" 2>&1
 ) else (
     schtasks /query /fo CSV /v 2>nul | findstr /i /c:"SYSTEM">> "%REPORT%" 2>&1
 )
@@ -2348,11 +2353,11 @@ echo  the prior path-substring allowlist that was bypassed by installing>> "%REP
 echo  to "C:\Program Files\anything\".>> "%REPORT%"
 del "%TEMP%\dz_svcgate_hit.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\service_signature_check.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\service_signature_check.ps1" -MarkerFile "%TEMP%\dz_svcgate_hit.txt">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\service_signature_check.ps1" -MarkerFile "%TEMP%\dz_svcgate_hit.txt">> "%REPORT%" 2>&1
 ) else (
     echo  [INFO] tools\service_signature_check.ps1 not found -- service signature gating skipped.>> "%REPORT%"
     echo Get-CimInstance Win32_Service ^| Where-Object {$_.PathName -and $_.PathName -notmatch 'system32^|SysWOW64^|Program Files^|MpKsl^|Windows Defender^|SecurityHealth^|MsMpEng'} ^| Select-Object Name,State,StartMode,PathName ^| Format-Table -AutoSize -Wrap > "%PSRUN%"
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 )
 if exist "%TEMP%\dz_svcgate_hit.txt" (
     call :dz_finding WARNING 7 T1543.003 "Service failed Authenticode gating"
@@ -2363,7 +2368,7 @@ echo.>> "%REPORT%"
 echo --- Unquoted Service Paths with Spaces --->> "%REPORT%"
 echo  Command: powershell -Command "Get-CimInstance Win32_Service">> "%REPORT%"
 echo $ok=$true; try{$v=Get-CimInstance Win32_Service -EA Stop ^| Where-Object {$_.PathName -and $_.PathName -notmatch '^\x22' -and $_.PathName -match ' ' -and $_.PathName -notmatch '^^[A-Za-z]:\\Windows\\'}}catch{$ok=$false}; if(-not $ok){'[SKIPPED] Get-CimInstance Win32_Service failed -- unquoted-path check NOT performed.'}elseif($v){$v ^| Select-Object Name,StartMode,PathName ^| Format-Table -AutoSize -Wrap}else{'[OK] No unquoted service paths found.'} > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- All Services State --->> "%REPORT%"
@@ -2434,7 +2439,7 @@ echo --- Firewall Profile State (evaluated) --->> "%REPORT%"
 echo  Command: powershell -Command "Get-NetFirewallProfile">> "%REPORT%"
 del "%TEMP%\dz_fw_hit.txt" 2>nul
 echo $fwp=@(Get-NetFirewallProfile -EA SilentlyContinue);$off=@($fwp^|Where-Object{"$($_.Enabled)" -ne 'True'});if($fwp.Count -eq 0){'[SKIPPED] Get-NetFirewallProfile unavailable -- firewall state NOT evaluated.'}elseif($off.Count -eq 0){'[OK] All firewall profiles enabled - Domain, Private, Public.'}else{'[CRITICAL] Firewall DISABLED on '+$off.Count+' profile(s): '+($off.Name -join ', ')+' (T1562.004)';Set-Content -LiteralPath "$env:TEMP\dz_fw_hit.txt" -Value hit} > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_fw_hit.txt" (
     call :dz_finding CRITICAL 8 T1562.004 "Windows Firewall disabled on one or more profiles"
     del "%TEMP%\dz_fw_hit.txt" 2>nul
@@ -2483,13 +2488,13 @@ goto :sec9_verdict
 echo --- Defender Core Status --->> "%REPORT%"
 echo  Command: powershell -Command "Get-MpComputerStatus">> "%REPORT%"
 echo Get-MpComputerStatus ^| Select-Object AMServiceEnabled,AntispywareEnabled,AntivirusEnabled,RealTimeProtectionEnabled,IoavProtectionEnabled,NISEnabled,OnAccessProtectionEnabled,IsTamperProtected,AMEngineVersion,AntivirusSignatureLastUpdated ^| Format-List > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- Defender Disabled Flags --->> "%REPORT%"
 echo  Command: powershell -Command "Get-MpPreference">> "%REPORT%"
 echo Get-MpPreference ^| Select-Object DisableRealtimeMonitoring,DisableBehaviorMonitoring,DisableIOAVProtection,DisableScriptScanning,DisableBlockAtFirstSeen,MAPSReporting ^| Format-List > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 echo.>> "%REPORT%"
 echo.>> "%REPORT%"
 echo --- Endpoint Telemetry: what is installed, and is it running? --->> "%REPORT%"
@@ -2500,7 +2505,7 @@ echo  protect this PC and that protection is not running now. Absence of EDR is>
 echo  reported as context, not as a fault: most home machines have none.>> "%REPORT%"
 del "%TEMP%\dz_edr.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\edr_presence.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\edr_presence.ps1">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\edr_presence.ps1">> "%REPORT%" 2>&1
 ) else (
     echo  [INFO] tools\edr_presence.ps1 not found -- endpoint telemetry check skipped.>> "%REPORT%"
 )
@@ -2521,7 +2526,7 @@ echo  Command: powershell -File tools\defender_core_check.ps1   [evaluates Get-M
 del "%TEMP%\dz_defcore.txt" 2>nul
 del "%TEMP%\dz_defcore_state.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\defender_core_check.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\defender_core_check.ps1">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\defender_core_check.ps1">> "%REPORT%" 2>&1
 ) else (
     echo  [WARNING] tools\defender_core_check.ps1 not found -- Defender core status NOT evaluated.>> "%REPORT%"
     call :dz_finding WARNING 9 T1562.001 "Defender core status not evaluated - tools\defender_core_check.ps1 missing"
@@ -2565,7 +2570,7 @@ echo  Command: powershell -File tools\defender_exclusions_check.ps1   [evaluates
 del "%TEMP%\dz_defexcl.txt" 2>nul
 del "%TEMP%\dz_defexcl_state.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\defender_exclusions_check.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\defender_exclusions_check.ps1">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\defender_exclusions_check.ps1">> "%REPORT%" 2>&1
 ) else (
     echo  [WARNING] tools\defender_exclusions_check.ps1 not found -- Defender exclusions NOT evaluated.>> "%REPORT%"
     call :dz_finding WARNING 9 T1562.001 "Defender exclusions not evaluated - tools\defender_exclusions_check.ps1 missing"
@@ -2667,7 +2672,7 @@ echo.>> "%REPORT%"
 echo --- Defender Threat Detection History --->> "%REPORT%"
 echo  Command: powershell -Command "Get-MpThreatDetection">> "%REPORT%"
 echo Get-MpThreatDetection ^| Select-Object ActionSuccess,InitialDetectionTime,ThreatID,DomainUser,ProcessName ^| Format-Table -AutoSize > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 echo.>> "%REPORT%"
 
 :: ====================================================================
@@ -2703,7 +2708,7 @@ echo --- SMBv1 Status (MUST be Disabled) --->> "%REPORT%"
 echo  Command: powershell -Command "Get-WindowsOptionalFeature -Online -FeatureName SMB1Protocol">> "%REPORT%"
 if "%IS_ADMIN%"=="0" goto :sec10_smb1_noadmin
 echo try{Get-WindowsOptionalFeature -Online -FeatureName SMB1Protocol ^| Select-Object FeatureName,State ^| Format-List}catch{'Unable to query SMBv1 state.'} > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 goto :sec10_smb1_done
 :sec10_smb1_noadmin
 echo  [DEFERRED - ADMIN REQUIRED] Get-WindowsOptionalFeature requires admin.>> "%REPORT%"
@@ -2715,7 +2720,7 @@ echo --- SMB Server Security Config --->> "%REPORT%"
 echo  Command: powershell -Command "Get-SmbServerConfiguration">> "%REPORT%"
 if "%IS_ADMIN%"=="0" goto :sec10_smbcfg_noadmin
 echo Get-SmbServerConfiguration ^| Select-Object EnableSMB1Protocol,EnableSMB2Protocol,RequireSecuritySignature,RejectUnencryptedAccess,EnableSecuritySignature ^| Format-List > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 goto :sec10_smbcfg_done
 :sec10_smbcfg_noadmin
 echo  [DEFERRED - ADMIN REQUIRED] Get-SmbServerConfiguration requires admin.>> "%REPORT%"
@@ -2752,7 +2757,7 @@ del "%TEMP%\dz_winrm_hit.txt" 2>nul
 echo $s1=(Get-SmbServerConfiguration -EA SilentlyContinue).EnableSMB1Protocol;if($s1 -eq $true){'[CRITICAL] SMBv1 ENABLED (EternalBlue CVE-2017-0144)';Set-Content -LiteralPath "$env:TEMP\dz_smb1_hit.txt" -Value hit}elseif($s1 -eq $false){'[OK] SMBv1 disabled.'}else{'[SKIPPED] SMBv1 state unavailable.'} > "%PSRUN%"
 echo $rdp=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -EA SilentlyContinue).fDenyTSConnections;if($rdp -eq 1){'[OK] RDP disabled.'}else{$nla=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -EA SilentlyContinue).UserAuthentication;if($nla -eq 1){'[OK] RDP enabled with NLA.'}else{'[WARNING] RDP enabled WITHOUT NLA';Set-Content -LiteralPath "$env:TEMP\dz_rdpnla_hit.txt" -Value hit}} >> "%PSRUN%"
 echo $wmr=Get-Service WinRM -EA SilentlyContinue;if($wmr -and $wmr.Status -eq 'Running'){'[WARNING] WinRM RUNNING (remote PowerShell enabled)';Set-Content -LiteralPath "$env:TEMP\dz_winrm_hit.txt" -Value hit}else{'[OK] WinRM not running.'} >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_smb1_hit.txt" (
     call :dz_finding CRITICAL 10 T1210 "SMBv1 enabled - EternalBlue exposure"
     del "%TEMP%\dz_smb1_hit.txt" 2>nul
@@ -2778,7 +2783,7 @@ echo  monitoring products. Often signed, legitimate software used abusively -->>
 echo  which is exactly why the rest of the audit walks past it.>> "%REPORT%"
 del "%TEMP%\dz_stalkerware.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\stalkerware_check.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\stalkerware_check.ps1">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\stalkerware_check.ps1">> "%REPORT%" 2>&1
 ) else (
     echo  [INFO] tools\stalkerware_check.ps1 not found -- covert-monitoring check skipped.>> "%REPORT%"
 )
@@ -2818,13 +2823,13 @@ echo ====================================================================>> "%RE
 echo --- Execution Policy All Scopes --->> "%REPORT%"
 echo  Command: powershell -Command "Get-ExecutionPolicy -List | Format-Table -AutoSize">> "%REPORT%"
 echo Get-ExecutionPolicy -List ^| Format-Table -AutoSize > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- PowerShell Version Table --->> "%REPORT%"
 echo  Command: powershell -Command "$PSVersionTable | Format-Table -AutoSize">> "%REPORT%"
 echo $PSVersionTable ^| Format-Table -AutoSize > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- PSv2 Engine Status (MUST be Disabled) --->> "%REPORT%"
@@ -2832,7 +2837,7 @@ echo  Command: tools\psv2_check.ps1   [tries: powershell -Version 2, DISM, CIM, 
 del "%TEMP%\dz_psv2_hit.txt" 2>nul
 del "%TEMP%\dz_psv2_state.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\psv2_check.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\psv2_check.ps1" -MarkerFile "%TEMP%\dz_psv2_hit.txt" -StateFile "%TEMP%\dz_psv2_state.txt">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\psv2_check.ps1" -MarkerFile "%TEMP%\dz_psv2_hit.txt" -StateFile "%TEMP%\dz_psv2_state.txt">> "%REPORT%" 2>&1
 ) else (
     echo [SKIPPED] tools\psv2_check.ps1 missing -- PSv2 engine state NOT determined.>> "%REPORT%"
 )
@@ -2852,7 +2857,7 @@ echo $tr=(Get-ItemProperty "$base\Transcription" -Name EnableTranscripting -EA S
 echo if($sbl -eq 1){'ScriptBlockLogging  : [OK] ENABLED (GPO)'}else{'[WARNING] PS Script Block Logging NOT enabled -- PowerShell commands are not recorded to Event 4104 (T1562.002)';Set-Content -LiteralPath "$env:TEMP\dz_sbl_hit.txt" -Value hit} >> "%PSRUN%"
 echo if($ml  -eq 1){'ModuleLogging       : [OK] ENABLED (GPO)'}else{'ModuleLogging       : [OK] Not configured (optional)'} >> "%PSRUN%"
 echo if($tr  -eq 1){'Transcription       : [OK] ENABLED (GPO)'}else{'Transcription       : [OK] Not configured (optional)'} >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_sbl_hit.txt" (
     call :dz_finding WARNING 11 T1562.002 "PowerShell Script Block Logging not enabled"
     del "%TEMP%\dz_sbl_hit.txt" 2>nul
@@ -2864,7 +2869,7 @@ echo  Command: powershell -Command "Get-Content '%APPDATA:'=''%\Microsoft\Window
 if not exist "%APPDATA%\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt" goto :pshistnone
 echo [FOUND] PS history file. Last 50 commands:>> "%REPORT%"
 echo Get-Content -LiteralPath (Join-Path $env:APPDATA 'Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt') -EA SilentlyContinue ^| Select-Object -Last 50 > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 goto :pshistdone
 :pshistnone
 echo [INFO] No PS history file found.>> "%REPORT%"
@@ -2951,13 +2956,13 @@ del "%TEMP%\dz_ntlm_hit.txt" 2>nul
 echo $lsa='HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' > "%PSRUN%"
 echo $wd=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' -Name UseLogonCredential -EA SilentlyContinue).UseLogonCredential;if($wd -eq 1){'[CRITICAL] WDigest ENABLED -- plaintext passwords cached in RAM (T1003.001)';Set-Content -LiteralPath "$env:TEMP\dz_wdigest_hit.txt" -Value hit}else{'[OK] WDigest not caching plaintext credentials.'} >> "%PSRUN%"
 echo $nl=(Get-ItemProperty $lsa -Name LmCompatibilityLevel -EA SilentlyContinue).LmCompatibilityLevel;if($nl -eq $null){'[OK] LmCompatibilityLevel not set (modern Windows defaults to NTLMv2-only behaviour).'}elseif($nl -ge 3){'[OK] NTLM level '+$nl+' (NTLMv2).'}else{'[WARNING] NTLMv1/LM permitted (LmCompatibilityLevel='+$nl+') -- downgrade/relay exposure';Set-Content -LiteralPath "$env:TEMP\dz_ntlm_hit.txt" -Value hit} >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_wdigest_hit.txt" (
     call :dz_finding CRITICAL 12 T1003.001 "WDigest enabled - plaintext credentials cached in RAM"
     del "%TEMP%\dz_wdigest_hit.txt" 2>nul
 )
 if exist "%SCRIPT_DIR%tools\lsa_protection_check.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\lsa_protection_check.ps1" -Mode Report>> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\lsa_protection_check.ps1" -Mode Report>> "%REPORT%" 2>&1
 ) else (
     echo  [WARNING] tools\lsa_protection_check.ps1 not found -- LSA Protection NOT evaluated.>> "%REPORT%"
     call :dz_finding WARNING 12 T1003.001 "LSA Protection not evaluated - tools\lsa_protection_check.ps1 missing"
@@ -3070,7 +3075,7 @@ echo --- BitLocker --->> "%REPORT%"
 echo  Command: powershell -Command "Get-BitLockerVolume">> "%REPORT%"
 if "%IS_ADMIN%"=="0" goto :sec13_bitlocker_noadmin
 echo try{Get-BitLockerVolume ^| Select-Object MountPoint,EncryptionMethod,VolumeStatus,ProtectionStatus ^| Format-Table -AutoSize}catch{'BitLocker cmdlet unavailable on this edition.'} > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 manage-bde -status>> "%REPORT%" 2>&1
 goto :sec13_bitlocker_done
 :sec13_bitlocker_noadmin
@@ -3095,7 +3100,7 @@ rem Checks SKIPPED in the coverage block.
 if "%IS_ADMIN%"=="0" goto :sec13_bl_eval_done
 echo try{$bl=Get-BitLockerVolume -MountPoint $env:SystemDrive -EA Stop;if($bl.ProtectionStatus -eq 'On'){'[OK] BitLocker ON for '+$env:SystemDrive+' ('+$bl.EncryptionMethod+').';Set-Content -LiteralPath "$env:TEMP\dz_bitlocker_state.txt" -Value on}else{'[WARNING] BitLocker OFF for '+$env:SystemDrive+' -- data readable if the drive is removed';Set-Content -LiteralPath "$env:TEMP\dz_bitlocker_hit.txt" -Value hit;Set-Content -LiteralPath "$env:TEMP\dz_bitlocker_state.txt" -Value off}}catch{'[SKIPPED] BitLocker status unavailable (edition or cmdlet missing).';Set-Content -LiteralPath "$env:TEMP\dz_bitlocker_state.txt" -Value unavailable} >> "%PSRUN%"
 :sec13_bl_eval_done
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_uac_hit.txt" (
     call :dz_finding CRITICAL 13 T1548.002 "UAC disabled - processes auto-elevate silently"
     del "%TEMP%\dz_uac_hit.txt" 2>nul
@@ -3139,7 +3144,7 @@ echo  and memory-integrity state ^(T1542^) -- boot-chain CONFIG, not a firmware 
 if "%IS_ADMIN%"=="0" goto :sec13_bootchain_noadmin
 del "%TEMP%\dz_bootchain.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\boot_chain_check.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\boot_chain_check.ps1">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\boot_chain_check.ps1">> "%REPORT%" 2>&1
 ) else (
     echo  [INFO] tools\boot_chain_check.ps1 not found -- boot-chain audit skipped.>> "%REPORT%"
 )
@@ -3166,7 +3171,7 @@ if "%IS_ADMIN%"=="0" goto :sec13_cbs_noadmin
 del "%TEMP%\dz_cbs.txt" 2>nul
 del "%TEMP%\dz_cbs_gap.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\cbs_integrity_check.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\cbs_integrity_check.ps1">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\cbs_integrity_check.ps1">> "%REPORT%" 2>&1
 ) else (
     echo  [INFO] tools\cbs_integrity_check.ps1 not found -- system-file integrity check skipped.>> "%REPORT%"
 )
@@ -3388,7 +3393,7 @@ echo.>> "%REPORT%"
 echo --- HTML Smuggling: Large HTML/HTA in Downloads (Midnight Blizzard) --->> "%REPORT%"
 echo  Command: powershell -Command "Get-ChildItem -Path ([System.Environment]::GetFolderPath('UserProfile')+'\Downloads') -Recurse -Include '*.html','*.htm','*.hta' -EA SilentlyContinue">> "%REPORT%"
 echo Get-ChildItem -Path ([System.Environment]::GetFolderPath('UserProfile')+'\Downloads') -Recurse -Include '*.html','*.htm','*.hta' -EA SilentlyContinue ^| Where-Object {$_.Length -gt 200000} ^| Select-Object FullName,@{N='SizeKB';E={[math]::Round($_.Length/1024,1)}},LastWriteTime ^| Format-Table -AutoSize > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- Executables in Downloads --->> "%REPORT%"
@@ -3463,7 +3468,7 @@ echo.>> "%REPORT%"
 echo --- Running Kernel Drivers --->> "%REPORT%"
 echo  Command: powershell -Command "Get-CimInstance Win32_SystemDriver">> "%REPORT%"
 echo Get-CimInstance Win32_SystemDriver ^| Where-Object {$_.Started -eq $true} ^| Select-Object Name,State,PathName ^| Sort-Object Name ^| Format-Table -AutoSize > "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- Driver Signature Log (run sigverif.exe as admin to generate) --->> "%REPORT%"
@@ -3483,7 +3488,7 @@ echo  permissions, and policy force-installs. [SKIPPED] if a profile is locked.>
 echo  Runs fully without admin (reads the current user's own browser profiles).>> "%REPORT%"
 del "%TEMP%\dz_browserext_hit.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\browser_extensions.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\browser_extensions.ps1">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\browser_extensions.ps1">> "%REPORT%" 2>&1
 ) else (
     echo  [INFO] tools\browser_extensions.ps1 not found -- browser extension inventory skipped.>> "%REPORT%"
 )
@@ -3551,7 +3556,7 @@ del "%TEMP%\dz_loggap.txt" 2>nul
 del "%TEMP%\dz_loggap_gap.txt" 2>nul
 del "%TEMP%\dz_loggap_deferred.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\log_gap_check.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\log_gap_check.ps1">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\log_gap_check.ps1">> "%REPORT%" 2>&1
 ) else (
     echo  [INFO] tools\log_gap_check.ps1 not found -- event-log gap check skipped.>> "%REPORT%"
 )
@@ -3587,7 +3592,7 @@ echo $e=Get-WinEvent -FilterHashtable @{LogName='Security';Id=1102;ProviderName=
 echo $e=Get-WinEvent -FilterHashtable @{LogName='System';Id=104;ProviderName='Microsoft-Windows-Eventlog'} -MaxEvents 1 -EA SilentlyContinue;if($e){'[WARNING] System event log was cleared at '+$e.TimeCreated+' -- often benign (updates/driver installs/disk cleanup); the Security 1102 check above is the attacker cover-up signal.';Set-Content -LiteralPath "$env:TEMP\dz_ev104_hit.txt" -Value hit}else{'[OK] System event log has not been cleared.'} >> "%PSRUN%"
 echo $e=@(Get-WinEvent -FilterHashtable @{LogName='Security';Id=4720} -MaxEvents 5 -EA SilentlyContinue);if($e.Count -gt 0){'[WARNING] New local account(s) created: '+$e.Count+' event(s) (T1136.001) -- review the names listed above.';Set-Content -LiteralPath "$env:TEMP\dz_ev4720_hit.txt" -Value hit}else{'[OK] No new local account creation events (4720).'} >> "%PSRUN%"
 echo $e=@(Get-WinEvent -FilterHashtable @{LogName='Security';Id=4732} -MaxEvents 5 -EA SilentlyContinue);if($e.Count -gt 0){'[WARNING] Account(s) added to a privileged group: '+$e.Count+' event(s) (T1098) -- review the names listed above.';Set-Content -LiteralPath "$env:TEMP\dz_ev4732_hit.txt" -Value hit}else{'[OK] No unexpected additions to Administrators (4732).'} >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 echo.>> "%REPORT%"
 echo --- Audit-Policy Visibility ^(can these checks even see anything?^) --->> "%REPORT%"
 echo  Command: powershell -File tools\audit_policy_check.ps1>> "%REPORT%"
@@ -3597,7 +3602,7 @@ echo  mean the events were never recorded -- not that nothing happened.>> "%REPO
 del "%TEMP%\dz_auditpol.txt" 2>nul
 del "%TEMP%\dz_auditpol_gap.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\audit_policy_check.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\audit_policy_check.ps1">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\audit_policy_check.ps1">> "%REPORT%" 2>&1
 ) else (
     echo  [INFO] tools\audit_policy_check.ps1 not found -- audit-policy visibility not verified.>> "%REPORT%"
 )
@@ -3655,14 +3660,14 @@ wevtutil qe Security /q:"*[System[(EventID=4698 or EventID=4702)]]" /c:20 /rd:tr
 :: wevtutil 4688 queries as an XPath SystemTime predicate so the
 :: results are scoped to the last 24h regardless of how many events
 :: the Security log has rotated through.
-for /f "usebackq" %%i in (`powershell -NoProfile -Command "(Get-Date).ToUniversalTime().AddHours(-24).ToString('yyyy-MM-ddTHH:mm:ss.fffZ')"`) do set "WEVT_24H_AGO=%%i"
+for /f "usebackq" %%i in (`powershell -NoProfile -NonInteractive -Command "(Get-Date).ToUniversalTime().AddHours(-24).ToString('yyyy-MM-ddTHH:mm:ss.fffZ')"`) do set "WEVT_24H_AGO=%%i"
 if not defined WEVT_24H_AGO set "WEVT_24H_AGO=1970-01-01T00:00:00.000Z"
 
 echo.>> "%REPORT%"
 echo --- Process Creation - Event 4688 (last 24h) --->> "%REPORT%"
 echo  Command: wevtutil qe Security /q:"*[System[(EventID=4688)]]" /c:200 /rd:true /f:text ^| select_lines.ps1 "TimeCreated" "Process Name" "Creator Process" "Command Line">> "%REPORT%"
 wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:200 /rd:true /f:text > "%TEMP%\dz_evt.tmp" 2>nul
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" "TimeCreated" "Process Name" "Creator Process" "Command Line">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" "TimeCreated" "Process Name" "Creator Process" "Command Line">> "%REPORT%" 2>&1
 del "%TEMP%\dz_evt.tmp" 2>nul
 
 echo.>> "%REPORT%"
@@ -3692,7 +3697,7 @@ del "%TEMP%\dz_loggap.txt" 2>nul
 del "%TEMP%\dz_loggap_gap.txt" 2>nul
 del "%TEMP%\dz_loggap_deferred.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\log_gap_check.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\log_gap_check.ps1">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\log_gap_check.ps1">> "%REPORT%" 2>&1
 ) else (
     echo  [INFO] tools\log_gap_check.ps1 not found -- event-log gap check skipped.>> "%REPORT%"
 )
@@ -3753,7 +3758,7 @@ echo       Write-Output '' >> "%PSRUN%"
 echo     } >> "%PSRUN%"
 echo   } else { Write-Output '[OK] No external PS Script Block events (audit-self events filtered).' } >> "%PSRUN%"
 echo } else { Write-Output '[OK] No PS Script Block events found.' } >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- Defender Alerts: 1116=Detected, 1117=Action --->> "%REPORT%"
@@ -3813,7 +3818,7 @@ echo --- [VOLT TYPHOON] LOLBin Abuse in Event 4688 --->> "%REPORT%"
 echo  Command: wevtutil qe Security /q:"*[System[(EventID=4688)]]" /c:500 /rd:true /f:text ^| select_lines.ps1 "certutil" "mshta" "regsvr32" "cmstp" "installutil" "odbcconf">> "%REPORT%"
 if "%IS_ADMIN%"=="0" goto :sec17_lolbin_noadmin
 wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:500 /rd:true /f:text > "%TEMP%\dz_evt.tmp" 2>nul
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" "certutil" "mshta" "regsvr32" "cmstp" "installutil" "odbcconf">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" "certutil" "mshta" "regsvr32" "cmstp" "installutil" "odbcconf">> "%REPORT%" 2>&1
 del "%TEMP%\dz_evt.tmp" 2>nul
 goto :sec17_lolbin_done
 :sec17_lolbin_noadmin
@@ -3826,7 +3831,7 @@ echo --- [VOLT TYPHOON] Discovery Commands in Event 4688 --->> "%REPORT%"
 echo  Command: wevtutil qe Security /q:"*[System[(EventID=4688)]]" /c:500 /rd:true /f:text ^| select_lines.ps1 "nltest" "net group" "dsquery" "ldifde" "ntdsutil" "csvde">> "%REPORT%"
 if "%IS_ADMIN%"=="0" goto :sec17_disc_noadmin
 wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:500 /rd:true /f:text > "%TEMP%\dz_evt.tmp" 2>nul
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" "nltest" "net group" "dsquery" "ldifde" "ntdsutil" "csvde">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" "nltest" "net group" "dsquery" "ldifde" "ntdsutil" "csvde">> "%REPORT%" 2>&1
 del "%TEMP%\dz_evt.tmp" 2>nul
 goto :sec17_disc_done
 :sec17_disc_noadmin
@@ -3916,7 +3921,7 @@ echo $rmm=@('ScreenConnect','AnyDesk','TeamViewer','Ammyy','RustDesk','Splashtop
 echo $found=$false >> "%PSRUN%"
 echo foreach($t in $rmm){$p=Get-Process -Name $t -EA SilentlyContinue; if($p){$found=$true;'[RMM RUNNING] '+$t+' PID:'+$p.Id}} >> "%PSRUN%"
 echo if(-not $found){'[OK] No unexpected RMM tool processes.'} >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- [DPRK] RMM Software Installed --->> "%REPORT%"
@@ -3926,7 +3931,7 @@ echo $regs=@('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM
 echo $found=$false >> "%PSRUN%"
 echo foreach($r in $regs){Get-ItemProperty $r -EA SilentlyContinue ^| ForEach-Object {$n=$_.DisplayName; foreach($t in $rmm){if($n -and $n -match $t){$found=$true;'[RMM INSTALLED] '+$n}}}} >> "%PSRUN%"
 echo if(-not $found){'[OK] No unexpected RMM software found.'} >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- [ALL ACTORS] Cobalt Strike Named Pipes (MDDR: most abused C2 tool) --->> "%REPORT%"
@@ -3961,7 +3966,7 @@ echo --- [VOLT TYPHOON] VPN Client Processes --->> "%REPORT%"
 echo  Command: Get-CimInstance Win32_Process ^| findstr /i vpn-client-names>> "%REPORT%"
 :: CIM instead of wmic (removed on 24H2+) so this actually runs on current
 :: Windows; [SKIPPED] only if process enumeration genuinely fails.
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object { $_.Name+'  '+$_.ProcessId+'  '+$_.ExecutablePath }" > "%TEMP%\dz_pipe.tmp" 2>nul
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object { $_.Name+'  '+$_.ProcessId+'  '+$_.ExecutablePath }" > "%TEMP%\dz_pipe.tmp" 2>nul
 set "_ENUMVPN="
 for %%z in ("%TEMP%\dz_pipe.tmp") do if %%~zz GTR 100 set "_ENUMVPN=1"
 if not defined _ENUMVPN goto :sec17_vpn_skip
@@ -4028,7 +4033,7 @@ del "%TEMP%\dz_crossapi.txt" 2>nul
 del "%TEMP%\dz_crossapi_gap.txt" 2>nul
 del "%TEMP%\dz_crossapi_deferred.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\cross_api_check.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\cross_api_check.ps1">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\cross_api_check.ps1">> "%REPORT%" 2>&1
 ) else (
     echo  [INFO] tools\cross_api_check.ps1 not found -- cross-API consistency check skipped.>> "%REPORT%"
 )
@@ -4072,9 +4077,9 @@ if "%BASELINE_SKIP%"=="1" (
         echo  [INFO] tools\baseline_diff.ps1 not found -- baseline analysis skipped.>> "%REPORT%"
     ) else (
         if "%BASELINE_SAVE%"=="1" (
-            "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\baseline_diff.ps1" -Mode Save -Path "!BASELINE_FILE!">> "%REPORT%" 2>&1
+            "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\baseline_diff.ps1" -Mode Save -Path "!BASELINE_FILE!">> "%REPORT%" 2>&1
         ) else (
-            "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\baseline_diff.ps1" -Mode Diff -Path "!BASELINE_FILE!">> "%REPORT%" 2>&1
+            "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\baseline_diff.ps1" -Mode Diff -Path "!BASELINE_FILE!">> "%REPORT%" 2>&1
         )
     )
 )
@@ -4158,7 +4163,7 @@ echo  Matching running processes against ioc_processes.txt>> "%REPORT%"
 :: printed [OK] with zero processes examined when wmic was absent. Enumerate
 :: via CIM into a temp file so a failed/empty enumeration is detectable and
 :: raised as a NOT-performed gap instead of masquerading as a clean result.
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object { $_.Name+'  '+$_.ProcessId+'  '+$_.ExecutablePath }" > "%TEMP%\dz_proc18a.tmp" 2>nul
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object { $_.Name+'  '+$_.ProcessId+'  '+$_.ExecutablePath }" > "%TEMP%\dz_proc18a.tmp" 2>nul
 set "_ENUM18A="
 for %%z in ("%TEMP%\dz_proc18a.tmp") do if %%~zz GTR 100 set "_ENUM18A=1"
 if defined _ENUM18A goto :sec18a_match
@@ -4171,7 +4176,7 @@ goto :sec18a_done
 :: and its failure (list unreadable, a line too long) left the errorlevel
 :: of the SECOND findstr in the pipe, which read [OK]. select_lines skips
 :: comments, matches literally, and exits 2 when it had nothing to match.
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_proc18a.tmp" -PatternFile "%IOCDIR%\ioc_processes.txt">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_proc18a.tmp" -PatternFile "%IOCDIR%\ioc_processes.txt">> "%REPORT%" 2>&1
 set "_SEL18A=!errorlevel!"
 if "!_SEL18A!"=="0" goto :sec18a_hit
 if "!_SEL18A!"=="1" goto :sec18a_clean
@@ -4210,7 +4215,7 @@ echo New-Item "$env:TEMP\dz_iochit_18b_done.txt" -Force ^| Out-Null >> "%PSRUN%"
 del "%TEMP%\dz_iochit_18b.txt" 2>nul
 del "%TEMP%\dz_iochit_18b_gap.txt" 2>nul
 del "%TEMP%\dz_iochit_18b_done.txt" 2>nul
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_iochit_18b.txt" (
     set /a IOC_HITS+=1
     call :dz_finding WARNING 18 T1071 "Named pipe IOC match"
@@ -4240,7 +4245,7 @@ echo New-Item "$env:TEMP\dz_iochit_18c_done.txt" -Force ^| Out-Null >> "%PSRUN%"
 del "%TEMP%\dz_iochit_18c.txt" 2>nul
 del "%TEMP%\dz_iochit_18c_gap.txt" 2>nul
 del "%TEMP%\dz_iochit_18c_done.txt" 2>nul
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_iochit_18c.txt" (
     set /a IOC_HITS+=1
     call :dz_finding WARNING 18 T1543 "Service IOC match"
@@ -4272,7 +4277,7 @@ echo New-Item "$env:TEMP\dz_iochit_18d_done.txt" -Force ^| Out-Null >> "%PSRUN%"
 del "%TEMP%\dz_iochit_18d.txt" 2>nul
 del "%TEMP%\dz_iochit_18d_gap.txt" 2>nul
 del "%TEMP%\dz_iochit_18d_done.txt" 2>nul
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_iochit_18d.txt" (
     set /a IOC_HITS+=1
     call :dz_finding CRITICAL 18 T1074 "Known malware staging files found"
@@ -4306,7 +4311,7 @@ echo New-Item "$env:TEMP\dz_iochit_18e_done.txt" -Force ^| Out-Null >> "%PSRUN%"
 del "%TEMP%\dz_iochit_18e.txt" 2>nul
 del "%TEMP%\dz_iochit_18e_gap.txt" 2>nul
 del "%TEMP%\dz_iochit_18e_done.txt" 2>nul
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_iochit_18e.txt" (
     set /a IOC_HITS+=1
     call :dz_finding WARNING 18 T1053 "Scheduled task IOC match"
@@ -4354,7 +4359,7 @@ goto :sec18f_done
 :sec18f_records
 :: select_lines for the reasons given at 18a. A missing ioc_domains.txt
 :: (only ioc_processes.txt is checked above) is exit 2 here: NOT performed.
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_dns18f.tmp" -PatternFile "%IOCDIR%\ioc_domains.txt">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_dns18f.tmp" -PatternFile "%IOCDIR%\ioc_domains.txt">> "%REPORT%" 2>&1
 set "_SEL18F=!errorlevel!"
 if "!_SEL18F!"=="0" goto :sec18f_hit
 if "!_SEL18F!"=="1" goto :sec18f_clean
@@ -4381,7 +4386,7 @@ echo  Matching process command lines against ioc_lolbins.txt>> "%REPORT%"
 :: produced an empty temp file there and select_lines reported no matches,
 :: so LOLBin abuse went undetected while the report said [OK]. Enumerate via
 :: CIM and raise a NOT-performed gap when the enumeration itself fails.
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object { $_.Name+'  '+$_.ProcessId+'  '+$_.CommandLine }" > "%TEMP%\dz_evt.tmp" 2>nul
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object { $_.Name+'  '+$_.ProcessId+'  '+$_.CommandLine }" > "%TEMP%\dz_evt.tmp" 2>nul
 set "_ENUM18G="
 for %%z in ("%TEMP%\dz_evt.tmp") do if %%~zz GTR 100 set "_ENUM18G=1"
 if defined _ENUM18G goto :sec18g_match
@@ -4390,7 +4395,7 @@ call :dz_finding WARNING 18 T1059 "LOLBin pattern match NOT performed - command 
 del "%TEMP%\dz_evt.tmp" 2>nul
 goto :sec18g_done
 :sec18g_match
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" -PatternFile "%IOCDIR%\ioc_lolbins.txt">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" -PatternFile "%IOCDIR%\ioc_lolbins.txt">> "%REPORT%" 2>&1
 :: Capture select_lines's exit before del overwrites errorlevel: 0 = at least
 :: one match emitted, 1 = none, 2 = it had no patterns (the list missing or
 :: only comments) -- which used to read [OK] here.
@@ -4431,7 +4436,7 @@ echo New-Item "$env:TEMP\dz_iochit_18h_done.txt" -Force ^| Out-Null >> "%PSRUN%"
 del "%TEMP%\dz_iochit_18h.txt" 2>nul
 del "%TEMP%\dz_iochit_18h_gap.txt" 2>nul
 del "%TEMP%\dz_iochit_18h_done.txt" 2>nul
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_iochit_18h.txt" (
     set /a IOC_HITS+=1
     call :dz_finding WARNING 18 T1112 "Registry IOC match"
@@ -4473,7 +4478,7 @@ if "%VT_CHECK%"=="1" (
         rem support it. Every other IOC marker already deletes before its
         rem producer runs; these two were the exceptions.
         del "%TEMP%\dz_iochit_18j.txt" 2>nul
-        "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\vt_check.ps1">> "%REPORT%" 2>&1
+        "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\vt_check.ps1">> "%REPORT%" 2>&1
         if exist "%TEMP%\dz_iochit_18j.txt" (
             set /a IOC_HITS+=1
             call :dz_finding WARNING 18 T1105 "VirusTotal-flagged file"
@@ -4495,7 +4500,7 @@ if "%VT_CHECK%"=="1" (
         rem Clear a marker left by an interrupted earlier -vt run -- see the
         rem note on the 18j marker above.
         del "%TEMP%\dz_iochit_18l.txt" 2>nul
-        "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\vt_ip_check.ps1">> "%REPORT%" 2>&1
+        "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\vt_ip_check.ps1">> "%REPORT%" 2>&1
         if exist "%TEMP%\dz_iochit_18l.txt" (
             set /a IOC_HITS+=1
             call :dz_finding WARNING 18 T1071 "VirusTotal-flagged remote IP"
@@ -4518,7 +4523,7 @@ if exist "%SCRIPT_DIR%tools\ioc_hash_check.ps1" (
     if exist "%IOCDIR%\ioc_hashes.txt" (
         del "%TEMP%\dz_iochit_18k.txt" 2>nul
         del "%TEMP%\dz_iochit_18k_gap.txt" 2>nul
-        "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\ioc_hash_check.ps1" -IocFile "%IOCDIR%\ioc_hashes.txt" >> "%REPORT%" 2>&1
+        "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\ioc_hash_check.ps1" -IocFile "%IOCDIR%\ioc_hashes.txt" >> "%REPORT%" 2>&1
         if exist "%TEMP%\dz_iochit_18k.txt" (
             set /a IOC_HITS+=1
             rem CRITICAL, as ioc_hash_check prints it: a file on disk with a known-bad
@@ -4544,7 +4549,7 @@ if exist "%SCRIPT_DIR%tools\ioc_hash_check.ps1" (
 echo.>> "%REPORT%"
 echo --- [18 SUMMARY] IOC Sweep Results --->> "%REPORT%"
 del "%TEMP%\dz_iocgaps.txt" 2>nul
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\count_gaps.ps1" -Report "%REPORT%" -FromByte %IOC_FROM% -StateFile "%TEMP%\dz_iocgaps.txt" >nul 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\count_gaps.ps1" -Report "%REPORT%" -FromByte %IOC_FROM% -StateFile "%TEMP%\dz_iocgaps.txt" >nul 2>&1
 set "IOC_GAPS=-1"
 if exist "%TEMP%\dz_iocgaps.txt" set /p IOC_GAPS=<"%TEMP%\dz_iocgaps.txt"
 del "%TEMP%\dz_iocgaps.txt" 2>nul
@@ -4607,7 +4612,7 @@ echo --- [CTI][T1105+T1059] LOLBin Download Cradles in Event 4688 (last 24h) ---
 echo  Command: wevtutil qe Security /q:"*[System[(EventID=4688)]]" /c:1000 /rd:true /f:text ^| select_lines.ps1 "bitsadmin" "certutil -urlcache" "curl " "wget" "Invoke-WebRequest" "Start-BitsTransfer" "desktopimgdownldr" "esentutl">> "%REPORT%"
 if "%IS_ADMIN%"=="0" goto :cti_lolbin4688_noadmin
 wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:1000 /rd:true /f:text > "%TEMP%\dz_evt.tmp" 2>nul
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" "bitsadmin" "certutil -urlcache" "curl " "wget" "Invoke-WebRequest" "Start-BitsTransfer" "desktopimgdownldr" "esentutl">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" "bitsadmin" "certutil -urlcache" "curl " "wget" "Invoke-WebRequest" "Start-BitsTransfer" "desktopimgdownldr" "esentutl">> "%REPORT%" 2>&1
 del "%TEMP%\dz_evt.tmp" 2>nul
 goto :cti_lolbin4688_done
 :cti_lolbin4688_noadmin
@@ -4653,7 +4658,7 @@ echo     } >> "%PSRUN%"
 echo   } >> "%PSRUN%"
 echo } >> "%PSRUN%"
 echo if ($recent.Count -gt 0) { '[INFO] Browser credential stores accessed in last 24h (may be normal browser activity):'; $recent ^| ForEach-Object { '  '+$_ } } else { '[OK] No unusual recent access to browser credential stores.' } >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 :: --- [CTI] AiTM Phishing / Token Theft Artifacts (T1557.001) ---
 echo.>> "%REPORT%"
@@ -4672,7 +4677,7 @@ echo     if ($files) { $hits += $tp + ': ' + $files.Count + ' file(s) modified i
 echo   } >> "%PSRUN%"
 echo } >> "%PSRUN%"
 echo if ($hits.Count -gt 0) { '[INFO] Recent AAD/token cache activity (correlate with login events):'; $hits ^| ForEach-Object { '  '+$_ } } else { '[OK] No unusual recent token cache modifications.' } >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 :: --- [CTI] Ransomware Precursors (T1490) ---
 echo.>> "%REPORT%"
@@ -4680,7 +4685,7 @@ echo --- [CTI][T1490] Ransomware Precursors - VSS/BCDEdit/Recovery Tampering (la
 echo  Command: wevtutil qe Security /q:"*[System[(EventID=4688)]]" /c:1000 /rd:true /f:text ^| select_lines.ps1 "vssadmin delete" "wmic shadowcopy" "bcdedit /set {default} recoveryenabled no" "wbadmin delete" "disableshadowcopy">> "%REPORT%"
 if "%IS_ADMIN%"=="0" goto :cti_ransom4688_noadmin
 wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:1000 /rd:true /f:text > "%TEMP%\dz_evt.tmp" 2>nul
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" "vssadmin delete" "wmic shadowcopy" "bcdedit /set {default} recoveryenabled no" "wbadmin delete" "disableshadowcopy">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" "vssadmin delete" "wmic shadowcopy" "bcdedit /set {default} recoveryenabled no" "wbadmin delete" "disableshadowcopy">> "%REPORT%" 2>&1
 del "%TEMP%\dz_evt.tmp" 2>nul
 goto :cti_ransom4688_done
 :cti_ransom4688_noadmin
@@ -4715,7 +4720,7 @@ echo  cannot evade by name alone ^(the old 12-name Test-Path scan could^).>> "%R
 del "%TEMP%\dz_driver.txt" 2>nul
 del "%TEMP%\dz_driver_gap.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\driver_audit.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\driver_audit.ps1">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\driver_audit.ps1">> "%REPORT%" 2>&1
 ) else (
     echo  [INFO] tools\driver_audit.ps1 not found -- driver audit skipped.>> "%REPORT%"
 )
@@ -4758,7 +4763,7 @@ echo --- [CTI][T1546.015] COM Object Hijacking - User CLSID Overrides --->> "%RE
 echo  Command: powershell -File tools\com_clsid_check.ps1>> "%REPORT%"
 del "%TEMP%\dz_com.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\com_clsid_check.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\com_clsid_check.ps1">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\com_clsid_check.ps1">> "%REPORT%" 2>&1
 ) else (
     echo  [INFO] tools\com_clsid_check.ps1 not found -- COM CLSID check skipped.>> "%REPORT%"
 )
@@ -4789,7 +4794,7 @@ echo     $found += $c.Name + ': ' + $c.Path + ' (modified: ' + $item.LastWriteTi
 echo   } >> "%PSRUN%"
 echo } >> "%PSRUN%"
 echo if ($found.Count -gt 0) { '[INFO] Cloud CLI credential files present (verify these are expected):'; $found ^| ForEach-Object { '  '+$_ } } else { '[OK] No cloud CLI credential files found (no cloud attack surface from local tokens).' } >> "%PSRUN%"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 
 :: --- [CTI] Explicit Credential Logon - Event 4648 (T1078) ---
 echo.>> "%REPORT%"
@@ -4856,7 +4861,7 @@ rem The tool reads %REPORT%, so its own output goes to a temp file first --
 rem reading and appending the same file at once is what started all this.
 del "%TEMP%\dz_verdict_gap.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\verdict_audit.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\verdict_audit.ps1" -Report "%REPORT%" -Ledger "%LEDGER%" -MarkerFile "%TEMP%\dz_verdict_gap.txt" > "%TEMP%\dz_vaudit.txt" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\verdict_audit.ps1" -Report "%REPORT%" -Ledger "%LEDGER%" -MarkerFile "%TEMP%\dz_verdict_gap.txt" > "%TEMP%\dz_vaudit.txt" 2>&1
     echo.>> "%REPORT%"
     echo --- Audit self-check: every printed finding reached the ledger --->> "%REPORT%"
     type "%TEMP%\dz_vaudit.txt">> "%REPORT%"
@@ -4873,7 +4878,7 @@ if exist "%TEMP%\dz_verdict_gap.txt" (
 echo --- Post-Audit Free Space --->> "%REPORT%"
 echo  Command: powershell -Command "Get-CimInstance Win32_LogicalDisk | Where-Object DeviceID -eq $env:SystemDrive | Select-Object -Expand FreeSpace">> "%REPORT%"
 echo (Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='%SystemDrive%'" -EA SilentlyContinue).FreeSpace > "%PSRUN%"
-for /f "usebackq" %%a in (`%PWSH% -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" 2^>nul`) do (
+for /f "usebackq" %%a in (`%PWSH% -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%" 2^>nul`) do (
     if not "%%a"=="" if not "%%a"=="0" set "FREE_AFTER=%%a"
 )
 if not "%FREE_AFTER%"=="0" goto :freeafter_done
@@ -4909,7 +4914,7 @@ set "CRIT_COUNT=0"
 :: the string early. CRIT_READ says whether a count was read at all.
 set "CRIT_READ=0"
 del "%TEMP%\dz_critcount.txt" 2>nul
-"%PWSH%" -NoProfile -Command "@(Select-String -LiteralPath $env:REPORT -Pattern '\A\[CRITICAL\]').Count" > "%TEMP%\dz_critcount.txt" 2>nul
+"%PWSH%" -NoProfile -NonInteractive -Command "@(Select-String -LiteralPath $env:REPORT -Pattern '\A\[CRITICAL\]').Count" > "%TEMP%\dz_critcount.txt" 2>nul
 :: Undefined first, so an empty file cannot pass the old 0 off as a count.
 :: Percent, not delayed, expansion on the pipe line: each side of a pipe runs
 :: in a new cmd, where delayed expansion is off.
@@ -5234,7 +5239,7 @@ echo Write-Output '' >> "%PSRUN%"
 :: passed. Runs before report_format/top_findings/HTML/seal so the calibrated
 :: verdict flows into every downstream artifact.
 if exist "%SCRIPT_DIR%tools\section_coverage.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\section_coverage.ps1" -Report "%REPORT%" >nul 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\section_coverage.ps1" -Report "%REPORT%" >nul 2>&1
 )
 
 :: ---- Format the report: insert section terminators for unambiguous boundaries ----
@@ -5242,7 +5247,7 @@ rem report_format also strips the NUL bytes wevtutil /f:text leaves in event
 rem text and writes how many to a count file; the summary declares the number.
 del "%TEMP%\dz_report_nul.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\report_format.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\report_format.ps1" -Report "%REPORT%" -NulCountFile "%TEMP%\dz_report_nul.txt" 2>nul
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\report_format.ps1" -Report "%REPORT%" -NulCountFile "%TEMP%\dz_report_nul.txt" 2>nul
 )
 set "REPORT_NULS=0"
 if exist "%TEMP%\dz_report_nul.txt" set /p REPORT_NULS=<"%TEMP%\dz_report_nul.txt"
@@ -5250,11 +5255,11 @@ del "%TEMP%\dz_report_nul.txt" 2>nul
 
 :: ---- Prepend TOP FINDINGS summary so analysts see the headline issues first ----
 if exist "%SCRIPT_DIR%tools\top_findings.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\top_findings.ps1" -Report "%REPORT%" 2>nul
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\top_findings.ps1" -Report "%REPORT%" 2>nul
 )
 
 :: ---- Run PS, show on screen, append to report ----------------------
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" > "%SUMFILE%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%" > "%SUMFILE%" 2>&1
 if exist "%SUMFILE%" (
     type "%SUMFILE%"
     echo.>> "%REPORT%"
@@ -5289,7 +5294,7 @@ rem (every proven backtick for /f in this script is top-level) and silently
 rem yields nothing -- caught by the flip-step-2 harness assertions.
 set "LEDGERSUM=%TEMP%\AuditLedgerSum_%TIMESTAMP%.txt"
 del "%LEDGERSUM%" 2>nul
-if defined LEDGER if exist "%LEDGER%" "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\ledger.ps1" -Mode Summarize -Path "%LEDGER%" >"%LEDGERSUM%" 2>nul
+if defined LEDGER if exist "%LEDGER%" "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\ledger.ps1" -Mode Summarize -Path "%LEDGER%" >"%LEDGERSUM%" 2>nul
 if exist "%LEDGERSUM%" (
     for /f "usebackq tokens=1* delims==" %%a in ("%LEDGERSUM%") do (
         if "%%a"=="TOTAL" set "LEDGER_TOTAL=%%b"
@@ -5380,13 +5385,13 @@ rem references and annotated with what fired this run. Informational; raises
 rem no finding. Placed just before COVERAGE & CONFIDENCE.
 if "%EXEC_BLOCKED%"=="0" if exist "%SCRIPT_DIR%tools\attack_matrix.ps1" (
     echo.>> "%REPORT%"
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\attack_matrix.ps1" -SourceDir "%SCRIPT_DIR%." -Report "%REPORT%" -Ledger "%LEDGER%">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\attack_matrix.ps1" -SourceDir "%SCRIPT_DIR%." -Report "%REPORT%" -Ledger "%LEDGER%">> "%REPORT%" 2>&1
 )
 rem Tier 0 COVERAGE & CONFIDENCE block -- reads the finished report and
 rem states how much was actually covered, so a clean pass is never read as
 rem a safety guarantee. Top-level call, no nesting.
 if "%EXEC_BLOCKED%"=="0" if exist "%SCRIPT_DIR%tools\report_safety.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\report_safety.ps1" -Mode Coverage -Report "%REPORT%">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\report_safety.ps1" -Mode Coverage -Report "%REPORT%">> "%REPORT%" 2>&1
 )
 echo ====================================================================>> "%REPORT%"
 (echo  EXIT CODE: %EXIT_CODE%)>> "%REPORT%"
@@ -5515,7 +5520,7 @@ echo ====================================================================>> "%RE
 :: until someone closes Notepad, and field_test or CI waits forever.
 if "%EXEC_BLOCKED%"=="1" goto :final_exit
 echo %C_CYAN%Generating HTML report...%C_RESET%
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\report_html.ps1" -Report "%REPORT%" -HtmlPath "%REPORT_HTML%" -RemediationPath "%REMEDIATION%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\report_html.ps1" -Report "%REPORT%" -HtmlPath "%REPORT_HTML%" -RemediationPath "%REMEDIATION%" 2>&1
 if exist "%REPORT_HTML%" (
     echo %C_GREEN%[OK]%C_RESET% HTML report: %REPORT_HTML%
 ) else (
@@ -5529,7 +5534,7 @@ rem report and is editable by anyone who can edit the report; what is on
 rem screen (and in AuditConsole_*.log) can be photographed or sent to yourself
 rem immediately, which is what makes it useful.
 if exist "%SCRIPT_DIR%tools\report_seal.ps1" (
-    "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\report_seal.ps1" -Report "%REPORT%" -HtmlReport "%REPORT_HTML%"
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\report_seal.ps1" -Report "%REPORT%" -HtmlReport "%REPORT_HTML%"
 ) else (
     echo %C_YELLOW%[WARN]%C_RESET% tools\report_seal.ps1 not found -- no integrity digest was produced for this report.
 )
@@ -5657,7 +5662,7 @@ goto :eof
 :: ====================================================================
 :dz_ps_scan
 set "DZ_BLK=%TEMP%\dz_blk_%DOZE_LOG_TS%.txt"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%PSRUN%" > "%DZ_BLK%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%" > "%DZ_BLK%" 2>&1
 type "%DZ_BLK%">> "%REPORT%"
 if not exist "%SCRIPT_DIR%tools\block_sev.ps1" goto :dz_ps_scan_nohelper
 rem READ THE GRADE THROUGH A FILE, NOT A for /f BACKTICK.
@@ -5683,7 +5688,7 @@ rem
 rem A file plus set /p is the idiom this repo already uses for markers. No
 rem backticks, no cmd /c, no quote stripping.
 set "DZ_SEVF=%TEMP%\dz_sev_%DOZE_LOG_TS%.txt"
-"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\block_sev.ps1" -Path "%DZ_BLK%" > "%DZ_SEVF%" 2>nul
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\block_sev.ps1" -Path "%DZ_BLK%" > "%DZ_SEVF%" 2>nul
 rem The sentinel is what stops this failing SILENTLY again. If no grade is ever
 rem read the value stays DZ_NOGRADE and is DECLARED an AUDITGAP, rather than
 rem defaulting to OK -- which is indistinguishable from a genuinely clean block.
