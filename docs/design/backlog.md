@@ -561,9 +561,14 @@ empty, a listing Windows refuses) prints NOT performed and raises a gap row,
 columns, and `tests\section18_gaps.ps1` runs the gap branches. The note that
 stood here was wrong twice: it named 18b and 18e when 18c, 18d, 18h and 18k
 had the same shape, and it said the summary counted their lines as gaps, which
-was false for 18e and 18k. Still open: no test plants a positive 18c, 18d or
-18h match through the audit itself (18b and 18e are matched on a planted pipe
-and tasks in the helpers job, through the rendered blocks). What was found:
+was false for 18e and 18k. Since 2026-10-10 the plant harness also fires 18c (a
+PSEXESVC-named service), 18d (%TEMP%\beacon.bin) and 18h (a HKCU Run value named
+ChromeUpdate), each beside a look-alike that must stay out, with a ledger-row
+assertion each; 18b and 18e are matched on a planted pipe and tasks in the
+helpers job, through the rendered blocks. Not planted, on purpose: 18h's
+Defender-policy, UAC, LSA, COM-hijack and proxy entries, which would change how
+the machine behaves (the full-run job pins the bad-value judgement on the
+runner's real EnableLUA=1 instead). What was found:
 
 
 While checking the stick's line endings, a search found no test that plants a

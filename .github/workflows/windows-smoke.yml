@@ -3538,6 +3538,15 @@ jobs:
           if ($s18gap.Count) { throw ("Section 18 raised gap row(s) on a healthy runner: {0}" -f ($s18gap -join ' ; ')) }
           if ($text -notmatch '(?m)^\[OK\] No scheduled task IOC matches\.|^\[WARNING\] Scheduled task IOC matches found\.') { throw 'Section 18e printed neither its [OK] nor a match' }
           Write-Host 'Section 18: no gap row on a healthy runner; 18e compared the tasks'
+          # 18h's bad-value judgement on real machine state: UAC is on on every
+          # runner (EnableLUA=1), and the list names only EnableLUA=0. A runtime
+          # list that lost its bad-value column once turned UAC ON into an IOC
+          # (standard-user field run 2026-09-24); the harness plants a Run value
+          # for the match itself, this pins the judgement.
+          $m18h = [regex]::Match($text, '(?s)--- \[18h\] Registry IOC Check ---(.*?)--- \[18i\]')
+          if (-not $m18h.Success) { throw 'Section 18h was not found in the report' }
+          if ($m18h.Groups[1].Value -match 'EnableLUA') { throw ('Section 18h listed EnableLUA on a runner with UAC on: {0}' -f $m18h.Groups[1].Value.Trim()) }
+          Write-Host 'Section 18h: UAC on (EnableLUA=1) is not reported as the listed EnableLUA=0'
           # THE APOSTROPHE RUN. TEMP held an apostrophe and APPDATA an apostrophe and
           # a space: the dashboard (its script and SUMCODE/SUMCOUNT in TEMP) must
           # have printed, the stage-1 remediation script must exist and parse, and

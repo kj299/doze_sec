@@ -512,3 +512,21 @@ class     = ADVISE
 proof     = harness:DNS cache holds ngrok.com, the vendor site
 signature = C2 domain IOC matches found in DNS cache
 note      = Section 18f matches the DNS client cache (ipconfig /displaydns, which also lists HOSTS entries) against ioc_domains.txt fragments. Several fragments are developer tunnel services (ngrok.io, trycloudflare.com, localtunnel) that attackers use for C2 and developers use for testing; a developer machine can match legitimately. The vendor's own site (ngrok.com) is not on the list, and the harness asserts it stays out of 18f beside a planted ngrok.io name that must be matched. Verify a hit: ipconfig /displaydns | findstr /i <fragment>, then ask who on this machine uses that service; Get-NetTCPConnection -State Established shows what is connected now.
+
+[ioc-service-name-lookalike]
+class     = ADVISE
+proof     = harness:Service carrying the real SecurityHealthService name
+signature = Service IOC matches found
+note      = Section 18c matches every service's name and display name against ioc_services.txt as a case-insensitive substring. Several entries are look-alikes of real Windows services (securityhealthservice2, WinHttpAutoProxySvcEx, W32TimeEx, CryptSvcEx) and must not match the real names; the harness plants a service carrying the real SecurityHealthService name and asserts it stays out of 18c, beside a PSEXESVC-named service that must be matched. A short entry (asio, gdrv, ene_io) can match inside an unrelated vendor service's name, and PSEXESVC is also left behind by legitimate PsExec use. Verify a hit: Get-CimInstance Win32_Service -Filter "Name='<name>'" | Format-List Name, DisplayName, PathName, StartMode, State; Get-AuthenticodeSignature on the PathName binary.
+
+[ioc-staging-name-elsewhere]
+class     = ADVISE
+proof     = harness:Same file name in a folder the list does not name
+signature = Known malware staging files found
+note      = Section 18d tests each ioc_file_paths.txt entry as an exact path after expanding its environment variables (%TEMP%, %APPDATA%, %PROGRAMDATA%). A file with the same NAME in another folder is not a match; the harness plants beacon.bin in a folder the list does not name and asserts it stays out of 18d, beside a %TEMP%\beacon.bin that must be matched. Some listed names are generic (debug.bin, update.exe, 7z.sfx.exe), so a hit at an exact path can still be an installer's leftover. Verify a hit: Get-Item '<path>' | Format-List FullName, Length, CreationTime, LastWriteTime; Get-FileHash -Algorithm SHA256 '<path>'; Get-AuthenticodeSignature '<path>'; look the hash up before deleting anything -- the file is evidence.
+
+[ioc-registry-value-name-contains]
+class     = ADVISE
+proof     = harness:Run value whose name only contains a listed name
+signature = Suspicious registry IOCs found
+note      = Section 18h looks each ioc_registry.txt entry up by exact key and exact value name (Get-ItemProperty -Name), and where the entry gives a bad value, the value must equal it (UAC on, EnableLUA=1, is not the listed EnableLUA=0). A vendor value whose name merely contains a listed name is not a match; the harness plants ChromeUpdateHelper_dz_selftest under HKCU Run and asserts it stays out of 18h, beside a ChromeUpdate value that must be matched. Listed Run value names (ChromeUpdate, AdobeUpdater, OneDriveUpdate) are names attackers borrow from real updaters, so a hit can be the genuine product; read the data. Verify a hit: reg query "<key>" /v <value>, then Get-AuthenticodeSignature on the program the data points at.
