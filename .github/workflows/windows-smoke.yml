@@ -3938,6 +3938,13 @@ jobs:
           $z3 = "[ZoneTransfer]`r`nZoneId=3"
           $z2 = "[ZoneTransfer]`r`nZoneId=2"
           function Set-Mark([string]$Path, [string]$Text) { Set-Content -LiteralPath $Path -Stream 'Zone.Identifier' -Value $Text }
+          # taskkill /T writes to stderr when part of the tree is already gone,
+          # and under Stop on 5.1 a native stderr line throws: Continue here.
+          function Stop-Tree([int]$Id) {
+            $ErrorActionPreference = 'Continue'
+            $null = @(& taskkill /PID $Id /T /F 2>&1)
+            $global:LASTEXITCODE = 0
+          }
           function Set-Policy([string]$P) {
             New-Item -Path $k -Force | Out-Null
             Set-Content -LiteralPath $sentinel -Value 'planted' -Encoding ASCII
@@ -3963,6 +3970,10 @@ jobs:
               Set-Mark $f $cases[$n]
               $r = (& powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $f 2>&1 | Out-String)
               if ($r -match 'DZ_RAN') { $ran += $n } else { $refused += $n }
+              if ($n -eq 'zone3') {
+                $said = (@($r -split "`r?`n" | Where-Object { $_.Trim() }) | Select-Object -First 2) -join ' / '
+                Write-Host ("{0}: PowerShell's words for a refused zone-3 script: {1}" -f $Policy, $said)
+              }
             }
             $global:LASTEXITCODE = 0
             Write-Host ("{0}: Windows ran [{1}] and refused [{2}]" -f $Policy, ($ran -join ', '), ($refused -join ', '))
@@ -3984,7 +3995,7 @@ jobs:
               $p = Start-Process -FilePath 'cmd.exe' -ArgumentList ('/c {0} {1}' -f $Bat, $BatArgs) -WorkingDirectory $w -WindowStyle Hidden -PassThru
               $null = $p.Handle
               if (-not $p.WaitForExit(180000)) {
-                & taskkill /PID $p.Id /T /F 2>&1 | Out-Null
+                Stop-Tree $p.Id
                 throw ("{0} {1}: still running after 3 minutes -- the audit hung (a prompt nobody can see?)" -f $Bat, $BatArgs)
               }
               $rc = $p.ExitCode
@@ -4025,7 +4036,10 @@ jobs:
 
             # a. RemoteSigned, some helpers marked, the probe not.
             Set-Policy 'RemoteSigned'
-            if (-not (Assert-Zones 'RemoteSigned')) { Write-Host '[ SKIP ] the Group Policy RemoteSigned policy did not take on this runner (a zone-3 script still ran) -- the Mark of the Web guard is NOT exercised here'; $global:LASTEXITCODE = 0; return }
+            # The AllSigned step before this one shows a Group Policy plant takes
+            # on this runner, so one that does not take here is a failure: a
+            # skip would pass every case below having tested none of them.
+            if (-not (Assert-Zones 'RemoteSigned')) { throw 'the Group Policy RemoteSigned policy did not take (a zone-3 script still ran under -ExecutionPolicy Bypass)' }
             Set-Mark (Join-Path $tools 'hosts_check.ps1') $z3
             Set-Mark (Join-Path $tools 'driver_audit.ps1') $z3
             Set-Mark (Join-Path $tools 'edr_presence.ps1') $z2
@@ -4059,13 +4073,13 @@ jobs:
             $p = Start-Process -FilePath 'powershell.exe' -ArgumentList ('-NoProfile ' + $probeArgs) -WindowStyle Hidden -PassThru
             $null = $p.Handle
             $waited = -not $p.WaitForExit(20000)
-            if ($waited) { & taskkill /PID $p.Id /T /F 2>&1 | Out-Null; $global:LASTEXITCODE = 0 }
+            if ($waited) { Stop-Tree $p.Id }
             $ranAnyway = Test-Path -LiteralPath $hs
             Write-Host ("without -NonInteractive the marked probe {0}" -f $(if ($waited) { 'was still waiting after 20 s (killed): the prompt nobody sees' } elseif ($ranAnyway) { 'ran without asking' } else { 'exited within 20 s without running' }))
             Remove-Item -LiteralPath $hs -Force -EA SilentlyContinue
             $p = Start-Process -FilePath 'powershell.exe' -ArgumentList ('-NoProfile -NonInteractive ' + $probeArgs) -WindowStyle Hidden -PassThru
             $null = $p.Handle
-            if (-not $p.WaitForExit(20000)) { & taskkill /PID $p.Id /T /F 2>&1 | Out-Null; throw 'with -NonInteractive the marked probe was still running after 20 s' }
+            if (-not $p.WaitForExit(20000)) { Stop-Tree $p.Id; throw 'with -NonInteractive the marked probe was still running after 20 s' }
             if (Test-Path -LiteralPath $hs) { throw 'with -NonInteractive the marked probe RAN under Unrestricted -- expected the prompt to fail at once' }
             Write-Host 'with -NonInteractive the marked probe was refused at once (no state file)'
             # Every helper marked: the downloaded-ZIP case, run as a person runs

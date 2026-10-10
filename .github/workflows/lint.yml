@@ -630,8 +630,22 @@ jobs:
               if ($l -match '^\s*(::|rem\s)') { continue }
               if ($l -match '-File "%SCRIPT_DIR%tools\\' -and $l -notmatch ' -NonInteractive ') { $bad += "${f}:$($i + 1): a helper runs before the probe without -NonInteractive" }
             }
-            $toOk = @(for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -match 'goto :exec_probe_ok\b') { $i } })
+            # Every jump to the label, in any spelling cmd accepts (goto x,
+            # goto:x, call :x), and no fall-through into it.
+            $toOk = @(for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -notmatch '^\s*(::|rem\s)' -and $lines[$i] -match '(?i)\b(goto|call)\s*:?exec_probe_ok\b') { $i } })
             if ($toOk.Count -ne 1 -or $lines[$toOk[0]] -ne 'if "%EXEC_MOTW%"=="ok" goto :exec_probe_ok') { $bad += "${f}: :exec_probe_ok must be reached only by: if `"%EXEC_MOTW%`"==`"ok`" goto :exec_probe_ok" }
+            $lbl = [array]::IndexOf($lines, ':exec_probe_ok')
+            if ($lbl -lt 1 -or $lines[$lbl - 1] -ne 'goto :end_script') { $bad += "${f}: the line before :exec_probe_ok must be goto :end_script, or the blocked path falls through into it" }
+            # The verdict is read only after the language mode passed: under
+            # ConstrainedLanguage the probe still writes ok on a machine with
+            # no Group Policy.
+            $ran = [array]::IndexOf($lines, ':exec_probe_ran')
+            $first = -1
+            if ($ran -ge 0) { for ($i = $ran + 1; $i -lt $lines.Count; $i++) { if ($lines[$i] -notmatch '^\s*(::|rem\s|$)') { $first = $i; break } } }
+            if ($first -lt 0 -or $lines[$first] -ne 'if "%EXEC_MOTW%"=="ok" goto :exec_probe_ok') { $bad += "${f}: the EXEC_MOTW check must be the first command after :exec_probe_ran" }
+            $toRan = @(for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -notmatch '^\s*(::|rem\s)' -and $lines[$i] -match '(?i)\b(goto|call)\s*:?exec_probe_ran\b') { $i } })
+            if ($toRan.Count -ne 1 -or $lines[$toRan[0]] -ne 'if "%EXEC_STATE%"=="ok|FullLanguage" goto :exec_probe_ran') { $bad += "${f}: :exec_probe_ran must be reached only once the state line reads ok|FullLanguage" }
+            if ($ran -lt 1 -or $lines[$ran - 1] -ne 'goto :exec_blind') { $bad += "${f}: the line before :exec_probe_ran must be goto :exec_blind, or the refused path falls through into it" }
             $clear = [array]::IndexOf($lines, 'set "EXEC_MOTW="')
             $read = [array]::IndexOf($lines, 'if exist "%TEMP%\dz_exec_motw.txt" set /p EXEC_MOTW=<"%TEMP%\dz_exec_motw.txt"')
             if ($clear -lt 0 -or $read -lt 0 -or $clear -gt $read) { $bad += "${f}: EXEC_MOTW must be cleared before its set /p (set /p from an empty file keeps the old value)" }

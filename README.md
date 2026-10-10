@@ -356,8 +356,9 @@ Whichever way you pick the stick, the script:
 - copies file **contents** only, so Mark of the Web never travels. A PC whose
   IT sets a RemoteSigned script policy would otherwise refuse the marked
   helpers, and an Unrestricted one would stop to ask about each; the audit
-  detects either, names the marked scripts and stops with `AUDIT NOT
-  PERFORMED` rather than read clean. It
+  detects either and stops with `AUDIT NOT PERFORMED` rather than read clean,
+  naming the marked scripts, or counting them when the whole copy is marked.
+  It
   also writes every text file with Windows line endings, as a Windows checkout
   has them (cmd.exe needs them in the batch files);
 - reads every file back, records anything already at the stick's root that

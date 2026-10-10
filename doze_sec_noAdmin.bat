@@ -653,7 +653,7 @@ echo.>> "%REPORT%"
 :: fails at once instead of hanging the audit.
 echo --- PowerShell script execution (can this machine run the audit's helper scripts?) --->> "%REPORT%"
 echo  Command: powershell -Command "Get-ExecutionPolicy -List">> "%REPORT%"
-echo  Command: powershell -Command "Get-ChildItem -LiteralPath '%SCRIPT_DIR:'=''%tools' -Filter *.ps1 | Get-Item -Stream Zone.Identifier -ErrorAction SilentlyContinue | Select-Object FileName">> "%REPORT%"
+echo  Command: powershell -Command "Get-ChildItem -LiteralPath '%SCRIPT_DIR:'=''%tools' -Filter *.ps1 | Get-Item -Stream Zone.Identifier -ErrorAction SilentlyContinue | Select-Object FileName, @{n='ZoneId'; e={@(Get-Content -LiteralPath $_.FileName -Stream Zone.Identifier) -match 'ZoneId'}}">> "%REPORT%"
 del "%TEMP%\dz_exec_state.txt" 2>nul
 del "%TEMP%\dz_exec_motw.txt" 2>nul
 del "%TEMP%\dz_exec_motw_lines.txt" 2>nul
@@ -673,12 +673,12 @@ echo *** AUDIT NOT PERFORMED -- PowerShell will not run this audit's helper scri
 if "%EXEC_STATE%"=="" goto :exec_refused
 set "EXEC_MODE=%EXEC_STATE:ok|=%"
 echo  Scripts run here, but in %EXEC_MODE% mode, not FullLanguage: AppLocker or WDAC has locked PowerShell down, and the .NET calls the checks rely on are blocked.>> "%REPORT%"
-echo  [!] PowerShell runs in %EXEC_MODE% mode on this machine -- the checks cannot run.
+echo  [STOP] PowerShell runs in %EXEC_MODE% mode on this machine -- the checks cannot run.
 goto :exec_blind
 :exec_refused
 set "EXEC_REFUSED=1"
 echo  PowerShell refused to run a script file here. An execution policy set by Group Policy, MachinePolicy or UserPolicy, overrides -ExecutionPolicy Bypass; AppLocker or WDAC script rules, or an antivirus product, can also block scripts.>> "%REPORT%"
-echo  [!] PowerShell refused to run the audit's helper scripts on this machine.
+echo  [STOP] PowerShell refused to run the audit's helper scripts on this machine.
 goto :exec_blind
 :exec_probe_ran
 :: The probe ran in FullLanguage. Its Mark of the Web verdict decides, and a
@@ -689,7 +689,7 @@ if exist "%TEMP%\dz_exec_motw_lines.txt" findstr /l /b /c:"*** AUDIT NOT PERFORM
 if "%EXEC_BANNER%"=="0" echo.>> "%REPORT%"
 if "%EXEC_BANNER%"=="0" echo *** AUDIT NOT PERFORMED -- the script-policy probe ran but did not say which helper scripts PowerShell will run ***>> "%REPORT%"
 if exist "%TEMP%\dz_exec_motw_lines.txt" type "%TEMP%\dz_exec_motw_lines.txt">> "%REPORT%"
-echo  [!] PowerShell will not run some of the audit's helper scripts on this machine -- usually the Mark of the Web on a copy unzipped from a download.
+echo  [STOP] PowerShell will not run some of the audit's helper scripts on this machine -- usually the Mark of the Web on a copy unzipped from a download.
 :exec_blind
 del "%TEMP%\dz_exec_motw_lines.txt" 2>nul
 echo  What PowerShell reports for this machine:>> "%REPORT%"
@@ -700,6 +700,10 @@ set "EP_MACHINE=not set"
 set "EP_USER=not set"
 for /f "tokens=3" %%a in ('reg query "HKLM\SOFTWARE\Policies\Microsoft\Windows\PowerShell" /v ExecutionPolicy 2^>nul ^| findstr /i "ExecutionPolicy"') do set "EP_MACHINE=%%a"
 for /f "tokens=3" %%a in ('reg query "HKCU\SOFTWARE\Policies\Microsoft\Windows\PowerShell" /v ExecutionPolicy 2^>nul ^| findstr /i "ExecutionPolicy"') do set "EP_USER=%%a"
+:: Group Policy's "Turn on Script Execution" set to Disabled writes EnableScripts=0,
+:: which is Restricted whatever ExecutionPolicy holds.
+for /f "tokens=3" %%a in ('reg query "HKLM\SOFTWARE\Policies\Microsoft\Windows\PowerShell" /v EnableScripts 2^>nul ^| findstr /i "EnableScripts"') do if "%%a"=="0x0" set "EP_MACHINE=Restricted (EnableScripts=0)"
+for /f "tokens=3" %%a in ('reg query "HKCU\SOFTWARE\Policies\Microsoft\Windows\PowerShell" /v EnableScripts 2^>nul ^| findstr /i "EnableScripts"') do if "%%a"=="0x0" set "EP_USER=Restricted (EnableScripts=0)"
 echo     MachinePolicy = %EP_MACHINE%   [HKLM\SOFTWARE\Policies\Microsoft\Windows\PowerShell]>> "%REPORT%"
 echo     UserPolicy    = %EP_USER%   [HKCU\SOFTWARE\Policies\Microsoft\Windows\PowerShell]>> "%REPORT%"
 if defined EXEC_MODE echo     LanguageMode  = %EXEC_MODE%>> "%REPORT%"
@@ -712,7 +716,8 @@ set "EXEC_MOTW_N=0"
 set "EXEC_PS1_N=0"
 for %%m in ("%SCRIPT_DIR%tools\*.ps1") do set /a EXEC_PS1_N+=1
 :: 2>nul comes first so a helper with no stream, whose < fails, prints nothing.
-for %%m in ("%SCRIPT_DIR%tools\*.ps1") do 2>nul findstr /i /r /c:"^ZoneId=[34]" <"%%~fm:Zone.Identifier" >nul && set /a EXEC_MOTW_N+=1
+:: A mark counts only with its [ZoneTransfer] header, as Windows reads it.
+for %%m in ("%SCRIPT_DIR%tools\*.ps1") do 2>nul findstr /i /r /c:"^ *ZoneId *= *[34] *$" <"%%~fm:Zone.Identifier" >nul && 2>nul findstr /i /l /c:"[ZoneTransfer]" <"%%~fm:Zone.Identifier" >nul && set /a EXEC_MOTW_N+=1
 if not "%EXEC_MOTW_N%"=="0" echo  Mark of the Web: %EXEC_MOTW_N% of the %EXEC_PS1_N% helper scripts in tools are marked as downloaded from the internet.>> "%REPORT%"
 set "EP_EFF=%EP_USER%"
 if not "%EP_MACHINE%"=="not set" set "EP_EFF=%EP_MACHINE%"
@@ -725,15 +730,15 @@ if "%SCRIPT_DIR:~0,2%"=="\\" echo  This copy runs from a network path. Windows c
 echo  Running anyway would print CLEAN for checks that never ran, so nothing was audited.>> "%REPORT%"
 echo  Ask whoever manages this machine to allow it, or run the audit on a machine you control.>> "%REPORT%"
 echo  See docs\second-machine.md in the doze_sec folder.>> "%REPORT%"
-echo  [!] Nothing was audited -- running anyway would print CLEAN for checks that never ran.
-echo  [!] See the top of %REPORT% and docs\second-machine.md.
+echo  [STOP] Nothing was audited -- running anyway would print CLEAN for checks that never ran.
+echo  [STOP] See the top of %REPORT% and docs\second-machine.md.
 set "EXEC_BLOCKED=1"
 set "EXIT_CODE=1"
 goto :end_script
 :exec_probe_missing
 echo *** AUDIT NOT PERFORMED -- tools\exec_probe.ps1 is missing: this copy of doze_sec is incomplete ***>> "%REPORT%"
 echo  Copy the whole doze_sec folder, including tools, tests and ThreatLists, and run again.>> "%REPORT%"
-echo  [!] tools\exec_probe.ps1 is missing -- this copy of doze_sec is incomplete. Nothing was audited.
+echo  [STOP] tools\exec_probe.ps1 is missing -- this copy of doze_sec is incomplete. Nothing was audited.
 set "EXEC_BLOCKED=1"
 set "EXIT_CODE=1"
 goto :end_script

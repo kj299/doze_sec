@@ -49,15 +49,16 @@ function Get-ExecState {
 
 function Get-ZoneFromStreamText {
     # The zone a Zone.Identifier stream assigns, read the way Windows reads
-    # it: the first ZoneId= under a [ZoneTransfer] header. -1 = no zone (no
-    # header, no ZoneId, empty): the file is not marked. -2 = a ZoneId that
-    # is not a number, which this probe will not guess at.
+    # it: the first ZoneId= under a [ZoneTransfer] header (an INI section:
+    # text after the closing bracket is ignored). -1 = no zone (no header,
+    # no ZoneId, empty): the file is not marked. -2 = a ZoneId that is not a
+    # number, which this probe will not guess at.
     param([string]$Text)
     if (-not $Text) { return -1 }
     $inSection = $false
     foreach ($raw in ($Text -split "`r?`n")) {
         $l = $raw.Trim()
-        if ($l -match '^\[(.*)\]$') { $inSection = ($Matches[1].Trim() -eq 'ZoneTransfer'); continue }
+        if ($l -match '^\[([^\]]*)\]') { $inSection = ($Matches[1].Trim() -eq 'ZoneTransfer'); continue }
         if (-not $inSection) { continue }
         if ($l -match '^ZoneId\s*=\s*(.*)$') {
             $v = $Matches[1].Trim()
@@ -69,23 +70,30 @@ function Get-ZoneFromStreamText {
 }
 
 function Get-ZoneMap {
-    # 'tools\<name>.ps1' -> zone, for every helper script in $Dir. A stream
-    # that cannot be opened (none, a FAT/exFAT stick, access denied) is -1:
-    # PowerShell's own zone check opens the same stream with the same token
-    # and reads an unopenable one as local. This reads the STREAM only;
+    # 'tools\<name>.ps1' -> zone, for every helper script in $Dir. No stream
+    # (none, or a FAT/exFAT stick, which cannot hold one) is -1. A stream that
+    # EXISTS but cannot be read is -2: PowerShell's own zone check may read it
+    # a moment later (a scanner briefly holding it, say), so this probe does
+    # not call it unmarked. This reads the STREAM only;
     # Windows also zones a file by its path (a network share named by IP or
     # FQDN is Internet). This probe sits in the same folder, so that case
     # refuses or prompts the probe itself, and the bat names it.
     param([string]$Dir)
     $map = @{}
-    foreach ($f in @(Get-ChildItem -LiteralPath $Dir -Filter '*.ps1' -File -EA Stop)) {
+    foreach ($f in @(Get-ChildItem -LiteralPath $Dir -Filter '*.ps1' -File -Force -EA Stop)) {
         # -Filter '*.ps1' also matches '.ps1xml' through 8.3 short names.
         if ($f.Extension -ne '.ps1') { continue }
         $z = -1
         try {
             $t = Get-Content -LiteralPath $f.FullName -Stream 'Zone.Identifier' -Raw -EA Stop
             $z = Get-ZoneFromStreamText ([string]$t)
-        } catch { $z = -1 }
+        } catch {
+            # Could not read it: does the stream exist? Listing it does not
+            # open it for reading, so a reader's lock does not hide it.
+            $exists = $false
+            try { $null = Get-Item -LiteralPath $f.FullName -Stream 'Zone.Identifier' -Force -EA Stop; $exists = $true } catch { $exists = $false }
+            if ($exists) { $z = -2 } else { $z = -1 }
+        }
         $map[('tools\' + $f.Name)] = $z
     }
     return $map
@@ -120,7 +128,7 @@ function Format-ZoneNames {
         if ($i -ge $script:NameCap) { $out += ('    ...and {0} more' -f ($Names.Count - $script:NameCap)); break }
         $z = [int]$Zones[$n]
         $zt = 'zone ' + $z
-        if ($z -eq -2) { $zt = 'ZoneId is not a number' }
+        if ($z -eq -2) { $zt = 'marked, but its zone could not be read' }
         $out += ('    {0} ({1})' -f ($n -replace '[^A-Za-z0-9_.\\-]', ''), $zt)
         $i++
     }
@@ -252,6 +260,7 @@ if ($SelfTest) {
     T 'the FIRST ZoneId under the header wins' ((Get-ZoneFromStreamText "[ZoneTransfer]`nZoneId=2`nZoneId=3") -eq 2)
     T 'a ZoneId with no [ZoneTransfer] header is no mark' ((Get-ZoneFromStreamText "ZoneId=3") -eq -1)
     T 'a ZoneId under another section is no mark' ((Get-ZoneFromStreamText "[Other]`nZoneId=3") -eq -1)
+    T 'text after the header bracket is ignored, as in an INI file' ((Get-ZoneFromStreamText "[ZoneTransfer] ;x`nZoneId=3") -eq 3)
     T 'an empty stream is no mark' ((Get-ZoneFromStreamText '') -eq -1)
     T 'a ZoneId that is not a number is -2, not a guess' ((Get-ZoneFromStreamText "[ZoneTransfer]`nZoneId=x") -eq -2)
 
@@ -281,7 +290,7 @@ if ($SelfTest) {
     $v = Get-MotwVerdict -GpoPolicy 'RemoteSigned' -Zones @{ 'tools\a.ps1' = 5; 'tools\b.ps1' = -1 }
     T 'RemoteSigned, zone 5: unknown, never ok (fail closed)' ($v.Verdict -eq 'unknown' -and (Text $v) -match 'tools\\a\.ps1 \(zone 5\)') (Text $v)
     $v = Get-MotwVerdict -GpoPolicy 'Unrestricted' -Zones @{ 'tools\a.ps1' = -2 }
-    T 'Unrestricted, a ZoneId that is not a number: unknown' ($v.Verdict -eq 'unknown' -and (Text $v) -match 'ZoneId is not a number') (Text $v)
+    T 'Unrestricted, a mark whose zone could not be read: unknown' ($v.Verdict -eq 'unknown' -and (Text $v) -match 'marked, but its zone could not be read') (Text $v)
     $v = Get-MotwVerdict -GpoPolicy 'RemoteSigned' -Zones @{ 'tools\a.ps1' = 3; 'tools\b.ps1' = 7 }
     T 'a zone-3 helper beside an odd zone: refused, and both are named' ($v.Verdict -eq 'refused' -and (Text $v) -match 'b\.ps1 \(zone 7\)') (Text $v)
     $v = Get-MotwVerdict -GpoPolicy 'AllSigned' -Zones $none
@@ -341,6 +350,31 @@ if ($SelfTest) {
             T 'live: a ZoneId=3 stream reads 3' ($m['tools\b.ps1'] -eq 3) ([string]$m['tools\b.ps1'])
             T 'live: a ZoneId=2 stream reads 2' ($m['tools\c.ps1'] -eq 2) ([string]$m['tools\c.ps1'])
             T 'live: a .ps1xml file is not a helper script' (-not $m.ContainsKey('tools\d.ps1xml') -and $m.Count -eq 3) (($m.Keys | Sort-Object) -join ',')
+            # A hidden helper is still scanned.
+            $hp = Join-Path $tdir 'h.ps1'
+            Set-Content -LiteralPath $hp -Value "'x'" -Encoding ASCII
+            Set-Content -LiteralPath $hp -Stream 'Zone.Identifier' -Value "[ZoneTransfer]`r`nZoneId=3"
+            (Get-Item -LiteralPath $hp -Force).Attributes = 'Hidden'
+            $m = Get-ZoneMap $tdir
+            T 'live: a hidden helper is still scanned' ($m['tools\h.ps1'] -eq 3) ([string]$m['tools\h.ps1'])
+            # A stream that exists but is held open by someone else is NOT read as
+            # unmarked: it blocks under a policy that checks it.
+            # CreateFileW, not [IO.File]::Open: .NET Framework's legacy path
+            # handling refuses a 'file:stream' path. GENERIC_READ, no sharing,
+            # OPEN_EXISTING.
+            $sig = '[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] public static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr sa, uint disposition, uint flags, IntPtr template);'
+            $k32 = Add-Type -MemberDefinition $sig -Name 'DzExecProbeLock' -Namespace 'DzExecProbeSelfTest' -PassThru
+            $lock = $k32::CreateFileW(($hp + ':Zone.Identifier'), [uint32]2147483648, [uint32]0, [IntPtr]::Zero, [uint32]3, [uint32]0, [IntPtr]::Zero)
+            if (-not $lock.IsInvalid) {
+                try {
+                    $m = Get-ZoneMap $tdir
+                    T 'live: a marked helper whose stream is locked reads -2, not unmarked' ($m['tools\h.ps1'] -eq -2) ([string]$m['tools\h.ps1'])
+                } finally { $lock.Dispose() }
+            } else {
+                Write-Output '[SKIP] locked stream: CreateFileW could not open the stream to hold it'
+            }
+            (Get-Item -LiteralPath $hp -Force).Attributes = 'Normal'
+            Remove-Item -LiteralPath $hp -Force
         } else {
             Write-Output '[SKIP] live Mark of the Web streams: NTFS alternate data streams exist only on Windows (windows-smoke runs these cases)'
         }

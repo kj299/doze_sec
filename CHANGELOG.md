@@ -24,13 +24,17 @@ Group Policy:
   carries the mark) and exits 1. A missing verdict is never read as ok.
 - No Group Policy with marked helpers prints an `[INFO]` line: the marks are
   harmless here and would not be on a managed PC.
-- When PowerShell refuses even the probe, cmd counts the zone-3 and zone-4
-  marks itself. The report names the mark as the cause only under a policy
+- When PowerShell refuses even the probe (a copy unzipped whole, so the probe
+  is marked too), cmd counts the zone-3 and zone-4 marks itself. The report names the mark as the cause only under a policy
   that checks it, and notes a network path, which Windows can place in the
   Internet zone.
 
-A new printed `Command:` line shows the reader how to list the marks
-themselves.
+A new printed `Command:` line shows the reader how to list the marks and
+their zones themselves. The policy evidence now shows `Restricted
+(EnableScripts=0)` when Group Policy turns script execution off, which it
+used to report by the ExecutionPolicy value alone. And the console's `[!]`
+lines on a blocked run printed as `[]` (delayed expansion ate the `!`);
+they read `[STOP]`.
 
 **What I had wrong.** CLAUDE.md said the probe "runs once before the first
 helper". It never did: `threat_list_seed.ps1` runs before it on every run, and
