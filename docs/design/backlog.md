@@ -521,11 +521,12 @@ when any is marked and the policy is RemoteSigned.
 
 ## IOC process and DNS-cache matches have never fired in a test (found 2026-10-09)
 
-While checking the stick's line endings, a search found no test anywhere that
-references `ioc_processes.txt` or `ioc_domains.txt`. Section 18a (a running
-process whose name is on the list) and Section 18f (a C2 domain in the DNS
-cache) have never been exercised with a positive match, by CI or by the plant
-harness. Both read their list with `findstr /i /g:`, which is sensitive to
+While checking the stick's line endings, a search found no test that plants a
+process name from `ioc_processes.txt` or puts a domain from `ioc_domains.txt`
+in the DNS cache (threat_list_seed's self-test only uses `ioc_domains.txt` as a
+seeding fixture). Section 18a (a running process whose name is on the list) and
+Section 18f (a C2 domain in the DNS cache) have never been exercised with a
+positive match, by CI or by the plant harness. Both read their list with `findstr /i /g:`, which is sensitive to
 line endings and has documented quirks with several search strings, so "it
 should match" is a claim nobody has checked. Next piece: plant a process
 started from a copy of a harmless binary renamed to a listed name, and a DNS

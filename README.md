@@ -325,12 +325,15 @@ the questions; `-ListCandidates` only lists the drives.
 needs no git. On GitHub, open the branch, **Code**, **Download ZIP**, then in
 File Explorer right-click the ZIP, **Extract All**, and set the destination to
 the folder the ZIP is in (for example `C:\Users\<name>\Downloads`). The ZIP
-holds a folder named after the branch, and Extract All's default destination
+holds a folder named `doze_sec-` plus the branch name with every `/` turned
+into `-` -- for the branch `claude/code-review-3qcjyn` that is
+`doze_sec-claude-code-review-3qcjyn` -- and Extract All's default destination
 adds another, so with the default the files land one folder deeper than you
-expect. Check before you run, and use the full path:
+expect. Copy the folder name from File Explorer if unsure, check before you
+run, and use the full path:
 
 ```
-$t = "C:\Users\<name>\Downloads\doze_sec-<branch>\tools\make_usb_stick.ps1"
+$t = "C:\Users\<name>\Downloads\doze_sec-claude-code-review-3qcjyn\tools\make_usb_stick.ps1"
 Test-Path $t
 powershell -NoProfile -ExecutionPolicy Bypass -File $t
 ```
@@ -411,7 +414,9 @@ console output says which policy; send it.
   ```
 
   With no drive named it lists the sticks that hold `doze_sec` and asks which
-  one to check (`-Drive E: -Verify` names it).
+  one to check; that needs PowerShell **as administrator**, because it asks
+  Windows which bus each disk is on. In a normal window, name the stick:
+  `-Drive E: -Verify`.
 
   It compares the stick with the manifest kept on your laptop -- never the
   copy on the stick, which the visited PC could have rewritten -- and lists any

@@ -273,9 +273,11 @@ RUNNING FROM A USB STICK
      NO GIT, OR THE CHANGE IS NOT MERGED YET? The script needs no git. On
      GitHub: the branch, Code, Download ZIP; Extract All with the destination
      set to the folder the ZIP is in (the ZIP holds its own folder, and the
-     default destination adds another). Then Test-Path the script's full path
-     (...\doze_sec-<branch>\tools\make_usb_stick.ps1) and run the command
-     above with that path. Every text file goes onto the stick with Windows
+     default destination adds another). That folder is doze_sec- plus the
+     branch name with every / turned into - (for claude/code-review-3qcjyn:
+     doze_sec-claude-code-review-3qcjyn). Test-Path the script's full path
+     (...\doze_sec-claude-code-review-3qcjyn\tools\make_usb_stick.ps1) and
+     run the command above with that path. Every text file goes onto the stick with Windows
      line endings, which a download lacks, so the stick is the same.
 
   2. RUN IT on the other PC, straight from the stick (nothing copied):
@@ -299,7 +301,8 @@ RUNNING FROM A USB STICK
 
        powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1 -Verify
 
-     (with no drive named it asks which stick to check; -Drive E: names it)
+     (with no drive named it asks which stick to check, which needs PowerShell
+     as administrator; in a normal window name it: -Drive E: -Verify)
 
      Any tool file the visited PC changed, any link, and any new file at the
      stick root that could run is listed -- that is itself worth reporting;

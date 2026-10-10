@@ -734,12 +734,14 @@ jobs:
                             'a stick whose volume ID changed (another USB port) is matched by content',
                             'a CHANGED copy whose ID changed is never matched',
                             'a refused drive is listed with its reason and has no number', 'confirming with a different letter cancels',
-                            'a window that cannot ask chooses nothing and names the -Drive form') {
+                            'a window that cannot ask chooses nothing and names the -Drive form',
+                            'a rolled-back copy (the old files and the old manifest copy, put back) is never matched under a new ID',
+                            'a rewritten manifest copy on the stick is a difference') {
             if ($out -notmatch [regex]::Escape($must)) { throw ("make_usb_stick case missing on Windows: {0}" -f $must) }
           }
           if ($out -match '\[SKIP\] (Mark of the Web|links on the stick)') { throw 'the stream or link cases skipped on Windows -- they must run here (the runner is elevated, so symbolic links can be created)' }
           $n = @($out -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($n -lt 100) { throw "make_usb_stick self-test ran only $n case(s)" }
+          if ($n -lt 110) { throw "make_usb_stick self-test ran only $n case(s)" }
           Write-Host "make_usb_stick -SelfTest OK ($n cases)"
           # Live, on real Storage cmdlets. -ListCandidates must refuse this
           # runner's Windows drive and say why. With no drive named the script
@@ -3532,12 +3534,12 @@ jobs:
           Copy-Item -LiteralPath $stickRoot -Destination $moved -Recurse
           $vm = (& .\tools\make_usb_stick.ps1 -ToFolder $moved -ManifestStore $store -Verify *>&1 | ForEach-Object { "$_" }) -join "`n"
           Write-Host $vm
-          if ($LASTEXITCODE -ne 0 -or $vm -notmatch 'its files match, one for one') { throw 'an unchanged copy in a new place was not matched by content' }
+          if ($LASTEXITCODE -ne 0 -or $vm -notmatch 'but it matches, file for file') { throw 'an unchanged copy in a new place was not matched by content' }
           Add-Content -LiteralPath (Join-Path $moved 'doze_sec\tools\exec_probe.ps1') -Value '# changed on a visited machine'
           $vt = (& .\tools\make_usb_stick.ps1 -ToFolder $moved -ManifestStore $store -Verify *>&1 | ForEach-Object { "$_" }) -join "`n"
           $vrc = $LASTEXITCODE
           Write-Host $vt
-          if ($vrc -ne 2 -or $vt -notmatch '\[UNVERIFIED\]' -or $vt -notmatch '1 difference\(s\) from this copy' -or $vt -match '\[OK\] The tool') { throw ("a copy in a new place that was ALSO changed must read UNVERIFIED with the difference count, exit 2 (got {0})" -f $vrc) }
+          if ($vrc -ne 2 -or $vt -notmatch '\[UNVERIFIED\]' -or $vt -notmatch ': 1 difference\(s\) from this copy' -or $vt -match '\[OK\] The tool') { throw ("a copy in a new place that was ALSO changed must read UNVERIFIED with the difference count, exit 2 (got {0})" -f $vrc) }
           Write-Host 'read-only field test: proven on this runner, run from a stick made from an LF-only marked download, which it left unchanged; a copy in a new place is matched by content, and one that also changed is UNVERIFIED.'
           # The last call above is the deliberately UNVERIFIED -Verify (exit 2).
           # This step's verdict is its throws; the runner's PowerShell wrapper

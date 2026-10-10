@@ -556,8 +556,13 @@ walk that refuses "any reparse point" refuses the owner's checkout -- refuse
 LINKS (`LinkType` SymbolicLink/Junction) in the source, every reparse point on
 the stick. Every text file goes onto the stick with CRLF whatever the source
 (a GitHub ZIP is LF-only, and CI had only ever built a stick from a CRLF
-checkout), and a stick Windows has re-identified is matched by content,
-never by guessing which manifest it was.
+checkout), and a stick Windows has re-identified is matched by content --
+every file AND the stick's own copy of its manifest, byte for byte, which is
+what makes one stick's manifest its own -- never by guessing which manifest
+it was. And `-Refresh` retires the manifest of the copy it replaced
+(`.superseded`): a manifest that can still vouch for a copy that no longer
+exists is how a visited machine rolls the tool back to an older version and
+reads `[OK]`.
 
 ### A section and the dashboard must not contradict each other (REQUIRED)
 

@@ -67,10 +67,12 @@ older checkout can hold an older guide.
 On GitHub open the branch, **Code**, **Download ZIP**; in File Explorer
 right-click it, **Extract All**, and set the destination to the folder the ZIP
 is in (for example `C:\Users\<name>\Downloads`) -- the ZIP holds its own
-folder, and the default destination adds another. Then:
+folder, and the default destination adds another. That folder is `doze_sec-`
+plus the branch name with every `/` turned into `-` (copy it from File
+Explorer if unsure). For the branch `claude/code-review-3qcjyn`:
 
 ```
-$t = "C:\Users\<name>\Downloads\doze_sec-<branch>\tools\make_usb_stick.ps1"
+$t = "C:\Users\<name>\Downloads\doze_sec-claude-code-review-3qcjyn\tools\make_usb_stick.ps1"
 Test-Path $t
 powershell -NoProfile -ExecutionPolicy Bypass -File $t
 ```
@@ -212,7 +214,8 @@ the RunOnce key, the boot configuration and the restore points.
   ```
 
   With no drive named it lists the sticks that hold `doze_sec` and asks which
-  one to check (`-Drive E: -Verify` names it).
+  one to check; that needs PowerShell **as administrator**. In a normal window,
+  name the stick: `-Drive E: -Verify`.
 
   It compares `E:\doze_sec` with the manifest kept on your laptop -- never the
   copy on the stick, which the visited PC could have rewritten -- and lists any

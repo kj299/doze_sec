@@ -233,18 +233,22 @@ function Get-PickerRow {
     #                   accepts it and it does not already hold doze_sec
     #                   (copying never overwrites a copy)
     #         'refresh' replace a copy there: offered when Get-StickVerdict
-    #                   accepts it
+    #                   accepts it and it holds doze_sec
     #         'verify'  check the copy there: offered when it holds doze_sec
     #                   and passes the same rule read-only (a write-protected
     #                   stick reads back fine)
     #   -HasTool  something named doze_sec is at its root
+    #   -ProbeError  why looking for doze_sec there failed (an unreadable
+    #             volume); a reason to refuse it
     # Returns @{ Letter; Offer; Reasons; Name; Bus; FileSystem; Size; Free }.
-    param([string]$Letter, $Disk, $Volume, [hashtable]$Context, [string]$Mode = 'make', [bool]$HasTool = $false)
+    param([string]$Letter, $Disk, $Volume, [hashtable]$Context, [string]$Mode = 'make', [bool]$HasTool = $false, [string]$ProbeError = '')
     $v = Get-StickVerdict $Disk $Volume $Context -ForReading:($Mode -eq 'verify')
     $reasons = New-Object System.Collections.Generic.List[string]
     foreach ($r in $v.Reasons) { $reasons.Add($r) }
     if ($Mode -eq 'verify' -and -not $HasTool) { $reasons.Add('it holds no doze_sec folder to check') }
+    if ($ProbeError) { $reasons.Add($ProbeError) }
     if ($Mode -eq 'make' -and $HasTool) { $reasons.Add('it already holds doze_sec -- run with -Refresh to replace that copy, or -Verify to check it') }
+    if ($Mode -eq 'refresh' -and -not $HasTool) { $reasons.Add('it holds no doze_sec to replace -- run without -Refresh to make one') }
     $size = $null
     if ($Volume -and $Volume.PSObject.Properties['Size']) { $size = $Volume.Size } elseif ($Disk) { $size = $Disk.Size }
     return @{
@@ -336,14 +340,16 @@ function Test-IsReparse {
 }
 
 function Get-EntryState {
-    # 'missing' | 'link' | 'dir' | 'file' -- read from the entry ITSELF, never
-    # from what a link points at. Test-Path and DirectoryInfo.Exists follow
-    # links; a junction planted on a stick can point into this laptop.
+    # 'missing' | 'link' | 'dir' | 'file' | 'unreadable' -- read from the entry
+    # ITSELF, never from what a link points at. Test-Path and
+    # DirectoryInfo.Exists follow links; a junction planted on a stick can point
+    # into this laptop. A METHOD call, not FileInfo.Attributes: PowerShell turns
+    # an exception thrown by a property getter into $null, so a BitLocker-locked
+    # or unrecognised volume read as attributes 0 -- an ordinary file.
     param([string]$Path)
-    $fi = New-Object IO.FileInfo $Path
-    $fi.Refresh()
-    $a = [int]$fi.Attributes
-    if ($a -eq -1) { return 'missing' }
+    try { $a = [int][IO.File]::GetAttributes($Path) }
+    catch [IO.FileNotFoundException], [IO.DirectoryNotFoundException] { return 'missing' }
+    catch { return 'unreadable' }
     if (($a -band [int][IO.FileAttributes]::ReparsePoint) -ne 0) { return 'link' }
     if (($a -band [int][IO.FileAttributes]::Directory) -ne 0) { return 'dir' }
     return 'file'
@@ -577,51 +583,98 @@ function Read-Manifest {
     return @{ Header = $hdr; Entries = $ent; Root = $rootOut }
 }
 
-function Compare-StickTree {
-    # Compares <Root> (the doze_sec folder) with a trusted manifest's entries,
-    # and the stick root (<OuterRoot>) with the root recorded when the stick
-    # was made. Never follows a link: a <Root> that is itself a link is reported
-    # as RootLink and nothing under it is read.
-    # Returns @{ RootLink; Missing; Changed; Added; Removed; Streams; Reparse;
-    #            RootNew; Other }.
-    param([string]$Root, [hashtable]$Expected, [string]$OuterRoot = '', $RootBaseline = $null)
-    $r = @{ RootLink = $false; Missing = $false; Changed = @(); Added = @(); Removed = @(); Streams = @(); Reparse = @(); RootNew = @(); Other = @() }
-    $state = Get-EntryState $Root
-    if ($state -eq 'link') { $r.RootLink = $true; return $r }
-    if ($state -ne 'dir') { $r.Missing = $true; return $r }
-    $changed = New-Object System.Collections.Generic.List[string]
-    $added = New-Object System.Collections.Generic.List[string]
-    $streams = New-Object System.Collections.Generic.List[string]
+function Get-FileSha256 {
+    # SHA-256 of a file, streamed, so a planted multi-gigabyte file cannot
+    # exhaust memory.
+    param([string]$Path)
+    $h = [Security.Cryptography.SHA256]::Create()
+    $fs = $null
+    try {
+        $fs = [IO.File]::OpenRead($Path)
+        return ([BitConverter]::ToString($h.ComputeHash($fs)) -replace '-', '').ToLower()
+    } finally {
+        if ($fs) { $fs.Dispose() }
+        $h.Dispose()
+    }
+}
+
+function Get-StickState {
+    # Reads the copy at <Root>, and the stick root at <OuterRoot>, ONCE: every
+    # file's SHA-256 (one larger than RootHashLimit is recorded by size --
+    # nothing this script writes is that large), each file's extra streams,
+    # every reparse point, the stick's own copy of its manifest, and the root
+    # scan. Comparing against several manifests reuses this reading instead of
+    # reading the stick again for each. Never follows a link.
+    param([string]$Root, [string]$OuterRoot = '')
+    $s = @{ State = (Get-EntryState $Root); Files = @{}; Streams = @{}; Reparse = @(); StickManifest = ''; Scan = $null }
+    if ($OuterRoot) { $s.Scan = Get-RootScan $OuterRoot }
+    if ($s.State -ne 'dir') { return $s }
     $tree = Get-TreeEntries $Root -Strict
-    $present = @{}
     foreach ($f in $tree.Files) {
         $rel = Get-RelPath $Root $f.FullName
-        if ($rel -ieq $script:StickManifestName) { continue }
-        $present[$rel] = $true
+        $h = 'unreadable'
+        if ($f.Length -gt $script:RootHashLimit) { $h = 'size:' + $f.Length }
+        else { try { $h = Get-FileSha256 $f.FullName } catch {} }
         # PowerShell hashtables compare keys case-insensitively, as FAT and
         # exFAT compare names.
+        if ($rel -ieq $script:StickManifestName) { $s.StickManifest = $h } else { $s.Files[$rel] = $h }
+        $x = @(Get-ExtraStreams $f.FullName)
+        if ($x.Count -gt 0) { $s.Streams[$rel] = $x }
+    }
+    $s.Reparse = $tree.Reparse
+    return $s
+}
+
+function Compare-StickState {
+    # Compares a Get-StickState reading with a trusted manifest: its entries,
+    # the stick root against the root it recorded, and -- given -ManifestHash,
+    # the SHA-256 of the laptop's manifest file -- the copy of that manifest the
+    # stick carries, which this script wrote byte for byte equal to the
+    # laptop's. That copy ties the stick to ONE manifest: two sticks made from
+    # the same checkout hold the same files but not the same manifest.
+    # Returns @{ RootLink; Missing; Changed; Added; Removed; Streams; Reparse;
+    #            RootNew; Other }.
+    param($State, [hashtable]$Expected, $RootBaseline = $null, [string]$ManifestHash = '')
+    $r = @{ RootLink = $false; Missing = $false; Changed = @(); Added = @(); Removed = @(); Streams = @(); Reparse = @(); RootNew = @(); Other = @() }
+    if ($State.State -eq 'link') { $r.RootLink = $true; return $r }
+    if ($State.State -ne 'dir') { $r.Missing = $true; return $r }
+    $changed = New-Object System.Collections.Generic.List[string]
+    $added = New-Object System.Collections.Generic.List[string]
+    $removed = New-Object System.Collections.Generic.List[string]
+    $streams = New-Object System.Collections.Generic.List[string]
+    foreach ($rel in @($State.Files.Keys | Sort-Object)) {
         if (-not $Expected.ContainsKey($rel)) { $added.Add($rel); continue }
-        $h = Get-Sha256Hex ([IO.File]::ReadAllBytes($f.FullName))
-        if ($h -ne $Expected[$rel]) { $changed.Add($rel) }
-        foreach ($s in (Get-ExtraStreams $f.FullName)) { $streams.Add($rel + ':' + $s) }
+        if ($State.Files[$rel] -ne $Expected[$rel]) { $changed.Add($rel) }
+        if ($State.Streams.ContainsKey($rel)) { foreach ($x in $State.Streams[$rel]) { $streams.Add($rel + ':' + $x) } }
+    }
+    foreach ($k in @($Expected.Keys | Sort-Object)) { if (-not $State.Files.ContainsKey($k)) { $removed.Add($k) } }
+    if ($ManifestHash) {
+        if (-not $State.StickManifest) { $removed.Add($script:StickManifestName) }
+        elseif ($State.StickManifest -ne $ManifestHash) { $changed.Add($script:StickManifestName) }
+        if ($State.Streams.ContainsKey($script:StickManifestName)) { foreach ($x in $State.Streams[$script:StickManifestName]) { $streams.Add($script:StickManifestName + ':' + $x) } }
     }
     $r.Changed = $changed.ToArray()
     $r.Added = $added.ToArray()
-    $r.Removed = @($Expected.Keys | Where-Object { -not $present.ContainsKey($_) } | Sort-Object)
+    $r.Removed = $removed.ToArray()
     $r.Streams = $streams.ToArray()
-    $r.Reparse = $tree.Reparse
-    if ($OuterRoot) {
-        $scan = Get-RootScan $OuterRoot
+    $r.Reparse = $State.Reparse
+    if ($State.Scan) {
         $new = New-Object System.Collections.Generic.List[string]
-        foreach ($k in $scan.Watch.Keys) {
+        foreach ($k in $State.Scan.Watch.Keys) {
             if ($null -eq $RootBaseline) { $new.Add($k + ' (the root was not recorded when this stick was made)'); continue }
             if (-not $RootBaseline.ContainsKey($k)) { $new.Add($k); continue }
-            if ($RootBaseline[$k] -ne $scan.Watch[$k]) { $new.Add($k + ' (changed)') }
+            if ($RootBaseline[$k] -ne $State.Scan.Watch[$k]) { $new.Add($k + ' (changed)') }
         }
         $r.RootNew = $new.ToArray()
-        $r.Other = $scan.Other
+        $r.Other = $State.Scan.Other
     }
     return $r
+}
+
+function Compare-StickTree {
+    # Get-StickState and Compare-StickState in one call.
+    param([string]$Root, [hashtable]$Expected, [string]$OuterRoot = '', $RootBaseline = $null, [string]$ManifestHash = '')
+    return (Compare-StickState (Get-StickState $Root $OuterRoot) $Expected $RootBaseline $ManifestHash)
 }
 
 function Get-DiffCount {
@@ -638,9 +691,10 @@ function Remove-StickCopy {
     # did, and a link could lead the delete off the stick. Then it deletes only
     # the files the manifest lists, the stick's manifest, and folders left
     # empty. Throws with the reason on refusal; deletes nothing in that case.
-    param([string]$Dir, [hashtable]$Expected)
+    param([string]$Dir, [hashtable]$Expected, [string]$ManifestHash = '')
+    if ((Get-EntryState $Dir) -eq 'link') { throw ($Dir + ' is itself a link or junction; refused -- nothing behind it was read. Keep the stick as it is: it is evidence.') }
     if ($null -eq $Expected) { throw ('this laptop holds no manifest for ' + $Dir + ', so nothing proves what in it is ours; remove it yourself after looking at what it holds') }
-    $c = Compare-StickTree -Root $Dir -Expected $Expected
+    $c = Compare-StickTree -Root $Dir -Expected $Expected -ManifestHash $ManifestHash
     if ($c.RootLink) { throw ($Dir + ' is itself a link or junction; refused -- inspect the stick before reusing it') }
     if ($c.Missing) { throw ($Dir + ' does not exist') }
     if ((Get-DiffCount $c) -gt 0) {
@@ -679,7 +733,8 @@ function Get-StoreManifests {
     param([string]$Store)
     $out = New-Object System.Collections.Generic.List[object]
     if ((Get-EntryState $Store) -ne 'dir') { return ,$out.ToArray() }
-    foreach ($f in (Get-ChildItem -LiteralPath $Store -Filter '*.sha256' -File | Sort-Object Name -Descending)) {
+    $files = @(Get-ChildItem -LiteralPath $Store -File | Where-Object { $_.Name.EndsWith('.sha256', [StringComparison]::OrdinalIgnoreCase) } | Sort-Object Name -Descending)
+    foreach ($f in $files) {
         $m = $null; $e = ''
         try { $m = Read-Manifest $f.FullName } catch { $e = $_.Exception.Message }
         $out.Add(@{ Path = $f.FullName; Manifest = $m; Error = $e })
@@ -687,47 +742,59 @@ function Get-StoreManifests {
     return ,$out.ToArray()
 }
 
+function Set-ManifestSuperseded {
+    # A laptop manifest whose copy -Refresh has replaced must never vouch
+    # again. Otherwise a visited machine that put the OLD copy back -- the
+    # files and the old manifest copy, saved from an earlier visit -- would
+    # read "[OK] ... exactly what this laptop put there": a rollback to an
+    # older tool. Renamed, not deleted, so the record stays; the store
+    # listing reads *.sha256 only. Returns the new path.
+    param([string]$Path)
+    $to = $Path + '.superseded'
+    if ((Get-EntryState $to) -ne 'missing') { $to = $Path + '.' + (Get-Date -Format 'yyyyMMddHHmmss') + '.superseded' }
+    [IO.File]::Move($Path, $to)
+    return $to
+}
+
 function Resolve-TrustedManifest {
-    # Which manifest kept on this laptop vouches for the copy at <Dest>. Never
-    # the stick's own copy of the manifest.
+    # Which manifest kept on this laptop vouches for the copy read into
+    # <Stick> (Get-StickState). Never the stick's own copy of the manifest.
     #   1. The newest whose recorded target is this one (the volume ID, or the
     #      folder path): How = 'target'.
-    #   2. Failing that, the newest whose files the copy matches EXACTLY --
-    #      among those, one whose stick-root record matches too: How =
+    #   2. Failing that, the newest that the copy matches EXACTLY -- every file,
+    #      and the stick's own copy of that manifest byte for byte: How =
     #      'content'. Windows can give a stick with no serial number a new
     #      volume ID when it goes into another USB port; that changes nothing on
-    #      the stick, and an exact match against a manifest this laptop wrote
-    #      proves the contents whatever the ID says.
+    #      the stick. The manifest copy is what makes this one stick's manifest:
+    #      another stick made from the same checkout has the same files and a
+    #      different manifest. And -Refresh retires the manifest of the copy it
+    #      replaces (Set-ManifestSuperseded), so an older copy put back cannot
+    #      match at all.
     #   3. Neither: How = '', and Candidates lists every manifest with its
-    #      difference count, so the caller can say UNVERIFIED and point at the
-    #      closest one instead of guessing which stick this is.
-    # A <Dest> that is a link or is missing is matched by target only: nothing
-    # behind a link is read, and an absent folder matches nothing.
+    #      difference count (or why it was not compared), so the caller can say
+    #      UNVERIFIED and point at the closest one instead of guessing.
+    # A copy that is a link, a file or unreadable is matched by target only.
     # Returns @{ Path; Manifest; How; Candidates = @(@{ Path; Line }) }.
-    param([object[]]$Manifests, [string]$TargetId, [string]$Dest, [string]$Outer = '')
+    param([object[]]$Manifests, [string]$TargetId, $Stick)
     foreach ($e in $Manifests) {
         if ($e.Manifest -and $e.Manifest.Header['target'] -ceq $TargetId) {
             return @{ Path = $e.Path; Manifest = $e.Manifest; How = 'target'; Candidates = @() }
         }
     }
-    $none = @{ Path = $null; Manifest = $null; How = ''; Candidates = @() }
-    if ((Get-EntryState $Dest) -ne 'dir') { return $none }
     $cands = New-Object System.Collections.Generic.List[object]
     $pick = $null
-    $pickRank = 0
     foreach ($e in $Manifests) {
         if (-not $e.Manifest) { $cands.Add(@{ Path = $e.Path; Line = 'could not be read (' + $e.Error + ')' }); continue }
         $m = $e.Manifest
-        $c = Compare-StickTree -Root $Dest -Expected $m.Entries -OuterRoot $Outer -RootBaseline $m.Root
+        $head = 'made ' + $m.Header['created'] + ' for ' + $m.Header['target'] + ', ' + $m.Entries.Count + ' files'
+        if ($Stick.State -ne 'dir') { $cands.Add(@{ Path = $e.Path; Line = ($head + ': not compared -- the copy is not a folder (' + $Stick.State + ')') }); continue }
+        $c = Compare-StickState $Stick $m.Entries $m.Root (Get-FileSha256 $e.Path)
         $d = Get-DiffCount $c
-        $rank = 0
-        if ($d -eq 0 -and $m.Entries.Count -gt 0) { $rank = 1; if (@($c.RootNew).Count -eq 0) { $rank = 2 } }
-        if ($rank -gt $pickRank) { $pick = $e; $pickRank = $rank }
-        $cands.Add(@{ Path = $e.Path; Line = ('made ' + $m.Header['created'] + ' for ' + $m.Header['target'] + ', ' + $m.Entries.Count + ' files: ' + $d + ' difference(s) from this copy') })
+        if ((-not $pick) -and $d -eq 0 -and $m.Entries.Count -gt 0) { $pick = $e }
+        $cands.Add(@{ Path = $e.Path; Line = ($head + ': ' + $d + ' difference(s) from this copy') })
     }
     if ($pick) { return @{ Path = $pick.Path; Manifest = $pick.Manifest; How = 'content'; Candidates = @() } }
-    $none.Candidates = $cands.ToArray()
-    return $none
+    return @{ Path = $null; Manifest = $null; How = ''; Candidates = $cands.ToArray() }
 }
 
 function Get-IdTag {
@@ -759,13 +826,18 @@ function Get-LiveTarget {
 function Get-LivePickerRows {
     param([string]$Mode)
     $rows = New-Object System.Collections.Generic.List[object]
-    foreach ($vol in (Get-Volume | Where-Object { $_.DriveLetter } | Sort-Object DriveLetter)) {
+    # Throws when the drives cannot be listed (a window that is not elevated
+    # may be refused); the caller says so and names the -Drive form.
+    $vols = @(Get-Volume -EA Stop | Where-Object { $_.DriveLetter } | Sort-Object DriveLetter)
+    foreach ($vol in $vols) {
         $l = [string]$vol.DriveLetter
         $lt = Get-LiveTarget $l
-        # Anything named doze_sec counts, a link included: -Verify reports a
-        # link there, and a copy never writes over one.
-        $has = ((Get-EntryState ($l + ':\' + $script:StickFolder)) -ne 'missing')
-        $rows.Add((Get-PickerRow -Letter $l -Disk $lt.Disk -Volume $lt.Volume -Context (Get-LiveContext $lt.Error) -Mode $Mode -HasTool $has))
+        # Anything named doze_sec counts, a link or a file included: -Verify
+        # reports those, and a copy never writes over one.
+        $st = Get-EntryState ($l + ':\' + $script:StickFolder)
+        $probe = ''
+        if ($st -eq 'unreadable') { $probe = 'Windows cannot read this drive -- it may be locked by BitLocker (unlock it in File Explorer first) or formatted for a Mac or Linux' }
+        $rows.Add((Get-PickerRow -Letter $l -Disk $lt.Disk -Volume $lt.Volume -Context (Get-LiveContext $lt.Error) -Mode $Mode -HasTool ($st -in @('dir', 'link', 'file')) -ProbeError $probe))
     }
     return ,$rows.ToArray()
 }
@@ -885,6 +957,10 @@ if ($SelfTest) {
     $rowHas = Get-PickerRow -Letter 'E' -Disk (D) -Volume (V -L 'E') -Context $ctx -Mode 'make' -HasTool $true
     T 'making: a stick that already holds doze_sec is not offered, and the reason names -Refresh and -Verify' ((-not $rowHas.Offer) -and ($rowHas.Reasons -join ' ') -match '-Refresh' -and ($rowHas.Reasons -join ' ') -match '-Verify') ($rowHas.Reasons -join '; ')
     T 'refreshing: the same stick is offered' ((Get-PickerRow -Letter 'E' -Disk (D) -Volume (V -L 'E') -Context $ctx -Mode 'refresh' -HasTool $true).Offer) ''
+    $rf = Get-PickerRow -Letter 'E' -Disk (D) -Volume (V -L 'E') -Context $ctx -Mode 'refresh' -HasTool $false
+    T 'refreshing: a stick with no copy to replace is not offered, and the reason says to run without -Refresh' ((-not $rf.Offer) -and ($rf.Reasons -join ' ') -match 'without -Refresh') ($rf.Reasons -join '; ')
+    $ur = Get-PickerRow -Letter 'E' -Disk (D) -Volume (V -L 'E') -Context $ctx -Mode 'verify' -HasTool $false -ProbeError 'Windows cannot read this drive -- it may be locked by BitLocker'
+    T 'checking: a stick Windows cannot read is refused with that reason, never offered' ((-not $ur.Offer) -and ($ur.Reasons -join ' ') -match 'cannot read') ($ur.Reasons -join '; ')
     $roV = Get-PickerRow -Letter 'E' -Disk (D -Ro $true) -Volume (V -L 'E') -Context $ctx -Mode 'verify' -HasTool $true
     $roM = Get-PickerRow -Letter 'E' -Disk (D -Ro $true) -Volume (V -L 'E') -Context $ctx -Mode 'make'
     T 'checking: a write-protected stick holding doze_sec is offered (reading back is fine); making on it is refused' ($roV.Offer -and -not $roM.Offer) (($roV.Reasons + $roM.Reasons) -join '; ')
@@ -975,30 +1051,44 @@ if ($SelfTest) {
         [IO.File]::WriteAllText((Join-Path $dest $script:StickManifestName), $text)
         $m = Read-Manifest $keep
         T 'the manifest round-trips: one entry per copied file, and the root baseline' ($m.Entries.Count -eq $res.Entries.Count -and $m.Header['target'] -eq $tid -and $null -ne $m.Root -and $m.Root.ContainsKey('autorun.inf')) ("entries=" + $m.Entries.Count)
-        $r = Resolve-TrustedManifest (Get-StoreManifests $store) $tid $dest $outer
+        $r = Resolve-TrustedManifest (Get-StoreManifests $store) $tid (Get-StickState $dest $outer)
         T 'the trusted manifest is found in the laptop store by target' ($r.Path -eq $keep -and $r.How -eq 'target') ($r.How + ' ' + $r.Path)
-        $r = Resolve-TrustedManifest (Get-StoreManifests $store) 'volume=\\?\Volume{new-port}\' $dest $outer
+        $r = Resolve-TrustedManifest (Get-StoreManifests $store) 'volume=\\?\Volume{new-port}\' (Get-StickState $dest $outer)
         T 'a stick whose volume ID changed (another USB port) is matched by content to the manifest this laptop wrote' ($r.Path -eq $keep -and $r.How -eq 'content') ($r.How + ' ' + $r.Path)
-        $r = Resolve-TrustedManifest (Get-StoreManifests $store) 'folder=elsewhere' (Join-Path $tmp 'nowhere') ''
-        T 'a missing copy matches no manifest by content' ($null -eq $r.Path) ($r.How + ' ' + $r.Path)
-        # Two manifests with the same files: the one whose stick-root record also
-        # matches is used, even when it is older.
+        $r = Resolve-TrustedManifest (Get-StoreManifests $store) 'folder=elsewhere' (Get-StickState (Join-Path $tmp 'nowhere') '')
+        T 'a missing copy matches no manifest by content, and every manifest is still listed with why it was not compared' ($null -eq $r.Path -and (@($r.Candidates | ForEach-Object { $_.Line }) -join ' ') -match 'not compared') ($r.How + ' ' + $r.Path)
+        # Another stick made from the same checkout: the same files, a different
+        # manifest (another target, another time, another root). Newer, but the
+        # stick's own copy of ITS manifest decides which one it is.
         $sameNoRoot = New-ManifestText -Entries $res.Entries -TargetId 'volume=\\?\Volume{other-stick}\' -SourcePath $src -Created '2026-10-10T12:00:00' -Root ([ordered]@{})
         $newer = Join-Path $store 'stick_20261010_120000_aaaaaaaa.sha256'
         [IO.File]::WriteAllText($newer, $sameNoRoot)
-        $r = Resolve-TrustedManifest (Get-StoreManifests $store) 'volume=\\?\Volume{new-port}\' $dest $outer
-        T 'among exact matches, the one whose stick-root record also matches is used' ($r.Path -eq $keep -and $r.How -eq 'content') ($r.How + ' ' + $r.Path)
+        $r = Resolve-TrustedManifest (Get-StoreManifests $store) 'volume=\\?\Volume{new-port}\' (Get-StickState $dest $outer)
+        T 'another stick''s manifest with the same files does not vouch for this one: the stick''s own manifest copy decides' ($r.Path -eq $keep -and $r.How -eq 'content') ($r.How + ' ' + $r.Path)
         [IO.File]::Delete($newer)
         [IO.File]::WriteAllText((Join-Path $store 'stick_20261011_000000_bbbbbbbb.sha256'), 'not a manifest')
         $all = Get-StoreManifests $store
         T 'a manifest that cannot be read is listed with its reason, not skipped in silence' (@($all | Where-Object { -not $_.Manifest -and $_.Error -match 'unreadable manifest line' }).Count -eq 1) ''
-        $r = Resolve-TrustedManifest $all $tid $dest $outer
+        $r = Resolve-TrustedManifest $all $tid (Get-StickState $dest $outer)
         T 'an unreadable manifest does not stop the right one being found' ($r.Path -eq $keep) $r.Path
 
         $c = Compare-StickTree -Root $dest -Expected $m.Entries -OuterRoot $outer -RootBaseline $m.Root
         T 'an untouched stick verifies identical, and a root file that was there when it was made is not reported' (((Get-DiffCount $c) + @($c.RootNew).Count) -eq 0) ((@($c.Changed) + @($c.Added) + @($c.Removed) + @($c.RootNew)) -join ', ')
         $c = Compare-StickTree -Root $dest -Expected $m.Entries -OuterRoot $outer -RootBaseline $null
         T 'with no root baseline the root entries are reported as not recorded, never as clean' (@($c.RootNew | Where-Object { $_ -match 'not recorded' }).Count -eq 1) ($c.RootNew -join ', ')
+
+        $kh = Get-FileSha256 $keep
+        $c = Compare-StickTree -Root $dest -Expected $m.Entries -OuterRoot $outer -RootBaseline $m.Root -ManifestHash $kh
+        T 'the stick''s own copy of its manifest is compared byte for byte, and an untouched one is not a difference' ((Get-DiffCount $c) -eq 0) ((@($c.Changed) + @($c.Removed)) -join ', ')
+        $smPath = Join-Path $dest $script:StickManifestName
+        [IO.File]::WriteAllText($smPath, 'rewritten on a visited machine')
+        $c = Compare-StickTree -Root $dest -Expected $m.Entries -ManifestHash $kh
+        T 'a rewritten manifest copy on the stick is a difference' (@($c.Changed) -contains $script:StickManifestName) ($c.Changed -join ', ')
+        $threw = ''; try { Remove-StickCopy -Dir $dest -Expected $m.Entries -ManifestHash $kh } catch { $threw = $_.Exception.Message }
+        T 'refresh refuses a copy whose manifest copy was rewritten, and deletes nothing' ($threw -match 'changed: STICK_MANIFEST' -and (Test-Path -LiteralPath (Join-Rel $dest 'tools\exec_probe.ps1'))) $threw
+        $r = Resolve-TrustedManifest (Get-StoreManifests $store) 'volume=\\?\Volume{new-port}\' (Get-StickState $dest $outer)
+        T 'a copy whose manifest copy was rewritten is never matched by content' ($null -eq $r.Path) ($r.How + ' ' + $r.Path)
+        [IO.File]::WriteAllText($smPath, $text)
 
         # A user's own results inside doze_sec: -Refresh must refuse and keep them.
         $resultsFile = Join-Rel $dest 'results\PC1\SecurityReport.txt'
@@ -1022,10 +1112,10 @@ if ($SelfTest) {
         T 'a NEW runnable file at the stick root is reported' (@($c.RootNew) -contains 'setup.exe') ($c.RootNew -join ', ')
         T 'a CHANGED root file is reported as changed' (@($c.RootNew) -contains 'autorun.inf (changed)') ($c.RootNew -join ', ')
         T 'other folders at the stick root are listed (results that must not travel on)' (@($c.Other) -contains 'results') ($c.Other -join ', ')
-        $r = Resolve-TrustedManifest (Get-StoreManifests $store) 'volume=\\?\Volume{new-port}\' $dest $outer
+        $r = Resolve-TrustedManifest (Get-StoreManifests $store) 'volume=\\?\Volume{new-port}\' (Get-StickState $dest $outer)
         $lines = @($r.Candidates | ForEach-Object { $_.Line }) -join ' | '
-        T 'a CHANGED copy whose ID changed is never matched: unverified, each laptop manifest listed with its difference count' ($null -eq $r.Path -and $lines -match '3 difference\(s\) from this copy' -and $lines -match 'could not be read') $lines
-        $r = Resolve-TrustedManifest (Get-StoreManifests $store) $tid $dest $outer
+        T 'a CHANGED copy whose ID changed is never matched: unverified, each laptop manifest listed with its difference count' ($null -eq $r.Path -and $lines -match ': 3 difference\(s\) from this copy' -and $lines -match 'could not be read') $lines
+        $r = Resolve-TrustedManifest (Get-StoreManifests $store) $tid (Get-StickState $dest $outer)
         T 'a changed copy whose ID still matches is found by target, so the changes are reported' ($r.Path -eq $keep -and $r.How -eq 'target') ($r.How + ' ' + $r.Path)
         $threw = ''; try { Remove-StickCopy -Dir $dest -Expected $m.Entries } catch { $threw = $_.Exception.Message }
         T 'refresh refuses a tampered copy -- it is evidence -- and deletes nothing' ($threw -match 'changed: tools\\exec_probe.ps1' -and (Test-Path -LiteralPath (Join-Rel $dest 'tools\extra.ps1'))) $threw
@@ -1049,6 +1139,10 @@ if ($SelfTest) {
             T 'a link in place of doze_sec is reported, and nothing behind it is read' ($c3.RootLink -and @($c3.Added).Count -eq 0) ("rootlink=" + $c3.RootLink + " added=" + (@($c3.Added) -join ','))
             $threw = ''; try { Remove-StickCopy -Dir (Join-Path $outer2 $script:StickFolder) -Expected $m.Entries } catch { $threw = $_.Exception.Message }
             T 'refresh refuses a doze_sec that is a link, and the files behind it survive' ($threw -match 'link or junction' -and (Test-Path -LiteralPath (Join-Path $laptopDir 'secret.txt'))) $threw
+            $threw = ''; try { Remove-StickCopy -Dir (Join-Path $outer2 $script:StickFolder) -Expected $null } catch { $threw = $_.Exception.Message }
+            T 'a link in place of doze_sec is named as a link even when this laptop has no manifest for it' ($threw -match 'link or junction' -and $threw -notmatch 'no manifest') $threw
+            $r = Resolve-TrustedManifest (Get-StoreManifests $store) 'volume=\\?\Volume{elsewhere}\' (Get-StickState (Join-Path $outer2 $script:StickFolder) $outer2)
+            T 'a link in place of doze_sec is never matched by content, and the store''s manifests are still listed' ($null -eq $r.Path -and (@($r.Candidates | ForEach-Object { $_.Line }) -join ' ') -match 'not compared -- the copy is not a folder \(link\)') (@($r.Candidates | ForEach-Object { $_.Line }) -join ' | ')
         } else { Write-Output '[SKIP] links on the stick: creating a symbolic link needs rights this session lacks' }
 
         # A clean copy refreshes.
@@ -1056,6 +1150,38 @@ if ($SelfTest) {
         $res3 = Invoke-StickCopy -Source $src -Dest $dest3
         Remove-StickCopy -Dir $dest3 -Expected (ConvertTo-Hashtable $res3.Entries)
         T 'refresh removes a copy that is still exactly what this laptop wrote' ((Get-EntryState $dest3) -eq 'missing') ''
+
+        # A rollback: v1 made, -Refresh to v2 (which retires v1's manifest), then
+        # a visited machine puts the saved v1 copy back and the stick comes home
+        # under a new ID. Nothing may vouch for v1 any more.
+        $rbStore = Join-Path $tmp 'rb_store'
+        [void][IO.Directory]::CreateDirectory($rbStore)
+        $rbOuter = Join-Path $tmp 'rb_stick'
+        $rbDest = Join-Path $rbOuter $script:StickFolder
+        $rb1 = Invoke-StickCopy -Source $src -Dest $rbDest
+        $rbText1 = New-ManifestText -Entries $rb1.Entries -TargetId 'volume=A' -SourcePath $src -Created '2026-10-01T10:00:00' -Root ([ordered]@{})
+        $rbM1 = Join-Path $rbStore 'stick_20261001_100000_11111111.sha256'
+        [IO.File]::WriteAllText($rbM1, $rbText1)
+        [IO.File]::WriteAllText((Join-Path $rbDest $script:StickManifestName), $rbText1)
+        $saved = Join-Path $tmp 'rb_saved_v1'
+        [void][IO.Directory]::CreateDirectory($saved)
+        foreach ($f in (Get-TreeEntries $rbDest -Strict).Files) { $to = Join-Rel $saved (Get-RelPath $rbDest $f.FullName); [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($to)); [IO.File]::Copy($f.FullName, $to) }
+        Remove-StickCopy -Dir $rbDest -Expected (Read-Manifest $rbM1).Entries -ManifestHash (Get-FileSha256 $rbM1)
+        $src2 = Join-Path $tmp 'src_v2'
+        New-Tree $src2 ($script:Required + @('tools\new_in_v2.ps1'))
+        $rb2 = Invoke-StickCopy -Source $src2 -Dest $rbDest
+        $rbText2 = New-ManifestText -Entries $rb2.Entries -TargetId 'volume=A' -SourcePath $src2 -Created '2026-10-05T10:00:00' -Root ([ordered]@{})
+        [IO.File]::WriteAllText((Join-Path $rbStore 'stick_20261005_100000_22222222.sha256'), $rbText2)
+        [IO.File]::WriteAllText((Join-Path $rbDest $script:StickManifestName), $rbText2)
+        $sup = Set-ManifestSuperseded $rbM1
+        T 'a replaced copy''s manifest is retired, not deleted, and the store no longer lists it' ((Get-EntryState $sup) -eq 'file' -and (Get-EntryState $rbM1) -eq 'missing' -and @(Get-StoreManifests $rbStore).Count -eq 1) $sup
+        foreach ($f in (Get-TreeEntries $rbDest -Strict).Files) { [IO.File]::Delete($f.FullName) }
+        foreach ($f in (Get-TreeEntries $saved -Strict).Files) { $to = Join-Rel $rbDest (Get-RelPath $saved $f.FullName); [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($to)); [IO.File]::Copy($f.FullName, $to) }
+        $r = Resolve-TrustedManifest (Get-StoreManifests $rbStore) 'volume=B' (Get-StickState $rbDest $rbOuter)
+        T 'a rolled-back copy (the old files and the old manifest copy, put back) is never matched under a new ID' ($null -eq $r.Path) ($r.How + ' ' + $r.Path)
+        $r = Resolve-TrustedManifest (Get-StoreManifests $rbStore) 'volume=A' (Get-StickState $rbDest $rbOuter)
+        $c = Compare-StickState (Get-StickState $rbDest $rbOuter) $r.Manifest.Entries $r.Manifest.Root (Get-FileSha256 $r.Path)
+        T 'under the old ID the newer manifest is used, so the rollback shows as differences' ($r.How -eq 'target' -and (Get-DiffCount $c) -gt 0) ('how=' + $r.How + ' diffs=' + (Get-DiffCount $c))
 
         $threw = ''; try { [void](Invoke-StickCopy -Source $src -Dest $dest) } catch { $threw = $_.Exception.Message }
         T 'an existing copy is never overwritten without -Refresh' ($threw -match 'already exists') $threw
@@ -1142,7 +1268,14 @@ if (($Drive -and $ToFolder) -or ((-not $Drive) -and (-not $ToFolder) -and (-not 
 }
 if (-not $Drive -and -not $ToFolder) {
     $pmode = if ($Verify) { 'verify' } elseif ($Refresh) { 'refresh' } else { 'make' }
-    $picked = Invoke-StickPicker -Rows (Get-LivePickerRows $pmode) -Mode $pmode -Ask { param($q) Read-Host $q } -Say { param($l) Write-Host $l }
+    $rows = $null
+    try { $rows = Get-LivePickerRows $pmode }
+    catch {
+        Write-Output ('[FAIL] Could not list the drives: ' + $_.Exception.Message)
+        Write-Output '  Run PowerShell as administrator, or name the drive instead, for example: -Drive E:'
+        exit 1
+    }
+    $picked = Invoke-StickPicker -Rows $rows -Mode $pmode -Ask { param($q) Read-Host $q } -Say { param($l) Write-Host $l }
     if (-not $picked) { exit 1 }
     $Drive = $picked + ':'
 }
@@ -1187,50 +1320,72 @@ if (-not $targetId) { $targetId = 'folder=' + [IO.Path]::GetFullPath($dest) }
 $store = Get-ManifestStore
 $destState = Get-EntryState $dest
 # Which laptop manifest vouches for the copy (-Verify, and -Refresh of an
-# existing copy). Never the copy on the stick.
+# existing copy). Never the copy on the stick, and never a -Manifest file on
+# the stick: the visited machine could have rewritten either.
 $found = @{ Path = $null; Manifest = $null; How = ''; Candidates = @() }
+$stickState = $null
 if ($Verify -or ($Refresh -and $destState -ne 'missing')) {
+    $stickState = Get-StickState $dest $outer
     if ($Manifest) {
-        try { $found = @{ Path = $Manifest; Manifest = (Read-Manifest $Manifest); How = 'given'; Candidates = @() } }
+        $mfull = [IO.Path]::GetFullPath($Manifest)
+        if ((Test-SelfOnTarget $mfull $outer) -or (Get-EntryState $mfull) -eq 'link') {
+            Write-Output ('[FAIL] -Manifest ' + $mfull + ' is on the target itself (or is a link). Pass the manifest kept on THIS laptop;')
+            Write-Output '  the copy on the stick may have been rewritten by a machine it visited, along with the files.'
+            exit 1
+        }
+        try { $found = @{ Path = $mfull; Manifest = (Read-Manifest $mfull); How = 'given'; Candidates = @() } }
         catch { Write-Output ('[FAIL] ' + $_.Exception.Message); exit 1 }
     } else {
-        $found = Resolve-TrustedManifest -Manifests (Get-StoreManifests $store) -TargetId $targetId -Dest $dest -Outer $outer
+        $found = Resolve-TrustedManifest -Manifests (Get-StoreManifests $store) -TargetId $targetId -Stick $stickState
     }
 }
 function Write-ContentMatchNote {
     param($R)
     if ($R.How -ne 'content') { return }
-    Write-Output ('[INFO] No manifest on this laptop names this copy (' + $targetId + '), but its files match, one for one,')
-    Write-Output ('       the manifest made ' + $R.Manifest.Header['created'] + ' for ' + $R.Manifest.Header['target'] + ', so that one is used.')
-    if ($targetId -like 'volume=*') { Write-Output '       Windows can give a stick a new volume ID when it goes into another USB port; that changes nothing on it.' }
+    Write-Output ('[INFO] No manifest on this laptop names this copy (' + $targetId + '), but it matches, file for file and with its own')
+    Write-Output ('       copy of the manifest, the one made ' + $R.Manifest.Header['created'] + ' for ' + $R.Manifest.Header['target'] + ', so that one is used.')
+    if ($Drive -and $lt -and $lt.Volume) { Write-Output '       Windows can give a stick a new volume ID when it goes into another USB port; that changes nothing on it.' }
+    elseif ($Drive) { Write-Output ('       The volume behind ' + $letter + ': could not be read, so the copy was matched by its files instead.') }
     else { Write-Output '       The folder was moved or renamed since; that changes nothing in it.' }
+}
+function Write-Candidates {
+    param($R)
+    if (@($R.Candidates).Count -gt 0) {
+        Write-Output ('  Manifests kept on this laptop (' + $store + '), newest first:')
+        foreach ($x in $R.Candidates) { Write-Output ('    ' + $x.Path); Write-Output ('      ' + $x.Line) }
+        Write-Output '  If one of them is this stick -- Windows can give a stick a new volume ID when it goes into another'
+        Write-Output '  USB port -- run this again with -Manifest "<that path>" to list exactly what changed. If none of'
+        Write-Output '  them is, this laptop did not make this copy: do not run it.'
+    } else {
+        Write-Output ('  There are no manifests in ' + $store + '. This laptop cannot vouch for this copy: do not run it.')
+        Write-Output '  Make the stick again from your checkout, or pass -Manifest <file> if you kept this laptop''s manifest elsewhere.'
+    }
 }
 
 if ($Verify) {
     if ($Drive -and -not $lt.Volume) {
         Write-Output ('[INFO] Could not read the volume behind ' + $letter + ': (' + $lt.Error + ').')
     }
-    if (-not $found.Path) {
-        if ($destState -eq 'missing') { Write-Output ('[FAIL] ' + $dest + ' does not exist.'); exit 1 }
+    if ($destState -eq 'missing') { Write-Output ('[FAIL] ' + $dest + ' does not exist.'); exit 1 }
+    if ($destState -eq 'unreadable') { Write-Output ('[FAIL] Windows cannot read ' + $dest + ' -- unlock the stick (BitLocker) or check it in File Explorer.'); exit 1 }
+    if ($destState -in @('link', 'file')) {
+        # This script only ever writes a folder there. Whatever put a link or a
+        # file in its place, it was not this laptop -- with or without a manifest.
         if ($destState -eq 'link') { Write-Output ('[LINK]    ' + $dest + ' is a link or junction -- not followed, nothing behind it was read.') }
-        $tail = if ($destState -eq 'dir') { ', and the copy matches none of them file for file.' } else { '.' }
-        Write-Output ('[UNVERIFIED] No manifest on this laptop names this copy (' + $targetId + ')' + $tail)
+        else { Write-Output ('[CHANGED] ' + $dest + ' is a file, not the folder this script writes.') }
+        Write-Output '[WARNING] The tool folder on this stick was replaced. Keep the stick exactly as it is: it is evidence. Do not open anything on it.'
+        exit 1
+    }
+    if (-not $found.Path) {
+        Write-Output ('[UNVERIFIED] No manifest on this laptop names this copy (' + $targetId + '), and it matches none of them exactly.')
         Write-Output '  The copy of the manifest ON the stick is not used: a visited machine could have rewritten it along with the files.'
-        if (@($found.Candidates).Count -gt 0) {
-            Write-Output ('  Manifests kept on this laptop (' + $store + '), newest first:')
-            foreach ($x in $found.Candidates) { Write-Output ('    ' + $x.Path); Write-Output ('      ' + $x.Line) }
-            Write-Output '  If one of them is this stick -- Windows can give a stick a new volume ID when it goes into another'
-            Write-Output '  USB port -- run this again with -Manifest "<that path>" to list exactly what changed. If none of'
-            Write-Output '  them is, this laptop did not make this copy: do not run it.'
-        } else {
-            Write-Output ('  There are no manifests in ' + $store + '. Pass -Manifest <file> if you kept the one this laptop wrote elsewhere.')
-        }
+        Write-Candidates $found
         exit 2
     }
     $trusted = $found.Path
     $m = $found.Manifest
     Write-ContentMatchNote $found
-    $c = Compare-StickTree -Root $dest -Expected $m.Entries -OuterRoot $outer -RootBaseline $m.Root
+    $c = Compare-StickState $stickState $m.Entries $m.Root (Get-FileSha256 $trusted)
     Write-Output ('Checking ' + $dest + ' against ' + $trusted + ' (made ' + $m.Header['created'] + ', ' + $m.Entries.Count + ' files)')
     if ($c.RootLink) {
         Write-Output ('[LINK]    ' + $dest + ' is a link or junction -- not followed, nothing behind it was read.')
@@ -1271,9 +1426,18 @@ if ($destState -ne 'missing') {
     $srcFull = [IO.Path]::GetFullPath($Source)
     if ((Test-SelfOnTarget $srcFull $dest) -or (Test-SelfOnTarget $dest $srcFull)) { Write-Output ('[FAIL] ' + $dest + ' overlaps the source ' + $srcFull + '; refused.'); exit 1 }
     $expected = $null
-    if ($found.Path) { $expected = $found.Manifest.Entries }
+    $mhash = ''
+    if ($found.Path) { $expected = $found.Manifest.Entries; $mhash = Get-FileSha256 $found.Path }
+    elseif ($destState -eq 'dir' -and @($found.Candidates).Count -gt 0) {
+        # The laptop holds manifests, and this copy matches none of them: it
+        # changed, or it is not this laptop's. Never delete it on a guess.
+        Write-Output ('[FAIL] No manifest on this laptop names this copy (' + $targetId + '), and it matches none of them exactly. Nothing was deleted.')
+        Write-Candidates $found
+        Write-Output '  Run -Verify first: it lists what changed.'
+        exit 1
+    }
     Write-ContentMatchNote $found
-    try { Remove-StickCopy -Dir $dest -Expected $expected; Write-Output ('[OK] Removed the earlier copy at ' + $dest + ' (it was still exactly what this laptop wrote).') }
+    try { Remove-StickCopy -Dir $dest -Expected $expected -ManifestHash $mhash; Write-Output ('[OK] Removed the earlier copy at ' + $dest + ' (it was still exactly what this laptop wrote).') }
     catch { Write-Output ('[FAIL] ' + $_.Exception.Message); exit 1 }
 }
 $srcBytes = [long]0
@@ -1307,7 +1471,25 @@ $keep = Join-Path $store ('stick_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '_' 
 [IO.File]::WriteAllText((Join-Path $dest $script:StickManifestName), $text)
 Write-Output ('[OK] ' + $res.Entries.Count + ' files copied and read back, ' + $res.Bytes + ' bytes.')
 Write-Output ('[OK] Manifest kept on this laptop: ' + $keep)
-$again = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + $PSCommandPath + '" ' + $(if ($Drive) { '-Drive ' + $letter + ':' } else { '-ToFolder "' + $ToFolder + '"' }) + ' -Verify'
+if ($Refresh -and $found.Path) {
+    # The copy that manifest vouched for is gone; it must never vouch again.
+    $storeFull = [IO.Path]::GetFullPath($store)
+    if (Test-SelfOnTarget ([IO.Path]::GetDirectoryName($found.Path)) $storeFull) {
+        $sup = Set-ManifestSuperseded $found.Path
+        Write-Output ('[INFO] The manifest of the copy just replaced no longer vouches for anything (kept as ' + $sup + ').')
+    } else {
+        Write-Output ('[INFO] Delete ' + $found.Path + ' (the -Manifest you passed): the copy it vouched for is gone, and if a')
+        Write-Output '       visited machine ever put that old copy back, that file would still call it unchanged.'
+    }
+}
+$againTarget = '-Drive ' + $letter + ':'
+if (-not $Drive) {
+    $tf = $outer
+    if ($tf.EndsWith('\') -or $tf.EndsWith('/')) { $tf = $tf + '.' }
+    $againTarget = '-ToFolder "' + $tf + '"'
+}
+$again = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + $PSCommandPath + '" ' + $againTarget + ' -Verify'
+if ($ManifestStore) { $again += ' -ManifestStore "' + $ManifestStore + '"' }
 Write-Output ''
 Write-Output 'Next:'
 Write-Output '  1. Eject the stick (Safely Remove), plug it back in, and run this on THIS laptop (it works from any folder):'
