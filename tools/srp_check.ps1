@@ -20,7 +20,7 @@
 # The bat then checks `if exist <MarkerFile>` to decide whether to log [CREATED].
 #
 # Usage (from doze_sec.bat):
-#   "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\srp_check.ps1" `
+#   "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\srp_check.ps1" `
 #       -Description "<text>" -MarkerFile "%TEMP%\dz_srp_created.txt"
 
 [CmdletBinding()]

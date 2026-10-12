@@ -128,7 +128,7 @@ function Get-DetectionBlock {
             return @(
                 $header,
                 "echo Get-CimInstance Win32_Process -Filter `"name='$Value'`" -EA SilentlyContinue ^| Select-Object Name,ProcessId,ExecutablePath ^| Format-Table -AutoSize > `"%PSRUN%`"",
-                "`"%PWSH%`" -NoProfile -ExecutionPolicy Bypass -File `"%PSRUN%`">> `"%REPORT%`" 2>&1"
+                "`"%PWSH%`" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"%PSRUN%`">> `"%REPORT%`" 2>&1"
             )
         }
         'file path' {
@@ -141,14 +141,14 @@ function Get-DetectionBlock {
             return @(
                 $header,
                 "echo try{`$p=Get-ChildItem \\.\pipe\ -EA SilentlyContinue ^| Where-Object {`$_.Name -match '$Value'}; if(`$p){'[$Severity] $Name pipe detected: '+(`$p.Name -join ', ')}else{'[OK] $Name pipe check clear.'}}catch{'[INFO] Pipe check unavailable.'} > `"%PSRUN%`"",
-                "`"%PWSH%`" -NoProfile -ExecutionPolicy Bypass -File `"%PSRUN%`">> `"%REPORT%`" 2>&1"
+                "`"%PWSH%`" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"%PSRUN%`">> `"%REPORT%`" 2>&1"
             )
         }
         'wmi query' {
             return @(
                 $header,
                 "echo try{`$r=Get-CimInstance -Query '$Value' -EA SilentlyContinue; if(`$r){'[$Severity] $Name WMI hit: '+(`$r ^| Out-String).Trim()}else{'[OK] $Name WMI check clear.'}}catch{'[INFO] WMI query failed: '+`$_.Exception.Message} > `"%PSRUN%`"",
-                "`"%PWSH%`" -NoProfile -ExecutionPolicy Bypass -File `"%PSRUN%`">> `"%REPORT%`" 2>&1"
+                "`"%PWSH%`" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"%PSRUN%`">> `"%REPORT%`" 2>&1"
             )
         }
     }

@@ -6,6 +6,49 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Every PowerShell the bats start runs -NonInteractive, so no question can wait unseen
+#245 put `-NonInteractive` on the script-policy probe and the helpers before
+it, because a PowerShell that stops to ask a question waits where nobody can
+see it. Every helper's output goes into the report, `>nul`, the console-log
+tee or field_test's pipe. The other launches were left as defence in depth
+not taken. They are taken now: all 133 launches in `doze_sec.bat` and 127 in
+`doze_sec_noAdmin.bat`, staged blocks, helpers, `for /f` one-liners and the
+console-log tee. A question from another cause now fails at once instead of
+waiting: a cmdlet's confirmation, a provider bootstrap, a `Read-Host` a future
+helper adds. Where the launch's errors go to the report, the error is there;
+where they go to nul (the `for /f` one-liners, a few INIT calls), the value
+keeps its default, as it would on any other failure. The printed `Command:`
+lines a person pastes are unchanged.
+
+The CTI checks `-updateTTP` generates are launched too, from
+`ttp_generated_checks.bat`, which Section 18 calls. `ttp_merge.ps1` now
+writes them with the flag. The file is appended to, so lines written by
+earlier runs stay as they were; `threat_list_seed.ps1`, which reconciles the
+runtime ThreatLists on every run, gives those lines the flag. It changes only
+the inserted flag, byte for byte. It writes beside the file and swaps it in,
+so a failed write leaves the original whole, and it prints how many lines it
+changed. On `-updateTTP` the early, unreported call skips the file, so the
+change shows in the report.
+
+`tools\lint_noninteractive.ps1` fails on any launch without the flag. It also
+fails on a launch with the flag after `-File` or `-Command`: PowerShell hands
+it to the script there, so it protects nothing. It reads `!PWSH!` and `pwsh`
+too, and a launch chained after an `echo` with an unquoted `&` or `|`. It
+fails a line that runs a helper but holds no launch it can read, a launch
+continued with `^`, and a generated launch line in `ttp_merge.ps1` without
+the flag. Its floor fails a scanner that finds fewer than 100 launches per
+bat. Its self-test proves each rule, and that printed text, comments, `where`
+and `set` stay quiet. A read-only review of the first draft found the CTI
+launches and a lint.yml mutation still anchored on the old launch text; both
+are fixed in this change. The helpers job
+measures what the lint assumes. Each case runs in its own console:
+
+- `Read-Host` without the flag waits.
+- With the flag before `-File`, it fails at once.
+- With the flag after `-File`, it still waits.
+- A cmdlet's confirmation (`Remove-Item` on a folder that holds a file)
+  fails at once and leaves the folder in place.
+
 ### The script-policy probe reads every helper's Mark of the Web, and a hidden question can no longer hang the audit
 `tools\exec_probe.ps1` proved that PowerShell runs one script here: itself.
 On a PC whose IT sets a Group Policy RemoteSigned or Unrestricted policy, an
