@@ -2160,7 +2160,17 @@ echo --- Running-process enumeration for the checks below --->> "%REPORT%"
 :: (Electron apps, the self-tee powershell line) blow past that. The three
 :: checks below match process NAMES and PATH fragments, not args. Command-
 :: line abuse patterns are handled in Section 18g via select_lines.ps1.
+:: One query, two outputs (tools\proc_snapshot.ps1): stdout is the same
+:: Name-PID-Path lines as before, and the process tree the masquerade check's
+:: parent rule reads (PID, parent PID, creation time) comes from the SAME
+:: objects, so the two can never describe different processes.
+del "%TEMP%\dz_proc4_tree.tmp" 2>nul
+if not exist "%SCRIPT_DIR%tools\proc_snapshot.ps1" goto :sec4_snap_inline
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\proc_snapshot.ps1" -TreePath "%TEMP%\dz_proc4_tree.tmp" > "%TEMP%\dz_proc4.tmp" 2>nul
+goto :sec4_snap_done
+:sec4_snap_inline
 "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object { $_.Name+'  '+$_.ProcessId+'  '+$_.ExecutablePath }" > "%TEMP%\dz_proc4.tmp" 2>nul
+:sec4_snap_done
 set "_ENUM4="
 for %%z in ("%TEMP%\dz_proc4.tmp") do if %%~zz GTR 100 set "_ENUM4=1"
 
@@ -2251,23 +2261,38 @@ goto :sec4_rmm_done
 echo [SKIPPED] Process enumeration failed -- RMM tool check NOT performed.>> "%REPORT%"
 :sec4_rmm_done
 echo.>> "%REPORT%"
-echo --- System-Process Name Masquerading (T1036: a system name running outside its directory) --->> "%REPORT%"
+echo --- System-Process Name Masquerading (T1036: a system name outside its directory, or started by the wrong parent) --->> "%REPORT%"
 echo  Command: powershell -File tools\masquerade_check.ps1>> "%REPORT%"
+echo  Command: powershell -Command "Get-CimInstance Win32_Process | Select-Object Name, ProcessId, ParentProcessId, SessionId, CreationDate, ExecutablePath">> "%REPORT%"
 echo  Grades the SAME snapshot as the checks above: svchost, lsass, csrss, explorer and>> "%REPORT%"
 echo  the other Windows names run only from fixed directories, so a familiar name from>> "%REPORT%"
 echo  AppData, ProgramData, Temp or a vendor folder is an impostor by path alone.>> "%REPORT%"
+echo  And by parent: Windows starts svchost.exe only from services.exe, and lsass.exe and>> "%REPORT%"
+echo  services.exe only from wininit.exe, and runs one of each; a process ID reused after>> "%REPORT%"
+echo  a parent exited is told apart by creation time, and the session is checked too.>> "%REPORT%"
 if not defined _ENUM4 goto :sec4_masq_skip
 del "%TEMP%\dz_masq.txt" 2>nul
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\masquerade_check.ps1" -Path "%TEMP%\dz_proc4.tmp" -MarkerFile "%TEMP%\dz_masq.txt">> "%REPORT%" 2>&1
+del "%TEMP%\dz_masq_parent.txt" 2>nul
+del "%TEMP%\dz_masq_count.txt" 2>nul
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\masquerade_check.ps1" -Path "%TEMP%\dz_proc4.tmp" -MarkerFile "%TEMP%\dz_masq.txt" -TreePath "%TEMP%\dz_proc4_tree.tmp" -ParentMarkerFile "%TEMP%\dz_masq_parent.txt" -CountMarkerFile "%TEMP%\dz_masq_count.txt">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_masq.txt" (
     call :dz_finding WARNING 4 T1036 "System-process name running outside its canonical directory"
     del "%TEMP%\dz_masq.txt" 2>nul
+)
+if exist "%TEMP%\dz_masq_parent.txt" (
+    call :dz_finding WARNING 4 T1036 "System-process name started by a parent Windows never uses"
+    del "%TEMP%\dz_masq_parent.txt" 2>nul
+)
+if exist "%TEMP%\dz_masq_count.txt" (
+    call :dz_finding WARNING 4 T1036 "System process Windows runs once seen twice or in the wrong session"
+    del "%TEMP%\dz_masq_count.txt" 2>nul
 )
 goto :sec4_masq_done
 :sec4_masq_skip
 echo [SKIPPED] Process enumeration failed -- masquerading check NOT performed.>> "%REPORT%"
 :sec4_masq_done
 del "%TEMP%\dz_proc4.tmp" 2>nul
+del "%TEMP%\dz_proc4_tree.tmp" 2>nul
 set "_ENUM4="
 echo.>> "%REPORT%"
 

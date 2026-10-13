@@ -424,6 +424,14 @@ try {
     Assert ($text1 -match '\[OK\] No scheduled task IOC matches\.|\[WARNING\] Scheduled task IOC matches found\.') `
         'Section 18e compared the scheduled tasks a standard user can list' `
         'Section 18e printed neither its [OK] nor a match on a standard-user token'
+    # Section 4's parent rule from a standard-user token: the parent PID,
+    # session and creation time of other users' and SYSTEM's processes must be
+    # readable here too (only their paths are not). The OK line proves the
+    # tree was graded on this token -- measured, not assumed.
+    Assert ($text1 -notmatch 'has the wrong parent:|\[WARNING\] Windows runs one |\) runs in session \d+ -- Windows runs') 'Section 4: no parent, one-of-each or session finding on a clean runner, standard-user token' `
+        ('Section 4 reported a parent finding on a clean runner: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'has the wrong parent:|Windows runs one|runs in session|^\s+(child|parent|instance):' }) -join ' | '))
+    Assert ($text1 -match '\[OK\] \d+ system-process name\(s\) were started by the parent Windows uses') 'Section 4 graded the process tree by parent on a standard-user token' `
+        ('Section 4 did not grade the process tree by parent on a standard-user token: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'by parent|creation time' }) -join ' | '))
     $max1 = Assert-LedgerConsistency -Text $text1 -Ledger $ledger1 -Label 'run 1'
     # The bat escalates to 6 ONLY from 0 and 4: 2 is the ledger-derived
     # "findings were raised" verdict and is never discarded (its rem block

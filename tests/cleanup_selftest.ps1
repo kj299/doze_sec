@@ -233,6 +233,16 @@ Get-Process -Name 'svchost' -EA SilentlyContinue |
     Where-Object { $_.Path -and $_.Path.StartsWith('C:\Users\Public\dz_selftest_masq', [StringComparison]::OrdinalIgnoreCase) } |
     Stop-Process -Force -EA SilentlyContinue
 Remove-Path 'C:\Users\Public\dz_selftest_masq'                 'Masquerading svchost.exe directory (Public\dz_selftest_masq)'
+# The masquerading-by-parent plants: two more RUNNING copies of ping.exe named
+# svchost.exe, and one named wininit.exe (one of each), stopped by PATH --
+# never by name: the real wininit.exe is critical, and stopping it stops
+# Windows -- before their directories go.
+Get-Process -EA SilentlyContinue |
+    Where-Object { $_.Path -and ($_.Path.StartsWith('C:\Users\Public\dz_selftest_parent_live\', [StringComparison]::OrdinalIgnoreCase) -or $_.Path.StartsWith('C:\Users\Public\dz_selftest_parent_gone\', [StringComparison]::OrdinalIgnoreCase) -or $_.Path.StartsWith('C:\Users\Public\dz_selftest_onlyone\', [StringComparison]::OrdinalIgnoreCase)) } |
+    Stop-Process -Force -EA SilentlyContinue
+Remove-Path 'C:\Users\Public\dz_selftest_parent_live'         'Masquerading-by-parent svchost.exe, living parent (Public\dz_selftest_parent_live)'
+Remove-Path 'C:\Users\Public\dz_selftest_parent_gone'         'Masquerading-by-parent svchost.exe, exited parent (Public\dz_selftest_parent_gone)'
+Remove-Path 'C:\Users\Public\dz_selftest_onlyone'             'Second wininit.exe, one of each (Public\dz_selftest_onlyone)'
 # The Section 18a plants are RUNNING copies of ping.exe named after an IOC
 # entry and its benign twin; stopped by PATH before their directories go.
 Get-Process -EA SilentlyContinue |

@@ -6,6 +6,144 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### A system-process name started by a parent Windows never uses is flagged (T1036, by parent)
+`masquerade_check.ps1` graded a Windows system-process name by its directory
+only. So an implant copied into System32 and named svchost.exe passed: it was
+in the right place with the right name. The second signal is the parent.
+Windows starts every svchost.exe from services.exe, and lsass.exe and
+services.exe from wininit.exe. This was deferred on 2026-09-23 because a
+parent that has exited looks like a wrong parent, once its process ID has been
+reused.
+
+Microsoft documents the answer (Win32_Process, ParentProcessId): the parent
+"may not refer to a running process", or may refer to "a process that reuses a
+process identifier", and CreationDate shows which. Microsoft's list of
+critical processes supplies the other half: System, smss.exe, wininit.exe,
+services.exe and the service host that runs the DCOM launcher never exit
+while Windows runs, and a session's winlogon.exe runs as long as the session.
+The rule:
+
+- Where the rightful parent cannot exit, anything else at the parent PID (an
+  older process, a newer one, or none) is a WARNING. A newer one is named as
+  a reused number: the line says the real parent is no longer running and
+  which later process now holds its PID.
+- A parent that is one process (System, which is PID 4 and nothing else;
+  smss.exe; wininit.exe; services.exe) is accepted on its name alone.
+  Creation time is not consulted, so a clock that stepped backward after
+  boot (a dual-boot PC, a time service correcting a fast clock) cannot turn
+  a genuine services.exe into a "reused PID". A winlogon.exe parent must be
+  the one in the child's own session, which predates everything it starts.
+  An svchost.exe parent is one of many: it counts only when it was created
+  before the child and the clock is seen not to have moved.
+- When a session ends its winlogon.exe exits first, and its dwm, LogonUI or
+  fontdrvhost can outlive it for a moment. A child whose session holds no
+  winlogon.exe is counted, never flagged, unless the process holding its
+  parent PID predates it (no reused number: that process started it).
+  Session 0 lasts until shutdown and never holds a winlogon.exe, so a dwm,
+  LogonUI or userinit there is always graded.
+- Where the rightful parent exits by design (the service host that starts
+  taskhostw or sihost), creation time tells a reused PID from a wrong living
+  parent. It is trusted only when the tree shows the clock did not move
+  backward since boot, and never on equal times. csrss, wininit and winlogon
+  (whose session smss.exe exits by design) are not graded by their parent at
+  all: one of each catches an impostor without depending on the clock.
+- One of each. Windows runs exactly one wininit, services, lsass and LsaIso,
+  all in session 0, and one csrss and winlogon per session. A second one is a
+  WARNING even when its own parent's name looks right. That catches a
+  renamed chain: a fake wininit starting a fake services starting an implant
+  svchost.
+- A snapshot missing a rightful parent altogether is incomplete, not
+  evidence: nothing is graded against it. A snapshot missing a process every
+  running Windows has (System at PID 4, the smss.exe System started,
+  wininit, services, lsass, csrss) prints `[SKIPPED]`, never the all-clear;
+  an impostor in it is still named.
+
+The finding names the child and the parent beneath it, with their paths and
+start times, and raises its own ledger row: "System-process name started by
+a parent Windows never uses". A second copy of a process Windows runs once,
+or one in the wrong session, raises a row of its own: "System process
+Windows runs once seen twice or in the wrong session".
+
+The tree comes from the same Win32_Process query as Section 4's existing
+snapshot, through the new `tools\proc_snapshot.ps1`. Its standard output is
+the former one-liner's, line for line, so every other Section 4 check reads
+the same input. It also writes the parent ID, creation time, session and path
+of every process; a name or path cannot split or forge a tree line.
+
+Three things are out of reach, and THREAT_MODEL now says so:
+
+- Parent PID spoofing, where an implant records services.exe as its parent.
+- A dropper that starts taskhostw.exe or sihost.exe and exits: their parent
+  can restart, so they are only counted.
+- Process-isolated Windows containers, which run their own process trees on
+  the host, and Sandboxie-Plus, whose sandboxes start COM servers from their
+  own DCOM launcher. Both are catalogued as field-only false positives.
+
+A read-only review of the first draft found two false positives on clean
+machines, both fixed before the first push. Creation time had been compared
+even for parents that never exit, so a backward clock step read as a reused
+PID. And dllhost.exe had been tied to service hosts only, though the COM+
+System Application service runs it under services.exe. The same review found
+the renamed chain and the incomplete-snapshot case.
+
+A second read-only review, of the fix, found five more, all fixed before the
+first push:
+
+- A session that is ending (an RDP logoff) would have flagged its lingering
+  dwm or fontdrvhost: its winlogon.exe had already exited.
+- csrss, wininit and winlogon were still graded by creation time when a
+  living process held their parent PID, and a clock step too small for the
+  tree to show could raise one. One of each already catches the impostor.
+- A process anywhere that called itself System counted as System.
+- A parent named svchost.exe or winlogon.exe was accepted by name, though
+  there are many of each: a later service host that reused a dropper's PID
+  hid the dropper. And a child older than its svchost.exe parent was read as
+  a moved clock, which would have hidden exactly that.
+- A snapshot missing lsass.exe or csrss.exe still printed the all-clear.
+
+It also found a session ID above 2^31 would overflow, and the "which runs
+until shutdown" wording was wrong for winlogon.exe, whose lifetime is its
+session's.
+
+A third review, of that fix, found that it had opened a miss: session 0 has
+no winlogon.exe, so a fake dwm.exe, LogonUI.exe or userinit.exe there -- where
+any SYSTEM service, scheduled task, PsExec or WMI launch lands -- read as "a
+session that is ending", and the block printed the all-clear. Fixed before
+the first push, with the four shapes it named pinned as must-raise cases and
+a session-0 dwm under the runner's real services.exe in CI. It also found:
+a few seconds' clock step back soon after boot could record a genuine
+WmiPrvSE before its service host (now read as a moved clock: nothing a
+service host starts can predate the first one); the clock self-test could
+lose either of its two checks unnoticed (each check now has its own case);
+and the harness's wininit.exe plant shared its ledger row with the svchost
+plants, so it proved nothing (it now has its own row).
+
+Tests, both directions:
+
+- The self-test pins every rule both ways (115 cases), including a reused
+  PID, System's PID 4, each way a clock is seen to move, a session that is
+  ending, session 0, the renamed chain and an incomplete snapshot.
+  Twenty-two mutations, across the three reviews, each fail their own
+  cases.
+- The helpers job grades the runner's whole live tree, which must raise
+  nothing. Against that live tree it also checks:
+  - a System32 svchost.exe whose parent PID is the job's own PowerShell is
+    named, while the path rule stays clean;
+  - an absent parent and a reused PID are named;
+  - a second services.exe is named;
+  - csrss.exe with an absent or reused parent stays quiet;
+  - a dwm.exe with no parent is named in the session of the runner's real
+    winlogon.exe, and stays quiet in a session that has none;
+  - a dwm.exe in session 0 under the runner's real services.exe is named.
+  It also compares proc_snapshot's lines byte for byte with the former
+  one-liner's.
+- The full-run and standard-user jobs require the parent `[OK]` line, and no
+  wrong parent, on a real audit.
+- The harness plants two copies of ping.exe named svchost.exe: one started by
+  the harness itself, one whose launching cmd.exe exits at once. A third copy
+  is named wininit.exe: Windows runs one. All three must be named and
+  counted.
+
 ### Every PowerShell the bats start runs -NonInteractive, so no question can wait unseen
 #245 put `-NonInteractive` on the script-policy probe and the helpers before
 it, because a PowerShell that stops to ask a question waits where nobody can

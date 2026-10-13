@@ -54,7 +54,7 @@ break untested nor drift out of sync with its test.
 | Execution | Yes | S4 (processes, LOLBins: T1218.005 mshta, T1218.010 regsvr32), S11 (PowerShell), S16 (4688), S18g |
 | Persistence | Strong | S5 (Run/Winlogon/IFEO/AppInit/Active Setup), S6 (tasks), S7 (services), S17 (WMI subscriptions), S18 (COM hijack, registry IOCs) |
 | Privilege Escalation | Yes | S13 (UAC, accessibility binaries T1546.008), S16 (4672/4732) |
-| Defense Evasion | Strong | S4 (system-process name masquerading, T1036), S9 (Defender tamper/exclusions, ASR rule state), S18 (AMSI bypass, BYOVD drivers), S16 (1102 log clear) |
+| Defense Evasion | Strong | S4 (system-process name masquerading, T1036: by directory, and by parent -- svchost.exe not started by services.exe, lsass.exe not by wininit.exe), S9 (Defender tamper/exclusions, ASR rule state), S18 (AMSI bypass, BYOVD drivers), S16 (1102 log clear) |
 | Credential Access | Strong | S12 (LSASS PPL, WDigest, NTLM, Credential Guard), S16 (4769 Kerberoast, 4776), S18 (browser/cloud cred stores) |
 | Discovery | Yes | S17 (4688 discovery commands: nltest, dsquery, ntdsutil) |
 | Lateral Movement | Yes | S10 (SMBv1, RDP/NLA, WinRM, sshd), S17/S18 (PsExec pipes, portproxy) |
@@ -183,6 +183,33 @@ and 13 verify exactly that.
   command-line-inclusion registry key) when process-creation, logon, or
   account auditing is off -- so a clean event-log result is understood as
   "clean AND recorded", not "clean because nothing was watching".
+
+- **What the parent rule cannot see.** Section 4 flags a Windows
+  system-process name started by a parent Windows never uses (an
+  svchost.exe started by anything but services.exe, an lsass.exe by
+  anything but wininit.exe), a second wininit, services, lsass or LsaIso
+  (or a second csrss or winlogon in one session), and a session-0 process
+  outside session 0. Where the rightful parent cannot exit, anything else at
+  its PID is a finding. A parent that is one process (System at PID 4,
+  smss, wininit, services) is accepted on its name, a winlogon.exe only when
+  it is the one in the child's session, and an svchost.exe only when it is
+  older than the child; where a parent exits by design, a reused process ID
+  is told from the real parent by creation time, as Microsoft documents for
+  Win32_Process, and only while the clock is seen not to have moved backward
+  since boot. csrss, wininit and winlogon are graded by count, never by the
+  clock. Three things are out of reach:
+  - an implant started with a forged parent process ID (T1134.004, parent PID
+    spoofing) records services.exe as its parent, and nothing the audit
+    reads afterwards can tell;
+  - a dropper that starts taskhostw.exe or sihost.exe and exits leaves only
+    a counted "parent is no longer running" line, because the service host
+    that rightly starts those can restart;
+  - process-isolated Windows containers run their own smss, csrss and
+    services trees on the host, and Sandboxie-Plus starts a sandbox's COM
+    servers from its own DCOM launcher; the rule can flag either (both
+    catalogued in `tests\benign_corpus.txt`). A child of a service host on
+    a machine whose clock stepped backward after boot is counted as not
+    graded rather than flagged.
 
 ## Getting full protection value
 

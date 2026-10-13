@@ -453,6 +453,34 @@ proof     = ci:masquerade_check.ps1 -SelfTest
 signature = system-process name\(s\) had no readable path
 note      = Win32_Process returns an empty ExecutablePath for protected processes and, on a non-admin run, for every other user's processes. A system name with no path is reported as NOT GRADED ([INFO], counted), never as a finding and never folded into the all-clear: a path the tool could not read is not a path it verified, and a snapshot where nothing could be graded reads [SKIPPED].
 
+[system-process-parent-exited-by-design]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:masquerade_check.ps1 -SelfTest + live
+signature = system-process name\(s\) whose parent is no longer running
+note      = Windows starts csrss.exe, wininit.exe and winlogon.exe from a per-session instance of smss.exe that exits once it has started them, so on every machine their parent PID points at nothing, or at a later process that reused the number. They are never graded by their parent: one per session grades them, which no clock step can confuse. The service host that starts taskhostw.exe or sihost.exe can restart (Microsoft, Win32_Process: CreationDate tells a reused PID from the real parent; trusted only when the clock is seen not to have moved backward since boot, never on equal times). When a session ends its winlogon.exe exits first, and its dwm.exe, LogonUI.exe or fontdrvhost.exe can outlive it for a moment: a child whose session holds no winlogon.exe is counted, never graded -- unless a process older than it holds its parent PID, and never in session 0, which lasts until shutdown and never holds a winlogon.exe. A parent that is gone is a finding only where the rightful parent cannot exit: System, smss.exe, wininit.exe, services.exe and the DCOM launcher's service host are critical processes and a session's winlogon.exe runs as long as the session, so an svchost.exe, lsass.exe or RuntimeBroker.exe whose parent is gone, or a dwm.exe whose session's winlogon.exe still runs, was not started by them.
+
+[system-process-parent-windows-tree]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:masquerade_check.ps1 -SelfTest + live
+signature = system-process name\(s\) were started by the parent Windows uses
+note      = The real tree: services.exe and lsass.exe (and LsaIso.exe under Credential Guard) are children of wininit.exe; every svchost.exe, spoolsv.exe, MsMpEng.exe, NisSrv.exe, SearchIndexer.exe and SecurityHealthService.exe a child of services.exe; dwm.exe, LogonUI.exe and userinit.exe of winlogon.exe; fontdrvhost.exe of wininit.exe (session 0) or winlogon.exe (each logon session); RuntimeBroker.exe, WmiPrvSE.exe and dllhost.exe of the service host that runs the DCOM launcher, and dllhost.exe also of services.exe (COM+ server applications and the COM+ System Application service run as services); taskhostw.exe and sihost.exe of a service host. One wininit, services, lsass and LsaIso, all in session 0; one csrss.exe per session and one winlogon.exe per session other than 0. A parent that is one process -- System (PID 4 only), smss.exe, wininit.exe, services.exe -- is accepted on its name alone, and a winlogon.exe when it is the one in the child's own session, so a clock that stepped backward after boot cannot make either look like a reused PID. An svchost.exe parent is one of many, so it counts only when it was created before the child and the clock is seen not to have moved; under a moved clock such a child is counted as not graded, never flagged. The helpers job grades the runner's whole live tree and requires it to raise nothing. Verify: Get-CimInstance Win32_Process | Select-Object Name, ProcessId, ParentProcessId, SessionId, CreationDate.
+
+[system-process-parent-in-a-container]
+class     = ADVISE
+maxsev    = WARNING
+proof     = field:a machine running process-isolated Windows containers shows each container's own smss.exe, csrss.exe, services.exe and svchost.exe tree on the host, started from the container runtime rather than from the host's own boot chain; the windows-latest runner has Docker, but a process-isolated container needs a Windows base image matching the host build pulled on every run, which this suite does not pay for (docs/design/backlog.md)
+signature = (has the wrong parent: |Windows runs one \S+|runs in session \d+ -- Windows runs ).*\(T1036 masquerading by parent\)
+note      = If the machine runs Docker or Windows containers in process isolation, check whether the flagged process's parent chain leads to the container runtime (vmcompute.exe, or a container's own smss.exe) before treating it as an impostor. On a home PC with no containers, a wrong parent is a finding.
+
+[system-process-parent-in-sandboxie]
+class     = ADVISE
+maxsev    = WARNING
+proof     = field:Sandboxie-Plus runs its own SandboxieDcomLaunch.exe and SandboxieRpcSs.exe inside each sandbox, and COM servers a sandboxed program uses (dllhost.exe, RuntimeBroker.exe, WmiPrvSE.exe) are started by them instead of by Windows' DCOM launcher; installing a sandbox on a CI runner is a product install this suite does not make
+signature = has the wrong parent: PID \d+ belongs to Sandboxie(DcomLaunch|RpcSs)\.exe -- .*\(T1036 masquerading by parent\)
+note      = If the parent line names SandboxieDcomLaunch.exe or SandboxieRpcSs.exe and the child runs from its canonical System32 path, it is a program you ran in a Sandboxie sandbox; confirm the parent's path is under the Sandboxie-Plus install directory (Program Files\Sandboxie-Plus) and that you use Sandboxie. A Sandboxie-named parent anywhere else is the finding.
+
 [ztdns-helper-hidden-from-standard-user]
 class     = QUIET
 maxsev    = INFO

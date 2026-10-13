@@ -374,7 +374,9 @@ the DNS probe) have never run in the field.
 - Building the twenty-two unlabelled manifest ids into detections: most are
   not host-observable; relabel the ones that exist and note the rest.
 
-## Masquerading by parent, not only by path (deferred 2026-09-23)
+## Masquerading by parent, not only by path (deferred 2026-09-23, DONE 2026-10-13)
+
+Done. Microsoft documents the exited-parent case (Win32_Process: a reused PID is told apart by CreationDate), and its critical-process list says which parents never exit. See the CHANGELOG entry. The original reasoning follows.
 
 `masquerade_check.ps1` grades a system-process NAME by its directory. The
 second classic signal is the PARENT: every svchost.exe is a child of
@@ -388,6 +390,22 @@ ordering (a PID is reused once its owner exits, so "parent is not services.exe"
 is also what a parent that has since exited looks like) and a benign twin for
 that case pinned in the self-test. Build it when a field run or the harness
 can show the exited-parent shape; do not build it on the assumption.
+
+## The container false positive, planted (open, 2026-10-13)
+
+`[system-process-parent-in-a-container]` in the corpus is `field:` only. A
+process-isolated Windows container shows its own smss, csrss, wininit,
+services and svchost tree on the host, so the parent rule's one-of-each and
+session lines can fire on a container host. GitHub's Windows images have
+carried Docker Engine (verify against the current windows-latest image notes
+before building: it has changed between images), so the shape could be
+produced on a runner: `docker run --isolation=process` with a Nano Server
+image whose build matches the host's (process isolation requires it). The
+cost is the image pull on every run, a few hundred MB for Nano Server. Worth
+doing if the parent rule is ever tightened, so the judgement is tested in
+both directions: the container's tree advised, an impostor beside it still
+flagged. Sandboxie-Plus (`[system-process-parent-in-sandboxie]`) is a product
+install and stays field-only.
 
 ## Raised gaps: DECIDED 2026-10-03 -- a raised gap prints `[WARNING]`
 
