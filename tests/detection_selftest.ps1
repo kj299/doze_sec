@@ -1288,12 +1288,14 @@ try {
                        @{ Case = 'Section 18d staging file match'; Row = 'CRITICAL|18|T1074|Known malware staging files found' },
                        @{ Case = 'Section 18f C2 domain match';   Row = 'WARNING|18|T1071.004|C2 domain IOC match in DNS cache' },
                        @{ Case = 'Section 18h registry IOC match'; Row = 'WARNING|18|T1112|Registry IOC match' },
-                       # The three parent plants raise through ONE marker, so they
+                       # The two svchost.exe plants raise through ONE marker, so they
                        # share this row: each case checks that its own plant printed
-                       # (its Expect), and the row that the rule's marker reached the ledger.
+                       # (its Expect), and the row that the rule's marker reached the
+                       # ledger. The wininit.exe plant has a row of its own, which
+                       # no other plant can write.
                        @{ Case = 'svchost.exe started by a living wrong parent'; Row = 'WARNING|4|T1036|System-process name started by a parent Windows never uses' },
                        @{ Case = 'svchost.exe whose parent exited'; Row = 'WARNING|4|T1036|System-process name started by a parent Windows never uses' },
-                       @{ Case = 'A second wininit.exe'; Row = 'WARNING|4|T1036|System-process name started by a parent Windows never uses' })) {
+                       @{ Case = 'A second wininit.exe'; Row = 'WARNING|4|T1036|System process Windows runs once seen twice or in the wrong session' })) {
         $cs = @($cases | Where-Object { $_.Name -like ('*' + $chk.Case + '*') -and -not $_.Invert })[0]
         if (-not ($cs -and $cs.Planted)) { Write-Host ("  [ SKIP     ] {0}: the plant did not take, so its ledger row is not checked" -f $chk.Case); continue }
         # The check is "printed but not counted": with nothing printed (a

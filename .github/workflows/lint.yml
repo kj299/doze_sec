@@ -363,10 +363,15 @@ jobs:
                    'dwm.exe in session 1 under the winlogon.exe of session 2 is WARNING (a winlogon.exe only starts processes in its own session)' \
                    'smss.exe whose parent calls itself System but is not PID 4 is WARNING: System is PID 4 and nothing else' \
                    'a snapshot with no lsass.exe is SKIPPED, never OK (every running Windows has one)' \
-                   'a ten-digit session ID parses (4294967295 is not dropped or overflowed)'; do
+                   'a ten-digit session ID parses (4294967295 is not dropped or overflowed)' \
+                   'a dwm.exe under services.exe in session 0 is a finding, never "a session that is ending"' \
+                   'userinit.exe under a living, OLDER cmd.exe in a session that is ending is WARNING: an older holder is no reused number, it started the child' \
+                   'a WmiPrvSE.exe recorded before the first service host (a small step back soon after boot) reads as a clock that moved, not a finding' \
+                   'a process recorded before the System-started smss.exe, alone, reads as a clock that moved' \
+                   'an svchost.exe recorded before its services.exe (but after smss), alone, reads as a clock that moved'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 100 ] || { echo "only $n case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 110 ] || { echo "only $n case(s)"; exit 1; }
       - name: proc_snapshot -- one query, the former Name-PID-Path lines byte for byte, and the process tree
         run: |
           out=$(pwsh -NoProfile -File tools/proc_snapshot.ps1 -SelfTest); echo "$out"

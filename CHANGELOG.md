@@ -37,7 +37,10 @@ The rule:
   before the child and the clock is seen not to have moved.
 - When a session ends its winlogon.exe exits first, and its dwm, LogonUI or
   fontdrvhost can outlive it for a moment. A child whose session holds no
-  winlogon.exe is counted, never flagged.
+  winlogon.exe is counted, never flagged, unless the process holding its
+  parent PID predates it (no reused number: that process started it).
+  Session 0 lasts until shutdown and never holds a winlogon.exe, so a dwm,
+  LogonUI or userinit there is always graded.
 - Where the rightful parent exits by design (the service host that starts
   taskhostw or sihost), creation time tells a reused PID from a wrong living
   parent. It is trusted only when the tree shows the clock did not move
@@ -57,7 +60,9 @@ The rule:
 
 The finding names the child and the parent beneath it, with their paths and
 start times, and raises its own ledger row: "System-process name started by
-a parent Windows never uses".
+a parent Windows never uses". A second copy of a process Windows runs once,
+or one in the wrong session, raises a row of its own: "System process
+Windows runs once seen twice or in the wrong session".
 
 The tree comes from the same Win32_Process query as Section 4's existing
 snapshot, through the new `tools\proc_snapshot.ps1`. Its standard output is
@@ -100,12 +105,26 @@ It also found a session ID above 2^31 would overflow, and the "which runs
 until shutdown" wording was wrong for winlogon.exe, whose lifetime is its
 session's.
 
+A third review, of that fix, found that it had opened a miss: session 0 has
+no winlogon.exe, so a fake dwm.exe, LogonUI.exe or userinit.exe there -- where
+any SYSTEM service, scheduled task, PsExec or WMI launch lands -- read as "a
+session that is ending", and the block printed the all-clear. Fixed before
+the first push, with the four shapes it named pinned as must-raise cases and
+a session-0 dwm under the runner's real services.exe in CI. It also found:
+a few seconds' clock step back soon after boot could record a genuine
+WmiPrvSE before its service host (now read as a moved clock: nothing a
+service host starts can predate the first one); the clock self-test could
+lose either of its two checks unnoticed (each check now has its own case);
+and the harness's wininit.exe plant shared its ledger row with the svchost
+plants, so it proved nothing (it now has its own row).
+
 Tests, both directions:
 
-- The self-test pins every rule both ways (106 cases), including a reused
-  PID, System's PID 4, a clock that moved, a session that is ending, the
-  renamed chain and an incomplete snapshot. Fifteen mutations, across both
-  reviews, each fail their own cases.
+- The self-test pins every rule both ways (115 cases), including a reused
+  PID, System's PID 4, each way a clock is seen to move, a session that is
+  ending, session 0, the renamed chain and an incomplete snapshot.
+  Twenty-two mutations, across the three reviews, each fail their own
+  cases.
 - The helpers job grades the runner's whole live tree, which must raise
   nothing. Against that live tree it also checks:
   - a System32 svchost.exe whose parent PID is the job's own PowerShell is
@@ -114,7 +133,8 @@ Tests, both directions:
   - a second services.exe is named;
   - csrss.exe with an absent or reused parent stays quiet;
   - a dwm.exe with no parent is named in the session of the runner's real
-    winlogon.exe, and stays quiet in a session that has none.
+    winlogon.exe, and stays quiet in a session that has none;
+  - a dwm.exe in session 0 under the runner's real services.exe is named.
   It also compares proc_snapshot's lines byte for byte with the former
   one-liner's.
 - The full-run and standard-user jobs require the parent `[OK]` line, and no

@@ -2273,7 +2273,8 @@ echo  a parent exited is told apart by creation time, and the session is checked
 if not defined _ENUM4 goto :sec4_masq_skip
 del "%TEMP%\dz_masq.txt" 2>nul
 del "%TEMP%\dz_masq_parent.txt" 2>nul
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\masquerade_check.ps1" -Path "%TEMP%\dz_proc4.tmp" -MarkerFile "%TEMP%\dz_masq.txt" -TreePath "%TEMP%\dz_proc4_tree.tmp" -ParentMarkerFile "%TEMP%\dz_masq_parent.txt">> "%REPORT%" 2>&1
+del "%TEMP%\dz_masq_count.txt" 2>nul
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\masquerade_check.ps1" -Path "%TEMP%\dz_proc4.tmp" -MarkerFile "%TEMP%\dz_masq.txt" -TreePath "%TEMP%\dz_proc4_tree.tmp" -ParentMarkerFile "%TEMP%\dz_masq_parent.txt" -CountMarkerFile "%TEMP%\dz_masq_count.txt">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_masq.txt" (
     call :dz_finding WARNING 4 T1036 "System-process name running outside its canonical directory"
     del "%TEMP%\dz_masq.txt" 2>nul
@@ -2281,6 +2282,10 @@ if exist "%TEMP%\dz_masq.txt" (
 if exist "%TEMP%\dz_masq_parent.txt" (
     call :dz_finding WARNING 4 T1036 "System-process name started by a parent Windows never uses"
     del "%TEMP%\dz_masq_parent.txt" 2>nul
+)
+if exist "%TEMP%\dz_masq_count.txt" (
+    call :dz_finding WARNING 4 T1036 "System process Windows runs once seen twice or in the wrong session"
+    del "%TEMP%\dz_masq_count.txt" 2>nul
 )
 goto :sec4_masq_done
 :sec4_masq_skip

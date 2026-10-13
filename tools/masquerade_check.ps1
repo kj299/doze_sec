@@ -33,8 +33,10 @@
 #     location and module_inspect grades what is loaded inside.
 #
 # MARKERS: -MarkerFile is written with WARNING when the path rule has a hit,
-# -ParentMarkerFile when the parent rule does; the caller raises each as its
-# own ledger row via :dz_finding. Read-only. Windows PowerShell 5.1 and pwsh.
+# -ParentMarkerFile when the parent rule does, -CountMarkerFile when a process
+# Windows runs once is there twice or in the wrong session; the caller raises
+# each as its own ledger row via :dz_finding, so the row names what was seen.
+# Read-only. Windows PowerShell 5.1 and pwsh.
 
 [CmdletBinding()]
 param(
@@ -47,6 +49,8 @@ param(
     # and the marker the parent rule writes (its own ledger row).
     [string]$TreePath,
     [string]$ParentMarkerFile,
+    # One of each, and the session rule: their own ledger row.
+    [string]$CountMarkerFile,
     [string]$SystemRoot = $env:SystemRoot,
     [switch]$SelfTest
 )
@@ -237,7 +241,10 @@ function Get-MasqueradeReport {
 # A SESSION THAT IS ENDING. When a session ends its winlogon.exe exits, and
 # for a moment its dwm, logonui or fontdrvhost can outlive it. A child whose
 # session holds no winlogon.exe is counted as one whose parent exited, never
-# a finding.
+# a finding -- unless a process OLDER than the child holds its parent PID
+# (that is no reused number; it started the child). Session 0 is never
+# ending: it lasts until shutdown and never holds a winlogon.exe, and it is
+# where a SYSTEM service, scheduled task or remote launch lands.
 #
 # ONE OF EACH. Windows runs exactly one wininit.exe, services.exe, lsass.exe
 # and LsaIso.exe, all in session 0, one smss.exe started by System, and one
@@ -342,7 +349,6 @@ function Get-ParentVerdict {
                 # The winlogon.exe of the child's session started it; one in
                 # another session never does.
                 if ([long]$ChildSession -eq [long]$Parent.Session) { return @{ Sev = 'OK' } }
-                $reused = $false
             } else {
                 # svchost.exe: one of many. A service host started after the
                 # child is not what started it.
@@ -361,8 +367,14 @@ function Get-ParentVerdict {
         if (-not $RightfulPresent) { return @{ Sev = 'UNVERIFIED'; Why = ('the snapshot holds no ' + ($rule.Parents -join ' or ') + ' at all, so it may be incomplete') } }
         if ($rule.PerSession) {
             if ($null -eq $AliveInSession) { return @{ Sev = 'UNVERIFIED'; Why = 'no session to find its winlogon.exe in' } }
-            # The session is ending: its winlogon.exe exited first.
-            if (-not $AliveInSession) { return @{ Sev = 'EXITED' } }
+            if (-not $AliveInSession) {
+                # The session is ending: its winlogon.exe exited first, and
+                # its number may since have been reused by a later process.
+                # A living holder that predates the child is no reuse -- it
+                # is what started the child, and it is the wrong name.
+                if ($null -eq $Parent -or $reused) { return @{ Sev = 'EXITED' } }
+                if (-not $haveTimes -or $ClockMoved -or [long]$Parent.Ticks -eq [long]$ChildTicks) { return @{ Sev = 'UNVERIFIED'; Why = 'its session is ending, and no creation time can tell the process holding its parent PID from a later one' } }
+            }
         }
         $kind = 'other'
         if ($null -eq $Parent) { $kind = 'gone' } elseif ($reused) { $kind = 'reused' }
@@ -385,12 +397,21 @@ function Get-ParentVerdict {
 # process before the System-started smss.exe, so any later process recorded
 # as older than it means the clock moved; so does a process recorded as older
 # than the wininit.exe or services.exe that started it, since each is one
-# process that never exits. A child older than its svchost.exe parent is NOT
-# such proof -- that is what a reused PID looks like, and reading it as a
-# moved clock would hide it.
+# process that never exits; and so does a name a service host starts
+# (RuntimeBroker, WmiPrvSE, dllhost, taskhostw, sihost) recorded as older than
+# the FIRST service host services.exe started -- nothing a service host
+# starts can predate every service host. A child older than its OWN
+# svchost.exe parent is not such proof: that is what a reused PID looks like,
+# and reading it as a moved clock would hide it.
 function Test-ClockMovedBackward {
     param($Records, $ByPid)
     $smss = @($Records | Where-Object { $_.Name -ieq 'smss.exe' -and $_.PPid -eq 4 -and $null -ne $_.Ticks }) | Select-Object -First 1
+    $firstHost = $null
+    foreach ($r in $Records) {
+        if ($null -eq $r.Ticks -or $r.Name -ine 'svchost.exe' -or -not $ByPid.ContainsKey($r.PPid)) { continue }
+        if ([string]$ByPid[$r.PPid].Name -ine 'services.exe') { continue }
+        if ($null -eq $firstHost -or [long]$r.Ticks -lt $firstHost) { $firstHost = [long]$r.Ticks }
+    }
     foreach ($r in $Records) {
         if ($null -eq $r.Ticks) { continue }
         if ($smss -and $r.PPid -ne 4 -and $r.PPid -ne 0 -and $r.Pid -ne $smss.Pid -and [long]$r.Ticks -lt [long]$smss.Ticks) { return $true }
@@ -400,6 +421,7 @@ function Test-ClockMovedBackward {
             $pn = ([string]$p.Name).ToLowerInvariant()
             if ($null -ne $p.Ticks -and ($pn -eq 'wininit.exe' -or $pn -eq 'services.exe') -and $script:ParentRule[$n].Parents -contains $pn -and [long]$p.Ticks -gt [long]$r.Ticks) { return $true }
         }
+        if ($null -ne $firstHost -and $script:ParentRule.ContainsKey($n) -and $script:ParentRule[$n].Parents -contains 'svchost.exe' -and [long]$r.Ticks -lt $firstHost) { return $true }
     }
     return $false
 }
@@ -455,7 +477,7 @@ function Get-ParentReport {
         $s = 'unknown'; if ($null -ne $r.Session) { $s = [string]$r.Session }
         return ($p + ', session ' + $s + ', started ' + (Format-UtcTicks $r.Ticks))
     }
-    $hits = 0; $ok = 0; $exited = 0; $unverified = 0
+    $hits = 0; $countHits = 0; $ok = 0; $exited = 0; $unverified = 0
     foreach ($rec in $records) {
         $parent = $null
         if ($rec.PPid -ne $rec.Pid -and $byPid.ContainsKey($rec.PPid)) { $parent = $byPid[$rec.PPid] }
@@ -472,7 +494,10 @@ function Get-ParentReport {
             # For a child of a session's winlogon.exe: does its session still
             # hold one (or, for fontdrvhost in session 0, wininit.exe)?
             if ($rule.PerSession) {
-                if ($null -eq $rec.Session) { $alive = $null } else {
+                # Session 0 lasts until shutdown and never holds a
+                # winlogon.exe, so it is never "a session that is ending":
+                # dwm, LogonUI and userinit are never started there.
+                if ($null -eq $rec.Session) { $alive = $null } elseif ([long]$rec.Session -eq 0) { $alive = $true } else {
                     $alive = $false
                     foreach ($pn in $rule.Parents) { if ($inSession.ContainsKey($pn + '|' + $rec.Session)) { $alive = $true } }
                 }
@@ -513,7 +538,7 @@ function Get-ParentReport {
     foreach ($k in @($groups.Keys | Sort-Object)) {
         $g = @($groups[$k])
         if ($g.Count -lt 2) { continue }
-        $hits++
+        $hits++; $countHits++
         $parts = $k.Split('|')
         $where = 'one ' + $parts[0]
         if ($parts.Count -gt 1 -and $parts[1] -eq 'system') { $where = 'one smss.exe started by System' }
@@ -536,12 +561,12 @@ function Get-ParentReport {
         if ($script:Session0Only -contains $n -and $rec.Session -ne 0) { $bad = $true; $want = 'only in session 0' }
         if ($n -eq 'winlogon.exe' -and $rec.Session -eq 0) { $bad = $true; $want = 'never in session 0' }
         if (-not $bad) { continue }
-        $hits++
+        $hits++; $countHits++
         [void]$out.Add(('[WARNING] Process ' + (ConvertTo-PrintableText $rec.Name) + ' (PID ' + $rec.Pid + ') runs in session ' + $rec.Session + ' -- Windows runs ' + $n + ' ' + $want + ' (T1036 masquerading by parent)'))
         [void]$out.Add(('    child:  ' + (Show-Proc $rec)))
     }
     if ($clockMoved) {
-        [void]$out.Add('[INFO] The clock moved backward since this boot (a process is recorded as starting before the smss.exe System started, or before the wininit.exe or services.exe that started it), so creation times do not order processes here: a service-host parent and a parent that can exit are not graded by time.')
+        [void]$out.Add('[INFO] The clock moved backward since this boot (a process is recorded as starting before the smss.exe System started, before the wininit.exe or services.exe that started it, or a service host''s child before the first service host), so creation times do not order processes here: a service-host parent and a parent that can exit are not graded by time.')
     }
     if ($exited -gt 0) {
         [void]$out.Add(('[INFO] ' + $exited + ' system-process name(s) whose parent is no longer running, as it may be by design (a session''s smss.exe exits once it has started csrss, wininit and winlogon; the service host that starts taskhostw or sihost can restart; a session that is ending loses its winlogon.exe first) -- not graded by parent.'))
@@ -562,9 +587,13 @@ function Get-ParentReport {
         } else {
             [void]$out.Add('[SKIPPED] no system-process parent could be graded -- masquerading by parent NOT verified.')
         }
-        return @{ Lines = @($out.ToArray()); Marker = $null }
+        return @{ Lines = @($out.ToArray()); Marker = $null; CountMarker = $null }
     }
-    return @{ Lines = @($out.ToArray()); Marker = 'WARNING' }
+    # Two rows: a wrong parent, and a process Windows runs once found twice or
+    # in the wrong session. Each names what was seen.
+    $pm = $null; if ($hits -gt $countHits) { $pm = 'WARNING' }
+    $cm = $null; if ($countHits -gt 0) { $cm = 'WARNING' }
+    return @{ Lines = @($out.ToArray()); Marker = $pm; CountMarker = $cm }
 }
 
 if ($SelfTest) {
@@ -661,7 +690,9 @@ if ($SelfTest) {
     T 'csrss, wininit and winlogon under a living, OLDER cmd.exe are not graded by parent (one per session grades them, so no clock step can raise one)' $nc ''
     # A session that is ending: its winlogon.exe exited first.
     T 'dwm.exe whose parent is gone, in a session with no winlogon.exe left, is EXITED (a session that is ending)' ((PV 'dwm.exe' 1040 $null $true $false 2 $false).Sev -eq 'EXITED') ''
-    T 'logonui.exe, userinit.exe and fontdrvhost.exe in a session with no winlogon.exe are EXITED too' ((PV 'logonui.exe' 1040 $null $true $false 2 $false).Sev -eq 'EXITED' -and (PV 'userinit.exe' 1040 (Par 2500 'cmd.exe' 1000 2) $true $false 2 $false).Sev -eq 'EXITED' -and (PV 'fontdrvhost.exe' 1040 $null $true $false 2 $false).Sev -eq 'EXITED') ''
+    T 'logonui.exe and fontdrvhost.exe with no parent, or userinit.exe under a LATER process, in a session with no winlogon.exe are EXITED too' ((PV 'logonui.exe' 1040 $null $true $false 2 $false).Sev -eq 'EXITED' -and (PV 'userinit.exe' 1040 (Par 2500 'cmd.exe' 5000 2) $true $false 2 $false).Sev -eq 'EXITED' -and (PV 'fontdrvhost.exe' 1040 $null $true $false 2 $false).Sev -eq 'EXITED') ''
+    T 'userinit.exe under a living, OLDER cmd.exe in a session that is ending is WARNING: an older holder is no reused number, it started the child' ((PV 'userinit.exe' 1040 (Par 2500 'cmd.exe' 1000 2) $true $false 2 $false).Sev -eq 'WARNING') ''
+    T 'in a session that is ending, a living holder with no creation time, the same time, or a moved clock is UNVERIFIED' ((PV 'dwm.exe' 1040 (Par 2500 'cmd.exe' $null 2) $true $false 2 $false).Sev -eq 'UNVERIFIED' -and (PV 'dwm.exe' 1040 (Par 2500 'cmd.exe' 1040 2) $true $false 2 $false).Sev -eq 'UNVERIFIED' -and (PV 'dwm.exe' 1040 (Par 2500 'cmd.exe' 1000 2) $true $true 2 $false).Sev -eq 'UNVERIFIED') ''
     T 'dwm.exe with no session is UNVERIFIED, never graded' ((PV 'dwm.exe' 1040 $null $true $false $null $null).Sev -eq 'UNVERIFIED' -and (PV 'dwm.exe' 1040 (Par 860 'winlogon.exe' 1013 1) $true $false $null).Sev -eq 'UNVERIFIED') ''
     # Must raise.
     $w = PV 'svchost.exe' 1300 (Par 3000 'explorer.exe' 1250)
@@ -717,7 +748,7 @@ if ($SelfTest) {
     )
     $pr = Get-ParentReport -Tree $tree
     $pt = $pr.Lines -join "`n"
-    T 'a real-shaped Windows tree raises nothing and prints the OK line' ($null -eq $pr.Marker -and $pt -match '\[OK\] \d+ system-process name\(s\) were started by the parent Windows uses' -and $pt -notmatch '\[WARNING\]') $pt
+    T 'a real-shaped Windows tree raises nothing and prints the OK line' ($null -eq $pr.Marker -and $null -eq $pr.CountMarker -and $pt -match '\[OK\] \d+ system-process name\(s\) were started by the parent Windows uses' -and $pt -notmatch '\[WARNING\]') $pt
     T 'the parents that exited by design (two csrss, wininit, winlogon) are counted, not graded' ($pt -match '\[INFO\] 4 system-process name\(s\) whose parent is no longer running') $pt
     T 'a clean tree with ordered times does not read as a clock that moved' ($pt -notmatch 'The clock moved backward') $pt
     $bad = $tree + @('4242|3000|6000|1|C:\Windows\System32\svchost.exe|svchost.exe', '4243|5555|6001|1|C:\Users\Public\x\svchost.exe|svchost.exe')
@@ -741,22 +772,46 @@ if ($SelfTest) {
     T 'a session whose winlogon.exe has exited: its dwm.exe and fontdrvhost.exe are counted as exited, not flagged' ($null -eq $pr.Marker -and $pt -match '\[INFO\] 7 system-process name\(s\) whose parent is no longer running') $pt
     $pr = Get-ParentReport -Tree ($tree + @('6300|6100|1400|1||dwm.exe'))
     T 'a dwm.exe in session 1, whose winlogon.exe runs, with its parent gone is a finding (and a second dwm is not graded by count)' ($pr.Marker -eq 'WARNING' -and ($pr.Lines -join "`n") -match '\[WARNING\] Process dwm\.exe \(PID 6300\) has the wrong parent: the process that started it \(PID 6100\) is no longer running -- Windows starts dwm\.exe only from the winlogon\.exe of its own session, which runs as long as that session') ($pr.Lines -join ' | ')
+    # Session 0 lasts until shutdown and never holds a winlogon.exe: a dwm,
+    # LogonUI or userinit there is not "a session that is ending". It is where
+    # a SYSTEM service, scheduled task, PsExec or WMI launch lands.
+    foreach ($s0 in @(@('7100|900|6000|0|C:\Windows\System32\dwm.exe|dwm.exe', 'dwm.exe under services.exe'),
+                      @('7101|1000|6000|0|C:\Windows\System32\LogonUI.exe|LogonUI.exe', 'LogonUI.exe under svchost.exe'),
+                      @('7102|6999|6000|0||userinit.exe', 'userinit.exe whose parent is gone'))) {
+        $pr = Get-ParentReport -Tree ($tree + @($s0[0]))
+        T ('a ' + $s0[1] + ' in session 0 is a finding, never "a session that is ending"') ($pr.Marker -eq 'WARNING' -and ($pr.Lines -join "`n") -notmatch '\[OK\]') ($pr.Lines -join ' | ')
+    }
+    $pr = Get-ParentReport -Tree ($tree + @('6990|1000|5900|0|C:\Windows\System32\cmd.exe|cmd.exe', '7103|6990|6000|0|C:\ProgramData\x\dwm.exe|dwm.exe'))
+    T 'a dwm.exe in session 0 started by cmd.exe is named, with cmd.exe as its parent' ($pr.Marker -eq 'WARNING' -and ($pr.Lines -join "`n") -match '\(PID 7103\) has the wrong parent: PID 6990 belongs to cmd\.exe -- Windows starts dwm\.exe only from the winlogon\.exe of its own session') ($pr.Lines -join ' | ')
+    # Each way the clock is seen to have moved, alone. A process older than
+    # the smss.exe System started:
+    $pr = Get-ParentReport -Tree ($tree + @('5150|3000|900|1||notepad.exe'))
+    T 'a process recorded before the System-started smss.exe, alone, reads as a clock that moved' ($null -eq $pr.Marker -and ($pr.Lines -join "`n") -match '\[INFO\] The clock moved backward since this boot') ($pr.Lines -join ' | ')
+    # ...an svchost.exe older than the services.exe that started it, but not
+    # older than smss:
+    $pr = Get-ParentReport -Tree ($tree + @('5100|900|1015|0|C:\Windows\System32\svchost.exe|svchost.exe'))
+    T 'an svchost.exe recorded before its services.exe (but after smss), alone, reads as a clock that moved' ($null -eq $pr.Marker -and ($pr.Lines -join "`n") -match '\[INFO\] The clock moved backward since this boot') ($pr.Lines -join ' | ')
+    # ...and a service host's child recorded before the FIRST service host: a
+    # few seconds' step back soon after boot. The genuine WmiPrvSE must not be
+    # read as a reused number.
+    $pr = Get-ParentReport -Tree ($tree + @('2150|1000|1025|0|C:\Windows\System32\wbem\WmiPrvSE.exe|WmiPrvSE.exe'))
+    T 'a WmiPrvSE.exe recorded before the first service host (a small step back soon after boot) reads as a clock that moved, not a finding' ($null -eq $pr.Marker -and ($pr.Lines -join "`n") -match '\[INFO\] The clock moved backward since this boot') ($pr.Lines -join ' | ')
     # The renamed chain: a launcher that exits starts a fake wininit, which
     # starts a fake services, which starts an implant svchost. Every parent
     # NAME looks right; one of each is what gives it away.
     $chain = $tree + @('8000|7999|6000|0|C:\ProgramData\w\wininit.exe|wininit.exe', '8001|8000|6001|0|C:\ProgramData\w\services.exe|services.exe', '8002|8001|6002|0|C:\ProgramData\w\svchost.exe|svchost.exe')
     $pr = Get-ParentReport -Tree $chain
     $pt = $pr.Lines -join "`n"
-    T 'a renamed chain (fake wininit -> fake services -> implant svchost) is caught: two wininit and two services' ($pr.Marker -eq 'WARNING' -and $pt -match '\[WARNING\] Windows runs one services\.exe; this snapshot holds 2' -and $pt -match '\[WARNING\] Windows runs one wininit\.exe; this snapshot holds 2' -and $pt -match '(?m)^    instance: PID 8001, parent wininit\.exe \(PID 8000\), C:\\ProgramData\\w\\services\.exe, session 0') $pt
+    T 'a renamed chain (fake wininit -> fake services -> implant svchost) is caught: two wininit and two services, on the one-of-each row (no parent is wrong)' ($pr.CountMarker -eq 'WARNING' -and $null -eq $pr.Marker -and $pt -match '\[WARNING\] Windows runs one services\.exe; this snapshot holds 2' -and $pt -match '\[WARNING\] Windows runs one wininit\.exe; this snapshot holds 2' -and $pt -match '(?m)^    instance: PID 8001, parent wininit\.exe \(PID 8000\), C:\\ProgramData\\w\\services\.exe, session 0') $pt
     $pr = Get-ParentReport -Tree ($tree + @('7000|6999|6000|1||csrss.exe'))
-    T 'a second csrss.exe in session 1 is caught, even though its parent exited (the dropper case)' ($pr.Marker -eq 'WARNING' -and ($pr.Lines -join "`n") -match '\[WARNING\] Windows runs one csrss\.exe per session; session 1 has 2') ($pr.Lines -join ' | ')
+    T 'a second csrss.exe in session 1 is caught, even though its parent exited (the dropper case)' ($pr.CountMarker -eq 'WARNING' -and ($pr.Lines -join "`n") -match '\[WARNING\] Windows runs one csrss\.exe per session; session 1 has 2') ($pr.Lines -join ' | ')
     $pr = Get-ParentReport -Tree ($tree + @('7000|3000|6000|1|C:\Users\Public\w\wininit.exe|wininit.exe'))
-    T 'a wininit.exe started by explorer.exe is caught by count (Windows runs one), not by its parent' ($pr.Marker -eq 'WARNING' -and ($pr.Lines -join "`n") -match '\[WARNING\] Windows runs one wininit\.exe; this snapshot holds 2' -and ($pr.Lines -join "`n") -notmatch 'PID 7000\) has the wrong parent') ($pr.Lines -join ' | ')
+    T 'a wininit.exe started by explorer.exe is caught by count (Windows runs one), not by its parent' ($pr.CountMarker -eq 'WARNING' -and $null -eq $pr.Marker -and ($pr.Lines -join "`n") -match '\[WARNING\] Windows runs one wininit\.exe; this snapshot holds 2' -and ($pr.Lines -join "`n") -notmatch 'PID 7000\) has the wrong parent') ($pr.Lines -join ' | ')
     $pr = Get-ParentReport -Tree ($tree | ForEach-Object { if ($_ -like '920|*') { '920|780|1021|1||lsass.exe' } else { $_ } })
-    T 'lsass.exe outside session 0 is caught' ($pr.Marker -eq 'WARNING' -and ($pr.Lines -join "`n") -match '\[WARNING\] Process lsass\.exe \(PID 920\) runs in session 1 -- Windows runs lsass\.exe only in session 0') ($pr.Lines -join ' | ')
+    T 'lsass.exe outside session 0 is caught, on the one-of-each row' ($pr.CountMarker -eq 'WARNING' -and $null -eq $pr.Marker -and ($pr.Lines -join "`n") -match '\[WARNING\] Process lsass\.exe \(PID 920\) runs in session 1 -- Windows runs lsass\.exe only in session 0') ($pr.Lines -join ' | ')
     # A session ID is a 32-bit unsigned number; the largest must parse.
     $pr = Get-ParentReport -Tree ($tree | ForEach-Object { if ($_ -like '920|*') { '920|780|1021|4294967295||lsass.exe' } else { $_ } })
-    T 'a ten-digit session ID parses (4294967295 is not dropped or overflowed)' ($pr.Marker -eq 'WARNING' -and ($pr.Lines -join "`n") -match '\(PID 920\) runs in session 4294967295 -- ') ($pr.Lines -join ' | ')
+    T 'a ten-digit session ID parses (4294967295 is not dropped or overflowed)' ($pr.CountMarker -eq 'WARNING' -and ($pr.Lines -join "`n") -match '\(PID 920\) runs in session 4294967295 -- ') ($pr.Lines -join ' | ')
     # A clock that stepped backward after boot: every svchost started after the
     # correction looks older than services.exe. Nothing may be flagged for it.
     $skew = $tree + @('5100|900|900|0|C:\Windows\System32\svchost.exe|svchost.exe', '5200|5150|950|1||taskhostw.exe', '5150|3000|900|1||notepad.exe')
@@ -825,3 +880,4 @@ try { $tree = @(Get-Content -LiteralPath $TreePath -EA Stop) } catch {
 $parentReport = Get-ParentReport -Tree $tree
 foreach ($l in $parentReport.Lines) { $l }
 if ($parentReport.Marker) { Write-MarkerFile -Path $ParentMarkerFile -Value $parentReport.Marker }
+if ($parentReport.CountMarker) { Write-MarkerFile -Path $CountMarkerFile -Value $parentReport.CountMarker }

@@ -2881,7 +2881,7 @@ jobs:
           $st = (.\tools\masquerade_check.ps1 -SelfTest) -join "`n"
           if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'masquerade_check.ps1 -SelfTest failed' }
           $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($nst -lt 100) { throw "masquerade_check self-test ran only $nst case(s)" }
+          if ($nst -lt 110) { throw "masquerade_check self-test ran only $nst case(s)" }
           Write-Host "masquerade_check -SelfTest OK ($nst cases)"
           $sp = (.\tools\proc_snapshot.ps1 -SelfTest) -join "`n"
           if ($LASTEXITCODE -ne 0) { Write-Host $sp; throw 'proc_snapshot.ps1 -SelfTest failed' }
@@ -2925,8 +2925,9 @@ jobs:
           $t2 = Join-Path $env:TEMP 'dz_ci_proc4_tree.tmp'
           $old = Join-Path $env:TEMP 'dz_ci_proc4_old.tmp'
           $pm = Join-Path $env:TEMP 'dz_ci_masq_parent.txt'
+          $cm = Join-Path $env:TEMP 'dz_ci_masq_count.txt'
           $snap = (Resolve-Path .\tools\proc_snapshot.ps1).Path
-          Remove-Item $d2, $t2, $old, $pm, $mk -Force -EA SilentlyContinue
+          Remove-Item $d2, $t2, $old, $pm, $cm, $mk -Force -EA SilentlyContinue
           # A .cmd file, so the lines reach cmd exactly as a bat holds them (no
           # argument re-quoting by PowerShell on the way): the new call, and the
           # bats' former one-liner to compare the bytes against.
@@ -2959,9 +2960,9 @@ jobs:
           $noTicks = @($tl | Where-Object { $_.Split('|')[2] -eq '' })
           Write-Host ("tree: {0} processes, {1} without a creation time: {2}" -f $tl.Count, $noTicks.Count, ($noTicks -join ', '))
           if ($noTicks.Count -gt [math]::Max(3, [int]($tl.Count / 20))) { throw 'too many processes without a creation time for the parent rule to grade' }
-          $out = (.\tools\masquerade_check.ps1 -Path $d2 -MarkerFile $mk -TreePath $t2 -ParentMarkerFile $pm) -join "`n"
-          Write-Host (($out -split "`n" | Where-Object { $_ -match 'by parent|wrong parent|child:|parent:|started by the parent|whose parent|creation time' }) -join "`n")
-          if (Test-Path $pm) { throw "the runner's own process tree was reported as masquerading by parent: $out" }
+          $out = (.\tools\masquerade_check.ps1 -Path $d2 -MarkerFile $mk -TreePath $t2 -ParentMarkerFile $pm -CountMarkerFile $cm) -join "`n"
+          Write-Host (($out -split "`n" | Where-Object { $_ -match 'by parent|wrong parent|child:|parent:|instance:|started by the parent|whose parent|creation time|clock moved|holds no' }) -join "`n")
+          if ((Test-Path $pm) -or (Test-Path $cm)) { throw "the runner's own process tree was reported as masquerading by parent: $out" }
           if ($out -notmatch '\[OK\] \d+ system-process name\(s\) were started by the parent Windows uses') { throw 'the real tree did not print the parent OK line' }
 
           # Synthetic children against the LIVE tree (their parents are real):
@@ -2979,7 +2980,9 @@ jobs:
           #    WARNING, Windows runs one;
           #  - a dwm.exe with no parent in a session with no winlogon.exe: quiet
           #    (a session that is ending), and the same in the session of the
-          #    runner's real winlogon.exe: WARNING.
+          #    runner's real winlogon.exe: WARNING;
+          #  - a dwm.exe in session 0 under the runner's real services.exe:
+          #    WARNING (session 0 never ends, and Windows never runs dwm there).
           $meTicks = ([datetime](Get-CimInstance Win32_Process -Filter ("ProcessId=" + $PID)).CreationDate).ToUniversalTime().Ticks
           $now = (Get-Date).ToUniversalTime().Ticks
           $win = $env:SystemRoot
@@ -2987,6 +2990,8 @@ jobs:
           if (-not $wininit) { throw 'the runner''s tree holds no wininit.exe' }
           $wlSession = @($tl | Where-Object { $_ -match '\|winlogon\.exe$' } | ForEach-Object { $_.Split('|')[3] } | Where-Object { $_ -ne '' })[0]
           if (-not $wlSession) { throw 'the runner''s tree holds no winlogon.exe with a session -- the per-session case needs one' }
+          $servicesPid = @($tl | Where-Object { $_ -match '\|services\.exe$' } | ForEach-Object { $_.Split('|')[0] })[0]
+          if (-not $servicesPid) { throw 'the runner''s tree holds no services.exe' }
           $before = $meTicks - 10000000
           Set-Content $t2 -Value ($tl + @(
             ("9000001|{0}|{1}|0|{2}\System32\svchost.exe|svchost.exe" -f $PID, $now, $win),
@@ -2996,22 +3001,30 @@ jobs:
             ("9000005|{0}|{1}|998||csrss.exe" -f $PID, $before),
             ("9000006|{0}|{1}|0|{2}\System32\services.exe|services.exe" -f $wininit, $now, $win),
             ("9000007|9999993|{0}|997|{1}\System32\dwm.exe|dwm.exe" -f $now, $win),
-            ("9000008|9999994|{0}|{1}|{2}\System32\dwm.exe|dwm.exe" -f $now, $wlSession, $win))) -Encoding ASCII
-          Set-Content $d2 -Value ($dl + @(("svchost.exe  9000001  {0}\System32\svchost.exe" -f $win), ("svchost.exe  9000002  {0}\System32\svchost.exe" -f $win), 'csrss.exe  9000003  ', ("svchost.exe  9000004  {0}\System32\svchost.exe" -f $win), 'csrss.exe  9000005  ', ("services.exe  9000006  {0}\System32\services.exe" -f $win), ("dwm.exe  9000007  {0}\System32\dwm.exe" -f $win), ("dwm.exe  9000008  {0}\System32\dwm.exe" -f $win)))
-          Remove-Item $pm, $mk -Force -EA SilentlyContinue
-          $out = (.\tools\masquerade_check.ps1 -Path $d2 -MarkerFile $mk -TreePath $t2 -ParentMarkerFile $pm) -join "`n"
+            ("9000008|9999994|{0}|{1}|{2}\System32\dwm.exe|dwm.exe" -f $now, $wlSession, $win),
+            ("9000009|{0}|{1}|0|{2}\System32\dwm.exe|dwm.exe" -f $servicesPid, $now, $win))) -Encoding ASCII
+          Set-Content $d2 -Value ($dl + @(("svchost.exe  9000001  {0}\System32\svchost.exe" -f $win), ("svchost.exe  9000002  {0}\System32\svchost.exe" -f $win), 'csrss.exe  9000003  ', ("svchost.exe  9000004  {0}\System32\svchost.exe" -f $win), 'csrss.exe  9000005  ', ("services.exe  9000006  {0}\System32\services.exe" -f $win), ("dwm.exe  9000007  {0}\System32\dwm.exe" -f $win), ("dwm.exe  9000008  {0}\System32\dwm.exe" -f $win), ("dwm.exe  9000009  {0}\System32\dwm.exe" -f $win)))
+          Remove-Item $pm, $cm, $mk -Force -EA SilentlyContinue
+          $out = (.\tools\masquerade_check.ps1 -Path $d2 -MarkerFile $mk -TreePath $t2 -ParentMarkerFile $pm -CountMarkerFile $cm) -join "`n"
           Write-Host (($out -split "`n" | Where-Object { $_ -match '9000\d{3}|9999\d{3}|Windows runs one|clock moved' }) -join "`n")
           if (Test-Path $mk) { throw "the canonical-path copies were reported by PATH -- the path rule must stay clean: $out" }
           if (-not (Test-Path $pm)) { throw "no parent marker: $out" }
+          if (-not (Test-Path $cm)) { throw "no one-of-each marker for the second services.exe (its own ledger row): $out" }
           $warn = @($out -split "`n" | Where-Object { $_ -match '^\[WARNING\] Process \S+ \(PID 9000\d{3}\) has the wrong parent' })
-          if ($warn.Count -ne 4) { throw ("expected exactly 4 wrong-parent WARNINGs (9000001, 9000002, 9000004, 9000008), got {0}: {1}" -f $warn.Count, ($warn -join ' | ')) }
+          if ($warn.Count -ne 5) { throw ("expected exactly 5 wrong-parent WARNINGs (9000001, 9000002, 9000004, 9000008, 9000009), got {0}: {1}" -f $warn.Count, ($warn -join ' | ')) }
           if ($out -notmatch ('\[WARNING\] Process svchost\.exe \(PID 9000001\) has the wrong parent: PID {0} belongs to .+? -- Windows starts svchost\.exe only from services\.exe, which runs until shutdown' -f $PID)) { throw 'the svchost.exe whose parent PID is this step''s PowerShell was not named with it' }
           if ($out -notmatch '\(PID 9000002\) has the wrong parent: the process that started it \(PID 9999991\) is no longer running') { throw 'the svchost.exe with an absent parent was not reported' }
-          if ($out -notmatch ('\(PID 9000004\) has the wrong parent: the process that started it \(PID {0}\) is no longer running' -f $PID) -or $out -notmatch ('(?m)^    parent: PID {0} is no longer running; the number now belongs to a later process, powershell\.exe ' -f $PID)) { throw 'the svchost.exe recorded before the process holding its parent PID was not reported as a reused number' }
+          # Worded as a reused number only while the runner's own tree shows
+          # the clock did not move; under a moved clock "younger" cannot be
+          # told, and the line names the holder instead. A WARNING either way.
+          $reusedOk = ($out -match ('\(PID 9000004\) has the wrong parent: the process that started it \(PID {0}\) is no longer running' -f $PID) -and $out -match ('(?m)^    parent: PID {0} is no longer running; the number now belongs to a later process, powershell\.exe ' -f $PID))
+          if ($out -match 'The clock moved backward') { $reusedOk = $reusedOk -or ($out -match ('\(PID 9000004\) has the wrong parent: PID {0} belongs to powershell\.exe -- ' -f $PID)) }
+          if (-not $reusedOk) { throw 'the svchost.exe recorded before the process holding its parent PID was not reported as a reused number' }
           if ($out -match '\(PID 900000[357]\)') { throw 'a csrss.exe whose parent exited by design, or a dwm.exe of a session that is ending, was reported' }
+          if ($out -notmatch ('\(PID 9000009\) has the wrong parent: PID {0} belongs to services\.exe -- Windows starts dwm\.exe only from the winlogon\.exe of its own session' -f $servicesPid)) { throw 'the dwm.exe in session 0 under services.exe was not reported -- session 0 never ends' }
           if ($out -notmatch ('\(PID 9000008\) has the wrong parent: the process that started it \(PID 9999994\) is no longer running -- Windows starts dwm\.exe only from the winlogon\.exe of its own session, which runs as long as that session')) { throw ('the dwm.exe with no parent in session {0}, whose winlogon.exe runs, was not reported' -f $wlSession) }
           if ($out -notmatch '\[WARNING\] Windows runs one services\.exe; this snapshot holds 2' -or $out -notmatch '(?m)^    instance: PID 9000006, parent wininit\.exe') { throw 'the second services.exe was not reported as one Windows never runs twice' }
-          Remove-Item $d2, $t2, $old, $pm, $mk -Force -EA SilentlyContinue
+          Remove-Item $d2, $t2, $old, $pm, $cm, $mk -Force -EA SilentlyContinue
           Write-Host 'masquerade_check live OK (by parent: the real tree is clean, the impostors are named, exited-by-design parents are quiet)'
           exit 0
 
