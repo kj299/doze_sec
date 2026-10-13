@@ -189,11 +189,15 @@ and 13 verify exactly that.
   svchost.exe started by anything but services.exe, an lsass.exe by
   anything but wininit.exe), a second wininit, services, lsass or LsaIso
   (or a second csrss or winlogon in one session), and a session-0 process
-  outside session 0. Where the rightful parent never exits, its name alone
-  decides; where it exits by design, a reused process ID is told from the
-  real parent by creation time, as Microsoft documents for Win32_Process,
-  and only while the clock is seen not to have moved backward since boot.
-  Three things are out of reach:
+  outside session 0. Where the rightful parent cannot exit, anything else at
+  its PID is a finding. A parent that is one process (System at PID 4,
+  smss, wininit, services) is accepted on its name, a winlogon.exe only when
+  it is the one in the child's session, and an svchost.exe only when it is
+  older than the child; where a parent exits by design, a reused process ID
+  is told from the real parent by creation time, as Microsoft documents for
+  Win32_Process, and only while the clock is seen not to have moved backward
+  since boot. csrss, wininit and winlogon are graded by count, never by the
+  clock. Three things are out of reach:
   - an implant started with a forged parent process ID (T1134.004, parent PID
     spoofing) records services.exe as its parent, and nothing the audit
     reads afterwards can tell;
@@ -201,8 +205,11 @@ and 13 verify exactly that.
     a counted "parent is no longer running" line, because the service host
     that rightly starts those can restart;
   - process-isolated Windows containers run their own smss, csrss and
-    services trees on the host, where the rule can flag the container's tree
-    (catalogued in `tests\benign_corpus.txt`).
+    services trees on the host, and Sandboxie-Plus starts a sandbox's COM
+    servers from its own DCOM launcher; the rule can flag either (both
+    catalogued in `tests\benign_corpus.txt`). A child of a service host on
+    a machine whose clock stepped backward after boot is counted as not
+    graded rather than flagged.
 
 ## Getting full protection value
 

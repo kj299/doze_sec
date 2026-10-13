@@ -2881,7 +2881,7 @@ jobs:
           $st = (.\tools\masquerade_check.ps1 -SelfTest) -join "`n"
           if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'masquerade_check.ps1 -SelfTest failed' }
           $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($nst -lt 80) { throw "masquerade_check self-test ran only $nst case(s)" }
+          if ($nst -lt 100) { throw "masquerade_check self-test ran only $nst case(s)" }
           Write-Host "masquerade_check -SelfTest OK ($nst cases)"
           $sp = (.\tools\proc_snapshot.ps1 -SelfTest) -join "`n"
           if ($LASTEXITCODE -ne 0) { Write-Host $sp; throw 'proc_snapshot.ps1 -SelfTest failed' }
@@ -2971,17 +2971,22 @@ jobs:
           #  - an svchost.exe whose parent PID belongs to no process: WARNING;
           #  - an svchost.exe recorded just BEFORE the PowerShell holding its
           #    parent PID (a reused PID): still WARNING -- services.exe never
-          #    exits, so its PID was never free;
+          #    exits, so its PID was never free -- and told as a reused number;
           #  - a csrss.exe with no parent, and one whose parent PID was reused
           #    by this PowerShell: quiet (a session's smss.exe exits by design).
           #    Each in a session of its own: one csrss.exe per session;
           #  - a second services.exe, started by the runner's real wininit.exe:
-          #    WARNING, Windows runs one.
+          #    WARNING, Windows runs one;
+          #  - a dwm.exe with no parent in a session with no winlogon.exe: quiet
+          #    (a session that is ending), and the same in the session of the
+          #    runner's real winlogon.exe: WARNING.
           $meTicks = ([datetime](Get-CimInstance Win32_Process -Filter ("ProcessId=" + $PID)).CreationDate).ToUniversalTime().Ticks
           $now = (Get-Date).ToUniversalTime().Ticks
           $win = $env:SystemRoot
           $wininit = @($tl | Where-Object { $_ -match '\|wininit\.exe$' } | ForEach-Object { $_.Split('|')[0] })[0]
           if (-not $wininit) { throw 'the runner''s tree holds no wininit.exe' }
+          $wlSession = @($tl | Where-Object { $_ -match '\|winlogon\.exe$' } | ForEach-Object { $_.Split('|')[3] } | Where-Object { $_ -ne '' })[0]
+          if (-not $wlSession) { throw 'the runner''s tree holds no winlogon.exe with a session -- the per-session case needs one' }
           $before = $meTicks - 10000000
           Set-Content $t2 -Value ($tl + @(
             ("9000001|{0}|{1}|0|{2}\System32\svchost.exe|svchost.exe" -f $PID, $now, $win),
@@ -2989,19 +2994,22 @@ jobs:
             ("9000003|9999992|{0}|999||csrss.exe" -f $now),
             ("9000004|{0}|{1}|0|{2}\System32\svchost.exe|svchost.exe" -f $PID, $before, $win),
             ("9000005|{0}|{1}|998||csrss.exe" -f $PID, $before),
-            ("9000006|{0}|{1}|0|{2}\System32\services.exe|services.exe" -f $wininit, $now, $win))) -Encoding ASCII
-          Set-Content $d2 -Value ($dl + @(("svchost.exe  9000001  {0}\System32\svchost.exe" -f $win), ("svchost.exe  9000002  {0}\System32\svchost.exe" -f $win), 'csrss.exe  9000003  ', ("svchost.exe  9000004  {0}\System32\svchost.exe" -f $win), 'csrss.exe  9000005  ', ("services.exe  9000006  {0}\System32\services.exe" -f $win)))
+            ("9000006|{0}|{1}|0|{2}\System32\services.exe|services.exe" -f $wininit, $now, $win),
+            ("9000007|9999993|{0}|997|{1}\System32\dwm.exe|dwm.exe" -f $now, $win),
+            ("9000008|9999994|{0}|{1}|{2}\System32\dwm.exe|dwm.exe" -f $now, $wlSession, $win))) -Encoding ASCII
+          Set-Content $d2 -Value ($dl + @(("svchost.exe  9000001  {0}\System32\svchost.exe" -f $win), ("svchost.exe  9000002  {0}\System32\svchost.exe" -f $win), 'csrss.exe  9000003  ', ("svchost.exe  9000004  {0}\System32\svchost.exe" -f $win), 'csrss.exe  9000005  ', ("services.exe  9000006  {0}\System32\services.exe" -f $win), ("dwm.exe  9000007  {0}\System32\dwm.exe" -f $win), ("dwm.exe  9000008  {0}\System32\dwm.exe" -f $win)))
           Remove-Item $pm, $mk -Force -EA SilentlyContinue
           $out = (.\tools\masquerade_check.ps1 -Path $d2 -MarkerFile $mk -TreePath $t2 -ParentMarkerFile $pm) -join "`n"
           Write-Host (($out -split "`n" | Where-Object { $_ -match '9000\d{3}|9999\d{3}|Windows runs one|clock moved' }) -join "`n")
           if (Test-Path $mk) { throw "the canonical-path copies were reported by PATH -- the path rule must stay clean: $out" }
           if (-not (Test-Path $pm)) { throw "no parent marker: $out" }
           $warn = @($out -split "`n" | Where-Object { $_ -match '^\[WARNING\] Process \S+ \(PID 9000\d{3}\) has the wrong parent' })
-          if ($warn.Count -ne 3) { throw ("expected exactly 3 wrong-parent WARNINGs (9000001, 9000002, 9000004), got {0}: {1}" -f $warn.Count, ($warn -join ' | ')) }
-          if ($out -notmatch ('\[WARNING\] Process svchost\.exe \(PID 9000001\) has the wrong parent: PID {0} belongs to \S+ -- Windows starts svchost\.exe only from services\.exe, which runs until shutdown' -f $PID)) { throw 'the svchost.exe whose parent PID is this step''s PowerShell was not named with it' }
+          if ($warn.Count -ne 4) { throw ("expected exactly 4 wrong-parent WARNINGs (9000001, 9000002, 9000004, 9000008), got {0}: {1}" -f $warn.Count, ($warn -join ' | ')) }
+          if ($out -notmatch ('\[WARNING\] Process svchost\.exe \(PID 9000001\) has the wrong parent: PID {0} belongs to .+? -- Windows starts svchost\.exe only from services\.exe, which runs until shutdown' -f $PID)) { throw 'the svchost.exe whose parent PID is this step''s PowerShell was not named with it' }
           if ($out -notmatch '\(PID 9000002\) has the wrong parent: the process that started it \(PID 9999991\) is no longer running') { throw 'the svchost.exe with an absent parent was not reported' }
-          if ($out -notmatch ('\(PID 9000004\) has the wrong parent: PID {0} belongs to ' -f $PID)) { throw 'the svchost.exe recorded before the process holding its parent PID was not reported' }
-          if ($out -match '\(PID 900000[35]\)') { throw 'a csrss.exe whose parent exited by design was reported' }
+          if ($out -notmatch ('\(PID 9000004\) has the wrong parent: the process that started it \(PID {0}\) is no longer running' -f $PID) -or $out -notmatch ('(?m)^    parent: PID {0} is no longer running; the number now belongs to a later process, powershell\.exe ' -f $PID)) { throw 'the svchost.exe recorded before the process holding its parent PID was not reported as a reused number' }
+          if ($out -match '\(PID 900000[357]\)') { throw 'a csrss.exe whose parent exited by design, or a dwm.exe of a session that is ending, was reported' }
+          if ($out -notmatch ('\(PID 9000008\) has the wrong parent: the process that started it \(PID 9999994\) is no longer running -- Windows starts dwm\.exe only from the winlogon\.exe of its own session, which runs as long as that session')) { throw ('the dwm.exe with no parent in session {0}, whose winlogon.exe runs, was not reported' -f $wlSession) }
           if ($out -notmatch '\[WARNING\] Windows runs one services\.exe; this snapshot holds 2' -or $out -notmatch '(?m)^    instance: PID 9000006, parent wininit\.exe') { throw 'the second services.exe was not reported as one Windows never runs twice' }
           Remove-Item $d2, $t2, $old, $pm, $mk -Force -EA SilentlyContinue
           Write-Host 'masquerade_check live OK (by parent: the real tree is clean, the impostors are named, exited-by-design parents are quiet)'

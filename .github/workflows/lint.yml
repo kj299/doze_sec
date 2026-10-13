@@ -356,10 +356,17 @@ jobs:
                    'svchost.exe whose parent is no longer running is WARNING: services.exe runs until shutdown' \
                    'csrss.exe whose session smss.exe has exited is EXITED, not a finding' \
                    'winlogon.exe whose parent PID now belongs to a LATER process is EXITED (PID reuse), not a finding' \
-                   'a real-shaped Windows tree raises nothing and prints the OK line'; do
+                   'a real-shaped Windows tree raises nothing and prints the OK line' \
+                   'a session whose winlogon.exe has exited: its dwm.exe and fontdrvhost.exe are counted as exited, not flagged' \
+                   'csrss, wininit and winlogon under a living, OLDER cmd.exe are not graded by parent (one per session grades them, so no clock step can raise one)' \
+                   'RuntimeBroker.exe whose parent PID belongs to a LATER svchost.exe is named as a reused number, and the clock is not blamed' \
+                   'dwm.exe in session 1 under the winlogon.exe of session 2 is WARNING (a winlogon.exe only starts processes in its own session)' \
+                   'smss.exe whose parent calls itself System but is not PID 4 is WARNING: System is PID 4 and nothing else' \
+                   'a snapshot with no lsass.exe is SKIPPED, never OK (every running Windows has one)' \
+                   'a ten-digit session ID parses (4294967295 is not dropped or overflowed)'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 80 ] || { echo "only $n case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 100 ] || { echo "only $n case(s)"; exit 1; }
       - name: proc_snapshot -- one query, the former Name-PID-Path lines byte for byte, and the process tree
         run: |
           out=$(pwsh -NoProfile -File tools/proc_snapshot.ps1 -SelfTest); echo "$out"
