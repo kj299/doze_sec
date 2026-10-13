@@ -1,6 +1,9 @@
 # masquerade_check.ps1 -- a system-process NAME running outside its canonical
-# directory (T1036, masquerading). Invoked from Section 4 of doze_sec.bat /
-# doze_sec_noAdmin.bat against the process snapshot Section 4 already took.
+# directory, or started by a parent Windows never uses (T1036, masquerading).
+# Invoked from Section 4 of doze_sec.bat / doze_sec_noAdmin.bat against the
+# process snapshot Section 4 already took (-Path, the Name-PID-Path dump) and
+# the process tree proc_snapshot.ps1 wrote from the same query (-TreePath).
+# The parent rule is described where it starts, below Get-MasqueradeReport.
 #
 # WHY: naming an implant svchost.exe, lsass.exe or explorer.exe and running it
 # from AppData, ProgramData, Temp or a vendor directory is the most common
@@ -29,8 +32,9 @@
 #   * any other name is IGNORED here; proc_path_grade grades paths by
 #     location and module_inspect grades what is loaded inside.
 #
-# MARKER: -MarkerFile is written with WARNING when any hit exists; the caller
-# raises via :dz_finding. Read-only. Windows PowerShell 5.1 and pwsh.
+# MARKERS: -MarkerFile is written with WARNING when the path rule has a hit,
+# -ParentMarkerFile when the parent rule does; the caller raises each as its
+# own ledger row via :dz_finding. Read-only. Windows PowerShell 5.1 and pwsh.
 
 [CmdletBinding()]
 param(
@@ -195,53 +199,71 @@ function Get-MasqueradeReport {
 # ---- Masquerading by PARENT ------------------------------------------------
 # A copy of an implant named svchost.exe can sit in System32 and pass the
 # path rule above. Windows starts each of these names from one parent, so the
-# parent is the second signal. A PID is reused once its owner exits, and
-# Microsoft documents how to tell (Win32_Process, ParentProcessId): the parent
-# "may not refer to a running process", or may "incorrectly [refer] to a
-# process that reuses a process identifier"; CreationDate shows whether the
-# listed parent was created after the child. So a parent created AFTER the
-# child is not the parent: the real one has exited.
+# parent is the second signal.
 #
-# Whether an exited parent matters depends on the parent. System, smss.exe,
-# wininit.exe and services.exe are critical processes: Windows stops with a
-# bug check if one exits (Bug check 0xEF; "Critical System Services"), so a
-# child of theirs whose parent is gone was not started by them. A session's
-# smss.exe exits by design once it has started csrss, wininit and winlogon; a
-# service host can restart; a session's winlogon ends with the session. Those
-# are counted, never graded.
+# TWO KINDS OF PARENT. Some never exit while Windows runs: System, smss.exe,
+# wininit.exe, services.exe and winlogon.exe are critical processes (Windows
+# stops with a bug check if one exits -- Bug check 0xEF, "Critical System
+# Services"), and so is the service host that runs the DCOM launcher, which
+# starts RuntimeBroker.exe, WmiPrvSE.exe and dllhost.exe. For a child of one
+# of those, only the parent's NAME decides: the rightful parent cannot have
+# exited, so any other process at the parent PID -- older, newer, or none --
+# means something else started the child. Time is not consulted at all, so a
+# clock that stepped backward after boot (a dual-boot PC, a time service
+# correcting a fast clock) cannot make a genuine parent look reused.
 #
-# Not in the table, on purpose: explorer.exe (userinit, winlogon, Task
+# Other parents exit by design: a session's smss.exe exits once it has
+# started csrss, wininit and winlogon, and the service hosts that start
+# taskhostw.exe and sihost.exe can restart. For those, a PID now held by a
+# process with the wrong name is either the real parent or a later process
+# that reused the number, and Microsoft documents how to tell (Win32_Process,
+# ParentProcessId): CreationDate shows whether the listed parent was created
+# after the child. That is trusted only when the clock is seen not to have
+# moved backward since boot, and never on equal times.
+#
+# ONE OF EACH. Windows runs exactly one wininit.exe, services.exe, lsass.exe
+# and LsaIso.exe, all in session 0, one smss.exe started by System, and one
+# csrss.exe per session and one winlogon.exe per session other than 0. A
+# second one is an impostor even when its own parent looks right -- which is
+# how a renamed chain (a fake wininit starting a fake services starting an
+# implant svchost) would otherwise pass.
+#
+# Not graded by parent, on purpose: explorer.exe (userinit, winlogon, Task
 # Manager and explorer itself all start it), conhost, rundll32, werfault and
-# ctfmon (their parents vary by design).
-#
-# Out of reach: parent PID spoofing (an implant started with a forged parent
-# looks like a child of services.exe; THREAT_MODEL names it as a gap).
-# Process-isolated Windows containers run their own smss, csrss and services
-# trees on the host.
+# ctfmon (their parents vary by design). And a dropper that starts
+# taskhostw.exe or sihost.exe and exits leaves only a counted line --
+# THREAT_MODEL names it, with parent PID spoofing and process-isolated
+# Windows containers (their own smss, csrss and services trees on the host).
 $script:ParentRule = @{
-    'smss.exe'                  = @{ Parents = @('system', 'smss.exe');       Show = 'System';                         Lifetime = $true }
-    'csrss.exe'                 = @{ Parents = @('smss.exe');                 Show = 'smss.exe';                       Lifetime = $false }
-    'wininit.exe'               = @{ Parents = @('smss.exe');                 Show = 'smss.exe';                       Lifetime = $false }
-    'winlogon.exe'              = @{ Parents = @('smss.exe');                 Show = 'smss.exe';                       Lifetime = $false }
-    'services.exe'              = @{ Parents = @('wininit.exe');              Show = 'wininit.exe';                    Lifetime = $true }
-    'lsass.exe'                 = @{ Parents = @('wininit.exe');              Show = 'wininit.exe';                    Lifetime = $true }
-    'lsaiso.exe'                = @{ Parents = @('wininit.exe');              Show = 'wininit.exe';                    Lifetime = $true }
-    'svchost.exe'               = @{ Parents = @('services.exe');             Show = 'services.exe';                   Lifetime = $true }
-    'spoolsv.exe'               = @{ Parents = @('services.exe');             Show = 'services.exe';                   Lifetime = $true }
-    'searchindexer.exe'         = @{ Parents = @('services.exe');             Show = 'services.exe';                   Lifetime = $true }
-    'securityhealthservice.exe' = @{ Parents = @('services.exe');             Show = 'services.exe';                   Lifetime = $true }
-    'msmpeng.exe'               = @{ Parents = @('services.exe');             Show = 'services.exe';                   Lifetime = $true }
-    'nissrv.exe'                = @{ Parents = @('services.exe');             Show = 'services.exe';                   Lifetime = $true }
-    'dwm.exe'                   = @{ Parents = @('winlogon.exe');             Show = 'winlogon.exe';                   Lifetime = $false }
-    'logonui.exe'               = @{ Parents = @('winlogon.exe');             Show = 'winlogon.exe';                   Lifetime = $false }
-    'userinit.exe'              = @{ Parents = @('winlogon.exe');             Show = 'winlogon.exe';                   Lifetime = $false }
-    'fontdrvhost.exe'           = @{ Parents = @('wininit.exe', 'winlogon.exe'); Show = 'wininit.exe or winlogon.exe'; Lifetime = $false }
-    'sihost.exe'                = @{ Parents = @('svchost.exe');              Show = 'svchost.exe';                    Lifetime = $false }
-    'taskhostw.exe'             = @{ Parents = @('svchost.exe');              Show = 'svchost.exe';                    Lifetime = $false }
-    'runtimebroker.exe'         = @{ Parents = @('svchost.exe');              Show = 'svchost.exe';                    Lifetime = $false }
-    'dllhost.exe'               = @{ Parents = @('svchost.exe');              Show = 'svchost.exe';                    Lifetime = $false }
-    'wmiprvse.exe'              = @{ Parents = @('svchost.exe');              Show = 'svchost.exe';                    Lifetime = $false }
+    'smss.exe'                  = @{ Parents = @('system', 'smss.exe');          Show = 'System';                      Lifetime = $true }
+    'csrss.exe'                 = @{ Parents = @('smss.exe');                    Show = 'smss.exe';                    Lifetime = $false }
+    'wininit.exe'               = @{ Parents = @('smss.exe');                    Show = 'smss.exe';                    Lifetime = $false }
+    'winlogon.exe'              = @{ Parents = @('smss.exe');                    Show = 'smss.exe';                    Lifetime = $false }
+    'services.exe'              = @{ Parents = @('wininit.exe');                 Show = 'wininit.exe';                 Lifetime = $true }
+    'lsass.exe'                 = @{ Parents = @('wininit.exe');                 Show = 'wininit.exe';                 Lifetime = $true }
+    'lsaiso.exe'                = @{ Parents = @('wininit.exe');                 Show = 'wininit.exe';                 Lifetime = $true }
+    'svchost.exe'               = @{ Parents = @('services.exe');                Show = 'services.exe';                Lifetime = $true }
+    'spoolsv.exe'               = @{ Parents = @('services.exe');                Show = 'services.exe';                Lifetime = $true }
+    'searchindexer.exe'         = @{ Parents = @('services.exe');                Show = 'services.exe';                Lifetime = $true }
+    'securityhealthservice.exe' = @{ Parents = @('services.exe');                Show = 'services.exe';                Lifetime = $true }
+    'msmpeng.exe'               = @{ Parents = @('services.exe');                Show = 'services.exe';                Lifetime = $true }
+    'nissrv.exe'                = @{ Parents = @('services.exe');                Show = 'services.exe';                Lifetime = $true }
+    'dwm.exe'                   = @{ Parents = @('winlogon.exe');                Show = 'winlogon.exe';                Lifetime = $true }
+    'logonui.exe'               = @{ Parents = @('winlogon.exe');                Show = 'winlogon.exe';                Lifetime = $true }
+    'userinit.exe'              = @{ Parents = @('winlogon.exe');                Show = 'winlogon.exe';                Lifetime = $true }
+    'fontdrvhost.exe'           = @{ Parents = @('wininit.exe', 'winlogon.exe'); Show = 'wininit.exe or winlogon.exe'; Lifetime = $true }
+    'runtimebroker.exe'         = @{ Parents = @('svchost.exe');                 Show = 'svchost.exe';                 Lifetime = $true }
+    'wmiprvse.exe'              = @{ Parents = @('svchost.exe');                 Show = 'svchost.exe';                 Lifetime = $true }
+    # COM+ server applications, and the COM+ System Application service
+    # (COMSysApp, whose image IS dllhost.exe), run as services.
+    'dllhost.exe'               = @{ Parents = @('svchost.exe', 'services.exe'); Show = 'svchost.exe or services.exe'; Lifetime = $true }
+    'taskhostw.exe'             = @{ Parents = @('svchost.exe');                 Show = 'svchost.exe';                 Lifetime = $false }
+    'sihost.exe'                = @{ Parents = @('svchost.exe');                 Show = 'svchost.exe';                 Lifetime = $false }
 }
+# Exactly one instance (all in session 0), and one per session.
+$script:OnlyOne        = @('wininit.exe', 'services.exe', 'lsass.exe', 'lsaiso.exe')
+$script:Session0Only   = @('wininit.exe', 'services.exe', 'lsass.exe', 'lsaiso.exe')
+$script:OnePerSession  = @('csrss.exe', 'winlogon.exe')
 
 function ConvertTo-PrintableText {
     # A process name or path goes into the report as text: no control
@@ -257,74 +279,112 @@ function Format-UtcTicks {
 }
 
 # PURE: one process, graded by its parent. Sev is OK, WARNING, EXITED,
-# UNVERIFIED or IGNORED. ChildTicks: the child's creation time (UTC ticks) or
-# $null. Parent: $null when no process holds the parent PID, else
-# @{ Pid; Name; Ticks }.
+# UNVERIFIED or IGNORED.
+#   ChildTicks       the child's creation time (UTC ticks) or $null
+#   Parent           $null when no process holds the parent PID, else
+#                    @{ Pid; Name; Ticks }
+#   RightfulPresent  the snapshot holds every rightful parent the rule names
+#                    (a snapshot missing services.exe is incomplete, not a crime)
+#   ClockMoved       the clock stepped backward since boot: creation times
+#                    cannot order processes
 function Get-ParentVerdict {
-    param([string]$Name, $ChildTicks, $Parent)
+    param([string]$Name, $ChildTicks, $Parent, [bool]$RightfulPresent = $true, [bool]$ClockMoved = $false)
     $n = ([string]$Name).Trim().ToLowerInvariant()
     if (-not $script:ParentRule.ContainsKey($n)) { return @{ Sev = 'IGNORED' } }
     $rule = $script:ParentRule[$n]
-    if ($null -eq $ChildTicks) { return @{ Sev = 'UNVERIFIED'; Why = 'no creation time for the process' } }
-    $gone = $false; $reused = $false
-    if ($null -eq $Parent) {
-        $gone = $true
-    } elseif ([int]$Parent.Pid -eq 4 -and [string]$Parent.Name -eq 'System') {
-        # PID 4 is always System, and System has no creation time to compare.
-    } elseif ($null -eq $Parent.Ticks) {
-        return @{ Sev = 'UNVERIFIED'; Why = 'no creation time for the parent' }
-    } elseif ([long]$Parent.Ticks -gt [long]$ChildTicks) {
-        # Created after the child: a later process holds the PID, so the
-        # process that started this one has exited.
-        $gone = $true; $reused = $true
+    $pname = $null
+    if ($null -ne $Parent) {
+        $pname = ([string]$Parent.Name).Trim().ToLowerInvariant()
+        if ([int]$Parent.Pid -eq 4 -and $pname -eq 'system') { $pname = 'system' }
+        if ($rule.Parents -contains $pname) { return @{ Sev = 'OK' } }
     }
-    if ($gone) {
-        if ($rule.Lifetime) {
-            return @{ Sev = 'WARNING'; Kind = 'gone'; Reused = $reused; Why = ('Windows starts ' + $n + ' only from ' + $rule.Show + ', which runs until shutdown') }
-        }
-        return @{ Sev = 'EXITED'; Reused = $reused }
+    if ($rule.Lifetime) {
+        # The rightful parent never exits, so anything else at the parent PID
+        # -- or nothing -- means it did not start this process. Time is not
+        # consulted. Only a snapshot with no rightful parent at all is left
+        # ungraded: that is an incomplete snapshot, not evidence.
+        if (-not $RightfulPresent) { return @{ Sev = 'UNVERIFIED'; Why = ('the snapshot holds no ' + $rule.Show + ' at all, so it may be incomplete') } }
+        $kind = 'gone'
+        if ($null -ne $Parent) { $kind = 'other' }
+        return @{ Sev = 'WARNING'; Kind = $kind; Why = ('Windows starts ' + $n + ' only from ' + $rule.Show + ', which runs until shutdown') }
     }
-    if ($rule.Parents -contains ([string]$Parent.Name).Trim().ToLowerInvariant()) { return @{ Sev = 'OK' } }
-    return @{ Sev = 'WARNING'; Kind = 'wrong'; Reused = $false; Why = ('Windows starts ' + $n + ' only from ' + $rule.Show) }
+    # A parent that exits by design: nothing at the PID is the expected case.
+    if ($null -eq $Parent) { return @{ Sev = 'EXITED' } }
+    if ($null -eq $ChildTicks -or $null -eq $Parent.Ticks) { return @{ Sev = 'UNVERIFIED'; Why = 'no creation time to tell a reused process ID from the parent' } }
+    if ($ClockMoved) { return @{ Sev = 'UNVERIFIED'; Why = 'the clock moved backward since boot, so a reused process ID cannot be told from the parent' } }
+    if ([long]$Parent.Ticks -eq [long]$ChildTicks) { return @{ Sev = 'UNVERIFIED'; Why = 'the parent and the child have the same creation time' } }
+    if ([long]$Parent.Ticks -gt [long]$ChildTicks) { return @{ Sev = 'EXITED'; Reused = $true } }
+    return @{ Sev = 'WARNING'; Kind = 'wrong'; Why = ('Windows starts ' + $n + ' only from ' + $rule.Show) }
 }
 
-# PURE: the tree (`PID|PPID|CreatedUtcTicks|Name`, from proc_snapshot.ps1) and
-# the dump (`Name  PID  Path`, for the paths) to report lines + marker.
+# PURE: has the clock stepped backward since boot? Only the kernel starts a
+# process before the System-started smss.exe, so any later process recorded
+# as older than it -- or any process recorded as older than a living parent
+# with its rightful name -- means the clock moved.
+function Test-ClockMovedBackward {
+    param($Records, $ByPid)
+    $smss = @($Records | Where-Object { $_.Name -ieq 'smss.exe' -and $_.PPid -eq 4 -and $null -ne $_.Ticks }) | Select-Object -First 1
+    foreach ($r in $Records) {
+        if ($null -eq $r.Ticks) { continue }
+        if ($smss -and $r.PPid -ne 4 -and $r.PPid -ne 0 -and $r.Pid -ne $smss.Pid -and [long]$r.Ticks -lt [long]$smss.Ticks) { return $true }
+        $n = ([string]$r.Name).ToLowerInvariant()
+        if ($script:ParentRule.ContainsKey($n) -and $ByPid.ContainsKey($r.PPid)) {
+            $p = $ByPid[$r.PPid]
+            if ($null -ne $p.Ticks -and $script:ParentRule[$n].Parents -contains ([string]$p.Name).ToLowerInvariant() -and [long]$p.Ticks -gt [long]$r.Ticks) { return $true }
+        }
+    }
+    return $false
+}
+
+# PURE: the tree (`PID|PPID|CreatedUtcTicks|SessionId|Path|Name`, written by
+# proc_snapshot.ps1 from the same query as the path rule's dump) to report
+# lines + marker.
 function Get-ParentReport {
-    param([string[]]$Tree, [string[]]$Dump)
+    param([string[]]$Tree)
     $out = New-Object System.Collections.ArrayList
-    $procs = @{}
-    $order = New-Object System.Collections.ArrayList
+    $byPid = @{}
+    $records = New-Object System.Collections.ArrayList
     foreach ($ln in @($Tree)) {
         if (-not $ln) { continue }
-        $m = [regex]::Match($ln, '^(\d+)\|(\d+)\|(\d*)\|(.+)$')
+        $m = [regex]::Match($ln, '^(\d{1,9})\|(\d{1,9})\|(\d{0,19})\|(\d{0,9})\|([^|]*)\|(.+)$')
         if (-not $m.Success) { continue }
-        $t = $null
-        if ($m.Groups[3].Value) { $t = [long]$m.Groups[3].Value }
-        $rec = @{ Pid = [int]$m.Groups[1].Value; PPid = [int]$m.Groups[2].Value; Ticks = $t; Name = $m.Groups[4].Value.Trim() }
-        $procs[$rec.Pid] = $rec
-        [void]$order.Add($rec)
+        $procId = [int]$m.Groups[1].Value
+        if ($byPid.ContainsKey($procId)) { continue }   # one snapshot holds a PID once
+        $t = $null; if ($m.Groups[3].Value) { $t = [long]$m.Groups[3].Value }
+        $sid = $null; if ($m.Groups[4].Value) { $sid = [int]$m.Groups[4].Value }
+        $rec = @{ Pid = $procId; PPid = [int]$m.Groups[2].Value; Ticks = $t; Session = $sid; Path = $m.Groups[5].Value; Name = $m.Groups[6].Value.Trim() }
+        $byPid[$procId] = $rec
+        [void]$records.Add($rec)
     }
-    if ($order.Count -eq 0) {
+    if ($records.Count -eq 0) {
         [void]$out.Add('[SKIPPED] the process tree snapshot held no parseable lines -- masquerading by parent NOT verified.')
         return @{ Lines = @($out.ToArray()); Marker = $null }
     }
-    $paths = @{}
-    foreach ($ln in @($Dump)) {
-        if (-not $ln) { continue }
-        $m = [regex]::Match($ln, '^(\S.*?)\s{2,}(\d+)\s{0,}(.*)$')
-        if ($m.Success) { $paths[[int]$m.Groups[2].Value] = $m.Groups[3].Value.Trim() }
-    }
-    function Show-Path([int]$ProcessId) {
-        $p = $paths[$ProcessId]
-        if ($p) { return (ConvertTo-PrintableText $p) }
-        return '(path not readable)'
+    $names = @{}
+    foreach ($r in $records) { $names[([string]$r.Name).ToLowerInvariant()] = $true }
+    if ($byPid.ContainsKey(4) -and ([string]$byPid[4].Name) -eq 'System') { $names['system'] = $true }
+    $clockMoved = Test-ClockMovedBackward -Records $records -ByPid $byPid
+
+    function Show-Proc($r) {
+        $p = ConvertTo-PrintableText $r.Path
+        if (-not $p) { $p = '(path not readable)' }
+        $s = 'unknown'; if ($null -ne $r.Session) { $s = [string]$r.Session }
+        return ($p + ', session ' + $s + ', started ' + (Format-UtcTicks $r.Ticks))
     }
     $hits = 0; $ok = 0; $exited = 0; $unverified = 0
-    foreach ($rec in $order) {
+    foreach ($rec in $records) {
         $parent = $null
-        if ($procs.ContainsKey($rec.PPid) -and $rec.PPid -ne $rec.Pid) { $parent = $procs[$rec.PPid] }
-        $v = Get-ParentVerdict -Name $rec.Name -ChildTicks $rec.Ticks -Parent $parent
+        if ($rec.PPid -ne $rec.Pid -and $byPid.ContainsKey($rec.PPid)) { $parent = $byPid[$rec.PPid] }
+        $n = ([string]$rec.Name).ToLowerInvariant()
+        # Every rightful parent the rule names must be in the snapshot (a
+        # complete Windows snapshot always holds System, smss, wininit,
+        # winlogon, services and svchost): one missing means the snapshot is
+        # incomplete, and a child's absent parent proves nothing.
+        $present = $true
+        if ($script:ParentRule.ContainsKey($n)) {
+            foreach ($pn in $script:ParentRule[$n].Parents) { if (-not $names.ContainsKey($pn)) { $present = $false } }
+        }
+        $v = Get-ParentVerdict -Name $rec.Name -ChildTicks $rec.Ticks -Parent $parent -RightfulPresent $present -ClockMoved $clockMoved
         switch ($v.Sev) {
             'OK'         { $ok++ }
             'EXITED'     { $exited++ }
@@ -334,29 +394,70 @@ function Get-ParentReport {
                 $nm = ConvertTo-PrintableText $rec.Name
                 if ($v.Kind -eq 'wrong') {
                     [void]$out.Add(('[WARNING] Process ' + $nm + ' (PID ' + $rec.Pid + ') has the wrong parent: ' + (ConvertTo-PrintableText $parent.Name) + ' (PID ' + $parent.Pid + ') -- ' + $v.Why + ' (T1036 masquerading by parent)'))
+                } elseif ($v.Kind -eq 'other') {
+                    [void]$out.Add(('[WARNING] Process ' + $nm + ' (PID ' + $rec.Pid + ') has the wrong parent: PID ' + $rec.PPid + ' belongs to ' + (ConvertTo-PrintableText $parent.Name) + ' -- ' + $v.Why + ' (T1036 masquerading by parent)'))
                 } else {
                     [void]$out.Add(('[WARNING] Process ' + $nm + ' (PID ' + $rec.Pid + ') has the wrong parent: the process that started it (PID ' + $rec.PPid + ') is no longer running -- ' + $v.Why + ' (T1036 masquerading by parent)'))
                 }
-                [void]$out.Add(('    child:  ' + (Show-Path $rec.Pid) + ', started ' + (Format-UtcTicks $rec.Ticks)))
-                if ($v.Kind -eq 'wrong') {
-                    [void]$out.Add(('    parent: ' + (ConvertTo-PrintableText $parent.Name) + ' (PID ' + $parent.Pid + ') ' + (Show-Path $parent.Pid) + ', started ' + (Format-UtcTicks $parent.Ticks)))
-                } elseif ($v.Reused) {
-                    [void]$out.Add(('    parent: PID ' + $rec.PPid + ' now belongs to ' + (ConvertTo-PrintableText $parent.Name) + ', started ' + (Format-UtcTicks $parent.Ticks) + ', after this process -- so the process that started it is no longer running'))
+                [void]$out.Add(('    child:  ' + (Show-Proc $rec)))
+                if ($null -ne $parent) {
+                    [void]$out.Add(('    parent: ' + (ConvertTo-PrintableText $parent.Name) + ' (PID ' + $parent.Pid + ') ' + (Show-Proc $parent)))
                 } else {
                     [void]$out.Add(('    parent: PID ' + $rec.PPid + ' is no longer running'))
                 }
             }
         }
     }
+    # One of each, in its session.
+    $groups = @{}
+    foreach ($rec in $records) {
+        $n = ([string]$rec.Name).ToLowerInvariant()
+        if ($script:OnlyOne -contains $n) { $k = $n } elseif ($script:OnePerSession -contains $n -and $null -ne $rec.Session) { $k = $n + '|' + $rec.Session } elseif ($n -eq 'smss.exe' -and $rec.PPid -eq 4) { $k = 'smss.exe|system' } else { continue }
+        if (-not $groups.ContainsKey($k)) { $groups[$k] = New-Object System.Collections.ArrayList }
+        [void]$groups[$k].Add($rec)
+    }
+    foreach ($k in @($groups.Keys | Sort-Object)) {
+        $g = @($groups[$k])
+        if ($g.Count -lt 2) { continue }
+        $hits++
+        $parts = $k.Split('|')
+        $where = 'one ' + $parts[0]
+        if ($parts.Count -gt 1 -and $parts[1] -eq 'system') { $where = 'one smss.exe started by System' }
+        elseif ($parts.Count -gt 1) { $where = 'one ' + $parts[0] + ' per session; session ' + $parts[1] + ' has' }
+        if ($parts.Count -gt 1 -and $parts[1] -ne 'system') {
+            [void]$out.Add(('[WARNING] Windows runs ' + $where + ' ' + $g.Count + ' -- all but one are impostors (T1036 masquerading by parent)'))
+        } else {
+            [void]$out.Add(('[WARNING] Windows runs ' + $where + '; this snapshot holds ' + $g.Count + ' -- all but one are impostors (T1036 masquerading by parent)'))
+        }
+        foreach ($r in $g) {
+            $pn = 'PID ' + $r.PPid + ' (no longer running)'
+            if ($byPid.ContainsKey($r.PPid) -and $r.PPid -ne $r.Pid) { $pn = (ConvertTo-PrintableText $byPid[$r.PPid].Name) + ' (PID ' + $r.PPid + ')' }
+            [void]$out.Add(('    instance: PID ' + $r.Pid + ', parent ' + $pn + ', ' + (Show-Proc $r)))
+        }
+    }
+    foreach ($rec in $records) {
+        $n = ([string]$rec.Name).ToLowerInvariant()
+        $bad = $false
+        if ($null -eq $rec.Session) { continue }
+        if ($script:Session0Only -contains $n -and $rec.Session -ne 0) { $bad = $true; $want = 'only in session 0' }
+        if ($n -eq 'winlogon.exe' -and $rec.Session -eq 0) { $bad = $true; $want = 'never in session 0' }
+        if (-not $bad) { continue }
+        $hits++
+        [void]$out.Add(('[WARNING] Process ' + (ConvertTo-PrintableText $rec.Name) + ' (PID ' + $rec.Pid + ') runs in session ' + $rec.Session + ' -- Windows runs ' + $n + ' ' + $want + ' (T1036 masquerading by parent)'))
+        [void]$out.Add(('    child:  ' + (Show-Proc $rec)))
+    }
+    if ($clockMoved) {
+        [void]$out.Add('[INFO] The clock moved backward since this boot (a process is recorded as starting before the smss.exe System started, or before its own rightful parent), so creation times do not order processes here: a parent that can exit is not graded by time.')
+    }
     if ($exited -gt 0) {
-        [void]$out.Add(('[INFO] ' + $exited + ' system-process name(s) whose parent is no longer running, as it may be by design (a session''s smss.exe exits once it has started csrss, wininit and winlogon; a service host can restart) -- not graded by parent.'))
+        [void]$out.Add(('[INFO] ' + $exited + ' system-process name(s) whose parent is no longer running, as it may be by design (a session''s smss.exe exits once it has started csrss, wininit and winlogon; the service host that starts taskhostw or sihost can restart) -- not graded by parent.'))
     }
     if ($unverified -gt 0) {
-        [void]$out.Add(('[INFO] ' + $unverified + ' system-process name(s) had no creation time for themselves or their parent -- not graded by parent, not cleared.'))
+        [void]$out.Add(('[INFO] ' + $unverified + ' system-process name(s) could not be graded by parent (no creation time, a clock that moved, or a snapshot with no rightful parent in it) -- not graded, not cleared.'))
     }
     if ($hits -eq 0) {
         if ($ok -gt 0) {
-            [void]$out.Add(('[OK] ' + $ok + ' system-process name(s) were started by the parent Windows uses -- no masquerading by parent.'))
+            [void]$out.Add(('[OK] ' + $ok + ' system-process name(s) were started by the parent Windows uses, one of each where Windows runs one -- no masquerading by parent.'))
         } else {
             [void]$out.Add('[SKIPPED] no system-process parent could be graded -- masquerading by parent NOT verified.')
         }
@@ -427,10 +528,11 @@ if ($SelfTest) {
     T 'no Windows directory: every system name is unverified, nothing is cleared, and the block says SKIPPED' ($null -eq $noroot.Marker -and (($noroot.Lines -join "`n") -notmatch '\[OK\]') -and (($noroot.Lines -join "`n") -match '\[INFO\] 4 system-process name') -and (($noroot.Lines -join "`n") -match '\[SKIPPED\] no system-process path could be graded')) ($noroot.Lines -join ' | ')
 
     # ---- by parent ----
-    function PV { param([string]$n, $ct, $par) Get-ParentVerdict -Name $n -ChildTicks $ct -Parent $par }
+    function PV { param([string]$n, $ct, $par, [bool]$present = $true, [bool]$moved = $false) Get-ParentVerdict -Name $n -ChildTicks $ct -Parent $par -RightfulPresent $present -ClockMoved $moved }
     function Par { param([int]$procId, [string]$n, $t) @{ Pid = $procId; Name = $n; Ticks = $t } }
-    # Rightful parents, alive and created before the child: OK.
+    # Rightful parents: OK, whatever the times say.
     T 'svchost.exe started by services.exe is OK' ((PV 'svchost.exe' 1300 (Par 900 'services.exe' 1200)).Sev -eq 'OK') ''
+    T 'svchost.exe under services.exe is OK even when the clock makes services.exe look younger (a backward clock step is not a reused PID)' ((PV 'svchost.exe' 1300 (Par 900 'services.exe' 9000)).Sev -eq 'OK') ''
     T 'lsass.exe and services.exe started by wininit.exe are OK' ((PV 'lsass.exe' 1210 (Par 780 'wininit.exe' 1011)).Sev -eq 'OK' -and (PV 'services.exe' 1200 (Par 780 'wininit.exe' 1011)).Sev -eq 'OK') ''
     T 'LsaIso.exe (Credential Guard) started by wininit.exe is OK' ((PV 'LsaIso.exe' 1220 (Par 780 'wininit.exe' 1011)).Sev -eq 'OK') ''
     T 'smss.exe started by System (PID 4, no creation time) is OK' ((PV 'smss.exe' 1002 (Par 4 'System' $null)).Sev -eq 'OK') ''
@@ -438,68 +540,95 @@ if ($SelfTest) {
     T 'dwm.exe started by winlogon.exe is OK' ((PV 'dwm.exe' 1040 (Par 860 'winlogon.exe' 1013)).Sev -eq 'OK') ''
     T 'fontdrvhost.exe started by wininit.exe or by winlogon.exe is OK' ((PV 'fontdrvhost.exe' 1031 (Par 780 'wininit.exe' 1011)).Sev -eq 'OK' -and (PV 'fontdrvhost.exe' 1032 (Par 860 'winlogon.exe' 1013)).Sev -eq 'OK') ''
     T 'RuntimeBroker.exe and WmiPrvSE.exe started by svchost.exe are OK' ((PV 'RuntimeBroker.exe' 2000 (Par 1000 'svchost.exe' 1030)).Sev -eq 'OK' -and (PV 'WmiPrvSE.exe' 2100 (Par 1000 'svchost.exe' 1030)).Sev -eq 'OK') ''
+    T 'dllhost.exe started by services.exe (the COM+ System Application service) is OK, as is one started by svchost.exe' ((PV 'dllhost.exe' 2200 (Par 900 'services.exe' 1200)).Sev -eq 'OK' -and (PV 'dllhost.exe' 2200 (Par 1000 'svchost.exe' 1030)).Sev -eq 'OK') ''
     $svc = $true
     foreach ($n in 'spoolsv.exe', 'SearchIndexer.exe', 'SecurityHealthService.exe', 'MsMpEng.exe', 'NisSrv.exe') { if ((PV $n 1300 (Par 900 'services.exe' 1200)).Sev -ne 'OK') { $svc = $false } }
     T 'every service-started name in the table is OK under services.exe' $svc ''
     T 'names compare case-insensitively (SVCHOST.EXE under Services.exe)' ((PV 'SVCHOST.EXE' 1300 (Par 900 'Services.exe' 1200)).Sev -eq 'OK') ''
-    # A parent that exited by design is counted, never graded.
+    # A parent that exits by design is counted, never graded.
     T 'csrss.exe whose session smss.exe has exited is EXITED, not a finding' ((PV 'csrss.exe' 1010 $null).Sev -eq 'EXITED') ''
     T 'winlogon.exe whose parent PID now belongs to a LATER process is EXITED (PID reuse), not a finding' ((PV 'winlogon.exe' 1013 (Par 770 'chrome.exe' 5000)).Sev -eq 'EXITED') ''
-    T 'RuntimeBroker.exe whose service host has exited is EXITED, not a finding' ((PV 'RuntimeBroker.exe' 2000 $null).Sev -eq 'EXITED') ''
+    T 'taskhostw.exe whose service host has exited is EXITED, not a finding' ((PV 'taskhostw.exe' 2000 $null).Sev -eq 'EXITED') ''
     # Must raise.
     $w = PV 'svchost.exe' 1300 (Par 3000 'explorer.exe' 1250)
-    T 'svchost.exe started by explorer.exe is WARNING, and names services.exe' ($w.Sev -eq 'WARNING' -and $w.Kind -eq 'wrong' -and $w.Why -match 'only from services\.exe') ($w.Why)
+    T 'svchost.exe whose parent PID is explorer.exe is WARNING, and names services.exe' ($w.Sev -eq 'WARNING' -and $w.Why -match 'only from services\.exe') ($w.Why)
+    T 'svchost.exe whose parent PID is a NEWER explorer.exe is still WARNING: services.exe never exits, so its PID was never free' ((PV 'svchost.exe' 1300 (Par 3000 'explorer.exe' 9000)).Sev -eq 'WARNING') ''
     T 'lsass.exe started by cmd.exe is WARNING' ((PV 'lsass.exe' 1300 (Par 2500 'cmd.exe' 1250)).Sev -eq 'WARNING') ''
     T 'services.exe started by explorer.exe is WARNING' ((PV 'services.exe' 1300 (Par 3000 'explorer.exe' 1250)).Sev -eq 'WARNING') ''
-    T 'csrss.exe started by a living cmd.exe is WARNING (an exited smss is fine, a wrong living parent is not)' ((PV 'csrss.exe' 1300 (Par 2500 'cmd.exe' 1250)).Sev -eq 'WARNING') ''
+    T 'RuntimeBroker.exe whose parent is gone is WARNING: the DCOM launcher''s service host never exits' ((PV 'RuntimeBroker.exe' 2000 $null).Sev -eq 'WARNING') ''
+    T 'csrss.exe started by a living, OLDER cmd.exe is WARNING (an exited smss is fine, a wrong living parent is not)' ((PV 'csrss.exe' 1300 (Par 2500 'cmd.exe' 1250)).Sev -eq 'WARNING') ''
     $g = PV 'svchost.exe' 1300 $null
     T 'svchost.exe whose parent is no longer running is WARNING: services.exe runs until shutdown' ($g.Sev -eq 'WARNING' -and $g.Kind -eq 'gone' -and $g.Why -match 'runs until shutdown') ($g.Why)
-    $r2 = PV 'svchost.exe' 1300 (Par 900 'services.exe' 9000)
-    T 'svchost.exe whose parent PID belongs to a process created AFTER it is WARNING (PID reuse: the real parent exited), even when the new owner is named services.exe' ($r2.Sev -eq 'WARNING' -and $r2.Kind -eq 'gone' -and $r2.Reused) ''
     T 'smss.exe started by cmd.exe, or whose parent is gone, is WARNING' ((PV 'smss.exe' 1300 (Par 2500 'cmd.exe' 1250)).Sev -eq 'WARNING' -and (PV 'smss.exe' 1300 $null).Sev -eq 'WARNING') ''
     T 'svchost.exe started by System (PID 4) is WARNING: System is not services.exe' ((PV 'svchost.exe' 1300 (Par 4 'System' $null)).Sev -eq 'WARNING') ''
     # Cannot tell.
-    T 'no creation time for the child is UNVERIFIED' ((PV 'svchost.exe' $null (Par 900 'services.exe' 1200)).Sev -eq 'UNVERIFIED') ''
-    T 'no creation time for a living parent is UNVERIFIED' ((PV 'svchost.exe' 1300 (Par 900 'services.exe' $null)).Sev -eq 'UNVERIFIED') ''
+    T 'a snapshot with no services.exe at all: an svchost.exe with no parent is UNVERIFIED (incomplete), not a finding' ((PV 'svchost.exe' 1300 $null $false).Sev -eq 'UNVERIFIED') ''
+    T 'a clock that moved: csrss.exe under an older-looking wrong parent is UNVERIFIED, not a finding' ((PV 'csrss.exe' 1300 (Par 2500 'cmd.exe' 1250) $true $true).Sev -eq 'UNVERIFIED') ''
+    T 'a clock that moved does not hide svchost.exe under explorer.exe (time is not consulted for a parent that never exits)' ((PV 'svchost.exe' 1300 (Par 3000 'explorer.exe' 1250) $true $true).Sev -eq 'WARNING') ''
+    T 'equal creation times for csrss.exe and a wrong-named holder are UNVERIFIED' ((PV 'csrss.exe' 1300 (Par 2500 'cmd.exe' 1300)).Sev -eq 'UNVERIFIED') ''
+    T 'no creation time to order a wrong-named holder of csrss.exe is UNVERIFIED' ((PV 'csrss.exe' $null (Par 2500 'cmd.exe' 1250)).Sev -eq 'UNVERIFIED' -and (PV 'csrss.exe' 1300 (Par 2500 'cmd.exe' $null)).Sev -eq 'UNVERIFIED') ''
     $ign = $true
     foreach ($n in 'explorer.exe', 'conhost.exe', 'rundll32.exe', 'WerFault.exe', 'ctfmon.exe', 'chrome.exe') { if ((PV $n 1300 (Par 2500 'cmd.exe' 1250)).Sev -ne 'IGNORED') { $ign = $false } }
     T 'names whose parent varies by design (explorer, conhost, rundll32, werfault, ctfmon) are not graded by parent' $ign ''
 
-    # The report, on a Windows 11-shaped tree: session smss instances gone
-    # (612, 770), winlogon's parent PID reused by a later chrome.exe, and
-    # explorer.exe whose userinit has exited.
+    # The report, on a Windows 11-shaped tree (PID|PPID|ticks|session|path|name):
+    # session smss instances gone (612, 770), winlogon's parent PID reused by a
+    # later chrome.exe, explorer.exe whose userinit has exited.
     $tree = @(
-        '0|0||System Idle Process', '4|0||System', '128|4|1001|Registry', '520|4|1002|smss.exe',
-        '700|612|1010|csrss.exe', '780|612|1011|wininit.exe', '790|770|1012|csrss.exe', '860|770|1013|winlogon.exe',
-        '900|780|1020|services.exe', '920|780|1021|lsass.exe', '930|780|1022|LsaIso.exe',
-        '1000|900|1030|svchost.exe', '1010|780|1031|fontdrvhost.exe', '1020|860|1032|fontdrvhost.exe', '1100|860|1040|dwm.exe',
-        '1500|900|1050|spoolsv.exe', '1600|900|1060|MsMpEng.exe', '2000|1000|1100|RuntimeBroker.exe', '2100|1000|1110|WmiPrvSE.exe',
-        '2200|1000|1120|taskhostw.exe', '2300|1000|1130|sihost.exe', '3000|2900|1200|explorer.exe', '3100|3000|1300|ctfmon.exe',
-        '770|3000|5000|chrome.exe'
+        '0|0||0||System Idle Process', '4|0||0||System', '128|4|1001|0||Registry', '520|4|1002|0|C:\Windows\System32\smss.exe|smss.exe',
+        '700|612|1010|0||csrss.exe', '780|612|1011|0||wininit.exe', '790|770|1012|1||csrss.exe', '860|770|1013|1|C:\Windows\System32\winlogon.exe|winlogon.exe',
+        '900|780|1020|0||services.exe', '920|780|1021|0||lsass.exe', '930|780|1022|0||LsaIso.exe',
+        '1000|900|1030|0|C:\Windows\System32\svchost.exe|svchost.exe', '1010|780|1031|0||fontdrvhost.exe', '1020|860|1032|1||fontdrvhost.exe', '1100|860|1040|1||dwm.exe',
+        '1500|900|1050|0||spoolsv.exe', '1600|900|1060|0||MsMpEng.exe', '1700|900|1065|0|C:\Windows\System32\dllhost.exe|dllhost.exe',
+        '2000|1000|1100|1||RuntimeBroker.exe', '2100|1000|1110|0||WmiPrvSE.exe',
+        '2200|1000|1120|1||taskhostw.exe', '2300|1000|1130|1||sihost.exe', '3000|2900|1200|1|C:\Windows\explorer.exe|explorer.exe', '3100|3000|1300|1||ctfmon.exe',
+        '770|3000|5000|1||chrome.exe'
     )
-    $pdump = @('svchost.exe  1000  C:\Windows\System32\svchost.exe', 'explorer.exe  3000  C:\Windows\explorer.exe', 'csrss.exe  700  ')
-    $pr = Get-ParentReport -Tree $tree -Dump $pdump
+    $pr = Get-ParentReport -Tree $tree
     $pt = $pr.Lines -join "`n"
     T 'a real-shaped Windows tree raises nothing and prints the OK line' ($null -eq $pr.Marker -and $pt -match '\[OK\] \d+ system-process name\(s\) were started by the parent Windows uses' -and $pt -notmatch '\[WARNING\]') $pt
     T 'the parents that exited by design (two csrss, wininit, winlogon) are counted, not graded' ($pt -match '\[INFO\] 4 system-process name\(s\) whose parent is no longer running') $pt
-    $bad = $tree + @('4242|3000|6000|svchost.exe', '4243|5555|6001|svchost.exe', '4244|770|1500|svchost.exe')
-    $bd = $pdump + @('svchost.exe  4242  C:\Windows\System32\svchost.exe', 'svchost.exe  4243  C:\Users\Public\x\svchost.exe')
-    $pr = Get-ParentReport -Tree $bad -Dump $bd
+    T 'a clean tree with ordered times does not read as a clock that moved' ($pt -notmatch 'The clock moved backward') $pt
+    $bad = $tree + @('4242|3000|6000|1|C:\Windows\System32\svchost.exe|svchost.exe', '4243|5555|6001|1|C:\Users\Public\x\svchost.exe|svchost.exe')
+    $pr = Get-ParentReport -Tree $bad
     $pt = $pr.Lines -join "`n"
-    T 'three impostors: three WARNINGs and the marker' ($pr.Marker -eq 'WARNING' -and @($pr.Lines | Where-Object { $_ -match '^\[WARNING\]' }).Count -eq 3) $pt
-    T 'a canonical-path svchost.exe started by explorer.exe is named, with both processes beneath it' ($pt -match '\[WARNING\] Process svchost\.exe \(PID 4242\) has the wrong parent: explorer\.exe \(PID 3000\) -- Windows starts svchost\.exe only from services\.exe \(T1036 masquerading by parent\)' -and $pt -match '(?m)^    child:  C:\\Windows\\System32\\svchost\.exe, started ' -and $pt -match '(?m)^    parent: explorer\.exe \(PID 3000\) C:\\Windows\\explorer\.exe, started ') $pt
+    T 'two svchost.exe impostors: two WARNINGs and the marker' ($pr.Marker -eq 'WARNING' -and @($pr.Lines | Where-Object { $_ -match '^\[WARNING\]' }).Count -eq 2) $pt
+    T 'a System32 svchost.exe whose parent PID is explorer.exe is named, with both processes beneath it' ($pt -match '\[WARNING\] Process svchost\.exe \(PID 4242\) has the wrong parent: PID 3000 belongs to explorer\.exe -- Windows starts svchost\.exe only from services\.exe, which runs until shutdown \(T1036 masquerading by parent\)' -and $pt -match '(?m)^    child:  C:\\Windows\\System32\\svchost\.exe, session 1, started ' -and $pt -match '(?m)^    parent: explorer\.exe \(PID 3000\) C:\\Windows\\explorer\.exe, session 1, started ') $pt
     T 'an svchost.exe whose parent is gone says so' ($pt -match '\[WARNING\] Process svchost\.exe \(PID 4243\) has the wrong parent: the process that started it \(PID 5555\) is no longer running -- Windows starts svchost\.exe only from services\.exe, which runs until shutdown' -and $pt -match '(?m)^    parent: PID 5555 is no longer running$') $pt
-    T 'an svchost.exe whose parent PID was reused names the new owner and why it is not the parent' ($pt -match '(?m)^    parent: PID 770 now belongs to chrome\.exe, started [^,]+, after this process') $pt
     T 'the times are shown in UTC' ($pt -match 'started \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}Z') $pt
-    $pr = Get-ParentReport -Tree @('', 'garbage') -Dump $pdump
-    T 'an empty or unparseable tree is SKIPPED, never OK' ($null -eq $pr.Marker -and ($pr.Lines -join "`n") -match '^\[SKIPPED\] the process tree snapshot held no parseable lines') ($pr.Lines -join ' | ')
-    $pr = Get-ParentReport -Tree @('900|780||services.exe', '1000|900||svchost.exe') -Dump @()
-    T 'a tree with no creation times grades nothing and says SKIPPED, never OK' ($null -eq $pr.Marker -and ($pr.Lines -join "`n") -match '\[SKIPPED\] no system-process parent could be graded' -and ($pr.Lines -join "`n") -notmatch '\[OK\]') ($pr.Lines -join ' | ')
-    $pr = Get-ParentReport -Tree @('900|780|1020|services.exe', ('1000|3000|1300|svchost.exe'), ('3000|1|1250|evil' + [char]7 + 'name.exe')) -Dump @()
+    # The renamed chain: a launcher that exits starts a fake wininit, which
+    # starts a fake services, which starts an implant svchost. Every parent
+    # NAME looks right; one of each is what gives it away.
+    $chain = $tree + @('8000|7999|6000|0|C:\ProgramData\w\wininit.exe|wininit.exe', '8001|8000|6001|0|C:\ProgramData\w\services.exe|services.exe', '8002|8001|6002|0|C:\ProgramData\w\svchost.exe|svchost.exe')
+    $pr = Get-ParentReport -Tree $chain
+    $pt = $pr.Lines -join "`n"
+    T 'a renamed chain (fake wininit -> fake services -> implant svchost) is caught: two wininit and two services' ($pr.Marker -eq 'WARNING' -and $pt -match '\[WARNING\] Windows runs one services\.exe; this snapshot holds 2' -and $pt -match '\[WARNING\] Windows runs one wininit\.exe; this snapshot holds 2' -and $pt -match '(?m)^    instance: PID 8001, parent wininit\.exe \(PID 8000\), C:\\ProgramData\\w\\services\.exe, session 0') $pt
+    $pr = Get-ParentReport -Tree ($tree + @('7000|6999|6000|1||csrss.exe'))
+    T 'a second csrss.exe in session 1 is caught, even though its parent exited (the dropper case)' ($pr.Marker -eq 'WARNING' -and ($pr.Lines -join "`n") -match '\[WARNING\] Windows runs one csrss\.exe per session; session 1 has 2') ($pr.Lines -join ' | ')
+    $pr = Get-ParentReport -Tree ($tree | ForEach-Object { if ($_ -like '920|*') { '920|780|1021|1||lsass.exe' } else { $_ } })
+    T 'lsass.exe outside session 0 is caught' ($pr.Marker -eq 'WARNING' -and ($pr.Lines -join "`n") -match '\[WARNING\] Process lsass\.exe \(PID 920\) runs in session 1 -- Windows runs lsass\.exe only in session 0') ($pr.Lines -join ' | ')
+    # A clock that stepped backward after boot: every svchost started after the
+    # correction looks older than services.exe. Nothing may be flagged for it.
+    $skew = $tree + @('5100|900|900|0|C:\Windows\System32\svchost.exe|svchost.exe', '5200|5150|950|1||taskhostw.exe', '5150|3000|900|1||notepad.exe')
+    $pr = Get-ParentReport -Tree $skew
+    $pt = $pr.Lines -join "`n"
+    T 'a clock that moved backward: nothing is flagged for it, and the report says time was not used' ($null -eq $pr.Marker -and $pt -match '\[INFO\] The clock moved backward since this boot') $pt
+    # Incomplete: the snapshot lost services.exe.
+    $pr = Get-ParentReport -Tree ($tree | Where-Object { $_ -notlike '900|*' })
+    T 'a snapshot that lost services.exe does not turn every svchost.exe into a finding' ($null -eq $pr.Marker -and ($pr.Lines -join "`n") -match 'could not be graded by parent') ($pr.Lines -join ' | ')
+    $pr = Get-ParentReport -Tree @('', 'garbage', '1|2|3|svchost.exe')
+    T 'an empty, unparseable or old-format tree is SKIPPED, never OK' ($null -eq $pr.Marker -and ($pr.Lines -join "`n") -match '^\[SKIPPED\] the process tree snapshot held no parseable lines') ($pr.Lines -join ' | ')
+    $pr = Get-ParentReport -Tree @('900|780|||C:\Windows\System32\services.exe|services.exe', '1000|900|||C:\Windows\System32\svchost.exe|svchost.exe', '780|612|||C:\Windows\System32\wininit.exe|wininit.exe')
+    T 'a tree with no creation times still grades parents that never exit by name' ($null -eq $pr.Marker -and ($pr.Lines -join "`n") -match '\[OK\] 2 system-process name') ($pr.Lines -join ' | ')
+    $pr = Get-ParentReport -Tree @('9|4|1|0||Registry', '10|9|2|0||conhost.exe')
+    T 'a tree with nothing gradable says SKIPPED, never OK' ($null -eq $pr.Marker -and ($pr.Lines -join "`n") -match '\[SKIPPED\] no system-process parent could be graded') ($pr.Lines -join ' | ')
+    $pr = Get-ParentReport -Tree @('900|780|1020|0||services.exe', '780|612|1011|0||wininit.exe', '1000|3000|1300|0||svchost.exe', ('3000|1|1250|1||evil' + [char]7 + 'name.exe'))
     T 'a control character in a parent name is not printed' ((($pr.Lines -join "`n") -notmatch [char]7) -and (($pr.Lines -join "`n") -match 'evil\?name\.exe')) ($pr.Lines -join ' | ')
+    $pr = Get-ParentReport -Tree @('900|780|1020|0||services.exe', '780|612|1011|0||wininit.exe', '1000|900|1030|0||svchost.exe', '1000|3000|1030|0||svchost.exe')
+    T 'a PID listed twice keeps its first record (no later line can overwrite it)' ($null -eq $pr.Marker) ($pr.Lines -join ' | ')
 
     if ($fails) { Write-Output "[FAIL] $fails masquerade_check self-test expectation(s) unmet"; exit 1 }
-    Write-Output '[OK] masquerade_check self-test: canonical directories in any casing are clean, a system name anywhere else is a WARNING, and a name with no path is stated as unverified; by parent, the parent Windows uses is clean, a wrong parent or a lifetime parent that is gone is a WARNING, a reused PID is told apart by creation time, and a parent that exits by design is counted.'
+    Write-Output '[OK] masquerade_check self-test: canonical directories in any casing are clean, a system name anywhere else is a WARNING, and a name with no path is stated as unverified; by parent, the parent Windows uses is clean whatever the clock did, anything else at a parent that never exits is a WARNING, a reused PID is told apart by creation time only for parents that exit by design, a second wininit/services/lsass or a second csrss in a session is caught, and an incomplete snapshot is not graded.'
     exit 0
 }
 
@@ -535,6 +664,6 @@ try { $tree = @(Get-Content -LiteralPath $TreePath -EA Stop) } catch {
     "[SKIPPED] masquerade_check: process tree unreadable ($($_.Exception.Message)) -- masquerading by parent NOT verified."
     exit 0
 }
-$parentReport = Get-ParentReport -Tree $tree -Dump $lines
+$parentReport = Get-ParentReport -Tree $tree
 foreach ($l in $parentReport.Lines) { $l }
 if ($parentReport.Marker) { Write-MarkerFile -Path $ParentMarkerFile -Value $parentReport.Marker }

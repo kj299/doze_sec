@@ -42,7 +42,7 @@ CORE|T1074|staging file at a path on ioc_file_paths.txt (Section 18d)
 CORE|T1112|Run value named on ioc_registry.txt (Section 18h); a HKCU Run value pointing at a file that does not exist is the safe artifact
 CORE|T1547.002|LSA authentication package
 CORE|T1562.004|firewall profile disabled
-CORE|T1036|system-process name running outside its canonical directory
+CORE|T1036|system-process name running outside its canonical directory, or started by a parent Windows never uses
 
 # ---- CI: emulated in an isolated helpers-ps51 step ----
 CI|T1014|Tarrask hidden task, via a synthetic TaskCache hive (cross_api_check)

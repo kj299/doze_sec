@@ -410,7 +410,7 @@ $cases = @(
         Tier   = 'required'  # masquerade_check.ps1's parent rule
         Touches= @('file:C:\Users\Public\dz_selftest_parent_live\svchost.exe|dz_selftest_parent_live')
         Affects= @()
-        Expect = '(?im)\[WARNING\] Process svchost\.exe \(PID \d+\) has the wrong parent: \S+ \(PID \d+\) -- Windows starts svchost\.exe only from services\.exe \(T1036 masquerading by parent\)\r?\n\s+child:  C:\\Users\\Public\\dz_selftest_parent_live\\svchost\.exe'
+        Expect = '(?im)\[WARNING\] Process svchost\.exe \(PID \d+\) has the wrong parent: PID \d+ belongs to \S+ -- Windows starts svchost\.exe only from services\.exe, which runs until shutdown \(T1036 masquerading by parent\)\r?\n\s+child:  C:\\Users\\Public\\dz_selftest_parent_live\\svchost\.exe'
         Plant  = { New-Item -ItemType Directory -Path $parentLiveDir -Force | Out-Null
                    Copy-Item -LiteralPath (Join-Path $env:SystemRoot 'System32\ping.exe') -Destination $parentLiveExe -Force
                    Start-Process -FilePath $parentLiveExe -ArgumentList '-n 1500 127.0.0.1' -WindowStyle Hidden | Out-Null
@@ -426,7 +426,7 @@ $cases = @(
         Tier   = 'required'  # masquerade_check.ps1's parent rule: services.exe never exits
         Touches= @('file:C:\Users\Public\dz_selftest_parent_gone\svchost.exe|dz_selftest_parent_gone')
         Affects= @()
-        Expect = '(?im)\[WARNING\] Process svchost\.exe \(PID \d+\) has the wrong parent: the process that started it \(PID \d+\) is no longer running -- Windows starts svchost\.exe only from services\.exe, which runs until shutdown \(T1036 masquerading by parent\)\r?\n\s+child:  C:\\Users\\Public\\dz_selftest_parent_gone\\svchost\.exe'
+        Expect = '(?im)\[WARNING\] Process svchost\.exe \(PID \d+\) has the wrong parent: (the process that started it \(PID \d+\) is no longer running|PID \d+ belongs to \S+) -- Windows starts svchost\.exe only from services\.exe, which runs until shutdown \(T1036 masquerading by parent\)\r?\n\s+child:  C:\\Users\\Public\\dz_selftest_parent_gone\\svchost\.exe'
         Plant  = { New-Item -ItemType Directory -Path $parentGoneDir -Force | Out-Null
                    Copy-Item -LiteralPath (Join-Path $env:SystemRoot 'System32\ping.exe') -Destination $parentGoneExe -Force
                    # cmd.exe starts the copy and exits at once: the copy's parent is gone.
@@ -1267,6 +1267,9 @@ try {
                        @{ Case = 'Section 18d staging file match'; Row = 'CRITICAL|18|T1074|Known malware staging files found' },
                        @{ Case = 'Section 18f C2 domain match';   Row = 'WARNING|18|T1071.004|C2 domain IOC match in DNS cache' },
                        @{ Case = 'Section 18h registry IOC match'; Row = 'WARNING|18|T1112|Registry IOC match' },
+                       # Both parent plants raise through ONE marker, so they share
+                       # this row: each case checks that its own plant printed (its
+                       # Expect), and the row that the rule's marker reached the ledger.
                        @{ Case = 'svchost.exe started by a living wrong parent'; Row = 'WARNING|4|T1036|System-process name started by a parent Windows never uses' },
                        @{ Case = 'svchost.exe whose parent exited'; Row = 'WARNING|4|T1036|System-process name started by a parent Windows never uses' })) {
         $cs = @($cases | Where-Object { $_.Name -like ('*' + $chk.Case + '*') -and -not $_.Invert })[0]

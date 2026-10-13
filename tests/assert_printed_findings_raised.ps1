@@ -57,6 +57,14 @@ $script:Contracts = @(
        Signature = '^\s*\[WARNING\] Process \S+ \(PID \d+\) has the wrong parent: .*\(T1036 masquerading by parent\)'
        Section   = '4'
        Technique = 'T1036' },
+    @{ Name      = 'A second instance of a process Windows runs once (or once per session)'
+       Signature = '^\s*\[WARNING\] Windows runs one \S+.*\(T1036 masquerading by parent\)'
+       Section   = '4'
+       Technique = 'T1036' },
+    @{ Name      = 'A session-0 process outside session 0, or winlogon in session 0'
+       Signature = '^\s*\[WARNING\] Process \S+ \(PID \d+\) runs in session \d+ -- Windows runs .*\(T1036 masquerading by parent\)'
+       Section   = '4'
+       Technique = 'T1036' },
     # Section 9's Defender core block, extracted to tools\defender_core_check.ps1
     # (marker idiom). The runner image ships with real-time protection off, so
     # the full-run job exercises this on the real path.

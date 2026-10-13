@@ -1889,8 +1889,8 @@ echo  Grades the SAME snapshot as the checks above: svchost, lsass, csrss, explo
 echo  the other Windows names run only from fixed directories, so a familiar name from>> "%REPORT%"
 echo  AppData, ProgramData, Temp or a vendor folder is an impostor by path alone.>> "%REPORT%"
 echo  And by parent: Windows starts svchost.exe only from services.exe, and lsass.exe and>> "%REPORT%"
-echo  services.exe only from wininit.exe; a process ID reused after a parent exited is>> "%REPORT%"
-echo  told apart by creation time.>> "%REPORT%"
+echo  services.exe only from wininit.exe, and runs one of each; a process ID reused after>> "%REPORT%"
+echo  a parent exited is told apart by creation time, where the parent exits by design.>> "%REPORT%"
 if not defined _ENUM4 goto :sec4_masq_skip
 del "%TEMP%\dz_masq.txt" 2>nul
 del "%TEMP%\dz_masq_parent.txt" 2>nul

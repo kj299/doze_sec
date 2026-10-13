@@ -18,16 +18,27 @@ reused.
 Microsoft documents the answer (Win32_Process, ParentProcessId): the parent
 "may not refer to a running process", or may refer to "a process that reuses a
 process identifier", and CreationDate shows which. Microsoft's list of
-critical processes supplies the other half: System, smss.exe, wininit.exe and
-services.exe never exit while Windows runs. The parent rule therefore decides
-three ways:
+critical processes supplies the other half: System, smss.exe, wininit.exe,
+services.exe, winlogon.exe and the service host that runs the DCOM launcher
+never exit while Windows runs. The rule:
 
-- A living parent, created before the child, with the wrong name: WARNING.
-- A parent that is gone, where the rightful parent never exits: WARNING. This
-  covers an svchost.exe whose launcher started it and exited.
-- A parent that is gone where Windows' own parent exits by design: counted,
-  never graded. A session's smss.exe exits once it has started csrss, wininit
-  and winlogon; a service host can restart; a session's winlogon ends with it.
+- Where the rightful parent never exits, only the parent's name decides.
+  Anything else at the parent PID (an older process, a newer one, or none)
+  is a WARNING. Creation time is not consulted, so a clock that stepped
+  backward after boot (a dual-boot PC, a time service correcting a fast
+  clock) cannot turn a genuine services.exe into a "reused PID".
+- Where the rightful parent exits by design (a session's smss.exe once it has
+  started csrss, wininit and winlogon; the service host that starts taskhostw
+  or sihost), creation time tells a reused PID from a wrong living parent.
+  It is trusted only when the tree shows the clock did not move backward
+  since boot, and never on equal times.
+- One of each. Windows runs exactly one wininit, services, lsass and LsaIso,
+  all in session 0, and one csrss and winlogon per session. A second one is a
+  WARNING even when its own parent's name looks right. That catches a
+  renamed chain: a fake wininit starting a fake services starting an implant
+  svchost.
+- A snapshot missing a rightful parent altogether is incomplete, not
+  evidence: nothing is graded against it.
 
 The finding names the child and the parent beneath it, with their paths and
 start times, and raises its own ledger row: "System-process name started by
@@ -36,25 +47,36 @@ a parent Windows never uses".
 The tree comes from the same Win32_Process query as Section 4's existing
 snapshot, through the new `tools\proc_snapshot.ps1`. Its standard output is
 the former one-liner's, line for line, so every other Section 4 check reads
-the same input. It also writes the parent ID and creation time of every
-process.
+the same input. It also writes the parent ID, creation time, session and path
+of every process; a name or path cannot split or forge a tree line.
 
-Two things are out of reach, and THREAT_MODEL now says so:
+Three things are out of reach, and THREAT_MODEL now says so:
 
 - Parent PID spoofing, where an implant records services.exe as its parent.
+- A dropper that starts taskhostw.exe or sihost.exe and exits: their parent
+  can restart, so they are only counted.
 - Process-isolated Windows containers, which run their own process trees on
   the host. This is catalogued as a field-only false positive.
 
+A read-only review of the first draft found two false positives on clean
+machines, both fixed before the first push. Creation time had been compared
+even for parents that never exit, so a backward clock step read as a reused
+PID. And dllhost.exe had been tied to service hosts only, though the COM+
+System Application service runs it under services.exe. The same review found
+the renamed chain and the incomplete-snapshot case.
+
 Tests, both directions:
 
-- The self-test pins every rule both ways (67 cases), including a reused PID
-  and System's PID 4.
+- The self-test pins every rule both ways (80 cases), including a reused PID,
+  System's PID 4, a clock that moved, the renamed chain and an incomplete
+  snapshot. Six mutations each fail their own cases.
 - The helpers job grades the runner's whole live tree, which must raise
   nothing. Against that live tree it also checks:
-  - a System32 svchost.exe started by the job's own PowerShell is named,
-    while the path rule stays clean;
+  - a System32 svchost.exe whose parent PID is the job's own PowerShell is
+    named, while the path rule stays clean;
   - an absent parent and a reused PID are named;
-  - csrss.exe with an absent parent stays quiet.
+  - a second services.exe is named;
+  - csrss.exe with an absent or reused parent stays quiet.
   It also compares proc_snapshot's lines byte for byte with the former
   one-liner's.
 - The full-run and standard-user jobs require the parent `[OK]` line, and no

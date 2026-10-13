@@ -184,16 +184,25 @@ and 13 verify exactly that.
   account auditing is off -- so a clean event-log result is understood as
   "clean AND recorded", not "clean because nothing was watching".
 
-- **A forged parent passes the parent rule.** Section 4 flags a Windows
+- **What the parent rule cannot see.** Section 4 flags a Windows
   system-process name started by a parent Windows never uses (an
   svchost.exe started by anything but services.exe, an lsass.exe by
-  anything but wininit.exe), and tells a reused process ID from the real
-  parent by creation time, as Microsoft documents for Win32_Process. An
-  implant started with a forged parent process ID (T1134.004, parent PID
-  spoofing) records services.exe as its parent, and nothing the audit
-  reads afterwards can tell. Process-isolated Windows containers run their
-  own smss, csrss and services trees on the host; there the rule can flag
-  the container's tree (catalogued in `tests\benign_corpus.txt`).
+  anything but wininit.exe), a second wininit, services, lsass or LsaIso
+  (or a second csrss or winlogon in one session), and a session-0 process
+  outside session 0. Where the rightful parent never exits, its name alone
+  decides; where it exits by design, a reused process ID is told from the
+  real parent by creation time, as Microsoft documents for Win32_Process,
+  and only while the clock is seen not to have moved backward since boot.
+  Three things are out of reach:
+  - an implant started with a forged parent process ID (T1134.004, parent PID
+    spoofing) records services.exe as its parent, and nothing the audit
+    reads afterwards can tell;
+  - a dropper that starts taskhostw.exe or sihost.exe and exits leaves only
+    a counted "parent is no longer running" line, because the service host
+    that rightly starts those can restart;
+  - process-isolated Windows containers run their own smss, csrss and
+    services trees on the host, where the rule can flag the container's tree
+    (catalogued in `tests\benign_corpus.txt`).
 
 ## Getting full protection value
 

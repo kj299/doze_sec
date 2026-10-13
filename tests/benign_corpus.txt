@@ -458,20 +458,20 @@ class     = QUIET
 maxsev    = INFO
 proof     = ci:masquerade_check.ps1 -SelfTest + live
 signature = system-process name\(s\) whose parent is no longer running
-note      = Windows starts csrss.exe, wininit.exe and winlogon.exe from a per-session instance of smss.exe that exits once it has started them, so on every machine their parent PID points at nothing, or at a later process that reused the number (Microsoft, Win32_Process: CreationDate tells a reused PID from the real parent). A service host can restart, and a session's winlogon ends with the session. These are counted, never graded. A parent that is gone is a finding only where the rightful parent never exits: System, smss.exe, wininit.exe and services.exe are critical processes, so an svchost.exe or lsass.exe whose parent is gone was not started by them.
+note      = Windows starts csrss.exe, wininit.exe and winlogon.exe from a per-session instance of smss.exe that exits once it has started them, so on every machine their parent PID points at nothing, or at a later process that reused the number (Microsoft, Win32_Process: CreationDate tells a reused PID from the real parent; trusted only when the clock is seen not to have moved backward since boot, never on equal times). The service host that starts taskhostw.exe or sihost.exe can restart. These are counted, never graded. A parent that is gone is a finding only where the rightful parent never exits: System, smss.exe, wininit.exe, services.exe, winlogon.exe and the DCOM launcher's service host are critical processes, so an svchost.exe, lsass.exe or RuntimeBroker.exe whose parent is gone was not started by them.
 
 [system-process-parent-windows-tree]
 class     = QUIET
 maxsev    = INFO
 proof     = ci:masquerade_check.ps1 -SelfTest + live
 signature = system-process name\(s\) were started by the parent Windows uses
-note      = The real tree: services.exe and lsass.exe (and LsaIso.exe under Credential Guard) are children of wininit.exe; every svchost.exe, spoolsv.exe, MsMpEng.exe, NisSrv.exe, SearchIndexer.exe and SecurityHealthService.exe a child of services.exe; dwm.exe and LogonUI.exe of winlogon.exe; fontdrvhost.exe of wininit.exe (session 0) or winlogon.exe (each logon session); RuntimeBroker.exe, WmiPrvSE.exe, dllhost.exe, taskhostw.exe and sihost.exe of a service host. The helpers job grades the runner's whole live tree and requires it to raise nothing. Verify: Get-CimInstance Win32_Process | Select-Object Name, ProcessId, ParentProcessId, CreationDate.
+note      = The real tree: services.exe and lsass.exe (and LsaIso.exe under Credential Guard) are children of wininit.exe; every svchost.exe, spoolsv.exe, MsMpEng.exe, NisSrv.exe, SearchIndexer.exe and SecurityHealthService.exe a child of services.exe; dwm.exe, LogonUI.exe and userinit.exe of winlogon.exe; fontdrvhost.exe of wininit.exe (session 0) or winlogon.exe (each logon session); RuntimeBroker.exe, WmiPrvSE.exe and dllhost.exe of the service host that runs the DCOM launcher, and dllhost.exe also of services.exe (COM+ server applications and the COM+ System Application service run as services); taskhostw.exe and sihost.exe of a service host. One wininit, services, lsass and LsaIso, all in session 0; one csrss.exe per session and one winlogon.exe per session other than 0. A parent the rule names is accepted on its name alone, so a clock that stepped backward after boot cannot make it look like a reused PID. The helpers job grades the runner's whole live tree and requires it to raise nothing. Verify: Get-CimInstance Win32_Process | Select-Object Name, ProcessId, ParentProcessId, SessionId, CreationDate.
 
 [system-process-parent-in-a-container]
 class     = ADVISE
 maxsev    = WARNING
 proof     = field:a machine running process-isolated Windows containers shows each container's own smss.exe, csrss.exe, services.exe and svchost.exe tree on the host, started from the container runtime rather than from the host's own boot chain; a CI runner runs no container, so this shape cannot be produced there
-signature = has the wrong parent: .*\(T1036 masquerading by parent\)
+signature = (has the wrong parent: |Windows runs one \S+|runs in session \d+ -- Windows runs ).*\(T1036 masquerading by parent\)
 note      = If the machine runs Docker or Windows containers in process isolation, check whether the flagged process's parent chain leads to the container runtime (vmcompute.exe, or a container's own smss.exe) before treating it as an impostor. On a home PC with no containers, a wrong parent is a finding.
 
 [ztdns-helper-hidden-from-standard-user]
