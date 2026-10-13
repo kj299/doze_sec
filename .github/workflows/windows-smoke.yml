@@ -2874,15 +2874,18 @@ jobs:
           Remove-Item $dump, $mk, $evil, $st -Force -EA SilentlyContinue
           Write-Host "proc_path_grade.ps1 OK (one measurement, carried to the dashboard)"
 
-      - name: masquerade_check.ps1 -SelfTest + live (a system-process name outside its directory)
+      - name: masquerade_check.ps1 -SelfTest + live (a system-process name outside its directory, or started by the wrong parent)
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           $st = (.\tools\masquerade_check.ps1 -SelfTest) -join "`n"
           if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'masquerade_check.ps1 -SelfTest failed' }
           $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($nst -lt 28) { throw "masquerade_check self-test ran only $nst case(s)" }
+          if ($nst -lt 66) { throw "masquerade_check self-test ran only $nst case(s)" }
           Write-Host "masquerade_check -SelfTest OK ($nst cases)"
+          $sp = (.\tools\proc_snapshot.ps1 -SelfTest) -join "`n"
+          if ($LASTEXITCODE -ne 0) { Write-Host $sp; throw 'proc_snapshot.ps1 -SelfTest failed' }
+          Write-Host "proc_snapshot -SelfTest OK"
           # Against a dump in the exact shape Section 4 writes, with the RUNNER'S
           # real paths: its own svchost and explorer must not raise, a copy of
           # ping.exe named svchost.exe under Users\Public must.
@@ -2913,7 +2916,73 @@ jobs:
           } finally {
             Remove-Item $md, $dump, $mk -Recurse -Force -EA SilentlyContinue
           }
-          Write-Host 'masquerade_check live OK'
+          Write-Host 'masquerade_check live OK (by path)'
+
+          # BY PARENT, on the runner's WHOLE live tree, written the way Section 4
+          # writes it: proc_snapshot from cmd, stdout redirected into the dump
+          # and the tree from the same query. Every real process must pass.
+          $d2 = Join-Path $env:TEMP 'dz_ci_proc4.tmp'
+          $t2 = Join-Path $env:TEMP 'dz_ci_proc4_tree.tmp'
+          $old = Join-Path $env:TEMP 'dz_ci_proc4_old.tmp'
+          $pm = Join-Path $env:TEMP 'dz_ci_masq_parent.txt'
+          $snap = (Resolve-Path .\tools\proc_snapshot.ps1).Path
+          Remove-Item $d2, $t2, $old, $pm, $mk -Force -EA SilentlyContinue
+          # A .cmd file, so the lines reach cmd exactly as a bat holds them (no
+          # argument re-quoting by PowerShell on the way): the new call, and the
+          # bats' former one-liner to compare the bytes against.
+          $cf = Join-Path $env:TEMP 'dz_ci_proc4.cmd'
+          Set-Content -LiteralPath $cf -Encoding ASCII -Value @(
+            '@echo off',
+            ('powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" -TreePath "{1}" > "{2}" 2>nul' -f $snap, $t2, $d2),
+            ('powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object {{ $_.Name+''  ''+$_.ProcessId+''  ''+$_.ExecutablePath }}" > "{0}" 2>nul' -f $old))
+          $ErrorActionPreference = 'Continue'
+          & cmd /c $cf
+          $global:LASTEXITCODE = 0
+          $ErrorActionPreference = 'Stop'
+          Remove-Item -LiteralPath $cf -Force -EA SilentlyContinue
+          $dl = @(Get-Content $d2); $tl = @(Get-Content $t2); $ol = @(Get-Content $old)
+          if ($dl.Count -lt 30 -or $tl.Count -ne $dl.Count) { throw ("proc_snapshot wrote {0} dump line(s) and {1} tree line(s); expected the same count, >= 30" -f $dl.Count, $tl.Count) }
+          $dumpPids = @($dl | ForEach-Object { if ($_ -match '^\S.*?\s{2,}(\d+)') { $Matches[1] } }) | Sort-Object
+          $treePids = @($tl | ForEach-Object { $_.Split('|')[0] }) | Sort-Object
+          if (($dumpPids -join ',') -ne ($treePids -join ',')) { throw 'the dump and the tree list different processes -- they must come from one query' }
+          # Same PID in both runs: the line must be identical, byte for byte.
+          $oldBy = @{}; foreach ($l in $ol) { if ($l -match '^\S.*?\s{2,}(\d+)') { $oldBy[$Matches[1]] = $l } }
+          $same = 0; $diff = @()
+          foreach ($l in $dl) { if ($l -match '^\S.*?\s{2,}(\d+)' -and $oldBy.ContainsKey($Matches[1])) { if ($oldBy[$Matches[1]] -ceq $l) { $same++ } else { $diff += $l } } }
+          if ($diff.Count -gt 0 -or $same -lt 20) { throw ("proc_snapshot's lines differ from the former one-liner's for the same processes ({0} same): {1}" -f $same, ($diff -join ' | ')) }
+          $noTicks = @($tl | Where-Object { $_.Split('|')[2] -eq '' })
+          Write-Host ("tree: {0} processes, {1} without a creation time: {2}" -f $tl.Count, $noTicks.Count, ($noTicks -join ', '))
+          if ($noTicks.Count -gt [math]::Max(3, [int]($tl.Count / 20))) { throw 'too many processes without a creation time for the parent rule to grade' }
+          $out = (.\tools\masquerade_check.ps1 -Path $d2 -MarkerFile $mk -TreePath $t2 -ParentMarkerFile $pm) -join "`n"
+          Write-Host (($out -split "`n" | Where-Object { $_ -match 'by parent|wrong parent|child:|parent:|started by the parent|whose parent|creation time' }) -join "`n")
+          if (Test-Path $pm) { throw "the runner's own process tree was reported as masquerading by parent: $out" }
+          if ($out -notmatch '\[OK\] \d+ system-process name\(s\) were started by the parent Windows uses') { throw 'the real tree did not print the parent OK line' }
+
+          # Synthetic children against the LIVE tree (their parents are real):
+          #  - a canonical-path System32 svchost.exe started by this step's own
+          #    PowerShell: a parent WARNING while the path rule stays clean;
+          #  - an svchost.exe whose parent PID belongs to no process: WARNING;
+          #  - a csrss.exe the same way: quiet (its session smss exits by design);
+          #  - an svchost.exe and a csrss.exe created BEFORE their listed parent
+          #    (this step's PowerShell): a reused PID, so the real parent is gone --
+          #    WARNING for svchost, quiet for csrss.
+          $now = (Get-Date).ToUniversalTime().Ticks
+          $win = $env:SystemRoot
+          Set-Content $t2 -Value ($tl + @(("9000001|{0}|{1}|svchost.exe" -f $PID, $now), ("9000002|9999991|{0}|svchost.exe" -f $now), ("9000003|9999992|{0}|csrss.exe" -f $now), ("9000004|{0}|1|svchost.exe" -f $PID), ("9000005|{0}|1|csrss.exe" -f $PID))) -Encoding ASCII
+          Set-Content $d2 -Value ($dl + @(("svchost.exe  9000001  {0}\System32\svchost.exe" -f $win), ("svchost.exe  9000002  {0}\System32\svchost.exe" -f $win), 'csrss.exe  9000003  ', ("svchost.exe  9000004  {0}\System32\svchost.exe" -f $win), 'csrss.exe  9000005  '))
+          Remove-Item $pm, $mk -Force -EA SilentlyContinue
+          $out = (.\tools\masquerade_check.ps1 -Path $d2 -MarkerFile $mk -TreePath $t2 -ParentMarkerFile $pm) -join "`n"
+          Write-Host (($out -split "`n" | Where-Object { $_ -match '9000\d{3}|9999\d{3}' }) -join "`n")
+          if (Test-Path $mk) { throw "the canonical-path svchost.exe copies were reported by PATH -- the path rule must stay clean: $out" }
+          if (-not (Test-Path $pm)) { throw "no parent marker: $out" }
+          $warn = @($out -split "`n" | Where-Object { $_ -match '^\[WARNING\] Process \S+ \(PID 9000\d{3}\) has the wrong parent' })
+          if ($warn.Count -ne 3) { throw ("expected exactly 3 parent WARNINGs (9000001, 9000002, 9000004), got {0}: {1}" -f $warn.Count, ($warn -join ' | ')) }
+          if ($out -notmatch ('\[WARNING\] Process svchost\.exe \(PID 9000001\) has the wrong parent: \S+ \(PID {0}\) -- Windows starts svchost\.exe only from services\.exe' -f $PID)) { throw 'the svchost.exe started by this step''s PowerShell was not named with its parent' }
+          if ($out -notmatch '\(PID 9000002\) has the wrong parent: the process that started it \(PID 9999991\) is no longer running') { throw 'the svchost.exe with an absent parent was not reported' }
+          if ($out -notmatch ('(?m)^    parent: PID {0} now belongs to \S+, started [^,]+, after this process' -f $PID)) { throw 'the reused-PID svchost.exe did not name the later process that holds the PID' }
+          if ($out -match '\(PID 900000[35]\)') { throw 'a csrss.exe whose parent exited by design was reported' }
+          Remove-Item $d2, $t2, $old, $pm, $mk -Force -EA SilentlyContinue
+          Write-Host 'masquerade_check live OK (by parent: the real tree is clean, the impostors are named, exited-by-design parents are quiet)'
           exit 0
 
       - name: psv2_check.ps1 (the AMSI-downgrade path must get a definite answer)
@@ -3652,6 +3721,12 @@ jobs:
           if (-not $m18h.Success) { throw 'Section 18h was not found in the report' }
           if ($m18h.Groups[1].Value -match 'EnableLUA') { throw ('Section 18h listed EnableLUA on a runner with UAC on: {0}' -f $m18h.Groups[1].Value.Trim()) }
           Write-Host 'Section 18h: UAC on (EnableLUA=1) is not reported as the listed EnableLUA=0'
+          # Section 4's parent rule on the runner's real process tree, in the
+          # real audit: nothing has the wrong parent, and the check graded it
+          # (the OK line), so a silent skip cannot pass for a clean tree.
+          if ($text -match 'has the wrong parent:') { throw ('Section 4 reported a wrong parent on a clean runner: {0}' -f (($text -split "`r?`n" | Where-Object { $_ -match 'has the wrong parent:|^\s+(child|parent):' }) -join ' | ')) }
+          if ($text -notmatch '\[OK\] \d+ system-process name\(s\) were started by the parent Windows uses') { throw 'Section 4 did not grade the process tree by parent (no OK line)' }
+          Write-Host 'Section 4: the runner''s real process tree passes the parent rule'
           # THE APOSTROPHE RUN. TEMP held an apostrophe and APPDATA an apostrophe and
           # a space: the dashboard (its script and SUMCODE/SUMCOUNT in TEMP) must
           # have printed, the stage-1 remediation script must exist and parse, and

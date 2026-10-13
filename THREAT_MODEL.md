@@ -54,7 +54,7 @@ break untested nor drift out of sync with its test.
 | Execution | Yes | S4 (processes, LOLBins: T1218.005 mshta, T1218.010 regsvr32), S11 (PowerShell), S16 (4688), S18g |
 | Persistence | Strong | S5 (Run/Winlogon/IFEO/AppInit/Active Setup), S6 (tasks), S7 (services), S17 (WMI subscriptions), S18 (COM hijack, registry IOCs) |
 | Privilege Escalation | Yes | S13 (UAC, accessibility binaries T1546.008), S16 (4672/4732) |
-| Defense Evasion | Strong | S4 (system-process name masquerading, T1036), S9 (Defender tamper/exclusions, ASR rule state), S18 (AMSI bypass, BYOVD drivers), S16 (1102 log clear) |
+| Defense Evasion | Strong | S4 (system-process name masquerading, T1036: by directory, and by parent -- svchost.exe not started by services.exe, lsass.exe not by wininit.exe), S9 (Defender tamper/exclusions, ASR rule state), S18 (AMSI bypass, BYOVD drivers), S16 (1102 log clear) |
 | Credential Access | Strong | S12 (LSASS PPL, WDigest, NTLM, Credential Guard), S16 (4769 Kerberoast, 4776), S18 (browser/cloud cred stores) |
 | Discovery | Yes | S17 (4688 discovery commands: nltest, dsquery, ntdsutil) |
 | Lateral Movement | Yes | S10 (SMBv1, RDP/NLA, WinRM, sshd), S17/S18 (PsExec pipes, portproxy) |
@@ -183,6 +183,17 @@ and 13 verify exactly that.
   command-line-inclusion registry key) when process-creation, logon, or
   account auditing is off -- so a clean event-log result is understood as
   "clean AND recorded", not "clean because nothing was watching".
+
+- **A forged parent passes the parent rule.** Section 4 flags a Windows
+  system-process name started by a parent Windows never uses (an
+  svchost.exe started by anything but services.exe, an lsass.exe by
+  anything but wininit.exe), and tells a reused process ID from the real
+  parent by creation time, as Microsoft documents for Win32_Process. An
+  implant started with a forged parent process ID (T1134.004, parent PID
+  spoofing) records services.exe as its parent, and nothing the audit
+  reads afterwards can tell. Process-isolated Windows containers run their
+  own smss, csrss and services trees on the host; there the rule can flag
+  the container's tree (catalogued in `tests\benign_corpus.txt`).
 
 ## Getting full protection value
 

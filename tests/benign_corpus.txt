@@ -453,6 +453,27 @@ proof     = ci:masquerade_check.ps1 -SelfTest
 signature = system-process name\(s\) had no readable path
 note      = Win32_Process returns an empty ExecutablePath for protected processes and, on a non-admin run, for every other user's processes. A system name with no path is reported as NOT GRADED ([INFO], counted), never as a finding and never folded into the all-clear: a path the tool could not read is not a path it verified, and a snapshot where nothing could be graded reads [SKIPPED].
 
+[system-process-parent-exited-by-design]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:masquerade_check.ps1 -SelfTest + live
+signature = system-process name\(s\) whose parent is no longer running
+note      = Windows starts csrss.exe, wininit.exe and winlogon.exe from a per-session instance of smss.exe that exits once it has started them, so on every machine their parent PID points at nothing, or at a later process that reused the number (Microsoft, Win32_Process: CreationDate tells a reused PID from the real parent). A service host can restart, and a session's winlogon ends with the session. These are counted, never graded. A parent that is gone is a finding only where the rightful parent never exits: System, smss.exe, wininit.exe and services.exe are critical processes, so an svchost.exe or lsass.exe whose parent is gone was not started by them.
+
+[system-process-parent-windows-tree]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:masquerade_check.ps1 -SelfTest + live
+signature = system-process name\(s\) were started by the parent Windows uses
+note      = The real tree: services.exe and lsass.exe (and LsaIso.exe under Credential Guard) are children of wininit.exe; every svchost.exe, spoolsv.exe, MsMpEng.exe, NisSrv.exe, SearchIndexer.exe and SecurityHealthService.exe a child of services.exe; dwm.exe and LogonUI.exe of winlogon.exe; fontdrvhost.exe of wininit.exe (session 0) or winlogon.exe (each logon session); RuntimeBroker.exe, WmiPrvSE.exe, dllhost.exe, taskhostw.exe and sihost.exe of a service host. The helpers job grades the runner's whole live tree and requires it to raise nothing. Verify: Get-CimInstance Win32_Process | Select-Object Name, ProcessId, ParentProcessId, CreationDate.
+
+[system-process-parent-in-a-container]
+class     = ADVISE
+maxsev    = WARNING
+proof     = field:a machine running process-isolated Windows containers shows each container's own smss.exe, csrss.exe, services.exe and svchost.exe tree on the host, started from the container runtime rather than from the host's own boot chain; a CI runner runs no container, so this shape cannot be produced there
+signature = has the wrong parent: .*\(T1036 masquerading by parent\)
+note      = If the machine runs Docker or Windows containers in process isolation, check whether the flagged process's parent chain leads to the container runtime (vmcompute.exe, or a container's own smss.exe) before treating it as an impostor. On a home PC with no containers, a wrong parent is a finding.
+
 [ztdns-helper-hidden-from-standard-user]
 class     = QUIET
 maxsev    = INFO

@@ -6,6 +6,63 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### A system-process name started by a parent Windows never uses is flagged (T1036, by parent)
+`masquerade_check.ps1` graded a Windows system-process name by its directory
+only. So an implant copied into System32 and named svchost.exe passed: it was
+in the right place with the right name. The second signal is the parent.
+Windows starts every svchost.exe from services.exe, and lsass.exe and
+services.exe from wininit.exe. This was deferred on 2026-09-23 because a
+parent that has exited looks like a wrong parent, once its process ID has been
+reused.
+
+Microsoft documents the answer (Win32_Process, ParentProcessId): the parent
+"may not refer to a running process", or may refer to "a process that reuses a
+process identifier", and CreationDate shows which. Microsoft's list of
+critical processes supplies the other half: System, smss.exe, wininit.exe and
+services.exe never exit while Windows runs. The parent rule therefore decides
+three ways:
+
+- A living parent, created before the child, with the wrong name: WARNING.
+- A parent that is gone, where the rightful parent never exits: WARNING. This
+  covers an svchost.exe whose launcher started it and exited.
+- A parent that is gone where Windows' own parent exits by design: counted,
+  never graded. A session's smss.exe exits once it has started csrss, wininit
+  and winlogon; a service host can restart; a session's winlogon ends with it.
+
+The finding names the child and the parent beneath it, with their paths and
+start times, and raises its own ledger row: "System-process name started by
+a parent Windows never uses".
+
+The tree comes from the same Win32_Process query as Section 4's existing
+snapshot, through the new `tools\proc_snapshot.ps1`. Its standard output is
+the former one-liner's, line for line, so every other Section 4 check reads
+the same input. It also writes the parent ID and creation time of every
+process.
+
+Two things are out of reach, and THREAT_MODEL now says so:
+
+- Parent PID spoofing, where an implant records services.exe as its parent.
+- Process-isolated Windows containers, which run their own process trees on
+  the host. This is catalogued as a field-only false positive.
+
+Tests, both directions:
+
+- The self-test pins every rule both ways (67 cases), including a reused PID
+  and System's PID 4.
+- The helpers job grades the runner's whole live tree, which must raise
+  nothing. Against that live tree it also checks:
+  - a System32 svchost.exe started by the job's own PowerShell is named,
+    while the path rule stays clean;
+  - an absent parent and a reused PID are named;
+  - csrss.exe with an absent parent stays quiet.
+  It also compares proc_snapshot's lines byte for byte with the former
+  one-liner's.
+- The full-run and standard-user jobs require the parent `[OK]` line, and no
+  wrong parent, on a real audit.
+- The harness plants two copies of ping.exe named svchost.exe: one started by
+  the harness itself, one whose launching cmd.exe exits at once. Both must be
+  named and counted.
+
 ### Every PowerShell the bats start runs -NonInteractive, so no question can wait unseen
 #245 put `-NonInteractive` on the script-policy probe and the helpers before
 it, because a PowerShell that stops to ask a question waits where nobody can

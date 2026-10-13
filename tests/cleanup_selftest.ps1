@@ -233,6 +233,13 @@ Get-Process -Name 'svchost' -EA SilentlyContinue |
     Where-Object { $_.Path -and $_.Path.StartsWith('C:\Users\Public\dz_selftest_masq', [StringComparison]::OrdinalIgnoreCase) } |
     Stop-Process -Force -EA SilentlyContinue
 Remove-Path 'C:\Users\Public\dz_selftest_masq'                 'Masquerading svchost.exe directory (Public\dz_selftest_masq)'
+# The masquerading-by-parent plants: two more RUNNING copies of ping.exe named
+# svchost.exe, stopped by PATH before their directories go.
+Get-Process -EA SilentlyContinue |
+    Where-Object { $_.Path -and ($_.Path.StartsWith('C:\Users\Public\dz_selftest_parent_live\', [StringComparison]::OrdinalIgnoreCase) -or $_.Path.StartsWith('C:\Users\Public\dz_selftest_parent_gone\', [StringComparison]::OrdinalIgnoreCase)) } |
+    Stop-Process -Force -EA SilentlyContinue
+Remove-Path 'C:\Users\Public\dz_selftest_parent_live'         'Masquerading-by-parent svchost.exe, living parent (Public\dz_selftest_parent_live)'
+Remove-Path 'C:\Users\Public\dz_selftest_parent_gone'         'Masquerading-by-parent svchost.exe, exited parent (Public\dz_selftest_parent_gone)'
 # The Section 18a plants are RUNNING copies of ping.exe named after an IOC
 # entry and its benign twin; stopped by PATH before their directories go.
 Get-Process -EA SilentlyContinue |

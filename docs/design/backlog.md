@@ -374,7 +374,9 @@ the DNS probe) have never run in the field.
 - Building the twenty-two unlabelled manifest ids into detections: most are
   not host-observable; relabel the ones that exist and note the rest.
 
-## Masquerading by parent, not only by path (deferred 2026-09-23)
+## Masquerading by parent, not only by path (deferred 2026-09-23, DONE 2026-10-13)
+
+Done. Microsoft documents the exited-parent case (Win32_Process: a reused PID is told apart by CreationDate), and its critical-process list says which parents never exit. See the CHANGELOG entry. The original reasoning follows.
 
 `masquerade_check.ps1` grades a system-process NAME by its directory. The
 second classic signal is the PARENT: every svchost.exe is a child of
