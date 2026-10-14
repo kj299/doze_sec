@@ -106,7 +106,16 @@ if (Test-Path -LiteralPath $toolDir) {
 }
 foreach ($f in $srcFiles) {
     try {
-        foreach ($m in ([regex]::Matches((Get-Content -LiteralPath $f -Raw -EA Stop), 'T1[0-9]{3}(\.[0-9]{3})?'))) {
+        # Backslashes are stripped before matching. A self-test that asserts on a
+        # printed line writes the technique id inside a regex, where the dot is
+        # escaped; the id then reads as its PARENT technique, which no manifest
+        # line maps, and the completeness gate fails naming a technique the code
+        # never references. It also hands the emulation backlog a phantom
+        # "add a plant for this" entry. lint_docs_drift strips for the same
+        # reason, and its comment names no technique id because it scans its own
+        # source -- the same applies here.
+        $srcText = ((Get-Content -LiteralPath $f -Raw -EA Stop) -replace '\\', '')
+        foreach ($m in ([regex]::Matches($srcText, 'T1[0-9]{3}(\.[0-9]{3})?'))) {
             $referenced[$m.Value] = $true
         }
     } catch {}

@@ -875,3 +875,56 @@ jobs:
           if (-not @(Get-Defects ([string[]]$mut) 'mutated').Count) { throw 'the check did not fail on a copy with the exit-7 delete removed -- it cannot catch the defect' }
           if ($all.Count) { $all | ForEach-Object { Write-Host "[FAIL] $_" }; exit 1 }
           Write-Host "[OK] every goto :final_exit after INIT 8 removes the RunOnce resume entry (both bats); the mutation fails as it should"
+
+  coverage-matrix-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Both completeness gates -- "every technique the code references is
+      # mapped" and "every core detection has a plant" -- lived only in
+      # windows-smoke. So an escaped technique id in a self-test regex, which a
+      # scanner that does not drop backslashes reads as the PARENT technique
+      # that no manifest line maps, failed three Windows jobs and skipped 26
+      # steps before anything said so. They run on Linux too now, where a push
+      # costs seconds.
+      - name: attack_matrix.ps1 -Strict + emulation_coverage.ps1 -Strict (the matrix cannot drift from the code)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $am = (./tools/attack_matrix.ps1 -SourceDir . -Strict) -join "`n"
+          Write-Host $am
+          if ($LASTEXITCODE -ne 0) { throw 'attack_matrix -Strict found technique ids referenced by the audit but not mapped in ttp_manifest.txt (see the WARNING line above)' }
+          if ($am -notmatch 'coverage matrix is complete') { throw 'completeness line missing -- unexpected unmapped techniques' }
+          if ($am -notmatch '(?m)^Persistence\s+\(\d+\)') { throw 'Persistence tactic group missing -- the source scan found nothing' }
+          # Prove the gate is not vacuous: an empty reference set satisfies
+          # "every referenced technique is mapped" trivially, so a scan that
+          # finds nothing must FAIL under -Strict.
+          $empty = Join-Path ([IO.Path]::GetTempPath()) ("dz_empty_src_{0}" -f $PID)
+          New-Item -ItemType Directory -Path $empty -Force | Out-Null
+          Copy-Item ThreatLists/ttp_manifest.txt (Join-Path $empty 'ttp_manifest.txt') -Force
+          $vac = (./tools/attack_matrix.ps1 -SourceDir $empty -Manifest (Join-Path $empty 'ttp_manifest.txt') -Strict) -join "`n"
+          if ($LASTEXITCODE -eq 0) { Write-Host $vac; throw 'attack_matrix -Strict PASSED on a source tree with no techniques -- the gate can pass vacuously' }
+          # The mutation, against the real tree: with the backslash strip
+          # removed, the escaped ids this repo's self-tests really do write must
+          # make the gate fail. If they do not, the strip is no longer what
+          # keeps the matrix complete and this guard proves nothing.
+          $needle = '((Get-Content -LiteralPath $f -Raw -EA Stop) -replace ''\\'', '''')'
+          $orig = [IO.File]::ReadAllText('tools/attack_matrix.ps1')
+          if (-not $orig.Contains($needle)) { throw 'the mutation needle no longer matches attack_matrix.ps1 -- this guard cannot prove anything' }
+          $mutPath = Join-Path $empty 'mut_attack_matrix.ps1'
+          [IO.File]::WriteAllText($mutPath, $orig.Replace($needle, '(Get-Content -LiteralPath $f -Raw -EA Stop)'))
+          $mut = (& $mutPath -SourceDir . -Manifest ThreatLists/ttp_manifest.txt -Strict) -join "`n"
+          if ($LASTEXITCODE -eq 0 -or $mut -notmatch 'NOT mapped in ttp_manifest') { Write-Host $mut; throw 'attack_matrix without the backslash strip still reported a complete matrix -- the strip is not what this depends on, or no escaped id is left in the tree' }
+          Remove-Item $empty -Recurse -Force -EA SilentlyContinue
+          $ec = (./tools/emulation_coverage.ps1 -SourceDir . -Strict) -join "`n"
+          Write-Host $ec
+          if ($LASTEXITCODE -ne 0) { throw 'emulation_coverage -Strict failed -- a core detection lost its plant, or a corpus tag names a technique the audit no longer detects' }
+          if ($ec -notmatch 'Emulation corpus is consistent') { throw 'consistency line missing from emulation_coverage' }
+          # A real instance, pinned: tools/asr_lsass_events.ps1 and
+          # tools/lsass_dump_config.ps1 each assert on a printed line whose
+          # technique id is escaped inside a regex. Read without the strip, that
+          # is T1003 -- which would arrive here as a detection with no plant,
+          # sending the next person to write a test for a technique no check
+          # references.
+          if ($ec -match '(?m)^\s+T1003\s*$') { throw 'the emulation backlog lists T1003, which no check references -- an escaped sub-technique id was read as its parent' }
+          Write-Host "[OK] coverage matrix complete and emulation corpus consistent; both gates fail on a tree that would drift, and the mutation fails as it should"

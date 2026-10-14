@@ -818,7 +818,16 @@ IOC. Reconcile on every run and print what was replaced. **And a shipped list's
 content change is a new verification**: `ttp_manifest.txt` changed entries in
 three commits while its date never moved, so the header now carries a digest
 of the entries and `tools/lint_threat_list_dates.ps1` fails when they drift
-(`-Stamp` re-verifies, deliberately).
+(`-Stamp` re-verifies, deliberately). **And a technique id inside a regex is
+not that technique.** A self-test asserting on a printed line escapes the dot,
+so a scanner matching ids over raw source reads the PARENT id -- which no
+manifest line maps. `lint_docs_drift` had learned to drop backslashes before
+counting; `attack_matrix` and `emulation_coverage` had not, so two such
+assertions made the coverage gate name a technique the code never references
+(three Windows jobs failed, 26 steps skipped) and handed the emulation backlog
+a phantom "write a plant for this". All three strip now -- and both gates run
+in `lint.yml` as well as windows-smoke, because **a completeness gate that
+lives only in the Windows suite costs a Windows round to fail.**
 
 **Key existence is not evidence either.** Section 18's registry IOC check
 flagged `HKLM\...\PortProxy\v4tov4\tcp [EXISTS]` while Section 3 of the same

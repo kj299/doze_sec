@@ -181,6 +181,23 @@ Tests, both directions; nothing is dumped and no process is copied:
 - **full-run and standard-user jobs:** no record and no dump setting on a
   clean runner, and each check states which verdict it reached.
 
+CI then failed three Windows jobs on the escaped-technique-id class a third
+time, in the two scanners `lint_docs_drift` had already been fixed for. Each
+of the two new tools asserts on a printed line whose technique id is escaped
+inside a regex, and `attack_matrix` and `emulation_coverage` match ids over
+raw source: both read that as the *parent* technique, which no manifest line
+maps. So the coverage matrix reported a technique the code never references
+(failing both harness jobs and the helpers job, which skipped 26 steps after
+it), and the emulation backlog grew a phantom entry telling the next person to
+write a plant for it. Both scanners drop backslashes now, as the lint does,
+and -- the reason this cost a Windows round at all -- **both completeness
+gates now run in `lint.yml` too**: they had lived only in windows-smoke, where
+failing takes twenty minutes instead of seconds. The new job also proves it is
+not vacuous (an empty source tree must fail, since "every referenced technique
+is mapped" is trivially true of nothing), runs the mutation against the real
+tree (with the strip removed, the ids this repo actually writes must make the
+gate fail), and pins the parent id by name as a must-not-appear backlog entry.
+
 ### A copy of LSASS is named for what it is, live and in the Security log (T1003.001)
 Process snapshotting and reflection make a new process that is a copy of an
 existing one: the same image, with the original recorded as its parent
