@@ -84,9 +84,21 @@ function ConvertFrom-AuditpolCsv {
 #   anything else                 -> the text is localized and cannot be
 #                                    classified; say so, never fabricate OFF
 function Get-AuditRowVerdict {
-    param([string]$Name, [string]$Setting, [string]$Feeds, [string]$Guid = '')
+    param([string]$Name, [string]$Setting, [string]$Feeds, [string]$Guid = '', [bool]$Context = $false)
     if ($Setting -and $Setting -match 'Success') {
         return @{ Line = "[OK] $Name auditing is ON -- feeds $Feeds."; Sev = 'OK' }
+    }
+    # A CONTEXT row tells the reader which evidence is not being recorded; it is
+    # never a finding. Windows ships a SACL on LSASS that records attempts to
+    # read its memory, but only while Kernel Object auditing is on, and
+    # Microsoft's default for that subcategory is Off -- so grading it like the
+    # rows above would raise on nearly every machine AND flip the coverage
+    # block's audit visibility to REDUCED everywhere (the regression PR #248
+    # paid for). Its text carries no graded phrase, and an [INFO] tag cannot
+    # reach the ON/OFF evidence either way.
+    if ($Context) {
+        $shownC = if ($Setting) { $Setting } else { '(not set)' }
+        return @{ Line = "[INFO] $Name is not being recorded [$shownC] -- $Feeds. Not a finding: Windows leaves this subcategory off by default."; Sev = 'OK'; Context = $true }
     }
     if ($Setting -and $Setting -notmatch '^(No Auditing|Failure)$') {
         return @{ Line = "[WARNING] $Name auditing state could not be read -- auditpol reported '$Setting', which this check cannot classify (localized Windows). Verify manually: auditpol /get /subcategory:$Guid"; Sev = 'WARNING'; Gap = $true }
@@ -105,6 +117,53 @@ function Get-CmdLineVerdict {
         return @{ Line = '[OK] Process-creation command-line logging is ENABLED (4688 events include the command line).'; Sev = 'OK' }
     }
     return @{ Line = '[WARNING] Process-creation command-line logging is DISABLED -- even audited 4688 events omit the command line, hiding the actual payload of a malicious launch (T1562.002).'; Sev = 'WARNING' }
+}
+
+# Subcategories whose absence blinds a detection the audit actually performs.
+# GUIDs are locale-independent; names are for the report only.
+$script:Subs = @(
+    @{ Guid = '{0CCE922B-69AE-11D9-BED3-505054503030}'; Name = 'Process Creation (4688)';         Feeds = 'suspicious-process, service-install and LOLBin event checks' },
+    @{ Guid = '{0CCE9215-69AE-11D9-BED3-505054503030}'; Name = 'Logon (4624/4625)';                Feeds = 'logon / failed-logon and lateral-movement checks' },
+    @{ Guid = '{0CCE9235-69AE-11D9-BED3-505054503030}'; Name = 'User Account Management (4720/4732)'; Feeds = 'new-account and admin-group-change checks' },
+    # {0CCE922F} is Audit_PolicyChange_AuditPolicy (ntsecapi.h). This row used
+    # to query {0CCE9217}, which is Audit_Logon_AccountLockout -- a different
+    # subcategory in a different category that happens to ship default=Success
+    # on Windows client. So the exact T1562.002 action this row exists to catch,
+    # `auditpol /set /subcategory:{0CCE922F-...} /success:disable`, left the
+    # queried subcategory untouched and the tool reported "[OK] Audit Policy
+    # Change (4719) auditing is ON" while 4719 was in fact blinded. The one
+    # check that tells the reader whether tamper-detection is live was reporting
+    # the opposite of the truth. Verified against Microsoft's Auditing Constants
+    # and asserted on a real Windows runner by the helpers-ps51 CI job.
+    @{ Guid = '{0CCE922F-69AE-11D9-BED3-505054503030}'; Name = 'Audit Policy Change (4719)';        Feeds = 'detection of auditing being turned off by an attacker' },
+    # CONTEXT ONLY (Context = $true): Windows 10 and later ship a SACL on
+    # LSASS.exe that logs attempts to read its memory (Microsoft, "What's new in
+    # Windows 10, version 1507": S:(AU;SAFA;0x0010;;;WD), 0x0010 being
+    # PROCESS_VM_READ), and those records appear only while THIS subcategory is
+    # on. Microsoft's Policy CSP gives its default as Off, and describes the
+    # events as high-volume with "little to no security relevance", so the audit
+    # does not ask for them and does not grade their absence -- it says, once,
+    # that this evidence is not being kept.
+    @{ Guid = '{0CCE921F-69AE-11D9-BED3-505054503030}'; Name = 'Kernel Object (4656/4663: attempts to read LSASS memory)'; Context = $true; Feeds = 'with it on, Windows records which program tried to read another process''s memory, including LSASS' }
+)
+
+# PURE: the whole subcategory table, graded. Rows maps a lowercase, brace-less
+# GUID to the setting text auditpol reported. Extracted so the TABLE plumbing is
+# tested, not only one row at a time: a mutation that stopped passing the
+# Context flag through failed no case while the self-test called the verdict
+# function directly.
+function Get-AuditRowsReport {
+    param($Subs, $Rows)
+    $out = New-Object System.Collections.ArrayList
+    $sev = 'OK'; $gapSev = 'OK'
+    foreach ($s in @($Subs)) {
+        $set = $Rows[$s.Guid.ToLower().Trim('{', '}')]
+        $isCtx = $false; if ($s.ContainsKey('Context')) { $isCtx = [bool]$s.Context }
+        $v = Get-AuditRowVerdict -Name $s.Name -Setting ([string]$set) -Feeds $s.Feeds -Guid $s.Guid -Context $isCtx
+        [void]$out.Add($v.Line)
+        if ($v.Sev -ne 'OK') { if ($v.Gap) { $gapSev = 'WARNING' } else { $sev = 'WARNING' } }
+    }
+    return @{ Lines = @($out.ToArray()); Sev = $sev; GapSev = $gapSev }
 }
 
 if ($SelfTest) {
@@ -167,6 +226,24 @@ if ($SelfTest) {
     $c = Get-CmdLineVerdict -Value 'yes'
     T 'cmdline junk text is DISABLED, not enabled by accident' ($c.Sev -eq 'WARNING') $c.Line
 
+    # The CONTEXT row: it names evidence that is not being kept, and it is never
+    # a finding and never evidence of auditing being on.
+    $cx = Get-AuditRowVerdict -Name 'Kernel Object (4656/4663: attempts to read LSASS memory)' -Setting 'No Auditing' -Feeds 'with it on, Windows records which program tried to read another process''s memory, including LSASS' -Context $true
+    T 'a CONTEXT row that is off prints [INFO], raises nothing, and uses none of the graded phrases' ($cx.Sev -eq 'OK' -and $cx.Context -eq $true -and $cx.Line -cmatch '^\[INFO\] Kernel Object .* is not being recorded \[No Auditing\]' -and $cx.Line -cnotmatch 'auditing is (ON|OFF)') $cx.Line
+    # The real table, graded end to end: the four graded rows on, Kernel Object
+    # off. Exactly one [INFO], no WARNING, nothing raised.
+    $allOn = @{}
+    foreach ($sb in $script:Subs) { $allOn[$sb.Guid.ToLower().Trim('{', '}')] = 'Success' }
+    $allOn['0cce921f-69ae-11d9-bed3-505054503030'] = 'No Auditing'
+    $tr = Get-AuditRowsReport -Subs $script:Subs -Rows $allOn
+    T 'the real table with Kernel Object off: one [INFO] line, no WARNING, nothing raised (the live plumbing, not one row)' ($tr.Sev -eq 'OK' -and $tr.GapSev -eq 'OK' -and @($tr.Lines | Where-Object { $_ -cmatch '^\[INFO\] Kernel Object ' }).Count -eq 1 -and @($tr.Lines | Where-Object { $_ -cmatch '^\[WARNING\]' }).Count -eq 0 -and $tr.Lines.Count -eq $script:Subs.Count) ($tr.Lines -join ' | ')
+    $tr = Get-AuditRowsReport -Subs $script:Subs -Rows @{}
+    T 'nothing recorded at all: every graded row WARNS, the context row still only informs' ($tr.Sev -eq 'WARNING' -and @($tr.Lines | Where-Object { $_ -cmatch '^\[WARNING\]' }).Count -eq ($script:Subs.Count - 1) -and @($tr.Lines | Where-Object { $_ -cmatch '^\[INFO\] Kernel Object ' }).Count -eq 1) ($tr.Lines -join ' | ')
+    T 'exactly one row in the shipped table is context-only, and it is Kernel Object' (@($script:Subs | Where-Object { $_.ContainsKey('Context') -and $_.Context }).Count -eq 1 -and @($script:Subs | Where-Object { $_.ContainsKey('Context') -and $_.Context })[0].Guid -eq '{0CCE921F-69AE-11D9-BED3-505054503030}') ''
+    $cx = Get-AuditRowVerdict -Name 'Kernel Object (4656/4663: attempts to read LSASS memory)' -Setting 'Success and Failure' -Feeds 'x' -Context $true
+    T 'a CONTEXT row that is ON reads like the others ([OK] ... auditing is ON)' ($cx.Sev -eq 'OK' -and $cx.Line -cmatch '^\[OK\] Kernel Object .* auditing is ON') $cx.Line
+    $cx = Get-AuditRowVerdict -Name 'Process Creation (4688)' -Setting 'No Auditing' -Feeds 'x'
+    T 'without -Context the same setting is still a WARNING (the four graded rows are untouched)' ($cx.Sev -eq 'WARNING' -and $cx.Line -cmatch 'auditing is OFF') $cx.Line
     T 'the cannot-classify row is flagged as a GAP (it feeds the auditpol_gap marker, never the finding row)' ((Get-AuditRowVerdict -Name 'Logon' -Setting 'Erfolg' -Feeds 'x').Gap -eq $true -and -not (Get-AuditRowVerdict -Name 'Logon' -Setting 'No Auditing' -Feeds 'x').Gap) ''
     if ($fails) { Write-Output "[FAIL] $fails audit_policy_check self-test expectation(s) unmet"; exit 1 }
     Write-Output '[OK] audit_policy_check self-test: real auditpol rows parse by GUID under any header, Success and Failure is ON, a localized setting is stated as unread rather than reported OFF.'
@@ -177,24 +254,7 @@ if ($SelfTest) {
 $sev = 'OK'
 
 $gapSev = 'OK'
-# Subcategories whose absence blinds a detection the audit actually performs.
-# GUIDs are locale-independent; names are for the report only.
-$subs = @(
-    @{ Guid = '{0CCE922B-69AE-11D9-BED3-505054503030}'; Name = 'Process Creation (4688)';         Feeds = 'suspicious-process, service-install and LOLBin event checks' },
-    @{ Guid = '{0CCE9215-69AE-11D9-BED3-505054503030}'; Name = 'Logon (4624/4625)';                Feeds = 'logon / failed-logon and lateral-movement checks' },
-    @{ Guid = '{0CCE9235-69AE-11D9-BED3-505054503030}'; Name = 'User Account Management (4720/4732)'; Feeds = 'new-account and admin-group-change checks' },
-    # {0CCE922F} is Audit_PolicyChange_AuditPolicy (ntsecapi.h). This row used
-    # to query {0CCE9217}, which is Audit_Logon_AccountLockout -- a different
-    # subcategory in a different category that happens to ship default=Success
-    # on Windows client. So the exact T1562.002 action this row exists to catch,
-    # `auditpol /set /subcategory:{0CCE922F-...} /success:disable`, left the
-    # queried subcategory untouched and the tool reported "[OK] Audit Policy
-    # Change (4719) auditing is ON" while 4719 was in fact blinded. The one
-    # check that tells the reader whether tamper-detection is live was reporting
-    # the opposite of the truth. Verified against Microsoft's Auditing Constants
-    # and asserted on a real Windows runner by the helpers-ps51 CI job.
-    @{ Guid = '{0CCE922F-69AE-11D9-BED3-505054503030}'; Name = 'Audit Policy Change (4719)';        Feeds = 'detection of auditing being turned off by an attacker' }
-)
+$subs = $script:Subs
 
 $apOk = $true
 $rows = @{}
@@ -222,17 +282,16 @@ if (-not $apOk) {
     '[WARNING] auditpol could not be queried -- audit-policy visibility NOT verified (needs admin).'
     $gapSev = 'WARNING'
 } else {
-    foreach ($s in $subs) {
-        $set = $rows[$s.Guid.ToLower().Trim('{','}')]
-        # "Success" present => the success events this feeds are being recorded.
-        # "No Auditing" or empty => blind. The setting TEXT is localized too, so
-        # a third case exists: the row was found but its value is in a language
-        # this script cannot classify. Reporting that as "auditing is OFF" would
-        # be a fabricated finding, so Get-AuditRowVerdict reports it as unread.
-        $v = Get-AuditRowVerdict -Name $s.Name -Setting ([string]$set) -Feeds $s.Feeds -Guid $s.Guid
-        $v.Line
-        if ($v.Sev -ne 'OK') { if ($v.Gap) { $gapSev = 'WARNING' } else { $sev = 'WARNING' } }
-    }
+    # "Success" present => the success events this feeds are being recorded.
+    # "No Auditing" or empty => blind. The setting TEXT is localized too, so a
+    # third case exists: the row was found but its value is in a language this
+    # script cannot classify. Reporting that as "auditing is OFF" would be a
+    # fabricated finding, so Get-AuditRowVerdict reports it as unread. A row
+    # marked Context is named, never graded.
+    $rep = Get-AuditRowsReport -Subs $subs -Rows $rows
+    foreach ($l in $rep.Lines) { $l }
+    if ($rep.Sev -ne 'OK') { $sev = 'WARNING' }
+    if ($rep.GapSev -ne 'OK') { $gapSev = 'WARNING' }
 }
 
 # Command-line inclusion in 4688 -- locale-independent registry signal. Without

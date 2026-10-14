@@ -6,6 +6,100 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### The records that remain when something reads LSASS memory (T1003.001)
+A copy of LSASS made to read its secrets lives for seconds, so the live
+snapshot (Section 4) will rarely catch one, and the process-creation record
+(Section 12) exists only while process creation is audited. Microsoft
+documents neither that such a copy appears in the process list nor that it
+produces Event 4688, so the live check is as far as that path honestly goes;
+raising it on a weaker signal would add false positives without closing the
+gap. Three records do persist, and the audit read none of them.
+
+Two of them are now read, in Section 12:
+
+- **`tools/asr_lsass_events.ps1` (new): Defender's own events for its rule
+  against reading LSASS memory** (1121 blocked, 1122 audited only). Microsoft
+  documents that this rule raises no alert, no notification and has no warn
+  mode, so this log is the owner's only local record that something tried.
+  - **Which of the event's two fields names the accessing program is not
+    fixed.** In a real captured event for this rule, `Process Name` held
+    lsass.exe and `Path` held the accessing program -- the reverse of the
+    public detection rule's assumption, and the reverse of the same
+    provider's Office events. So whichever field is not lsass.exe is
+    reported, and when neither is, both are printed as unresolved rather
+    than one of them guessed at. Both orders are pinned from that capture.
+  - **WARNING, never CRITICAL.** Microsoft's own rule reference says many
+    programs ask for access to LSASS they do not need and names Chrome's
+    updater; the captured event's accessor is OneDrive's updater. Lines are
+    grouped by program with a count and the newest time.
+  - An audit-mode record says the access was **not** blocked.
+  - **An empty log is not an all-clear.** The rule writes nothing while it is
+    off or not configured, so the mode decides what emptiness means. It is
+    measured once, in Section 9, and passed in; off or not configured prints
+    `[SKIPPED]` and raises nothing, pointing at the row Section 9 raises.
+  - A program **excluded** from this rule can read LSASS leaving no event at
+    all (Microsoft: the rule ignores antivirus exclusions and honours its
+    own), so the per-rule exclusions are read and raised.
+- **`tools/lsass_dump_config.ps1` (new): the settings that would have Windows
+  write LSASS's memory to a file**, and any such file where they point:
+  silent-process-exit monitoring (the 0x200 flag and the per-program
+  settings), and Windows Error Reporting local dumps. A dump file of LSASS on
+  disk is CRITICAL -- it holds the credentials, and copying it is all that is
+  needed.
+  - **Values are graded, never the key.** Microsoft documents an `AuditLevel`
+    value under the same key for LSA protection's audit mode, on by default
+    on Windows 11 22H2+, so that key exists on healthy machines; it is named
+    as the ordinary one. The global full-dump setting, which is not specific
+    to LSASS, is named and not graded.
+  - The flag is read as a bit, in any of the forms a real machine holds it
+    (number, decimal string, hex string); a value that cannot be read as a
+    number is a declared gap, never "no flags set".
+  - The all-clear line names the folders it looked in, because a program that
+    dumps LSASS without asking Windows leaves no setting at all.
+
+**The third is deliberately not read, and the audit now says so.** The
+Security log's object-access records from the SACL Windows ships on LSASS need
+a subcategory that is off by default, and Microsoft describes those events as
+high-volume with "little to no security relevance and are hard to parse or
+analyze". `audit_policy_check.ps1` gains that subcategory as a **context row**:
+it prints `[INFO]` naming the evidence that is not being kept, and is excluded
+from the ON evidence and from the OFF verdict. Grading it like the other four
+rows would have raised on nearly every machine and flipped the coverage
+block's audit visibility to REDUCED everywhere -- the regression the previous
+PR paid for. The row-grading loop was extracted into a pure function so the
+table plumbing is tested: a mutation that stopped passing the context flag
+through failed no case while the self-test called the verdict function
+directly.
+
+Two defects in this change's own tests, found while writing them:
+- A self-test case built a record with a malformed argument, so the call threw
+  and the case passed with one record instead of two. It now asserts the
+  combined wording, and a second case asserts that every record the self-test
+  builds is in fact a record.
+- A technique id written inside a self-test regex (with the dot escaped) was
+  counted by `lint_docs_drift` as its parent technique, for the second time.
+  The lint now drops backslashes before counting, so the class cannot recur --
+  and its own comment names no technique id, since it scans its own source.
+
+Tests, both directions; nothing is dumped and no process is copied:
+- Self-tests: 22 cases for the event check, 27 for the dump settings, 27 for
+  the audit policy. Ten mutations each fail their own cases.
+- **helpers job:** both self-tests on 5.1; the runner's real state graded
+  (nothing configured, nothing on disk, and either the all-clear or the
+  declared gap for Defender's log); each of the three "no record is being
+  written" modes asserted to print `[SKIPPED]` and never an all-clear; and
+  the grading proven against a real `REG_DWORD` on a **test image name**, so
+  the runner's own LSASS keys are never written (the step asserts afterwards
+  that they were not).
+- **Harness:** a file that looks like a dump of LSASS, in the folder Windows
+  would use, proves the whole path end to end (line, marker, ledger row). It
+  is a few bytes of text and configures nothing, so a failed cleanup cannot
+  leave a machine writing credentials to disk; the finding names the harness
+  marker in its own text, so a leftover cannot send its owner into an
+  incident response, while still being reported as a real one would be.
+- **full-run and standard-user jobs:** no record and no dump setting on a
+  clean runner, and each check states which verdict it reached.
+
 ### A copy of LSASS is named for what it is, live and in the Security log (T1003.001)
 Process snapshotting and reflection make a new process that is a copy of an
 existing one: the same image, with the original recorded as its parent

@@ -502,6 +502,34 @@ proof     = ci:lsass_copy_events.ps1
 signature = No copy of lsass\.exe in the Security log
 note      = Windows starts LSASS once, at boot, from wininit.exe, and with process-creation auditing on that start is in the Security log as Event 4688 (lsass.exe created by wininit.exe). It is counted on the OK line, never a finding. Verify: Get-WinEvent -FilterHashtable @{LogName='Security';Id=4688} | Where-Object { $_.Properties[5].Value -like '*\lsass.exe' }.
 
+[asr-lsass-read-by-an-updater]
+class     = ADVISE
+maxsev    = WARNING
+proof     = field:producing this record means a program actually asking to read LSASS memory, which this suite does not do on a runner; the judgement (which field names the program, blocked versus audited, the rule off) is covered in both directions by asr_lsass_events.ps1 -SelfTest
+signature = tried to read LSASS memory: .*\(T1003.001\)
+note      = Microsoft's own rule reference says many programs ask for access to LSASS they do not need, and names Google Chrome's updater; the real event captured for this rule names OneDrive's updater. So a line naming an updater or a well-known vendor program under Program Files, validly signed, is the common benign shape: confirm the program is one you installed and that its path and signature are what you expect (Get-AuthenticodeSignature '<path>'). A program from a temporary folder, a download folder or a user profile, or one you do not recognise, is the finding. A line that says the access was recorded but NOT blocked means the rule is in audit mode and the read went through: Section 9 offers to put it in Block mode.
+
+[asr-lsass-rule-not-enabled]
+class     = QUIET
+maxsev    = OK
+proof     = ci:asr_lsass_events.ps1
+signature = records NOT checked -- the rule is (turned OFF|not configured)
+note      = Defender's rule against reading LSASS memory writes a record only while it is on, so with the rule off or not configured the log is empty for a reason that says nothing about the machine. That is printed as SKIPPED and raises nothing; Section 9 separately raises the rule's own state, and the remediation script offers to turn it on. This is not a gap in the audit: it is the evidence not existing yet.
+
+[lsass-auditlevel-lsa-protection]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:lsass_dump_config.ps1
+signature = AuditLevel = \d+ -- the LSA-protection audit setting Microsoft documents
+note      = Microsoft documents Image File Execution Options\LSASS.exe\AuditLevel = 8 as LSA protection's audit mode, and it is on by default on a clean-installed Windows 11 22H2 or later. So the IFEO key for lsass.exe exists on healthy machines and says nothing by itself; this check grades the VALUES it holds (GlobalFlag's 0x200 flag) and names AuditLevel as the ordinary one. A reader who finds this key should not read its mere existence as tampering.
+
+[lsass-dump-by-an-administrator]
+class     = ADVISE
+maxsev    = CRITICAL
+proof     = field:a dump of LSASS can only be produced by dumping LSASS, which this suite never does; the grading of a dump file, of each dump-on-exit setting, and of the settings that are ordinary is covered in both directions by lsass_dump_config.ps1 -SelfTest
+signature = (A memory dump of \S+ is on disk|is configured to have its memory DUMPED when it exits|Silent-process-exit monitoring is ENABLED)
+note      = The benign cause is a person deliberately collecting a dump: an administrator troubleshooting LSASS with a debugger or ProcDump, an incident responder preserving evidence, or a support engineer who was asked to set silent-process-exit monitoring. Windows does not configure any of this for LSASS itself. If you, your IT department or a responder did not do it at the time shown, treat the dump as credential theft: change the passwords used on this machine from a different, clean one, and keep the file for whoever investigates. Either way the setting should be removed once it is no longer needed, since it will keep writing credentials to disk.
+
 [ztdns-helper-hidden-from-standard-user]
 class     = QUIET
 maxsev    = INFO

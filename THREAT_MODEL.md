@@ -230,6 +230,37 @@ and 13 verify exactly that.
   - a standard-user token cannot read the Security log: deferred, counted.
   With LSA Protection on, a user-mode tool cannot copy LSASS at all.
 
+- **The records that remain after an LSASS read, and what each cannot see.**
+  Section 12 reads two more sources, because the live snapshot and the
+  process-creation record can both miss a copy that lived for seconds:
+  - **Defender's own events for its rule against reading LSASS memory**
+    (1121 blocked, 1122 audited). Microsoft documents that this rule raises
+    no alert and no notification, so this log is the only local record. It
+    exists only while the rule is on, so with the rule off or not configured
+    the check prints `[SKIPPED]` and raises nothing -- Section 9 raises the
+    rule's state, and an empty log then means nothing. A program excluded
+    from the rule can read LSASS leaving no event at all, so the per-rule
+    exclusions are read and raised. Which of the event's two fields names
+    the accessing program is not fixed (a real capture has them the reverse
+    way round from the public detection rule), so whichever is not lsass.exe
+    is reported, and when neither is, both are printed as unresolved.
+  - **The settings that would have Windows write LSASS's memory to a file**
+    (silent-process-exit monitoring, Windows Error Reporting local dumps) and
+    any such file where they point. These persist whatever the auditing
+    state. Values are graded, never the key: Microsoft documents an
+    `AuditLevel` value under the same key for LSA protection's audit mode,
+    on by default on Windows 11 22H2+. A program that dumps LSASS without
+    asking Windows leaves none of these settings -- only, perhaps, the file,
+    and only where this check looks, which its all-clear line names.
+  - Out of reach, and deliberately not read: the Security log's object-access
+    records (4656/4663) from the SACL Windows ships on LSASS. That
+    subcategory is off by default, Microsoft describes the events as
+    high-volume with "little to no security relevance and are hard to parse
+    or analyze", and nothing establishes what a snapshot-based read leaves
+    there. Section 16's audit-policy block names that subcategory as context,
+    so a reader knows when this evidence is not being kept, and the audit
+    does not pretend to read it.
+
 ## Getting full protection value
 
 1. Run `doze_sec.bat` as Administrator (not the noAdmin variant) on a

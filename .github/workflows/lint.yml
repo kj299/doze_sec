@@ -288,10 +288,13 @@ jobs:
                    '"Success and Failure" is ON' \
                    'a localized setting (Erfolg) is a raised gap ([WARNING] not classified), never reported as OFF' \
                    'Failure alone is OFF' \
-                   'cmdline value absent is DISABLED'; do
+                   'cmdline value absent is DISABLED' \
+                   'the real table with Kernel Object off: one [INFO] line, no WARNING, nothing raised (the live plumbing, not one row)' \
+                   'a CONTEXT row that is off prints [INFO], raises nothing, and uses none of the graded phrases' \
+                   'exactly one row in the shipped table is context-only, and it is Kernel Object'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
-          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 18 ] || { echo "only $n case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 27 ] || { echo "only $n case(s)"; exit 1; }
       - name: persistence_eval -- the owner's real autoruns, and Process Explorer's Replace Task Manager
         run: |
           out=$(pwsh -NoProfile -File tools/persistence_eval.ps1 -SelfTest); echo "$out"
@@ -387,6 +390,31 @@ jobs:
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
           n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 14 ] || { echo "only $n case(s)"; exit 1; }
+      - name: asr_lsass_events -- the accessing program is taken from whichever field is not lsass.exe; a log the rule never writes to is SKIPPED, not cleared
+        run: |
+          out=$(pwsh -NoProfile -File tools/asr_lsass_events.ps1 -SelfTest); echo "$out"
+          for n in 'the real captured field order (Process Name = lsass.exe, Path = the program) names the program, not lsass.exe' \
+                   'the reversed order (Path = lsass.exe) names the same program -- neither field is trusted to be the accessor' \
+                   'when neither field names lsass.exe, both are printed and the line says it could not tell them apart' \
+                   'an audit-mode record says the access was NOT blocked' \
+                   'a per-rule exclusion is a WARNING naming the excluded program, and the all-clear line is withheld' \
+                   'with the rule off, an empty log is [SKIPPED] and raises nothing -- never an all-clear'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 22 ] || { echo "only $n case(s)"; exit 1; }
+      - name: lsass_dump_config -- a dump-on-exit setting or a dump file is a finding; the documented LSA-protection value is not
+        run: |
+          out=$(pwsh -NoProfile -File tools/lsass_dump_config.ps1 -SelfTest); echo "$out"
+          for n in 'AuditLevel=8 alone is the documented LSA-protection setting: OK, named as ordinary, never a finding' \
+                   'the flag is read as a bit, not an equality: 0x240 still carries 0x200' \
+                   'a GlobalFlag that cannot be read as a number is a declared gap, never read as no flags set' \
+                   'a dump FILE of lsass on disk is CRITICAL, with its path, size and time, and says what to do' \
+                   'the GLOBAL full-dump setting is named as a general debugging setting, never graded' \
+                   'a dump file left by this tool'"'"'s own harness is still CRITICAL, and the line says what it is' \
+                   'pointed at another program, every line names that program and none mentions LSASS'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 27 ] || { echo "only $n case(s)"; exit 1; }
       - name: proc_snapshot -- one query, the former Name-PID-Path lines byte for byte, and the process tree
         run: |
           out=$(pwsh -NoProfile -File tools/proc_snapshot.ps1 -SelfTest); echo "$out"

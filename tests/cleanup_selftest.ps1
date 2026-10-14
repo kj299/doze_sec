@@ -243,6 +243,10 @@ Get-Process -EA SilentlyContinue |
 Remove-Path 'C:\Users\Public\dz_selftest_parent_live'         'Masquerading-by-parent svchost.exe, living parent (Public\dz_selftest_parent_live)'
 Remove-Path 'C:\Users\Public\dz_selftest_parent_gone'         'Masquerading-by-parent svchost.exe, exited parent (Public\dz_selftest_parent_gone)'
 Remove-Path 'C:\Users\Public\dz_selftest_onlyone'             'Second wininit.exe, one of each (Public\dz_selftest_onlyone)'
+# The fake LSASS dump file: removed by name, never the whole folder -- Windows'
+# own silent-process-exit dumps would live there, and a real one is evidence.
+$lsassFake = Join-Path $env:TEMP 'Silent Process Exit\lsass_dz_selftest.dmp'
+Remove-Path $lsassFake                                        'Fake LSASS memory dump, detection self-test (lsass_dz_selftest.dmp)'
 # The Section 18a plants are RUNNING copies of ping.exe named after an IOC
 # entry and its benign twin; stopped by PATH before their directories go.
 Get-Process -EA SilentlyContinue |

@@ -391,6 +391,29 @@ is also what a parent that has since exited looks like) and a benign twin for
 that case pinned in the self-test. Build it when a field run or the harness
 can show the exited-parent shape; do not build it on the assumption.
 
+## The LSASS SACL's object-access records (open, 2026-10-14; deliberately not read)
+
+Windows ships a SACL on LSASS that records attempts to read its memory
+(Security 4656/4663), and the audit does not read it. Three reasons, all
+current: the Kernel Object subcategory it needs is off by default, Microsoft
+describes those events as high-volume with "little to no security relevance
+and are hard to parse or analyze", and the research for PR #249 could not
+establish what a snapshot-based read leaves there at all -- the copy is a
+different process object, with no such SACL on it.
+
+What exists instead: Section 16's audit-policy block now names that
+subcategory as a context row, so a reader knows when this evidence is not
+being kept, and Section 12 reads the two records that do persist (Defender's
+ASR events, and the dump-on-exit settings).
+
+Revisit if a field run shows the subcategory on, or if a machine turns out to
+record a read that Defender's events miss. The work would be: read 4656/4663
+filtered to ObjectType Process and an ObjectName ending in lsass.exe, keep
+only access masks that include 0x10 (read process memory, ignoring
+query-only masks), and grade the accessor by signature rather than by path --
+plus a benign-accessor list, which is the part with no first-party source and
+the reason this is not a half-day's work.
+
 ## The container false positive, planted (open, 2026-10-13)
 
 `[system-process-parent-in-a-container]` in the corpus is `field:` only. A

@@ -2970,6 +2970,7 @@ echo THREAT: With no ASR rules in Block mode, Office-macro droppers, LSASS crede
 echo theft, and vulnerable-driver loads are stopped by signature detection alone.>> "%REPORT%"
 echo  Command: powershell -Command "(Get-MpPreference).AttackSurfaceReductionRules_Ids">> "%REPORT%"
 del "%TEMP%\dz_asr_hit.txt" 2>nul
+del "%TEMP%\dz_asr_lsass_mode.txt" 2>nul
 echo try { $p = Get-MpPreference -ErrorAction Stop } catch { Write-Output '[INFO] Get-MpPreference unavailable - third-party AV active or service restricted. ASR audit skipped.'; exit 0 } > "%PSRUN%"
 echo $ids = @(); if ($p.AttackSurfaceReductionRules_Ids) { $ids = @($p.AttackSurfaceReductionRules_Ids) } >> "%PSRUN%"
 echo $acts = @(); if ($p.AttackSurfaceReductionRules_Actions) { $acts = @($p.AttackSurfaceReductionRules_Actions) } >> "%PSRUN%"
@@ -3022,6 +3023,9 @@ echo foreach ($k in $keyRules.Keys) { >> "%PSRUN%"
 echo   $ix = [array]::IndexOf($lowIds, $k) >> "%PSRUN%"
 echo   if ($ix -lt 0 -or [int]$acts[$ix] -ne 1) { Write-Output ('[WARNING] Key ASR rule not in Block mode: ' + $keyRules[$k]); Set-Content -LiteralPath "$env:TEMP\dz_asr_hit.txt" -Value hit } >> "%PSRUN%"
 echo } >> "%PSRUN%"
+echo $lsassIx = [array]::IndexOf($lowIds, '9e6c4e1f-7d60-472f-ba1a-a39ef669e4b2') >> "%PSRUN%"
+echo $lsassMode = 'notconfigured'; if ($lsassIx -ge 0) { $la = [int]$acts[$lsassIx]; $lsassMode = 'off'; if ($la -eq 1) { $lsassMode = 'block' }; if ($la -eq 2) { $lsassMode = 'audit' }; if ($la -eq 6) { $lsassMode = 'warn' } } >> "%PSRUN%"
+echo Set-Content -LiteralPath "$env:TEMP\dz_asr_lsass_mode.txt" -Value $lsassMode -Encoding ASCII >> "%PSRUN%"
 call :dz_ps_scan 9 T1562.001 "Defender ASR rules absent or not in Block mode"
 rem Belt and braces. If grading returned OK but the block set its marker,
 rem the grade was wrong and the finding would vanish -- which is exactly
@@ -3347,6 +3351,80 @@ if exist "%TEMP%\dz_lsacopy_deferred.txt" (
     set /p _LCDEF=<"%TEMP%\dz_lsacopy_deferred.txt"
     set /a DEFERRED_COUNT+=!_LCDEF!
     del "%TEMP%\dz_lsacopy_deferred.txt" 2>nul
+)
+echo.>> "%REPORT%"
+echo --- Programs Defender caught reading LSASS memory, and settings that would dump it (T1003.001) --->> "%REPORT%"
+echo  Command: powershell -File tools\asr_lsass_events.ps1>> "%REPORT%"
+echo  Command: powershell -File tools\lsass_dump_config.ps1>> "%REPORT%"
+echo  Command: powershell -Command "Get-WinEvent -LogName 'Microsoft-Windows-Windows Defender/Operational' -MaxEvents 200 -EA SilentlyContinue | Where-Object { $_.Id -eq 1121 -or $_.Id -eq 1122 }">> "%REPORT%"
+echo  Command: reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SilentProcessExit\lsass.exe">> "%REPORT%"
+echo  Defender's rule against reading LSASS memory raises no alert and no pop-up, so>> "%REPORT%"
+echo  its own log is the only local record that something tried. And three registry>> "%REPORT%"
+echo  settings can have Windows write LSASS's memory to a file, which would hold the>> "%REPORT%"
+echo  credentials in it.>> "%REPORT%"
+del "%TEMP%\dz_asrlsass.txt" 2>nul
+del "%TEMP%\dz_asrlsass_gap.txt" 2>nul
+del "%TEMP%\dz_asrlsass_deferred.txt" 2>nul
+rem The rule's mode was measured once, in Section 9. A second Get-MpPreference
+rem here would be a second opinion, not a summary.
+set "ASR_LSASS_MODE=ungraded"
+if exist "%TEMP%\dz_asr_lsass_mode.txt" set /p ASR_LSASS_MODE=<"%TEMP%\dz_asr_lsass_mode.txt"
+if exist "%SCRIPT_DIR%tools\asr_lsass_events.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\asr_lsass_events.ps1" -RuleMode "%ASR_LSASS_MODE%">> "%REPORT%" 2>&1
+) else (
+    echo  [WARNING] tools\asr_lsass_events.ps1 not found -- Defender's record of LSASS reads NOT checked.>> "%REPORT%"
+    call :dz_finding WARNING 12 T1003.001 "Defender LSASS-read records NOT checked - tools\asr_lsass_events.ps1 missing"
+)
+del "%TEMP%\dz_asr_lsass_mode.txt" 2>nul
+if exist "%TEMP%\dz_asrlsass.txt" (
+    set "_ARSEV="
+    set /p _ARSEV=<"%TEMP%\dz_asrlsass.txt"
+    call :dz_finding !_ARSEV! 12 T1003.001 "A program tried to read LSASS memory, or is excluded from the rule that would stop it"
+    del "%TEMP%\dz_asrlsass.txt" 2>nul
+)
+if exist "%TEMP%\dz_asrlsass_gap.txt" (
+    rem A gap is its own row: the tool could not perform this check.
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_asrlsass_gap.txt"
+    call :dz_finding !_GAPSEV! 12 T1003.001 "Defender LSASS-read records NOT checked - its log unreadable"
+    del "%TEMP%\dz_asrlsass_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_asrlsass_deferred.txt" (
+    rem A standard-user token may not read Defender's log: a deferral, counted,
+    rem never a ledger row.
+    set "_ARDEF=0"
+    set /p _ARDEF=<"%TEMP%\dz_asrlsass_deferred.txt"
+    set /a DEFERRED_COUNT+=!_ARDEF!
+    del "%TEMP%\dz_asrlsass_deferred.txt" 2>nul
+)
+del "%TEMP%\dz_lsadump.txt" 2>nul
+del "%TEMP%\dz_lsadump_gap.txt" 2>nul
+del "%TEMP%\dz_lsadump_deferred.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\lsass_dump_config.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\lsass_dump_config.ps1">> "%REPORT%" 2>&1
+) else (
+    echo  [WARNING] tools\lsass_dump_config.ps1 not found -- LSASS dump settings NOT checked.>> "%REPORT%"
+    call :dz_finding WARNING 12 T1003.001 "LSASS dump settings NOT checked - tools\lsass_dump_config.ps1 missing"
+)
+if exist "%TEMP%\dz_lsadump.txt" (
+    set "_LDSEV="
+    set /p _LDSEV=<"%TEMP%\dz_lsadump.txt"
+    call :dz_finding !_LDSEV! 12 T1003.001 "LSASS is configured to have its memory dumped, or a dump of it is on disk"
+    del "%TEMP%\dz_lsadump.txt" 2>nul
+)
+if exist "%TEMP%\dz_lsadump_gap.txt" (
+    rem A gap is its own row: the tool could not perform this check.
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_lsadump_gap.txt"
+    call :dz_finding !_GAPSEV! 12 T1003.001 "LSASS dump settings NOT checked - a key or folder unreadable"
+    del "%TEMP%\dz_lsadump_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_lsadump_deferred.txt" (
+    rem A key this token cannot read: a deferral, counted, never a ledger row.
+    set "_LDDEF=0"
+    set /p _LDDEF=<"%TEMP%\dz_lsadump_deferred.txt"
+    set /a DEFERRED_COUNT+=!_LDDEF!
+    del "%TEMP%\dz_lsadump_deferred.txt" 2>nul
 )
 :: Carry the LSA Protection verdict to the dashboard (the DEFCORE_* idiom). The
 :: tile used to read the registry AGAIN and graded an explicit RunAsPPL=0 as

@@ -127,6 +127,15 @@ $parentGoneExe = Join-Path $parentGoneDir 'svchost.exe'
 # a renamed chain, where every parent NAME looks right.
 $onlyOneDir = 'C:\Users\Public\dz_selftest_onlyone'
 $onlyOneExe = Join-Path $onlyOneDir 'wininit.exe'
+# A file that LOOKS like a memory dump of LSASS, where Windows would write one
+# if it were told to (Microsoft's documented default folder for silent process
+# exit). Nothing is dumped and nothing is configured: it is a few bytes of
+# text, so a cleanup that fails cannot leave this machine writing credentials
+# to disk. The name carries the harness marker, and the check names that marker
+# in its finding, so a leftover cannot send its owner into an incident
+# response -- while still being reported, as a real one would be.
+$lsassDumpDir  = Join-Path $env:TEMP 'Silent Process Exit'
+$lsassDumpFile = Join-Path $lsassDumpDir 'lsass_dz_selftest.dmp'
 # Section 18a: a copy of ping.exe whose NAME holds an ioc_processes.txt entry
 # (chisel), and a twin whose name holds none (level_agent is an RMM name the
 # list deliberately dropped). A plain directory under C:\ -- not Temp, where
@@ -458,6 +467,18 @@ $cases = @(
         Cleanup= { Get-Process -EA SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($onlyOneDir + '\', [StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force -EA SilentlyContinue
                    Start-Sleep -Milliseconds 500
                    Remove-Item -LiteralPath $onlyOneDir -Recurse -Force -EA SilentlyContinue }
+    },
+    @{
+        Name   = 'A file that looks like a memory dump of LSASS -> flagged as credentials on disk (T1003.001)'
+        Attack = @('T1003.001')
+        Tier   = 'required'  # lsass_dump_config.ps1: the end-to-end path, line -> marker -> ledger row
+        Touches= @('file:%TEMP%\Silent Process Exit\lsass_dz_selftest.dmp|lsass_dz_selftest')
+        Affects= @()
+        Expect = '(?im)\[CRITICAL\] A memory dump of lsass\.exe is on disk: [^\r\n]*lsass_dz_selftest\.dmp[^\r\n]*carries dz_selftest'
+        Plant  = { New-Item -ItemType Directory -Path $lsassDumpDir -Force | Out-Null
+                   Set-Content -LiteralPath $lsassDumpFile -Value 'not a dump: a doze_sec detection self-test file' -Encoding ASCII
+                   if (-not (Test-Path -LiteralPath $lsassDumpFile)) { throw 'the fake dump file was not created' } }
+        Cleanup= { Remove-Item -LiteralPath $lsassDumpFile -Force -EA SilentlyContinue }
     },
     @{
         Name   = 'Process whose name holds an ioc_processes.txt entry -> Section 18a Process IOC match (T1057)'
@@ -1295,7 +1316,10 @@ try {
                        # no other plant can write.
                        @{ Case = 'svchost.exe started by a living wrong parent'; Row = 'WARNING|4|T1036|System-process name started by a parent Windows never uses' },
                        @{ Case = 'svchost.exe whose parent exited'; Row = 'WARNING|4|T1036|System-process name started by a parent Windows never uses' },
-                       @{ Case = 'A second wininit.exe'; Row = 'WARNING|4|T1036|System process Windows runs once seen twice or in the wrong session' })) {
+                       @{ Case = 'A second wininit.exe'; Row = 'WARNING|4|T1036|System process Windows runs once seen twice or in the wrong session' },
+                       # Section 12's dump-settings check: its own row, which no
+                       # other plant can write.
+                       @{ Case = 'A file that looks like a memory dump of LSASS'; Row = 'CRITICAL|12|T1003.001|LSASS is configured to have its memory dumped, or a dump of it is on disk' })) {
         $cs = @($cases | Where-Object { $_.Name -like ('*' + $chk.Case + '*') -and -not $_.Invert })[0]
         if (-not ($cs -and $cs.Planted)) { Write-Host ("  [ SKIP     ] {0}: the plant did not take, so its ledger row is not checked" -f $chk.Case); continue }
         # The check is "printed but not counted": with nothing printed (a
