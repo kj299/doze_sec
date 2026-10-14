@@ -432,6 +432,15 @@ try {
         ('Section 4 reported a parent finding on a clean runner: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'has the wrong parent:|Windows runs one|runs in session|^\s+(child|parent|instance):' }) -join ' | '))
     Assert ($text1 -match '\[OK\] \d+ system-process name\(s\) were started by the parent Windows uses') 'Section 4 graded the process tree by parent on a standard-user token' `
         ('Section 4 did not grade the process tree by parent on a standard-user token: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'by parent|creation time' }) -join ' | '))
+    # A copy of a system process: none on a clean runner. And the Security log
+    # a standard user cannot read is a DEFERRAL for the LSASS-copy history --
+    # counted, never a ledger row, never a gap.
+    Assert ($text1 -notmatch 'is a copy of LSASS|is a copy of its parent|lsass\.exe was copied at') 'no copy of a system process on a clean runner, standard-user token' `
+        ('a copy was reported: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'is a copy of|was copied at' }) -join ' | '))
+    Assert ($text1 -match '\[DEFERRED - ADMIN REQUIRED\] Copies of lsass\.exe in the Security log') 'Section 12: the LSASS-copy history is deferred on a standard-user token' `
+        ('Section 12 printed: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'Copies of lsass\.exe|No copy of lsass' }) -join ' | '))
+    Assert (@($ledger1 | Where-Object { $_ -match 'LSASS copy history NOT checked' }).Count -eq 0) 'the deferred LSASS-copy history is not a ledger row' `
+        'a standard-user token raised the LSASS-copy history as a gap'
     $max1 = Assert-LedgerConsistency -Text $text1 -Ledger $ledger1 -Label 'run 1'
     # The bat escalates to 6 ONLY from 0 and 4: 2 is the ledger-derived
     # "findings were raised" verdict and is never discarded (its rem block

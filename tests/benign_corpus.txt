@@ -481,6 +481,27 @@ proof     = field:Sandboxie-Plus runs its own SandboxieDcomLaunch.exe and Sandbo
 signature = has the wrong parent: PID \d+ belongs to Sandboxie(DcomLaunch|RpcSs)\.exe -- .*\(T1036 masquerading by parent\)
 note      = If the parent line names SandboxieDcomLaunch.exe or SandboxieRpcSs.exe and the child runs from its canonical System32 path, it is a program you ran in a Sandboxie sandbox; confirm the parent's path is under the Sandboxie-Plus install directory (Program Files\Sandboxie-Plus) and that you use Sandboxie. A Sandboxie-named parent anywhere else is the finding.
 
+[process-copy-error-reporting]
+class     = ADVISE
+maxsev    = WARNING
+proof     = field:Windows Error Reporting copies a hung process to report on it while the original keeps running; producing that on a runner means hanging a system process until WER copies it, which this suite does not do
+signature = is a copy of its parent .*\(T1055\)
+note      = Windows Error Reporting (WerFault.exe) copies a process that stopped responding, so the report can be written while the original carries on; the copy has the original's name and image and the original as its parent, and it is gone once the report is written. Verify: is WerFault.exe running (Get-Process WerFault), and is the copy gone when you look again a minute later (Get-Process -Id <copy PID>)? A copy that stays, or one with no WerFault.exe around it, is the finding: code injection by forking runs the attacker's code in exactly such a copy.
+
+[lsass-copy-admin-dump]
+class     = ADVISE
+maxsev    = CRITICAL
+proof     = field:an administrator's own dump of LSASS taken from a copy (ProcDump -r, Windows 8.1 and later: "Uses PSS") leaves exactly this process and this Event 4688 record; making one on a runner means copying LSASS, which this suite never does
+signature = (is a copy of LSASS|lsass\.exe was copied at )
+note      = The only benign source of an LSASS copy is a person deliberately dumping LSASS memory: an administrator troubleshooting LSASS with ProcDump -r, or an incident responder collecting evidence. Windows itself does not copy LSASS. If you, your IT department or a responder did not dump LSASS at the time shown, treat the copy as credential theft: change the passwords used on this machine from a different, clean one. With LSA Protection on (Section 12), a user-mode tool cannot copy LSASS at all, so a copy then also means kernel-level access.
+
+[lsass-start-by-wininit]
+class     = QUIET
+maxsev    = OK
+proof     = ci:lsass_copy_events.ps1
+signature = No copy of lsass\.exe in the Security log
+note      = Windows starts LSASS once, at boot, from wininit.exe, and with process-creation auditing on that start is in the Security log as Event 4688 (lsass.exe created by wininit.exe). It is counted on the OK line, never a finding. Verify: Get-WinEvent -FilterHashtable @{LogName='Security';Id=4688} | Where-Object { $_.Properties[5].Value -like '*\lsass.exe' }.
+
 [ztdns-helper-hidden-from-standard-user]
 class     = QUIET
 maxsev    = INFO

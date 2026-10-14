@@ -1891,11 +1891,15 @@ echo  AppData, ProgramData, Temp or a vendor folder is an impostor by path alone
 echo  And by parent: Windows starts svchost.exe only from services.exe, and lsass.exe and>> "%REPORT%"
 echo  services.exe only from wininit.exe, and runs one of each; a process ID reused after>> "%REPORT%"
 echo  a parent exited is told apart by creation time, and the session is checked too.>> "%REPORT%"
+echo  A system process whose parent has its own name and image is a copy of it -- a copy>> "%REPORT%"
+echo  of LSASS is how credential dumpers read its memory; Section 12 reads the record.>> "%REPORT%"
 if not defined _ENUM4 goto :sec4_masq_skip
 del "%TEMP%\dz_masq.txt" 2>nul
 del "%TEMP%\dz_masq_parent.txt" 2>nul
 del "%TEMP%\dz_masq_count.txt" 2>nul
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\masquerade_check.ps1" -Path "%TEMP%\dz_proc4.tmp" -MarkerFile "%TEMP%\dz_masq.txt" -TreePath "%TEMP%\dz_proc4_tree.tmp" -ParentMarkerFile "%TEMP%\dz_masq_parent.txt" -CountMarkerFile "%TEMP%\dz_masq_count.txt">> "%REPORT%" 2>&1
+del "%TEMP%\dz_masq_lsacopy.txt" 2>nul
+del "%TEMP%\dz_masq_copy.txt" 2>nul
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\masquerade_check.ps1" -Path "%TEMP%\dz_proc4.tmp" -MarkerFile "%TEMP%\dz_masq.txt" -TreePath "%TEMP%\dz_proc4_tree.tmp" -ParentMarkerFile "%TEMP%\dz_masq_parent.txt" -CountMarkerFile "%TEMP%\dz_masq_count.txt" -LsassCopyMarkerFile "%TEMP%\dz_masq_lsacopy.txt" -CopyMarkerFile "%TEMP%\dz_masq_copy.txt">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_masq.txt" (
     call :dz_finding WARNING 4 T1036 "System-process name running outside its canonical directory"
     del "%TEMP%\dz_masq.txt" 2>nul
@@ -1907,6 +1911,14 @@ if exist "%TEMP%\dz_masq_parent.txt" (
 if exist "%TEMP%\dz_masq_count.txt" (
     call :dz_finding WARNING 4 T1036 "System process Windows runs once seen twice or in the wrong session"
     del "%TEMP%\dz_masq_count.txt" 2>nul
+)
+if exist "%TEMP%\dz_masq_lsacopy.txt" (
+    call :dz_finding CRITICAL 4 T1003.001 "LSASS copy running - a second process holding LSASS memory"
+    del "%TEMP%\dz_masq_lsacopy.txt" 2>nul
+)
+if exist "%TEMP%\dz_masq_copy.txt" (
+    call :dz_finding WARNING 4 T1055 "System process copied from its parent - error report or forked code"
+    del "%TEMP%\dz_masq_copy.txt" 2>nul
 )
 goto :sec4_masq_done
 :sec4_masq_skip
@@ -3004,6 +3016,43 @@ if exist "%TEMP%\dz_lsa_gap.txt" (
     set /p _GAPSEV=<"%TEMP%\dz_lsa_gap.txt"
     call :dz_finding !_GAPSEV! 12 T1003.001 "LSA Protection state NOT determined - registry and boot event unreadable, or the measurement is missing"
     del "%TEMP%\dz_lsa_gap.txt" 2>nul
+)
+echo.>> "%REPORT%"
+echo --- LSASS copies in the Security log (T1003.001: Event 4688, lsass.exe created by lsass.exe) --->> "%REPORT%"
+echo  Command: powershell -File tools\lsass_copy_events.ps1>> "%REPORT%"
+echo  Command: powershell -Command "Get-WinEvent -FilterHashtable @{LogName='Security';Id=4688} -MaxEvents 2000 -EA SilentlyContinue | Where-Object { $_.Properties[5].Value -like '*\lsass.exe' } | Select-Object TimeCreated, @{N='Created';E={$_.Properties[5].Value}}, @{N='By';E={$_.Properties[13].Value}}"   [the audit reads every 4688 record, not only the newest 2000]>> "%REPORT%"
+echo  A copy of LSASS is a second process holding its memory; tools that dump credentials>> "%REPORT%"
+echo  make one and read it instead of LSASS. It lives for seconds, so the Security log is>> "%REPORT%"
+echo  where it is seen -- when process-creation auditing is on.>> "%REPORT%"
+del "%TEMP%\dz_lsacopy.txt" 2>nul
+del "%TEMP%\dz_lsacopy_gap.txt" 2>nul
+del "%TEMP%\dz_lsacopy_deferred.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\lsass_copy_events.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\lsass_copy_events.ps1">> "%REPORT%" 2>&1
+) else (
+    echo  [WARNING] tools\lsass_copy_events.ps1 not found -- LSASS copies in the Security log NOT checked.>> "%REPORT%"
+    call :dz_finding WARNING 12 T1003.001 "LSASS copy history NOT checked - tools\lsass_copy_events.ps1 missing"
+)
+if exist "%TEMP%\dz_lsacopy.txt" (
+    set "_LCSEV="
+    set /p _LCSEV=<"%TEMP%\dz_lsacopy.txt"
+    call :dz_finding !_LCSEV! 12 T1003.001 "LSASS created by itself or by an unexpected parent - Event 4688"
+    del "%TEMP%\dz_lsacopy.txt" 2>nul
+)
+if exist "%TEMP%\dz_lsacopy_gap.txt" (
+    rem A gap is its own row: the tool could not perform this check.
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_lsacopy_gap.txt"
+    call :dz_finding !_GAPSEV! 12 T1003.001 "LSASS copy history NOT checked - Security log unreadable"
+    del "%TEMP%\dz_lsacopy_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_lsacopy_deferred.txt" (
+    rem A standard-user token cannot read the Security log: a deferral, counted,
+    rem never a ledger row.
+    set "_LCDEF=0"
+    set /p _LCDEF=<"%TEMP%\dz_lsacopy_deferred.txt"
+    set /a DEFERRED_COUNT+=!_LCDEF!
+    del "%TEMP%\dz_lsacopy_deferred.txt" 2>nul
 )
 :: Carry the LSA Protection verdict to the dashboard (the DEFCORE_* idiom). The
 :: tile used to read the registry AGAIN and graded an explicit RunAsPPL=0 as

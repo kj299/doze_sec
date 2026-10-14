@@ -6,6 +6,85 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### A copy of LSASS is named for what it is, live and in the Security log (T1003.001)
+Process snapshotting and reflection make a new process that is a copy of an
+existing one: the same image, with the original recorded as its parent
+(Microsoft, PSS_CAPTURE_VA_CLONE). Tools that want LSASS's secrets copy LSASS
+and read the copy, so LSASS itself is never read. The public detections for
+that, Elastic's "Potential LSASS Clone Creation via PssCaptureSnapShot" and
+Sigma's "Potential Credential Dumping Via LSASS Process Clone", key on exactly
+lsass.exe created by lsass.exe. Diagnostics make the same shape for an
+ordinary process: Windows Error Reporting copies a hung one, and ProcDump -r
+dumps "using a clone".
+
+Before this, the parent rule reported an LSASS copy as a generic wrong
+parent plus a second instance: two WARNING rows that never said what was
+seen. A copy of smss.exe, or of a name outside the table, was not reported at
+all.
+
+- **Section 4 (`masquerade_check`).** A system process whose parent has its
+  own name and image is reported once, as a copy, instead of as a wrong
+  parent and a second instance:
+  - a copy of LSASS is CRITICAL, raising "LSASS copy running" (T1003.001);
+  - any other copy is a WARNING (T1055). Its wording names both causes, an
+    error report or code injection by forking, and how to tell them apart:
+    WerFault.exe running, and the copy gone on a second look.
+  - The rule covers only names Windows never starts from themselves.
+    Browsers, explorer.exe and many others start children from their own
+    image, and the first smss.exe starts one copy of itself per session, so
+    a same-name pair is no signal for them. (The plan said "any name"; that
+    would have flagged every browser.)
+  - When a path is unreadable, as for another user's process on a
+    standard-user token, the name alone counts and the line says so. A
+    process with the same name but a different path is not a copy, and the
+    existing rules grade it.
+- **Section 12 (new `tools\lsass_copy_events.ps1`).** A copy made to read
+  LSASS lives for seconds, so the snapshot will rarely see one. The Security
+  log keeps the record: Event 4688 carries the creator's name since Windows
+  10. The tool reads every 4688 record, through EventLogReader so that no
+  message is rendered.
+  - lsass.exe created by lsass.exe is CRITICAL.
+  - lsass.exe created by anything but wininit.exe is a WARNING.
+  - The boot start is counted on the OK line, which names how far back the
+    log reaches.
+  - The path is compared case-insensitively in PowerShell, not in the
+    XPath. XPath compares case-sensitively, and a spelling that never
+    matches the recorded path would be a permanent all-clear.
+  - A log with no 4688 record at all (auditing off) prints `[SKIPPED]` and
+    raises nothing; Section 16 raises the auditing gap.
+  - A log an administrator cannot read is a raised gap; on a standard-user
+    token it is a counted deferral.
+
+Found while writing the tests, and fixed before any run:
+- A self-test helper named `CP` would have called `Copy-Item` on Windows
+  PowerShell 5.1 for every case it ran: an alias resolves before a function,
+  and pwsh on Linux has no `cp` alias, so every Linux run passed.
+- Another helper, named `R`, never ran even on Linux (`r` is
+  `Invoke-History`), and two of its cases passed only because the call
+  failed.
+- `lint_ps51_portability` now has a fourth rule: no function named like a
+  5.1 built-in alias, with the alias list written out. It reports both
+  original names.
+
+Tests, both directions; no test copies any process:
+- **masquerade_check self-test (129 cases).** It covers:
+  - a copy with the same image or with the same name only;
+  - an impostor at another path, which is not a copy;
+  - browsers, explorer and the per-session smss, which are not copies;
+  - an LSASS copy graded once, on its own row.
+  Six mutations each fail their own cases.
+- **lsass_copy_events self-test (12 cases).** It covers the boot start, a
+  copy in any spelling, an unexpected starter, a record with no creator, a
+  log with no 4688, and the cmd.exe wording.
+- **helpers job.** A synthetic copy of the runner's real LSASS reads
+  CRITICAL on its own row. Then a REAL Event 4688 pair, made without copying
+  anything (cmd.exe started by cmd.exe, with Process Creation auditing
+  turned on and then restored), is read by the same code with `-Image`
+  pointing at cmd.exe. That proves the field reading on a real record.
+- **full-run job.** No copy is reported on a clean runner, and Section 12
+  prints its OK line or the declared SKIPPED.
+- **Standard-user job.** The history is deferred, and never a ledger row.
+
 ### A system-process name started by a parent Windows never uses is flagged (T1036, by parent)
 `masquerade_check.ps1` graded a Windows system-process name by its directory
 only. So an implant copied into System32 and named svchost.exe passed: it was
