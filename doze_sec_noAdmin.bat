@@ -3074,10 +3074,14 @@ rem The rule's mode was measured once, in Section 9. A second Get-MpPreference
 rem here would be a second opinion, not a summary.
 set "ASR_LSASS_MODE=ungraded"
 if exist "%TEMP%\dz_asr_lsass_mode.txt" set /p ASR_LSASS_MODE=<"%TEMP%\dz_asr_lsass_mode.txt"
-rem The value becomes part of a command line, so only the five words Section 9
-rem writes are allowed through; anything else is treated as not graded.
+rem The value becomes part of a command line, so only the six words Section 9
+rem writes are allowed through; anything else is treated as not graded. The
+rem comparison uses !delayed! expansion: %percent% expansion happens while the
+rem line is PARSED, so a double quote in the file would close the comparison's
+rem quoting and run whatever followed it -- the value must be validated after
+rem parsing, not before.
 set "ASR_MODE_OK="
-for %%m in (block audit warn off notconfigured ungraded) do if /i "%ASR_LSASS_MODE%"=="%%m" set "ASR_MODE_OK=1"
+for %%m in (block audit warn off notconfigured ungraded) do if /i "!ASR_LSASS_MODE!"=="%%m" set "ASR_MODE_OK=1"
 if not defined ASR_MODE_OK set "ASR_LSASS_MODE=ungraded"
 rem Printed with the mode this machine is in, so a reader who pastes the line
 rem sees their own state rather than a default that says nothing.

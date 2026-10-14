@@ -107,7 +107,10 @@ function Test-FlagBit {
     if ($null -eq $dec) { return @{ Set = $false; Shown = ''; Ambiguous = $false; Unreadable = $true } }
     $alt = $null
     $t = ([string]$Value).Trim()
-    if ($Value -isnot [int] -and $Value -isnot [long] -and $Value -isnot [uint32] -and $t -match '^\d{1,8}$') {
+    # Leading zeros do not make a value unambiguous: '000200' is the same
+    # written-without-a-base case as '200', so the length test is applied to
+    # the digits that matter.
+    if ($Value -isnot [int] -and $Value -isnot [long] -and $Value -isnot [uint32] -and $t -match '^\d+$' -and ($t -replace '^0+', '').Length -le 8) {
         try { $alt = [Convert]::ToInt64($t, 16) } catch { $alt = $null }
     }
     $setDec = [bool]($dec -band $Bit)
@@ -128,11 +131,15 @@ function Test-FlagBit {
 #                minidump signature, $false when it demonstrably does not, and
 #                $null when the first bytes could not be read.
 #   LookedIn     the folders that were searched, for the OK line
+#   NotThere     candidate folders that do not exist on this machine, named in
+#                the OK line too: "no dump was found" must say where it looked
+#                AND what was not there to look in
 #   ReadErrors   @( 'key: reason' ) -- a key that could not be read at all
 function Get-DumpConfigReport {
     param([string]$ImageName = 'lsass.exe', $GlobalFlag = $null, $AuditLevel = $null,
           $SilentExit = $null, $WerImage = $null, $WerGlobal = $null,
-          $DumpFiles = @(), $LookedIn = @(), $ReadErrors = @(), [bool]$IsElevated = $true)
+          $DumpFiles = @(), $LookedIn = @(), $ReadErrors = @(), [bool]$IsElevated = $true,
+          $NotThere = @())
     $out = New-Object System.Collections.ArrayList
     $sev = 'OK'; $gapSev = 'OK'; $deferred = 0
     $img = ConvertTo-PrintableText $ImageName
@@ -250,7 +257,12 @@ function Get-DumpConfigReport {
     if ($sev -eq 'OK' -and $gapSev -eq 'OK' -and $deferred -eq 0) {
         $where = 'the documented dump folders'
         if (@($LookedIn).Count -gt 0) { $where = (@($LookedIn) | ForEach-Object { ConvertTo-PrintableText ([string]$_) }) -join '; ' }
-        [void]$out.Add(('[OK] Nothing is configured to write a memory dump of ' + $img + ', and no such dump was found in ' + $where + '. A program that dumps it without asking Windows leaves no setting here.'))
+        $absent = ''
+        if (@($NotThere).Count -gt 0) {
+            $absent = ' (' + ((@($NotThere) | ForEach-Object { ConvertTo-PrintableText ([string]$_) }) -join '; ') + ' do not exist on this machine)'
+            if (@($LookedIn).Count -eq 0) { $where = 'any of the documented dump folders' }
+        }
+        [void]$out.Add(('[OK] Nothing is configured to write a memory dump of ' + $img + ', and no such dump was found in ' + $where + $absent + '. A program that dumps it without asking Windows leaves no setting here.'))
     }
     return @{ Lines = @($out.ToArray()); Sev = $sev; GapSev = $gapSev; Deferred = $deferred }
 }
@@ -332,6 +344,12 @@ if ($SelfTest) {
     $r = Rep @{ DumpFiles = @(@{ Path = 'C:\x\lsass.dmp'; IsDump = $null }) }
     $j = $r.Lines -join "`n"
     T 'a header that could not be read stays CRITICAL and says the header was not established' ($r.Sev -eq 'CRITICAL' -and $j -match 'first bytes could not be read, so whether it is a real dump is not established -- treated as one') $j
+    $r = Get-DumpConfigReport -ImageName 'lsass.exe' -LookedIn @() -NotThere @('C:\Windows\Temp\Silent Process Exit', 'C:\Users\u\AppData\Local\CrashDumps')
+    $j = $r.Lines -join "`n"
+    T 'when none of the dump folders exists, the all-clear says so rather than naming folders it never opened' ($r.Sev -eq 'OK' -and $j -match 'no such dump was found in any of the documented dump folders \(C:\\Windows\\Temp\\Silent Process Exit; C:\\Users\\u\\AppData\\Local\\CrashDumps do not exist on this machine\)') $j
+    $r = Get-DumpConfigReport -ImageName 'lsass.exe' -LookedIn @('C:\Windows\Temp') -NotThere @('C:\x\CrashDumps')
+    T 'with some folders there and some not, both are named' (($r.Lines -join "`n") -match 'found in C:\\Windows\\Temp \(C:\\x\\CrashDumps do not exist') ($r.Lines -join ' | ')
+    T 'a zero-padded value written without a base keeps its ambiguity' ((Test-FlagBit -Value '000200' -Bit 0x200).Set -and (Test-FlagBit -Value '000200' -Bit 0x200).Ambiguous -and (Test-FlagBit -Value '000000200' -Bit 0x200).Set) ''
     T 'a flag written as digits with no base is read in both bases, and the line says so' ((Test-FlagBit -Value '200' -Bit 0x200).Set -and (Test-FlagBit -Value '200' -Bit 0x200).Ambiguous -and (Test-FlagBit -Value 512 -Bit 0x200).Set -and -not (Test-FlagBit -Value 512 -Bit 0x200).Ambiguous -and -not (Test-FlagBit -Value '64' -Bit 0x200).Set) ''
     $r = Rep @{ GlobalFlag = '200' }
     T 'GlobalFlag = 200 with no base is reported, naming the reading that carries the flag' ($r.Sev -eq 'WARNING' -and ($r.Lines -join "`n") -match 'written as 200 with no base, and read as hexadecimal it carries this flag') ($r.Lines -join ' | ')
@@ -442,7 +460,12 @@ foreach ($cfg in $configured) {
     if (-not $c) { continue }
     [void]$cands.Add($c)
     if ($c -match '(?i)%(TEMP|TMP)%') {
-        foreach ($st in $systemTemps) { [void]$cands.Add(($c -replace '(?i)%(TEMP|TMP)%', [regex]::Escape($st).Replace('\', '\'))) }
+        # A -replace REPLACEMENT string treats only '$' specially: escaping it
+        # with [regex]::Escape, which is for PATTERNS, left every backslash
+        # doubled ("C:\\Windows\\Temp\..."), which then failed the dedupe
+        # below and reported the same file twice, under a path no reader could
+        # paste.
+        foreach ($st in $systemTemps) { [void]$cands.Add(($c -replace '(?i)%(TEMP|TMP)%', $st.Replace('$', '$$'))) }
     }
 }
 foreach ($d in @($defaults.ToArray())) { [void]$cands.Add($d) }
@@ -451,15 +474,18 @@ foreach ($cand in @($cands.ToArray())) {
     if (-not $c) { continue }
     try { $c = [Environment]::ExpandEnvironmentVariables($c) } catch { }
     # Normalised before the dedupe: 'C:\d' and 'C:\d\' are one folder, and
-    # listing it twice would report the same file twice.
+    # listing it twice would report the same file twice. A drive root keeps its
+    # separator, because 'C:' means the current directory on C:, not the root.
     $c = $c.TrimEnd('\', '/')
     if (-not $c) { continue }
+    if ($c -match '^[A-Za-z]:$') { $c = $c + '\' }
     $dup = $false
     foreach ($seen in $folders) { if (([string]$seen) -ieq $c) { $dup = $true; break } }
     if (-not $dup) { [void]$folders.Add($c) }
 }
 $dumpFiles = New-Object System.Collections.ArrayList
 $searched = New-Object System.Collections.ArrayList
+$notThere = New-Object System.Collections.ArrayList
 foreach ($f in $folders) {
     try {
         if (-not (Test-Path -LiteralPath $f -EA Stop)) {
@@ -479,8 +505,17 @@ foreach ($f in $folders) {
             try {
                 $fs = [System.IO.File]::OpenRead($file.FullName)
                 try {
+                    # Read() may legally return fewer bytes than asked for on
+                    # a longer file, so it is called until it has four or the
+                    # file ends: a short read graded as "not a dump" is the
+                    # unsafe direction.
                     $buf = New-Object byte[] 4
-                    $got = $fs.Read($buf, 0, 4)
+                    $got = 0
+                    while ($got -lt 4) {
+                        $n = $fs.Read($buf, $got, 4 - $got)
+                        if ($n -le 0) { break }
+                        $got += $n
+                    }
                     if ($got -eq 4) { $isDump = ([System.Text.Encoding]::ASCII.GetString($buf) -eq 'MDMP') } else { $isDump = $false }
                 } finally { $fs.Dispose() }
             } catch { $isDump = $null }
@@ -488,7 +523,9 @@ foreach ($f in $folders) {
         }
         [void]$searched.Add($f)
     } catch [System.IO.DirectoryNotFoundException] {
-        # Not there at all: nothing to search and nothing to declare.
+        # Not there at all: nothing to search, and named as absent so the
+        # all-clear line can be read for what it covers.
+        [void]$notThere.Add($f)
         continue
     } catch {
         [void]$readErrors.Add($f + ' could not be listed (' + $_.Exception.Message + ')')
@@ -498,7 +535,7 @@ foreach ($f in $folders) {
 $report = Get-DumpConfigReport -ImageName $img -GlobalFlag $globalFlag -AuditLevel $auditLevel `
     -SilentExit $silentExit -WerImage $werImage -WerGlobal $werGlobal `
     -DumpFiles @($dumpFiles.ToArray()) -LookedIn @($searched.ToArray()) `
-    -ReadErrors @($readErrors.ToArray()) -IsElevated ($Elevated -eq 1)
+    -ReadErrors @($readErrors.ToArray()) -IsElevated ($Elevated -eq 1) -NotThere @($notThere.ToArray())
 foreach ($l in $report.Lines) { $l }
 Write-Marker -Name 'lsadump' -Sev $report.Sev
 if ($report.GapSev -ne 'OK') { Write-Marker -Name 'lsadump_gap' -Sev $report.GapSev }

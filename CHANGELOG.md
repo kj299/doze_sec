@@ -129,10 +129,41 @@ A read-only review before the first push found these, all fixed:
   line that would have told a reader nothing about their own machine; and a
   CI step that never verified its own cleanup.
 
+A second review, of those fixes, found that two of them had introduced
+problems of their own, and five more besides -- all fixed:
+- **My own fix changed the gap wording, and two CI needles still tested the
+  old text.** On a runner whose Defender log is unreadable -- the exact
+  condition that step exists to measure -- it would have failed saying no
+  verdict was printed, when one was. That is the stale-anchor lesson for the
+  fourth time, this time introduced *by* a review fix, so the pre-push search
+  for changed phrases now runs again after the fixes, not only before them.
+- **The all-clear could still print beside a gap**, in the one state where an
+  empty log proves nothing: when the exclusion list could not be read.
+- **The mode-based returns discarded records**, the same defect the read-error
+  fix had just removed. Records are graded first now, whatever the mode says
+  about an *empty* log, with a line explaining the combination; the mode's own
+  verdict follows.
+- **The %TEMP% substitution was wrong.** A `-replace` replacement string
+  treats only `$` specially, so escaping it as if it were a pattern left every
+  backslash doubled: the de-duplication then failed and the same dump file
+  would have been reported twice, under a path no reader could paste.
+- **A field holding only punctuation named a program.** Requiring a non-empty
+  field was one character short; a name must now carry a letter or a digit.
+- **Smaller:** the all-clear named folders it had never opened when none
+  existed (which would also have failed a CI assertion); a grouping key joined
+  by a bar absorbed a distinct pair; `Sort-Object` has no `-Stable` on 5.1, so
+  which lines the cap dropped varied between runs; a zero-padded flag value
+  lost its ambiguity; a drive root lost its separator, which on Windows means
+  the current directory rather than the root; a four-byte read may legally
+  return fewer; the localized context row fabricated "not being recorded" for
+  a value it could not classify, against this very file's rule; and the
+  whitelist that guards the mode compared it with parse-time expansion, so a
+  quote in the file would have closed the comparison's quoting.
+
 Tests, both directions; nothing is dumped and no process is copied:
-- Self-tests: 34 cases for the event check, 33 for the dump settings, 28 for
-  the audit policy. Thirteen mutations each fail their own cases, including
-  the reintroduced coverage-block defect.
+- Self-tests: 42 cases for the event check, 36 for the dump settings, 29 for
+  the audit policy, 12 for the coverage block. Thirteen mutations each fail
+  their own cases, including the reintroduced coverage-block defect.
 - **helpers job:** both self-tests on 5.1; the runner's real state graded
   (nothing configured, nothing on disk, and either the all-clear or the
   declared gap for Defender's log); each of the three "no record is being

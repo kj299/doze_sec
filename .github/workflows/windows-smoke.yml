@@ -829,7 +829,7 @@ jobs:
           $st = (.\tools\audit_policy_check.ps1 -SelfTest) -join "`n"
           if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'audit_policy_check.ps1 -SelfTest failed' }
           $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($nst -lt 27) { throw "audit_policy_check self-test ran only $nst case(s)" }
+          if ($nst -lt 29) { throw "audit_policy_check self-test ran only $nst case(s)" }
           Write-Host "audit_policy_check -SelfTest OK ($nst cases)"
           $md = Join-Path $env:TEMP ("dz_ap_ci_{0}" -f $PID)
           New-Item -ItemType Directory -Path $md -Force | Out-Null
@@ -3136,7 +3136,7 @@ jobs:
           $st = (.\tools\asr_lsass_events.ps1 -SelfTest) -join "`n"
           if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'asr_lsass_events.ps1 -SelfTest failed' }
           $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($nst -lt 34) { throw "asr_lsass_events self-test ran only $nst case(s)" }
+          if ($nst -lt 42) { throw "asr_lsass_events self-test ran only $nst case(s)" }
           Write-Host "asr_lsass_events -SelfTest OK ($nst cases)"
           # The runner's real Defender log. The rule's mode decides what an
           # empty log means, so each mode is asserted for the right line: no
@@ -3158,7 +3158,7 @@ jobs:
           if (Test-Path (Join-Path $md 'dz_asrlsass.txt')) { throw "the runner was reported as having a program read LSASS memory: $out" }
           # Whether a runner's Defender channel is readable at all is what this
           # measures: either the OK line or the declared gap, never silence.
-          if ($out -notmatch '\[OK\] No program tried to read LSASS memory' -and $out -notmatch 'NOT checked -- the Defender Operational log could not be read') { throw "neither the OK line nor the declared gap: $out" }
+          if ($out -notmatch '\[OK\] No program tried to read LSASS memory' -and $out -notmatch 'NOT checked.*the Defender Operational log could not be read' -and $out -notmatch 'DEFERRED - ADMIN REQUIRED.*Defender Operational log') { throw "neither the OK line nor the declared gap: $out" }
           Write-Host ('asr_lsass_events live OK: ' + (($out -split "`n" | Where-Object { $_ -match '^\[' }) -join ' | '))
           Remove-Item $md -Recurse -Force -EA SilentlyContinue
           exit 0
@@ -3171,7 +3171,7 @@ jobs:
           $st = (.\tools\lsass_dump_config.ps1 -SelfTest) -join "`n"
           if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'lsass_dump_config.ps1 -SelfTest failed' }
           $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($nst -lt 33) { throw "lsass_dump_config self-test ran only $nst case(s)" }
+          if ($nst -lt 36) { throw "lsass_dump_config self-test ran only $nst case(s)" }
           Write-Host "lsass_dump_config -SelfTest OK ($nst cases)"
           # The runner's real LSASS: nothing configured, nothing on disk.
           $md = Join-Path $env:TEMP 'dz_ci_lsadump'
@@ -3182,7 +3182,7 @@ jobs:
           if ($out -match 'Exception|is not recognized|CategoryInfo') { throw "PowerShell error text in the output: $out" }
           if (Test-Path (Join-Path $md 'dz_lsadump.txt')) { throw "the runner's LSASS was reported as configured for a dump: $out" }
           if ($out -notmatch '\[OK\] Nothing is configured to write a memory dump of lsass\.exe') { throw "no OK line for a clean runner: $out" }
-          if ($out -notmatch 'and no such dump was found in .+Temp') { throw 'the OK line does not name the folders it looked in' }
+          if ($out -notmatch 'and no such dump was found in .+(Temp|CrashDumps)' -and $out -notmatch 'no such dump was found in any of the documented dump folders \(.+do not exist on this machine\)') { throw 'the OK line does not say where it looked, nor which folders were absent' }
           # The grading, proven on a HARMLESS test image: the real LSASS keys are
           # never written, so a runner cannot be left watching its own LSASS exit.
           # Touches: registry HKLM\...\Image File Execution Options\dz_ci_dumpcfg.exe
@@ -3981,7 +3981,7 @@ jobs:
           # it: nothing on a clean runner, and each check says which it is.
           if ($text -match 'tried to read LSASS memory|is EXCLUDED from Defender|Silent-process-exit monitoring is ENABLED|configured to have its memory DUMPED|A memory dump of \S+ is on disk') { throw ('an LSASS-read record or a dump setting was reported on a clean runner: {0}' -f (($text -split "`r?`n" | Where-Object { $_ -match 'tried to read LSASS|EXCLUDED from Defender|Silent-process-exit|memory DUMPED|memory dump of' }) -join ' | ')) }
           if ($text -notmatch '\[OK\] Nothing is configured to write a memory dump of lsass\.exe') { throw 'Section 12 did not grade the LSASS dump settings' }
-          if ($text -notmatch '\[OK\] No program tried to read LSASS memory|\[SKIPPED\] .* records NOT checked|NOT checked -- the Defender Operational log') { throw 'Section 12 printed no verdict for Defender''s LSASS-read records' }
+          if ($text -notmatch '\[OK\] No program tried to read LSASS memory|\[SKIPPED\] .* records NOT checked|NOT checked.*the Defender Operational log') { throw 'Section 12 printed no verdict for Defender''s LSASS-read records' }
           Write-Host ('Section 12 (LSASS reads and dump settings): ' + (($text -split "`r?`n" | Where-Object { $_ -match 'tried to read LSASS memory|records NOT checked|Nothing is configured to write' }) -join ' | '))
           Write-Host ('Section 12: ' + (($text -split "`r?`n" | Where-Object { $_ -match 'No copy of lsass\.exe|Copies of lsass\.exe in the Security log' }) -join ' | '))
           # THE APOSTROPHE RUN. TEMP held an apostrophe and APPDATA an apostrophe and

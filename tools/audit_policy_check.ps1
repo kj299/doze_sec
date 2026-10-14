@@ -102,6 +102,11 @@ function Get-AuditRowVerdict {
         if ($Setting -and $Setting -match 'Success') {
             return @{ Line = "[INFO] $Name IS being recorded [$shownC] -- $Feeds."; Sev = 'OK'; Context = $true }
         }
+        # The same rule as the graded rows: a setting whose text this check
+        # cannot classify is reported as unread, never fabricated as off.
+        if ($Setting -and $Setting -notmatch '^(No Auditing|Failure)$') {
+            return @{ Line = "[INFO] $Name state could not be read [$shownC] -- $Feeds. Whether it is being recorded is not established (localized Windows); verify: auditpol /get /subcategory:$Guid"; Sev = 'OK'; Context = $true }
+        }
         return @{ Line = "[INFO] $Name is not being recorded [$shownC] -- $Feeds. Not a finding: Windows leaves this subcategory off by default."; Sev = 'OK'; Context = $true }
     }
     if ($Setting -and $Setting -match 'Success') {
@@ -248,6 +253,8 @@ if ($SelfTest) {
     T 'nothing recorded at all: every graded row WARNS, the context row still only informs' ($tr.Sev -eq 'WARNING' -and @($tr.Lines | Where-Object { $_ -cmatch '^\[WARNING\]' }).Count -eq ($script:Subs.Count - 1) -and @($tr.Lines | Where-Object { $_ -cmatch '^\[INFO\] Kernel Object ' }).Count -eq 1) ($tr.Lines -join ' | ')
     T 'exactly one row in the shipped table is context-only, and it is Kernel Object' (@($script:Subs | Where-Object { $_.ContainsKey('Context') -and $_.Context }).Count -eq 1 -and @($script:Subs | Where-Object { $_.ContainsKey('Context') -and $_.Context })[0].Guid -eq '{0CCE921F-69AE-11D9-BED3-505054503030}') ''
     $cx = Get-AuditRowVerdict -Name 'Kernel Object (4656/4663: attempts to read LSASS memory)' -Setting 'Success and Failure' -Feeds 'x' -Context $true
+    $cxl = Get-AuditRowVerdict -Name 'Kernel Object (4656/4663: attempts to read LSASS memory)' -Setting 'Erfolg' -Feeds 'x' -Guid '{0CCE921F-69AE-11D9-BED3-505054503030}' -Context $true
+    T 'a CONTEXT row whose setting is localized is reported as unread, never fabricated as off' ($cxl.Sev -eq 'OK' -and $cxl.Line -cmatch '^\[INFO\] Kernel Object .* state could not be read \[Erfolg\]' -and $cxl.Line -notmatch 'is not being recorded' -and $cxl.Line -match 'auditpol /get /subcategory:\{0CCE921F') $cxl.Line
     T 'a CONTEXT row that is ON is also [INFO] and never says the graded phrase: it is not evidence that the audit''s own subcategories are on' ($cx.Sev -eq 'OK' -and $cx.Context -eq $true -and $cx.Line -cmatch '^\[INFO\] Kernel Object .* IS being recorded \[Success and Failure\]' -and $cx.Line -cnotmatch 'auditing is (ON|OFF)') $cx.Line
     # The shape that broke it: a localized Windows where none of the four
     # graded rows can be read, and this one is on.

@@ -544,6 +544,13 @@ proof     = ci:asr_lsass_events.ps1
 signature = does not say which of its two fields names it
 note      = Defender's attack-surface-reduction events do not label which field holds the program that was stopped: for this rule a real capture has the accessing program in Path and lsass.exe in Process Name, and for other rules the roles are reversed. When neither field names lsass.exe the check cannot tell them apart, so it prints both rather than guessing, and groups repeats into one line. Read both paths: one of them is the program to look at. If this line appears often with the same pair, the provider on that build labels its fields differently again, which is worth reporting.
 
+[file-named-like-an-lsass-dump]
+class     = ADVISE
+maxsev    = WARNING
+proof     = ci:lsass_dump_config.ps1
+signature = A file named like a memory dump of \S+ is on disk, but it is not one
+note      = A file whose name contains lsass and ends .dmp, in one of the folders Windows writes dumps to, but which does not begin with a minidump header, so it holds no process memory: notes, a renamed log, a placeholder, or a file someone copied there. It is reported because the name was chosen by something, and that is worth knowing, but it is not credentials on disk and carries none of that advice. Verify with: Get-Content -LiteralPath '<path>' -TotalCount 1, or look at the first four bytes -- a real minidump starts MDMP.
+
 [lsass-dump-by-an-administrator]
 class     = ADVISE
 maxsev    = CRITICAL

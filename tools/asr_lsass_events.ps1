@@ -92,12 +92,16 @@ function Get-AsrAccessor {
     $n = ([string]$ProcessName).Trim()
     $pIsTarget = ($p -like '*\lsass.exe')
     $nIsTarget = ($n -like '*\lsass.exe')
-    # The OTHER field must actually name something: an event that holds
+    # The OTHER field must actually NAME something: an event that holds
     # lsass.exe and nothing else would otherwise produce a WARNING naming
     # nobody -- and that line does not even match the contract written to
-    # protect it, so no gate would have caught it.
-    if ($nIsTarget -and -not $pIsTarget -and $p) { return @{ Accessor = $p; Certain = $true } }
-    if ($pIsTarget -and -not $nIsTarget -and $n) { return @{ Accessor = $n; Certain = $true } }
+    # protect it, so no gate would have caught it. A field holding only
+    # punctuation ('\') is the same hole one character wider, so a name must
+    # carry at least one letter or digit.
+    $pNamed = ($p -match '[A-Za-z0-9]')
+    $nNamed = ($n -match '[A-Za-z0-9]')
+    if ($nIsTarget -and -not $pIsTarget -and $pNamed) { return @{ Accessor = $p; Certain = $true } }
+    if ($pIsTarget -and -not $nIsTarget -and $nNamed) { return @{ Accessor = $n; Certain = $true } }
     if ($pIsTarget -and $nIsTarget) { return @{ Accessor = ''; Certain = $false } }
     # Neither names lsass.exe: the event's own fields do not say which side is
     # which, so both are reported rather than one of them guessed at.
@@ -133,33 +137,29 @@ function Get-AsrEventReport {
         [void]$out.Add(('[WARNING] The programs excluded from ' + $ruleName + ' were NOT checked -- the exclusion list could not be read (' + (ConvertTo-PrintableText $ExclusionError) + '). An excluded program can read LSASS memory and leave no record here.'))
         $gapSev = 'WARNING'
     }
+    # The mode is read now and ACTED ON below, after the records are graded:
+    # whatever the mode says about an empty log, a record in hand is an
+    # observation and must not be dropped (the defect the ReadError branch was
+    # just fixed for). Records can legitimately exist after the rule was
+    # switched off, and 'ungraded' is the default whenever Section 9's state
+    # file is missing.
     $mode = ([string]$RuleMode).Trim().ToLowerInvariant()
     $known = @('block', 'audit', 'warn', 'off', 'notconfigured', 'ungraded')
-    if ($known -notcontains $mode) {
-        # An unrecognised mode is not assumed to be blocking: that wording
-        # would claim protection this check cannot see.
-        [void]$out.Add(('[WARNING] ' + $ruleName + ' records NOT checked -- Section 9 reported its mode as ''' + (ConvertTo-PrintableText $mode) + ''', which this check does not recognise, so what an empty log means here cannot be said.'))
-        $gapSev = 'WARNING'
-        return @{ Lines = @($out.ToArray()); Sev = $sev; GapSev = $gapSev; Deferred = $deferred; Hits = 0 }
-    }
-    if ($mode -eq 'off' -or $mode -eq 'notconfigured' -or $mode -eq 'ungraded') {
-        $why = switch ($mode) {
-            'off'           { 'the rule is turned OFF' }
-            'notconfigured' { 'the rule is not configured' }
-            default         { 'Section 9 did not grade the rule''s state' }
-        }
-        # The mode is decided BEFORE the channel is considered: with the rule
-        # off there is nothing in the log whether or not this token could read
-        # it, and reporting a gap or a deferral for a log that would be empty
-        # anyway overstates what is missing.
-        [void]$out.Add(('[SKIPPED] ' + $ruleName + ' records NOT checked -- ' + $why + ', so nothing is written here and an empty log means nothing. Section 9 reports the rule''s state; turning it on is what makes this evidence exist.'))
-        return @{ Lines = @($out.ToArray()); Sev = $sev; GapSev = $gapSev; Deferred = $deferred; Hits = 0 }
+    $modeUnusable = (($known -notcontains $mode) -or $mode -eq 'off' -or $mode -eq 'notconfigured' -or $mode -eq 'ungraded')
+    if ($modeUnusable -and @($Records).Count -gt 0) {
+        [void]$out.Add(('[INFO] ' + @($Records).Count + ' record(s) for this rule are in the log even though Section 9 reported its mode as ''' + (ConvertTo-PrintableText $mode) + ''' -- they are graded below; the mode only decides what an EMPTY log would have meant.'))
     }
 
     # A read that failed part-way still grades what it read: returning here
     # would throw away the records already in hand, including the one naming
     # the program. The gap is added beside them, never instead of them.
-    if ($ReadError) {
+    #
+    # It is not reported at all when the rule is demonstrably off or not
+    # configured: nothing is written to this log then, so an unreadable
+    # channel costs nothing and saying otherwise overstates the gap. With the
+    # mode UNKNOWN or ungraded the rule may well be on, so the gap stands.
+    $channelMatters = ($mode -ne 'off' -and $mode -ne 'notconfigured')
+    if ($ReadError -and $channelMatters) {
         if ($IsElevated) {
             [void]$out.Add(('[WARNING] ' + $ruleName + ': its records were NOT checked, or only partly -- the Defender Operational log could not be read (' + (ConvertTo-PrintableText $ReadError) + '). Anything found before it stopped is below.'))
             $gapSev = 'WARNING'
@@ -196,7 +196,9 @@ function Get-AsrEventReport {
 
     $cap = 10
     $i = 0
-    foreach ($key in @($groups.Keys | Sort-Object { -($groups[$_]['Hits']) })) {
+    # The name breaks ties: Sort-Object has no -Stable on 5.1, so without it
+    # the programs the cap drops would differ from run to run.
+    foreach ($key in @($groups.Keys | Sort-Object @{ Expression = { -($groups[$_]['Hits']) } }, @{ Expression = { $_ } })) {
         $i++
         if ($i -gt $cap) { break }
         $g = $groups[$key]
@@ -221,14 +223,17 @@ function Get-AsrEventReport {
     # every record in the channel, for one ledger row.
     $ugroups = @{}
     foreach ($r in @($unresolved)) {
-        $uk = ([string]$r.Path) + '|' + ([string]$r.ProcessName)
+        # Separated by NUL, which no field can contain: 'a|b' + 'c' and 'a' +
+        # 'b|c' would otherwise be one group, and the second pair's fields
+        # would never be printed.
+        $uk = ([string]$r.Path) + [char]0 + ([string]$r.ProcessName)
         if (-not $ugroups.ContainsKey($uk)) { $ugroups[$uk] = @{ Hits = 0; Newest = $null; Path = [string]$r.Path; ProcessName = [string]$r.ProcessName } }
         $ug = $ugroups[$uk]
         $ug.Hits++
         if ($null -eq $ug.Newest -or ($null -ne $r.Time -and [datetime]$r.Time -gt [datetime]$ug.Newest)) { $ug.Newest = $r.Time }
     }
     $i = 0
-    foreach ($uk in @($ugroups.Keys | Sort-Object { -($ugroups[$_]['Hits']) })) {
+    foreach ($uk in @($ugroups.Keys | Sort-Object @{ Expression = { -($ugroups[$_]['Hits']) } }, @{ Expression = { $_ } })) {
         $i++
         if ($i -gt $cap) { break }
         $ug = $ugroups[$uk]
@@ -248,9 +253,34 @@ function Get-AsrEventReport {
         [void]$out.Add(('[INFO] Only the newest ' + $Total + ' attack-surface-reduction record(s) were read; older ones were not.'))
     }
 
+    if ($known -notcontains $mode) {
+        # An unrecognised mode is not assumed to be blocking: that wording
+        # would claim protection this check cannot see.
+        [void]$out.Add(('[WARNING] ' + $ruleName + ' records NOT checked -- Section 9 reported its mode as ''' + (ConvertTo-PrintableText $mode) + ''', which this check does not recognise, so what an empty log means here cannot be said.'))
+        $gapSev = 'WARNING'
+        return @{ Lines = @($out.ToArray()); Sev = $sev; GapSev = $gapSev; Deferred = $deferred; Hits = $hits }
+    }
+    if ($mode -eq 'off' -or $mode -eq 'notconfigured' -or $mode -eq 'ungraded') {
+        $why = switch ($mode) {
+            'off'           { 'the rule is turned OFF' }
+            'notconfigured' { 'the rule is not configured' }
+            default         { 'Section 9 did not grade the rule''s state' }
+        }
+        # The mode is decided BEFORE the channel is considered: with the rule
+        # off there is nothing in the log whether or not this token could read
+        # it, and reporting a gap or a deferral for a log that would be empty
+        # anyway overstates what is missing.
+        [void]$out.Add(('[SKIPPED] ' + $ruleName + ' records NOT checked -- ' + $why + ', so nothing more is written here and an empty log means nothing. Section 9 reports the rule''s state; turning it on is what makes this evidence exist.'))
+        return @{ Lines = @($out.ToArray()); Sev = $sev; GapSev = $gapSev; Deferred = $deferred; Hits = $hits }
+    }
+
     # The all-clear is withheld whenever the read failed or was deferred: "I
     # could not read the log" and "no program tried" must never print together.
-    if ($sev -eq 'OK' -and -not $ReadError -and $Unreadable -eq 0) {
+    # ExclusionError belongs in this guard as much as the others: an excluded
+    # program leaves no record, so "no program tried" cannot be said while the
+    # exclusion list is unknown. The first version of this guard left it out
+    # and printed both lines together.
+    if ($sev -eq 'OK' -and -not $ReadError -and -not $ExclusionError -and $Unreadable -eq 0) {
         $span = 'the records read'
         if ($null -ne $Oldest -and $null -ne $Newest) { $span = 'from ' + (Format-When $Oldest) + ' to ' + (Format-When $Newest) }
         elseif ($null -ne $Oldest) { $span = 'back to ' + (Format-When $Oldest) }
@@ -318,7 +348,10 @@ if ($SelfTest) {
         $j = $r.Lines -join "`n"
         T ('with the rule ' + $m + ', an empty log is [SKIPPED] and raises nothing -- never an all-clear') ($r.Sev -eq 'OK' -and $r.GapSev -eq 'OK' -and $j -cmatch '^\[SKIPPED\] ' -and $j -match 'an empty log means nothing' -and $j -notmatch '\[OK\]') $j
     }
-    T 'a record found while the rule reads off is still not graded from this log (Section 9 owns the state)' ((Get-AsrEventReport -Records @((NewRec $one $L)) -RuleMode 'off' -Total 1).Sev -eq 'OK') ''
+    # Section 9 owns the rule's STATE; this check owns the records. A record
+    # that exists is graded whatever the state says (the earlier version
+    # dropped it, which is the same defect as a gap discarding its evidence).
+    T 'a record found while the rule reads off is still graded here, and the mode line explains it' ((Get-AsrEventReport -Records @((NewRec $one $L)) -RuleMode 'off' -Total 1).Sev -eq 'WARNING' -and ((Get-AsrEventReport -Records @((NewRec $one $L)) -RuleMode 'off' -Total 1).Lines -join "`n") -match 'the mode only decides what an EMPTY log would have meant') ''
 
     # An exclusion hides accesses, whatever the mode.
     $r = Get-AsrEventReport -Records @() -RuleMode 'block' -Exclusions @('C:\tools\grabber.exe') -Total 5
@@ -331,6 +364,7 @@ if ($SelfTest) {
 
     $r = Get-AsrEventReport -Records @() -RuleMode 'off' -ReadError 'EventLog access is not supported on this platform.'
     $j = $r.Lines -join "`n"
+    T 'with the mode UNGRADED an unreadable log IS a gap: the rule may well be on' ((Get-AsrEventReport -Records @() -RuleMode 'ungraded' -ReadError 'denied').GapSev -eq 'WARNING') ''
     T 'with the rule off, an unreadable log is not a gap either: there would be nothing in it to read' ($r.GapSev -eq 'OK' -and $r.Deferred -eq 0 -and $j -cmatch '^\[SKIPPED\] ' -and $j -notmatch 'could not be read' -and $j -notmatch 'DEFERRED') $j
     T 'but an exclusion is still raised when the rule is off and the log unreadable' ((Get-AsrEventReport -Records @() -RuleMode 'off' -ReadError 'x' -Exclusions @('C:\t\g.exe')).Sev -eq 'WARNING') ''
 
@@ -349,13 +383,26 @@ if ($SelfTest) {
     T 'a read that stopped at the cap says so, and may still print the all-clear for what it read' ($r.Sev -eq 'OK' -and ($r.Lines -join "`n") -match '\[INFO\] Only the newest 20000 attack-surface-reduction record\(s\) were read' -and ($r.Lines -join "`n") -match '\[OK\]') ($r.Lines -join ' | ')
     $r = Get-AsrEventReport -Records @() -RuleMode 'block' -ExclusionError 'Requested registry access is not allowed.'
     $j = $r.Lines -join "`n"
-    T 'an exclusion list that could not be read is a raised gap and withholds nothing it cannot claim' ($r.GapSev -eq 'WARNING' -and $j -match 'The programs excluded from .* were NOT checked' -and $j -match 'can read LSASS memory and leave no record here') $j
+    T 'an exclusion list that could not be read is a raised gap, and withholds the all-clear it cannot claim' ($r.GapSev -eq 'WARNING' -and $j -match 'The programs excluded from .* were NOT checked' -and $j -match 'can read LSASS memory and leave no record here' -and $j -notmatch '\[OK\]') $j
     $r = Get-AsrEventReport -Records @() -RuleMode 'enforced' -Total 3
     $j = $r.Lines -join "`n"
     T 'a mode this check does not recognise is a declared gap, never assumed to be blocking' ($r.GapSev -eq 'WARNING' -and $j -match 'which this check does not recognise' -and $j -notmatch 'is blocking' -and $j -notmatch '\[OK\]') $j
+    # Whatever the mode, a record in hand is graded: the mode only decides what
+    # an EMPTY log would have meant.
+    foreach ($m in @('off', 'notconfigured', 'ungraded', 'enforced')) {
+        $r = Get-AsrEventReport -Records @((NewRec 'C:\x\grab.exe' $L)) -RuleMode $m -Total 5
+        $j = $r.Lines -join "`n"
+        T ('with the mode ' + $m + ', a record already in the log is still graded and named') ($r.Sev -eq 'WARNING' -and $r.Hits -eq 1 -and $j -match 'C:\\x\\grab\.exe tried to read LSASS memory' -and $j -match 'the mode only decides what an EMPTY log would have meant' -and $j -notmatch '\[OK\]') $j
+    }
+    T 'two DIFFERENT unresolved pairs that share a bar character are two groups, both printed' (@((Get-AsrEventReport -Records @((NewRec 'a|b' 'c'), (NewRec 'a' 'b|c')) -RuleMode 'block' -Total 2).Lines | Where-Object { $_ -match 'does not say which' }).Count -eq 2) ''
+    $tie = @(); foreach ($k in 1..12) { $tie += (NewRec ('bare' + $k + '.exe') 'alsobare.exe') }
+    $o1 = (Get-AsrEventReport -Records $tie -RuleMode 'block' -Total 12).Lines -join "`n"
+    $o2 = (Get-AsrEventReport -Records $tie -RuleMode 'block' -Total 12).Lines -join "`n"
+    T 'with every count equal, the capped list is the same every run (Sort-Object has no -Stable on 5.1)' ($o1 -ceq $o2 -and $o1 -match 'bare1\.exe') ''
     $r = Get-AsrEventReport -Records @() -RuleMode 'warn' -Total 3 -Oldest $t0 -Newest $t0
     T 'warn mode has its own wording and is never called blocking' ($r.Sev -eq 'OK' -and ($r.Lines -join "`n") -match 'in warn mode \(it asks the person at the keyboard' -and ($r.Lines -join "`n") -notmatch 'is blocking') ($r.Lines -join ' | ')
     T 'an event naming lsass.exe and nothing else names nobody as the accessor: unresolved, not a blank WARNING' ((Get-AsrAccessor -Path '' -ProcessName $L).Certain -eq $false -and (Get-AsrAccessor -Path $L -ProcessName '  ').Certain -eq $false) ''
+    T 'a field holding only punctuation names nobody either' ((Get-AsrAccessor -Path '\' -ProcessName $L).Certain -eq $false -and (Get-AsrAccessor -Path '...' -ProcessName $L).Certain -eq $false -and (Get-AsrAccessor -Path 'a' -ProcessName $L).Certain -eq $true) ''
     $r = Get-AsrEventReport -Records @((NewRec '' $L)) -RuleMode 'block' -Total 1
     $j = $r.Lines -join "`n"
     T 'such an event prints both fields rather than a WARNING naming nobody' ($j -notmatch '\[WARNING\]\s+tried to read' -and $j -match 'does not say which of its two fields names it') $j
