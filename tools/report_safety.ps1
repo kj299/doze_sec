@@ -42,12 +42,17 @@ $ErrorActionPreference = 'Continue'
 # seen' -- an OK default -- and the first standard-user field run, where the
 # audit-policy check never executed (auditpol needs admin), read
 # 'Audit visibility : OK' for a check that did not run.
+# Only the audit-policy check's OWN lines count: tagged, and matched with
+# their case. -match ignores case and matched anywhere in any line, so a
+# sentence in another section ("...when process-creation auditing is on.")
+# once read as auditing ON and certified a check that never ran (2026-10-14,
+# caught by the standard-user CI job before it shipped).
 function Get-AuditVisibility {
     param([string[]]$Lines)
     $on = $false; $off = $false; $deferred = $false
     foreach ($l in @($Lines)) {
-        if ($l -match 'auditing is OFF' -or $l -match 'command-line logging is DISABLED') { $off = $true }
-        elseif ($l -match 'auditing is ON' -or $l -match 'command-line logging is ENABLED') { $on = $true }
+        if ($l -cmatch '^\s*\[WARNING\] .+ auditing is OFF\b' -or $l -cmatch '^\s*\[WARNING\] Process-creation command-line logging is DISABLED') { $off = $true }
+        elseif ($l -cmatch '^\s*\[OK\] .+ auditing is ON\b' -or $l -cmatch '^\s*\[OK\] Process-creation command-line logging is ENABLED') { $on = $true }
         elseif ($l -match 'DEFERRED - ADMIN REQUIRED\] auditpol') { $deferred = $true }
     }
     if ($off) { return 'REDUCED' }
@@ -69,6 +74,8 @@ if ($SelfTest) {
     T 'an empty report -> UNKNOWN' ((Get-AuditVisibility -Lines @()) -eq 'UNKNOWN') ''
     T 'a SKIPPED localized row beside ON rows is still OK (the ON rows are evidence)' ((Get-AuditVisibility -Lines @('[OK] Logon (4624/4625) auditing is ON', '[SKIPPED] User Account Management (4720/4732) auditing state could not be read')) -eq 'OK') ''
     T 'auditpol itself a raised gap (needs admin) with nothing else -> UNKNOWN, never OK' ((Get-AuditVisibility -Lines @('[WARNING] auditpol could not be queried -- audit-policy visibility NOT verified (needs admin).')) -eq 'UNKNOWN') ''
+    T 'a sentence elsewhere that says auditing is on, or off, is not the audit-policy check: still DEFERRED' ((Get-AuditVisibility -Lines @('[DEFERRED - ADMIN REQUIRED] auditpol (audit-policy visibility) requires admin', ' where it is seen -- when process-creation auditing is on.', '[SKIPPED] Copies of lsass.exe NOT checked -- process-creation auditing is off, or was turned on only recently')) -eq 'DEFERRED') ''
+    T 'an untagged or lower-case ON is not evidence; the tagged line is' ((Get-AuditVisibility -Lines @('Process Creation auditing is ON')) -eq 'UNKNOWN' -and (Get-AuditVisibility -Lines @('[OK] Process Creation (4688) auditing is on')) -eq 'UNKNOWN' -and (Get-AuditVisibility -Lines @('  [OK] Process Creation (4688) auditing is ON -- feeds x.')) -eq 'OK') ''
     if ($fails) { Write-Output "[FAIL] $fails report_safety self-test expectation(s) unmet"; exit 1 }
     Write-Output '[OK] report_safety self-test: audit visibility is OK only on evidence of auditing ON, REDUCED on any OFF, and never OK by default.'
     exit 0

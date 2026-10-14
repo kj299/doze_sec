@@ -112,7 +112,7 @@ function Get-CopyEventReport {
     $cut = $Image.LastIndexOf('\'); if ($cut -gt 0) { $dir = $Image.Substring(0, $cut) }
     $boot = $dir + '\wininit.exe'
     if ($Total -le 0) {
-        [void]$out.Add(('[SKIPPED] Copies of ' + $leaf + ' in the Security log NOT checked -- the log holds no process-creation record (Event 4688): process-creation auditing is off, or was turned on only recently, so a copy leaves no record here. Section 16 reports the audit policy.'))
+        [void]$out.Add(('[SKIPPED] Copies of ' + $leaf + ' in the Security log NOT checked -- the log holds no process-creation record (Event 4688): process creation is not being audited, or only recently was, so a copy leaves no record here. Section 16 reports the audit policy.'))
         return @{ Lines = @($out.ToArray()); Sev = 'OK'; Copies = 0 }
     }
     $copies = @(); $odd = @(); $bootStarts = 0; $noCreator = 0
@@ -160,7 +160,7 @@ function Get-CopyEventReport {
         [void]$out.Add(('[INFO] ' + $Unreadable + ' process-creation record(s) could not be read and were skipped -- not graded, not cleared.'))
     }
     if ($null -ne $Newest -and $null -ne $Now -and (([datetime]$Now).ToUniversalTime() - ([datetime]$Newest).ToUniversalTime()).TotalHours -gt 1) {
-        [void]$out.Add(('[INFO] The newest process-creation record is from ' + (Show-When $Newest) + ': no process start since then is recorded, so process-creation auditing is likely off now (Section 16 reports the audit policy) -- a copy made since leaves no record here.'))
+        [void]$out.Add(('[INFO] The newest process-creation record is from ' + (Show-When $Newest) + ': no process start since then is recorded, so process creation is likely not being audited now (Section 16 reports the audit policy) -- a copy made since leaves no record here.'))
     }
     if ($Capped) {
         [void]$out.Add(('[INFO] Only the newest ' + $Total + ' process-creation records were read; older ones were not.'))

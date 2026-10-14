@@ -89,6 +89,19 @@ A read-only review before the first push found these, all fixed:
 - **A lint gap.** Rule 4 now also catches a scope-prefixed name
   (`function script:cp`).
 
+CI then caught one more, in the standard-user job. The coverage block's
+audit-visibility rule matched "auditing is ON" anywhere in any line, ignoring
+case. The new Section 12 description, "...when process-creation auditing is
+on.", therefore certified `Audit visibility : OK` for an audit-policy check
+that never ran on that token. The elevated `[SKIPPED]` line ("auditing is
+off") would likewise have read as OFF.
+- The rule now counts only the audit-policy check's own lines: tagged, and
+  matched with their case. Two self-test cases pin that, and both fail
+  against the old rule.
+- The new lines no longer use that phrase.
+- Prose in one section could change another section's verdict, and only a
+  real run on that token showed it.
+
 Tests, both directions; no test copies any process:
 - **masquerade_check self-test (135 cases).** It covers:
   - a copy with the same image or with the same name only;

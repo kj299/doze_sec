@@ -3317,7 +3317,7 @@ echo  Command: powershell -File tools\lsass_copy_events.ps1>> "%REPORT%"
 echo  Command: powershell -Command "Get-WinEvent -FilterHashtable @{LogName='Security';Id=4688} -MaxEvents 2000 -EA SilentlyContinue | Where-Object { $_.Properties[5].Value -like '*\lsass.exe' } | Select-Object TimeCreated, @{N='Created';E={$_.Properties[5].Value}}, @{N='By';E={$_.Properties[13].Value}}"   [the audit reads every 4688 record, not only the newest 2000]>> "%REPORT%"
 echo  A copy of LSASS is a second process holding its memory; tools that dump credentials>> "%REPORT%"
 echo  make one and read it instead of LSASS. It lives for seconds, so the Security log is>> "%REPORT%"
-echo  where it is seen -- when process-creation auditing is on.>> "%REPORT%"
+echo  where it is seen, if process creation is being audited.>> "%REPORT%"
 del "%TEMP%\dz_lsacopy.txt" 2>nul
 del "%TEMP%\dz_lsacopy_gap.txt" 2>nul
 del "%TEMP%\dz_lsacopy_deferred.txt" 2>nul
