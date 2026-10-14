@@ -66,16 +66,42 @@ Found while writing the tests, and fixed before any run:
   5.1 built-in alias, with the alias list written out. It reports both
   original names.
 
+A read-only review before the first push found these, all fixed:
+- **A false positive.** A reused process ID read as a copy. Session 1's
+  winlogon.exe was "a copy of its parent winlogon.exe" because the exited
+  smss.exe's PID now belonged to session 2's newer winlogon.exe. A real
+  copy is made from a running original, so the original is older and in
+  the same session. Both are now checked; where the clock cannot order the
+  two and the rightful parent exits by design, the pair is not called a
+  copy.
+- **A false all-clear.** A read of the Security log that stopped part-way,
+  or one unreadable record, would have printed the OK line with no word
+  about it. A bad record is now counted and skipped, and a stopped read
+  says where it stopped.
+- **A missing statement.** The OK line now names the span the log covers,
+  and a newest record more than an hour old is stated: nothing has been
+  recorded since, so auditing is likely off now.
+- **Two weak tests.**
+  - The control-character self-test could not fail: it matched `^` per
+    array element, never at an embedded newline.
+  - The CI proof on a real record could pass by skipping; it now fails,
+    and it checks that the audit policy was restored.
+- **A lint gap.** Rule 4 now also catches a scope-prefixed name
+  (`function script:cp`).
+
 Tests, both directions; no test copies any process:
-- **masquerade_check self-test (129 cases).** It covers:
+- **masquerade_check self-test (135 cases).** It covers:
   - a copy with the same image or with the same name only;
   - an impostor at another path, which is not a copy;
   - browsers, explorer and the per-session smss, which are not copies;
-  - an LSASS copy graded once, on its own row.
-  Six mutations each fail their own cases.
-- **lsass_copy_events self-test (12 cases).** It covers the boot start, a
+  - an LSASS copy graded once, on its own row;
+  - a reused number in another session, or a newer holder, which is not a
+    copy.
+  Nine mutations each fail their own cases.
+- **lsass_copy_events self-test (14 cases).** It covers the boot start, a
   copy in any spelling, an unexpected starter, a record with no creator, a
-  log with no 4688, and the cmd.exe wording.
+  log with no 4688, a read that stopped part-way, a stale newest record,
+  and the cmd.exe wording. Seven mutations each fail.
 - **helpers job.** A synthetic copy of the runner's real LSASS reads
   CRITICAL on its own row. Then a REAL Event 4688 pair, made without copying
   anything (cmd.exe started by cmd.exe, with Process Creation auditing

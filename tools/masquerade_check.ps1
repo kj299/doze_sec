@@ -340,14 +340,24 @@ function Format-UtcTicks {
 # PURE: is the child a copy of its parent? The same name (case-insensitive),
 # a name Windows never starts from itself, and the same image -- or an image
 # that cannot be compared because a path is not readable (another user's
-# process on a standard-user token). Returns 'same image', 'same name' (the
+# process on a standard-user token). A copy is made from a running original,
+# so the original is older and in the same session: a holder of the parent
+# PID that is newer, or in another session, is a reused number (session 1's
+# winlogon.exe, whose session smss.exe has exited, while session 2's newer
+# winlogon.exe holds that PID), and the other rules grade it. Where the clock
+# cannot order the two and the rightful parent exits by design, reuse is
+# expected and it is not called a copy. Returns 'same image', 'same name' (the
 # image could not be compared) or $null.
 function Test-IsCopy {
-    param($Child, $Parent)
+    param($Child, $Parent, [bool]$ClockMoved = $false)
     if ($null -eq $Child -or $null -eq $Parent) { return $null }
     $cn = ([string]$Child.Name).Trim().ToLowerInvariant()
     if (-not $cn -or $cn -ne ([string]$Parent.Name).Trim().ToLowerInvariant()) { return $null }
     if (-not $script:ParentRule.ContainsKey($cn) -or $cn -eq 'smss.exe') { return $null }
+    if ($null -ne $Child.Session -and $null -ne $Parent.Session -and [long]$Child.Session -ne [long]$Parent.Session) { return $null }
+    $ordered = (-not $ClockMoved -and $null -ne $Child.Ticks -and $null -ne $Parent.Ticks)
+    if ($ordered -and [long]$Parent.Ticks -gt [long]$Child.Ticks) { return $null }
+    if (-not $ordered -and -not $script:ParentRule[$cn].Lifetime) { return $null }
     $cp = ([string]$Child.Path).Trim(); $pp = ([string]$Parent.Path).Trim()
     if ($cp -and $pp) {
         if ($cp -ieq $pp) { return 'same image' }
@@ -528,7 +538,7 @@ function Get-ParentReport {
         $n = ([string]$rec.Name).ToLowerInvariant()
         # A copy of its parent is graded once, as a copy -- not as a wrong
         # parent and again as a second instance.
-        $how = Test-IsCopy -Child $rec -Parent $parent
+        $how = Test-IsCopy -Child $rec -Parent $parent -ClockMoved $clockMoved
         if ($how) {
             $copyPids[$rec.Pid] = $true
             $hits++
@@ -875,6 +885,20 @@ if ($SelfTest) {
     T 'smss.exe under smss.exe is no copy: the first smss starts one for each session by design' ($null -eq (CopyOf 'smss.exe' 'C:\Windows\System32\smss.exe' 'smss.exe' 'C:\Windows\System32\smss.exe')) ''
     T 'browsers and explorer start children from their own image: chrome.exe, msedge.exe or explorer.exe under itself is no copy' ($null -eq (CopyOf 'chrome.exe' 'C:\Program Files\Google\Chrome\Application\chrome.exe' 'chrome.exe' 'C:\Program Files\Google\Chrome\Application\chrome.exe') -and $null -eq (CopyOf 'msedge.exe' 'C:\x\msedge.exe' 'msedge.exe' 'C:\x\msedge.exe') -and $null -eq (CopyOf 'explorer.exe' 'C:\Windows\explorer.exe' 'explorer.exe' 'C:\Windows\explorer.exe')) ''
     T 'a different name is no copy, and no parent is no copy' ($null -eq (CopyOf 'lsass.exe' $L 'wininit.exe' 'C:\Windows\System32\wininit.exe') -and $null -eq (Test-IsCopy -Child @{ Name = 'lsass.exe'; Path = $L } -Parent $null)) ''
+    # A reused number is not a copy: a copy is made from a running original,
+    # so the original is older and in the same session.
+    function CopyT { param($ct, $cs, $pt, $ps, [bool]$moved = $false, [string]$n = 'winlogon.exe') Test-IsCopy -Child @{ Name = $n; Path = ''; Ticks = $ct; Session = $cs } -Parent @{ Name = $n; Path = ''; Ticks = $pt; Session = $ps } -ClockMoved $moved }
+    T 'a parent PID now held by a NEWER process of the same name is a reused number, not a copy' ($null -eq (CopyT 1013 1 9000 2) -and $null -eq (CopyT 1013 1 9000 1)) ''
+    T 'the same name in ANOTHER session is no copy (a copy shares its original''s session)' ($null -eq (CopyT 9000 2 1013 1)) ''
+    T 'an older same-name parent in the same session is a copy' ((CopyT 9000 1 1013 1) -eq 'same name') ''
+    T 'where the clock cannot order them, a name whose parent exits by design is not called a copy; one whose parent cannot exit still is' ($null -eq (CopyT 9000 1 1013 1 $true) -and $null -eq (CopyT $null 1 1013 1) -and (CopyT 9000 0 1013 0 $true 'lsass.exe') -eq 'same name') ''
+    # PID 770 (session 1's exited smss) is held by chrome.exe in $tree; here it
+    # is session 2's newer winlogon.exe instead. Replaced, not appended: the
+    # first record of a PID wins.
+    $pr = Get-ParentReport -Tree ($tree | ForEach-Object { if ($_ -like '770|*') { '770|4400|9000|2|C:\Windows\System32\winlogon.exe|winlogon.exe' } else { $_ } })
+    T 'session 1''s winlogon.exe, whose exited smss.exe PID is now session 2''s newer winlogon.exe, raises nothing' ($null -eq $pr.CopyMarker -and $null -eq $pr.LsassCopyMarker -and $null -eq $pr.Marker -and ($pr.Lines -join "`n") -notmatch 'is a copy') ($pr.Lines -join ' | ')
+    $pr = Get-ParentReport -Tree ($tree + @('6000|5000|2000|1||taskhostw.exe', '5000|1000|3000|1||taskhostw.exe'))
+    T 'a taskhostw.exe whose parent PID now belongs to a newer taskhostw.exe is no copy' ($null -eq $pr.CopyMarker -and ($pr.Lines -join "`n") -notmatch 'is a copy') ($pr.Lines -join ' | ')
     $treeL = $tree | ForEach-Object { if ($_ -like '920|*') { '920|780|1021|0|C:\Windows\System32\lsass.exe|lsass.exe' } else { $_ } }
     $pr = Get-ParentReport -Tree ($treeL + @('9920|920|6000|0|C:\Windows\System32\lsass.exe|lsass.exe'))
     $pt = $pr.Lines -join "`n"

@@ -222,7 +222,8 @@ and 13 verify exactly that.
   - with process-creation auditing off there is no 4688 record at all; the
     check says so (`[SKIPPED]`) and Section 16 raises the auditing gap;
   - a copy older than the Security log's oldest record is gone with it; the
-    OK line names the date the log reaches back to;
+    OK line names the span the log covers, and a newest record more than an
+    hour old is stated (nothing recorded since: auditing likely off now);
   - a copy made with the image reference released (PSS_CREATE_RELEASE_SECTION)
     has no image path to compare; Section 4 then needs the name alone, which
     it accepts only where a path is unreadable;

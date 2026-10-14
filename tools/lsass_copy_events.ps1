@@ -97,8 +97,14 @@ function Get-LeafName {
 #   Total    how many 4688 records were read in all; 0 means none exists
 #   Oldest   the oldest 4688 record read ([datetime] or $null)
 #   Capped   reading stopped at -MaxRecords
+#   Newest   the newest 4688 record read; with -Now, a newest record more
+#            than an hour old means nothing has been recorded since (the
+#            audit's own process starts would be, were auditing on)
+#   StoppedBy  the error that ended the read part-way, or ''
+#   Unreadable records that could not be read and were skipped
 function Get-CopyEventReport {
-    param($Records, [string]$Image, [long]$Total = 0, $Oldest = $null, [bool]$Capped = $false)
+    param($Records, [string]$Image, [long]$Total = 0, $Oldest = $null, [bool]$Capped = $false,
+          $Newest = $null, $Now = $null, [string]$StoppedBy = '', [long]$Unreadable = 0)
     $out = New-Object System.Collections.ArrayList
     $leaf = Get-LeafName $Image
     $isLsass = ($leaf -ieq 'lsass.exe')
@@ -144,13 +150,23 @@ function Get-CopyEventReport {
     if ($noCreator -gt 0) {
         [void]$out.Add(('[INFO] ' + $noCreator + ' record(s) of ' + $leaf + ' starting carry no creator name (an older event format) -- not graded, not cleared.'))
     }
-    $span = 'the oldest record read'
-    if ($null -ne $Oldest) { $span = (Show-When $Oldest) }
+    $span = 'the records read'
+    if ($null -ne $Oldest -and $null -ne $Newest) { $span = 'from ' + (Show-When $Oldest) + ' to ' + (Show-When $Newest) }
+    elseif ($null -ne $Oldest) { $span = 'back to ' + (Show-When $Oldest) }
+    if ($StoppedBy) {
+        [void]$out.Add(('[INFO] Reading the Security log stopped after ' + $Total + ' record(s) (' + (ConvertTo-PrintableText $StoppedBy) + '): records older than ' + (Show-When $Oldest) + ' were NOT checked.'))
+    }
+    if ($Unreadable -gt 0) {
+        [void]$out.Add(('[INFO] ' + $Unreadable + ' process-creation record(s) could not be read and were skipped -- not graded, not cleared.'))
+    }
+    if ($null -ne $Newest -and $null -ne $Now -and (([datetime]$Now).ToUniversalTime() - ([datetime]$Newest).ToUniversalTime()).TotalHours -gt 1) {
+        [void]$out.Add(('[INFO] The newest process-creation record is from ' + (Show-When $Newest) + ': no process start since then is recorded, so process-creation auditing is likely off now (Section 16 reports the audit policy) -- a copy made since leaves no record here.'))
+    }
     if ($Capped) {
         [void]$out.Add(('[INFO] Only the newest ' + $Total + ' process-creation records were read; older ones were not.'))
     }
     if ($sev -eq 'OK') {
-        [void]$out.Add(('[OK] No copy of ' + $leaf + ' in the Security log: ' + $Total + ' process-creation record(s) read, back to ' + $span + '; ' + $bootStarts + ' start(s) of ' + $leaf + ' by wininit.exe.'))
+        [void]$out.Add(('[OK] No copy of ' + $leaf + ' in the Security log: ' + $Total + ' process-creation record(s) read, ' + $span + '; ' + $bootStarts + ' start(s) of ' + $leaf + ' by wininit.exe.'))
     }
     return @{ Lines = @($out.ToArray()); Sev = $sev; Copies = $copies.Count }
 }
@@ -166,9 +182,14 @@ if ($SelfTest) {
     # Not R: that is a built-in alias (Invoke-History), and an alias wins over a function.
     function NewRec { param([string]$new, [string]$par, $np = 900, $pp = 780, $t = $t0) @{ Time = $t; NewPid = $np; NewName = $new; ParentPid = $pp; ParentName = $par } }
 
-    $r = Get-CopyEventReport -Records @((NewRec $L $W), (NewRec 'C:\Windows\System32\svchost.exe' 'C:\Windows\System32\services.exe')) -Image $L -Total 5000 -Oldest $t0
+    $r = Get-CopyEventReport -Records @((NewRec $L $W), (NewRec 'C:\Windows\System32\svchost.exe' 'C:\Windows\System32\services.exe')) -Image $L -Total 5000 -Oldest $t0 -Newest $t0.AddDays(2) -Now $t0.AddDays(2).AddMinutes(5)
     $j = $r.Lines -join "`n"
-    T 'LSASS started by wininit.exe at boot is the normal record: OK, counted' ($r.Sev -eq 'OK' -and $j -match '\[OK\] No copy of lsass\.exe in the Security log: 5000 process-creation record\(s\) read, back to 2026-10-01 08:00:00Z; 1 start\(s\) of lsass\.exe by wininit\.exe') $j
+    T 'LSASS started by wininit.exe at boot is the normal record: OK, counted, with the span the log covers' ($r.Sev -eq 'OK' -and $j -match '\[OK\] No copy of lsass\.exe in the Security log: 5000 process-creation record\(s\) read, from 2026-10-01 08:00:00Z to 2026-10-03 08:00:00Z; 1 start\(s\) of lsass\.exe by wininit\.exe' -and $j -notmatch 'newest process-creation record is from') $j
+    $r = Get-CopyEventReport -Records @((NewRec $L $W)) -Image $L -Total 5000 -Oldest $t0 -Newest $t0.AddDays(2) -Now $t0.AddDays(30)
+    T 'a newest record a month old says nothing has been recorded since (auditing likely off now)' (($r.Lines -join "`n") -match '\[INFO\] The newest process-creation record is from 2026-10-03 08:00:00Z: no process start since then is recorded') ($r.Lines -join ' | ')
+    $r = Get-CopyEventReport -Records @((NewRec $L $W)) -Image $L -Total 1200 -Oldest $t0 -Newest $t0.AddDays(1) -StoppedBy 'The handle is invalid' -Unreadable 3
+    $j = $r.Lines -join "`n"
+    T 'a read that stopped part-way, and records that could not be read, are said, never folded into the OK line silently' ($j -match '\[INFO\] Reading the Security log stopped after 1200 record\(s\) \(The handle is invalid\): records older than 2026-10-01 08:00:00Z were NOT checked' -and $j -match '\[INFO\] 3 process-creation record\(s\) could not be read and were skipped') $j
     $r = Get-CopyEventReport -Records @((NewRec $L $W), (NewRec $L $L 6120 900 $t0.AddHours(3))) -Image $L -Total 5000 -Oldest $t0
     $j = $r.Lines -join "`n"
     T 'lsass.exe created by lsass.exe is CRITICAL: LSASS was copied, with the time and both PIDs' ($r.Sev -eq 'CRITICAL' -and $r.Copies -eq 1 -and $j -match '(?m)^\[CRITICAL\] lsass\.exe was copied at 2026-10-01 11:00:00Z: Event 4688 records lsass\.exe \(PID 6120\) created by lsass\.exe \(PID 900\) itself -- a second process holding LSASS''s memory, the shape credential-dumping tools leave \(T1003.001\)' -and $j -notmatch '\[OK\]') $j
@@ -197,7 +218,7 @@ if ($SelfTest) {
     T 'pointed at cmd.exe (the CI proof), cmd.exe started by cmd.exe reads as a copy without the LSASS sentence' ($r.Sev -eq 'CRITICAL' -and $j -match '\[CRITICAL\] cmd\.exe was copied at .*created by cmd\.exe \(PID 5000\) itself$' -and $j -notmatch 'LSASS') $j
     T 'process IDs read as numbers or 0x strings' ((ConvertTo-ProcessId '0x1a4') -eq 420 -and (ConvertTo-ProcessId 420) -eq 420 -and $null -eq (ConvertTo-ProcessId 'x')) ''
     $r = Get-CopyEventReport -Records @((NewRec $L ('C:\evil' + [char]10 + '[OK] fake'))) -Image $L -Total 3
-    T 'a control character in a creator name cannot start a report line' (@($r.Lines | Where-Object { $_ -match '^\[OK\] fake' }).Count -eq 0) ($r.Lines -join ' | ')
+    T 'a control character in a creator name cannot start a report line' ((($r.Lines -join "`n") -notmatch '(?m)^\[OK\] fake') -and @($r.Lines | Where-Object { $_ -match '[\x00-\x1F]' }).Count -eq 0) ($r.Lines -join ' | ')
 
     if ($fails) { Write-Output "[FAIL] $fails lsass_copy_events self-test expectation(s) unmet"; exit 1 }
     Write-Output '[OK] lsass_copy_events self-test: a boot start is counted, lsass.exe created by lsass.exe is CRITICAL in any spelling, any other starter is a WARNING, a record with no creator is not cleared, and a log with no process-creation record is SKIPPED, never OK.'
@@ -227,7 +248,7 @@ if ($Elevated -lt 0) {
 }
 
 $records = New-Object System.Collections.ArrayList
-$total = 0L; $oldest = $null; $capped = $false
+$total = 0L; $oldest = $null; $newest = $null; $capped = $false; $unreadable = 0L
 $readError = $null
 try {
     # EventLogReader rather than Get-WinEvent: no message is rendered, so a
@@ -242,6 +263,7 @@ try {
             try {
                 $total++
                 $oldest = $e.TimeCreated
+                if ($null -eq $newest) { $newest = $e.TimeCreated }
                 $props = $e.Properties
                 # NewProcessName is field 5 in every version of 4688; the
                 # creator's name (ParentProcessName) is field 13, from
@@ -251,6 +273,10 @@ try {
                     $pp = $null; if ($props.Count -gt 7) { $pp = ConvertTo-ProcessId $props[7].Value }
                     [void]$records.Add(@{ Time = $e.TimeCreated; NewPid = (ConvertTo-ProcessId $props[4].Value); NewName = [string]$props[5].Value; ParentPid = $pp; ParentName = $pn })
                 }
+            } catch {
+                # One record that cannot be read is counted and skipped; it
+                # must not end the read (and with it every older record).
+                $unreadable++
             } finally { $e.Dispose() }
             if ($total -ge $MaxRecords) { $capped = $true; break }
         }
@@ -269,6 +295,9 @@ if ($null -ne $readError -and $total -eq 0) {
     }
     exit 0
 }
-$report = Get-CopyEventReport -Records $records -Image $Image -Total $total -Oldest $oldest -Capped $capped
+# A read that stopped part-way (the log wrapped under it, say) still grades
+# what it read, and says where it stopped.
+$stopped = ''; if ($null -ne $readError) { $stopped = $readError }
+$report = Get-CopyEventReport -Records $records -Image $Image -Total $total -Oldest $oldest -Capped $capped -Newest $newest -Now (Get-Date) -StoppedBy $stopped -Unreadable $unreadable
 foreach ($l in $report.Lines) { $l }
 Write-Marker -Name 'lsacopy' -Sev $report.Sev

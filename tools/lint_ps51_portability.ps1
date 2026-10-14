@@ -210,7 +210,9 @@ function Get-PortabilityDefects {
 
     # --- Rule 4: a function named like a 5.1 built-in alias -----------------
     foreach ($fd in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true))) {
-        if ($script:Ps51Aliases -contains $fd.Name.ToLowerInvariant()) {
+        # A scope prefix (function script:cp) does not stop the alias winning.
+        $fnName = ($fd.Name -replace '^(?i)(global|script|local|private):', '').ToLowerInvariant()
+        if ($script:Ps51Aliases -contains $fnName) {
             $out += New-Object PSObject -Property @{
                 File   = $Path
                 Line   = $fd.Extent.StartLineNumber
@@ -329,6 +331,8 @@ if ($SelfTest) {
       ("count=$($d.Count) rule=$(if($d.Count){$d[0].Rule})")
     $q4 = W 'aliasr.ps1' ('function r { 1 }' + $NL)
     T 'a function named r (Invoke-History) is a defect, whatever its case' ((N $q4) -eq 1) ('count=' + (N $q4))
+    $t4 = W 'aliasscope.ps1' ('function script:cp { 1 }' + $NL + 'function global:R { 2 }' + $NL)
+    T 'a scope prefix does not hide the name (script:cp, global:R)' ((N $t4) -eq 2) ('count=' + (N $t4))
     $s4 = W 'aliasok.ps1' ('function CopyOf { param($a) $a }' + $NL + '$cp = 1' + $NL + 'Get-ChildItem | sort Name' + $NL)
     T 'a distinct function name, a variable named $cp, and USING an alias are not defects' ((N $s4) -eq 0) ('count=' + (N $s4))
 

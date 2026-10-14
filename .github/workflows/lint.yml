@@ -372,7 +372,8 @@ jobs:
                    'a copy of LSASS is CRITICAL, on its own row, named once: no wrong-parent line and no second-instance line for it' \
                    'lsass.exe under lsass.exe from ANOTHER path is not a copy (the other rules grade an impostor)' \
                    'browsers and explorer start children from their own image: chrome.exe, msedge.exe or explorer.exe under itself is no copy' \
-                   'smss.exe under smss.exe is no copy: the first smss starts one for each session by design'; do
+                   'smss.exe under smss.exe is no copy: the first smss starts one for each session by design' \
+                   'a parent PID now held by a NEWER process of the same name is a reused number, not a copy'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
           n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 125 ] || { echo "only $n case(s)"; exit 1; }
@@ -385,7 +386,7 @@ jobs:
                    'no process-creation record at all: SKIPPED (auditing off), never OK, raises nothing'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 12 ] || { echo "only $n case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 14 ] || { echo "only $n case(s)"; exit 1; }
       - name: proc_snapshot -- one query, the former Name-PID-Path lines byte for byte, and the process tree
         run: |
           out=$(pwsh -NoProfile -File tools/proc_snapshot.ps1 -SelfTest); echo "$out"

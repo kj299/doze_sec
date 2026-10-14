@@ -3050,7 +3050,7 @@ jobs:
           $st = (.\tools\lsass_copy_events.ps1 -SelfTest) -join "`n"
           if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'lsass_copy_events.ps1 -SelfTest failed' }
           $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($nst -lt 12) { throw "lsass_copy_events self-test ran only $nst case(s)" }
+          if ($nst -lt 14) { throw "lsass_copy_events self-test ran only $nst case(s)" }
           Write-Host "lsass_copy_events -SelfTest OK ($nst cases)"
           # The audit's own query, on the runner's real Security log: no copy of
           # LSASS, or the declared SKIPPED when the log holds no 4688 at all.
@@ -3079,37 +3079,44 @@ jobs:
           if ($row) { $f = $row -split ','; for ($i = 0; $i -lt $f.Count - 1; $i++) { if ($f[$i] -match '0CCE922B') { $prior = $f[$i + 1].Trim(); break } } }
           Write-Host "Process Creation auditing before this step: '$prior'"
           $known = @('No Auditing', 'Success', 'Failure', 'Success and Failure')
-          if ($known -notcontains $prior) {
-            # Never change a policy this step cannot put back exactly.
-            Write-Host "[ SKIP ] the prior Process Creation setting could not be read exactly ('$prior') -- the policy is left untouched and the real-record case did not run"
-          } else {
-            $md2 = Join-Path $env:TEMP 'dz_ci_lsacopy_cmd'
-            try {
-              auditpol /set /subcategory:$guid /success:enable | Out-Null
-              if ($LASTEXITCODE -ne 0) {
-                Write-Host '[ SKIP ] auditpol could not enable Process Creation on this runner -- the real-record case did not run'
-              } else {
-                & cmd.exe /c "cmd.exe /c exit 0"
-                $global:LASTEXITCODE = 0
-                Start-Sleep -Seconds 3
-                Remove-Item $md2 -Recurse -Force -EA SilentlyContinue
-                New-Item -ItemType Directory -Path $md2 | Out-Null
-                $out2 = (.\tools\lsass_copy_events.ps1 -MarkerDir $md2 -Image (Join-Path $env:SystemRoot 'System32\cmd.exe') -MaxRecords 5000) -join "`n"
-                Write-Host (($out2 -split "`n" | Select-Object -First 6) -join "`n")
-                if ($out2 -notmatch '(?m)^\[CRITICAL\] cmd\.exe was copied at .*: Event 4688 records cmd\.exe \(PID \d+\) created by cmd\.exe \(PID \d+\) itself') { throw "the real 4688 record of cmd.exe created by cmd.exe was not read as that pair: $out2" }
-                if ($out2 -match 'LSASS') { throw 'the cmd.exe run used the LSASS wording' }
-                if ((Get-Content (Join-Path $md2 'dz_lsacopy.txt')).Trim() -ne 'CRITICAL') { throw 'no CRITICAL marker for the real pair' }
-                Write-Host 'lsass_copy_events live OK: the real cmd.exe-from-cmd.exe record was read by the same code that looks for an LSASS copy'
-              }
-            } finally {
-              $sv = 'disable'; $fv = 'disable'
-              if ($prior -match 'Success') { $sv = 'enable' }
-              if ($prior -match 'Failure') { $fv = 'enable' }
-              auditpol /set /subcategory:$guid /success:$sv /failure:$fv | Out-Null
-              $global:LASTEXITCODE = 0
+          # Never change a policy this step cannot put back exactly -- and a proof
+          # that can quietly not run is a promise, so that fails the step.
+          if ($known -notcontains $prior) { throw "the prior Process Creation setting could not be read exactly ('$prior'); the policy is left untouched and the real-record proof did not run" }
+          $md2 = Join-Path $env:TEMP 'dz_ci_lsacopy_cmd'
+          try {
+            auditpol /set /subcategory:$guid /success:enable | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'auditpol could not enable Process Creation on this runner; the real-record proof did not run' }
+            & cmd.exe /c "cmd.exe /c exit 0"
+            $global:LASTEXITCODE = 0
+            # The record can take a moment to be readable: poll, up to 30 s.
+            $out2 = ''
+            for ($try = 0; $try -lt 15; $try++) {
+              Start-Sleep -Seconds 2
               Remove-Item $md2 -Recurse -Force -EA SilentlyContinue
+              New-Item -ItemType Directory -Path $md2 | Out-Null
+              $out2 = (.\tools\lsass_copy_events.ps1 -MarkerDir $md2 -Image (Join-Path $env:SystemRoot 'System32\cmd.exe') -MaxRecords 5000) -join "`n"
+              if ($out2 -match '\[CRITICAL\] cmd\.exe was copied at ') { break }
             }
+            Write-Host (($out2 -split "`n" | Select-Object -First 6) -join "`n")
+            if ($out2 -notmatch '(?m)^\[CRITICAL\] cmd\.exe was copied at .*: Event 4688 records cmd\.exe \(PID \d+\) created by cmd\.exe \(PID \d+\) itself') { throw "the real 4688 record of cmd.exe created by cmd.exe was not read as that pair: $out2" }
+            if ($out2 -match 'LSASS') { throw 'the cmd.exe run used the LSASS wording' }
+            if ((Get-Content (Join-Path $md2 'dz_lsacopy.txt')).Trim() -ne 'CRITICAL') { throw 'no CRITICAL marker for the real pair' }
+            Write-Host 'lsass_copy_events live OK: the real cmd.exe-from-cmd.exe record was read by the same code that looks for an LSASS copy'
+          } finally {
+            $sv = 'disable'; $fv = 'disable'
+            if ($prior -match 'Success') { $sv = 'enable' }
+            if ($prior -match 'Failure') { $fv = 'enable' }
+            auditpol /set /subcategory:$guid /success:$sv /failure:$fv | Out-Null
+            $global:LASTEXITCODE = 0
+            Remove-Item $md2 -Recurse -Force -EA SilentlyContinue
           }
+          # The restore is checked, not assumed.
+          $row2 = @(auditpol /get /subcategory:$guid /r) | Where-Object { $_ -match '0CCE922B' } | Select-Object -First 1
+          $global:LASTEXITCODE = 0
+          $after = $null
+          if ($row2) { $f2 = $row2 -split ','; for ($i = 0; $i -lt $f2.Count - 1; $i++) { if ($f2[$i] -match '0CCE922B') { $after = $f2[$i + 1].Trim(); break } } }
+          if ($after -ne $prior) { throw "the Process Creation audit setting was not restored: before '$prior', after '$after'" }
+          Write-Host "Process Creation auditing restored: '$after'"
           Remove-Item $md -Recurse -Force -EA SilentlyContinue
           exit 0
 
