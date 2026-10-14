@@ -129,11 +129,14 @@ $onlyOneDir = 'C:\Users\Public\dz_selftest_onlyone'
 $onlyOneExe = Join-Path $onlyOneDir 'wininit.exe'
 # A file that LOOKS like a memory dump of LSASS, where Windows would write one
 # if it were told to (Microsoft's documented default folder for silent process
-# exit). Nothing is dumped and nothing is configured: it is a few bytes of
-# text, so a cleanup that fails cannot leave this machine writing credentials
-# to disk. The name carries the harness marker, and the check names that marker
-# in its finding, so a leftover cannot send its owner into an incident
-# response -- while still being reported, as a real one would be.
+# exit). Nothing is dumped and nothing is configured: it is one line of text
+# behind a minidump signature, so a cleanup that fails cannot leave this
+# machine writing credentials to disk. The name carries the harness marker, and
+# the check names that marker in its finding, so a leftover cannot send its
+# owner into an incident response -- while still being reported, as a real one
+# would be. The folder itself may already exist (Windows uses it); the cold
+# cleanup removes only this file, never the folder, since a real dump beside it
+# would be evidence.
 $lsassDumpDir  = Join-Path $env:TEMP 'Silent Process Exit'
 $lsassDumpFile = Join-Path $lsassDumpDir 'lsass_dz_selftest.dmp'
 # Section 18a: a copy of ping.exe whose NAME holds an ioc_processes.txt entry
@@ -476,7 +479,11 @@ $cases = @(
         Affects= @()
         Expect = '(?im)\[CRITICAL\] A memory dump of lsass\.exe is on disk: [^\r\n]*lsass_dz_selftest\.dmp[^\r\n]*carries dz_selftest'
         Plant  = { New-Item -ItemType Directory -Path $lsassDumpDir -Force | Out-Null
-                   Set-Content -LiteralPath $lsassDumpFile -Value 'not a dump: a doze_sec detection self-test file' -Encoding ASCII
+                   # The first four bytes are the minidump signature, because
+                   # the check grades the HEADER and not the name: without them
+                   # this plant would prove only the name rule. Nothing else in
+                   # the file is a dump -- it is one line of text.
+                   Set-Content -LiteralPath $lsassDumpFile -Value 'MDMP not a dump: a doze_sec detection self-test file' -Encoding ASCII -NoNewline
                    if (-not (Test-Path -LiteralPath $lsassDumpFile)) { throw 'the fake dump file was not created' } }
         Cleanup= { Remove-Item -LiteralPath $lsassDumpFile -Force -EA SilentlyContinue }
     },

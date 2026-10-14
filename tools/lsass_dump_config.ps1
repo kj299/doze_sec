@@ -85,12 +85,36 @@ function ConvertTo-PrintableText {
 function ConvertTo-FlagNumber {
     param($Value)
     if ($null -eq $Value) { return $null }
-    if ($Value -is [int] -or $Value -is [long] -or $Value -is [uint32]) { return [long]$Value }
+    # Masked to 32 bits: a REG_DWORD above 0x7FFFFFFF arrives as a negative
+    # Int32, and [long] would sign-extend it into 0xFFFFFFFF80000200 in the
+    # printed value. The mask needs the L suffix -- PowerShell reads the
+    # literal 0xFFFFFFFF as Int32 -1, so masking with it changes nothing, which
+    # is how the first attempt at this line silently did nothing at all.
+    if ($Value -is [int] -or $Value -is [long] -or $Value -is [uint32]) { return ([long]$Value -band 0xFFFFFFFFL) }
     $t = ([string]$Value).Trim()
     if (-not $t) { return $null }
     if ($t -match '^0[xX]([0-9A-Fa-f]{1,16})$') { return [Convert]::ToInt64($Matches[1], 16) }
     if ($t -match '^\d{1,19}$') { return [long]$t }
     return $null
+}
+
+# PURE: does this value carry $Bit? A string of digits with no 0x gives no base,
+# and the tools that write these values use both, so BOTH readings are tried and
+# either one carrying the bit counts. Returns @{ Set; Shown; Ambiguous }.
+function Test-FlagBit {
+    param($Value, [long]$Bit)
+    $dec = ConvertTo-FlagNumber $Value
+    if ($null -eq $dec) { return @{ Set = $false; Shown = ''; Ambiguous = $false; Unreadable = $true } }
+    $alt = $null
+    $t = ([string]$Value).Trim()
+    if ($Value -isnot [int] -and $Value -isnot [long] -and $Value -isnot [uint32] -and $t -match '^\d{1,8}$') {
+        try { $alt = [Convert]::ToInt64($t, 16) } catch { $alt = $null }
+    }
+    $setDec = [bool]($dec -band $Bit)
+    $setAlt = ($null -ne $alt -and [bool]($alt -band $Bit))
+    $shown = '0x' + ('{0:X}' -f $dec)
+    if ($setAlt -and -not $setDec) { $shown = '0x' + ('{0:X}' -f $alt) + ' (the value is written as ' + $t + ' with no base, and read as hexadecimal it carries this flag)' }
+    return @{ Set = ($setDec -or $setAlt); Shown = $shown; Ambiguous = ($setAlt -and -not $setDec); Unreadable = $false }
 }
 
 # PURE: everything read, graded.
@@ -99,7 +123,10 @@ function ConvertTo-FlagNumber {
 #   SilentExit   $null, or @{ ReportingMode; LocalDumpFolder; DumpType; MonitorProcess }
 #   WerImage     $null, or @{ DumpFolder; DumpType; DumpCount }   (per-image)
 #   WerGlobal    $null, or @{ DumpFolder; DumpType; DumpCount }   (all programs)
-#   DumpFiles    @( @{ Path; Length; Modified } ) found where the settings point
+#   DumpFiles    @( @{ Path; Length; Modified; IsDump } ) found where the
+#                settings point. IsDump is $true when the file starts with the
+#                minidump signature, $false when it demonstrably does not, and
+#                $null when the first bytes could not be read.
 #   LookedIn     the folders that were searched, for the OK line
 #   ReadErrors   @( 'key: reason' ) -- a key that could not be read at all
 function Get-DumpConfigReport {
@@ -119,12 +146,13 @@ function Get-DumpConfigReport {
 
     # FLG_MONITOR_SILENT_PROCESS_EXIT (0x200): Windows watches this program's
     # exit, which is what makes the SilentProcessExit settings below apply.
+    $gfTest = Test-FlagBit -Value $GlobalFlag -Bit 0x200
     $gf = ConvertTo-FlagNumber $GlobalFlag
     if ($null -ne $GlobalFlag -and $null -eq $gf) {
         [void]$out.Add(('[WARNING] ' + $silentMonitor + ' is set to a value this check could not read as a number (' + (ConvertTo-PrintableText ([string]$GlobalFlag)) + ') -- silent-process-exit monitoring for ' + $img + ' NOT determined. Verify: reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\' + $img + '" /v GlobalFlag'))
         $gapSev = 'WARNING'
-    } elseif ($null -ne $gf -and ($gf -band 0x200)) {
-        [void]$out.Add(('[WARNING] Silent-process-exit monitoring is ENABLED for ' + $img + ': ' + $silentMonitor + ' = 0x' + ('{0:X}' -f $gf) + ' has the 0x200 flag set, so Windows watches this program''s exit and applies the settings below (T1003.001).'))
+    } elseif ($null -ne $GlobalFlag -and $gfTest.Set) {
+        [void]$out.Add(('[WARNING] Silent-process-exit monitoring is ENABLED for ' + $img + ': ' + $silentMonitor + ' = ' + $gfTest.Shown + ' has the 0x200 flag set, so Windows watches this program''s exit and applies the settings below (T1003.001).'))
         $sev = Get-MaxSev $sev 'WARNING'
     }
 
@@ -176,14 +204,28 @@ function Get-DumpConfigReport {
         # event-log record a file can be deleted -- but the line says what it
         # is, so a leftover after a failed cleanup cannot send its owner into
         # an incident response over a 15-byte test file.
+        # A NAME is not a dump. A file called lsass_notes.dmp, or one matched
+        # by its 8.3 short name, would otherwise draw the full
+        # change-your-passwords advice; the first four bytes of a minidump are
+        # MDMP, so a file that demonstrably is not one is a WARNING that says
+        # exactly that. Unreadable bytes stay CRITICAL: a dump whose header
+        # cannot be read is not a reason to relax.
+        $notADump = ($null -ne $f.IsDump -and -not $f.IsDump)
         $mine = ''
         if (([string]$f.Path) -match 'dz_selftest') {
             $mine = ' This file''s name carries dz_selftest, the marker this tool''s own detection harness uses: if tests\detection_selftest.ps1 has been run on this machine, this is that test file, it holds nothing, and tests\cleanup_selftest.ps1 deletes it.'
         }
         $advice = ''
         if ($isLsass) { $advice = ' Such a file holds the credentials that were in LSASS''s memory, and anyone who can read the file can use them. If you did not create it, treat it as credential theft: change the passwords used on this machine from a different, clean one, and keep the file for whoever investigates.' }
-        [void]$out.Add(('[CRITICAL] A memory dump of ' + $img + ' is on disk: ' + (ConvertTo-PrintableText ([string]$f.Path)) + $sz + $when + ' (T1003.001).' + $advice + $mine))
-        $sev = Get-MaxSev $sev 'CRITICAL'
+        if ($notADump) {
+            [void]$out.Add(('[WARNING] A file named like a memory dump of ' + $img + ' is on disk, but it is not one: ' + (ConvertTo-PrintableText ([string]$f.Path)) + $sz + $when + ' does not begin with a minidump header, so it holds no process memory. Worth knowing why it is there and what named it that (T1003.001).' + $mine))
+            $sev = Get-MaxSev $sev 'WARNING'
+        } else {
+            $hdr = ''
+            if ($null -eq $f.IsDump) { $hdr = ' Its first bytes could not be read, so whether it is a real dump is not established -- treated as one.' }
+            [void]$out.Add(('[CRITICAL] A memory dump of ' + $img + ' is on disk: ' + (ConvertTo-PrintableText ([string]$f.Path)) + $sz + $when + ' (T1003.001).' + $advice + $hdr + $mine))
+            $sev = Get-MaxSev $sev 'CRITICAL'
+        }
     }
 
     foreach ($e in @($ReadErrors)) {
@@ -282,7 +324,19 @@ if ($SelfTest) {
     $j = $r.Lines -join "`n"
     T 'pointed at another program, every line names that program and none mentions LSASS' ($r.Sev -eq 'WARNING' -and $j -match 'ENABLED for dz_ci_dummy\.exe' -and $j -match 'SilentProcessExit\\dz_ci_dummy\.exe' -and $j -notmatch 'LSASS' -and $j -notmatch 'lsass') $j
 
-    $r = Rep @{ DumpFiles = @(@{ Path = 'C:\Users\u\AppData\Local\Temp\Silent Process Exit\lsass_dz_selftest.dmp' }) }
+    $r = Rep @{ DumpFiles = @(@{ Path = 'C:\x\lsass_notes.dmp'; Length = 400; IsDump = $false }) }
+    $j = $r.Lines -join "`n"
+    T 'a file merely NAMED like a dump is a WARNING saying it is not one, never the credential-theft advice' ($r.Sev -eq 'WARNING' -and $j -match '\[WARNING\] A file named like a memory dump of lsass\.exe is on disk, but it is not one: C:\\x\\lsass_notes\.dmp' -and $j -match 'does not begin with a minidump header' -and $j -notmatch 'change the passwords') $j
+    $r = Rep @{ DumpFiles = @(@{ Path = 'C:\x\lsass.dmp'; IsDump = $true }) }
+    T 'a real minidump header keeps the CRITICAL and the advice' ($r.Sev -eq 'CRITICAL' -and ($r.Lines -join "`n") -match 'change the passwords used on this machine') ''
+    $r = Rep @{ DumpFiles = @(@{ Path = 'C:\x\lsass.dmp'; IsDump = $null }) }
+    $j = $r.Lines -join "`n"
+    T 'a header that could not be read stays CRITICAL and says the header was not established' ($r.Sev -eq 'CRITICAL' -and $j -match 'first bytes could not be read, so whether it is a real dump is not established -- treated as one') $j
+    T 'a flag written as digits with no base is read in both bases, and the line says so' ((Test-FlagBit -Value '200' -Bit 0x200).Set -and (Test-FlagBit -Value '200' -Bit 0x200).Ambiguous -and (Test-FlagBit -Value 512 -Bit 0x200).Set -and -not (Test-FlagBit -Value 512 -Bit 0x200).Ambiguous -and -not (Test-FlagBit -Value '64' -Bit 0x200).Set) ''
+    $r = Rep @{ GlobalFlag = '200' }
+    T 'GlobalFlag = 200 with no base is reported, naming the reading that carries the flag' ($r.Sev -eq 'WARNING' -and ($r.Lines -join "`n") -match 'written as 200 with no base, and read as hexadecimal it carries this flag') ($r.Lines -join ' | ')
+    T 'a REG_DWORD above 0x7FFFFFFF prints unsigned, not sign-extended' (((Rep @{ GlobalFlag = [int]-2147483136 }).Lines -join "`n") -match 'GlobalFlag = 0x80000200 ') ((Rep @{ GlobalFlag = [int]-2147483136 }).Lines -join ' | ')
+    $r = Rep @{ DumpFiles = @(@{ Path = 'C:\Users\u\AppData\Local\Temp\Silent Process Exit\lsass_dz_selftest.dmp'; IsDump = $true }) }
     $j = $r.Lines -join "`n"
     T 'a dump file left by this tool''s own harness is still CRITICAL, and the line says what it is' ($r.Sev -eq 'CRITICAL' -and $j -match 'A memory dump of lsass\.exe is on disk: C:\\Users\\u\\AppData\\Local\\Temp\\Silent Process Exit\\lsass_dz_selftest\.dmp' -and $j -match 'carries dz_selftest, the marker this tool''s own detection harness uses' -and $j -match 'cleanup_selftest\.ps1 deletes it') $j
     T 'an ordinary dump file carries no such sentence' (((Rep @{ DumpFiles = @(@{ Path = 'C:\x\lsass.dmp' }) }).Lines -join "`n") -notmatch 'dz_selftest') ''
@@ -359,27 +413,83 @@ $folders = New-Object System.Collections.ArrayList
 # Each default folder is built only when the variable it needs is set:
 # Join-Path with a null path throws, and an error line in the report is noise
 # the reader did not ask for.
+#
+# LSASS RUNS AS SYSTEM, so %TEMP% in its silent-process-exit folder is
+# SYSTEM's temp folder, not the folder of whoever is running this audit. The
+# first version searched only the auditing user's folders -- which is to say,
+# everywhere except where the dump would actually land. Both expansions are
+# searched, and so is the system profile's.
 $defaults = New-Object System.Collections.ArrayList
 if ($env:TEMP) { [void]$defaults.Add((Join-Path $env:TEMP 'Silent Process Exit')) }
 if ($env:LOCALAPPDATA) { [void]$defaults.Add((Join-Path $env:LOCALAPPDATA 'CrashDumps')) }
-if ($env:windir) { [void]$defaults.Add((Join-Path $env:windir 'System32\config\systemprofile\AppData\Local\CrashDumps')) }
-foreach ($cand in (@(
+if ($env:windir) {
+    [void]$defaults.Add((Join-Path $env:windir 'Temp\Silent Process Exit'))
+    [void]$defaults.Add((Join-Path $env:windir 'System32\config\systemprofile\AppData\Local\Temp\Silent Process Exit'))
+    [void]$defaults.Add((Join-Path $env:windir 'System32\config\systemprofile\AppData\Local\CrashDumps'))
+}
+# A configured folder written with %TEMP% is expanded BOTH ways for the same
+# reason: this process's temp folder, and the one the service would use.
+$systemTemps = @()
+if ($env:windir) { $systemTemps = @((Join-Path $env:windir 'Temp'), (Join-Path $env:windir 'System32\config\systemprofile\AppData\Local\Temp')) }
+$configured = @(
     ([string]$(if ($null -ne $silentExit) { $silentExit.LocalDumpFolder } else { '' })),
     ([string]$(if ($null -ne $werImage) { $werImage.DumpFolder } else { '' })),
     ([string]$(if ($null -ne $werGlobal) { $werGlobal.DumpFolder } else { '' }))
-) + @($defaults.ToArray()))) {
+)
+$cands = New-Object System.Collections.ArrayList
+foreach ($cfg in $configured) {
+    $c = ([string]$cfg).Trim()
+    if (-not $c) { continue }
+    [void]$cands.Add($c)
+    if ($c -match '(?i)%(TEMP|TMP)%') {
+        foreach ($st in $systemTemps) { [void]$cands.Add(($c -replace '(?i)%(TEMP|TMP)%', [regex]::Escape($st).Replace('\', '\'))) }
+    }
+}
+foreach ($d in @($defaults.ToArray())) { [void]$cands.Add($d) }
+foreach ($cand in @($cands.ToArray())) {
     $c = ([string]$cand).Trim()
     if (-not $c) { continue }
     try { $c = [Environment]::ExpandEnvironmentVariables($c) } catch { }
-    if ($folders -notcontains $c) { [void]$folders.Add($c) }
+    # Normalised before the dedupe: 'C:\d' and 'C:\d\' are one folder, and
+    # listing it twice would report the same file twice.
+    $c = $c.TrimEnd('\', '/')
+    if (-not $c) { continue }
+    $dup = $false
+    foreach ($seen in $folders) { if (([string]$seen) -ieq $c) { $dup = $true; break } }
+    if (-not $dup) { [void]$folders.Add($c) }
 }
 $dumpFiles = New-Object System.Collections.ArrayList
+$searched = New-Object System.Collections.ArrayList
 foreach ($f in $folders) {
     try {
-        if (-not (Test-Path -LiteralPath $f -EA Stop)) { continue }
-        foreach ($file in @(Get-ChildItem -LiteralPath $f -Filter ('*' + $base + '*.dmp') -File -Force -EA Stop)) {
-            [void]$dumpFiles.Add(@{ Path = $file.FullName; Length = $file.Length; Modified = $file.LastWriteTimeUtc })
+        if (-not (Test-Path -LiteralPath $f -EA Stop)) {
+            # Absent, or not listable by this token -- Test-Path answers $false
+            # for both. Enumerating says which, and a folder that could not be
+            # read must not appear in the line that says where it looked.
+            [void][System.IO.Directory]::GetFileSystemEntries($f)
+            continue
         }
+        # Enumerate, then match in PowerShell: -Filter is matched by the
+        # filesystem, which matches 8.3 SHORT names too, so 'lsass_x.dmpbak'
+        # (short name LSASS_~1.DMP) would be taken for a dump.
+        foreach ($file in @(Get-ChildItem -LiteralPath $f -File -Force -EA Stop | Where-Object { $_.Name -like ('*' + $base + '*.dmp') })) {
+            # The first four bytes of a minidump are MDMP. A file merely NAMED
+            # like one is reported as that, not as credentials on disk.
+            $isDump = $null
+            try {
+                $fs = [System.IO.File]::OpenRead($file.FullName)
+                try {
+                    $buf = New-Object byte[] 4
+                    $got = $fs.Read($buf, 0, 4)
+                    if ($got -eq 4) { $isDump = ([System.Text.Encoding]::ASCII.GetString($buf) -eq 'MDMP') } else { $isDump = $false }
+                } finally { $fs.Dispose() }
+            } catch { $isDump = $null }
+            [void]$dumpFiles.Add(@{ Path = $file.FullName; Length = $file.Length; Modified = $file.LastWriteTimeUtc; IsDump = $isDump })
+        }
+        [void]$searched.Add($f)
+    } catch [System.IO.DirectoryNotFoundException] {
+        # Not there at all: nothing to search and nothing to declare.
+        continue
     } catch {
         [void]$readErrors.Add($f + ' could not be listed (' + $_.Exception.Message + ')')
     }
@@ -387,7 +497,7 @@ foreach ($f in $folders) {
 
 $report = Get-DumpConfigReport -ImageName $img -GlobalFlag $globalFlag -AuditLevel $auditLevel `
     -SilentExit $silentExit -WerImage $werImage -WerGlobal $werGlobal `
-    -DumpFiles @($dumpFiles.ToArray()) -LookedIn @($folders.ToArray()) `
+    -DumpFiles @($dumpFiles.ToArray()) -LookedIn @($searched.ToArray()) `
     -ReadErrors @($readErrors.ToArray()) -IsElevated ($Elevated -eq 1)
 foreach ($l in $report.Lines) { $l }
 Write-Marker -Name 'lsadump' -Sev $report.Sev

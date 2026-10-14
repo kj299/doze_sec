@@ -92,8 +92,12 @@ function Get-AsrAccessor {
     $n = ([string]$ProcessName).Trim()
     $pIsTarget = ($p -like '*\lsass.exe')
     $nIsTarget = ($n -like '*\lsass.exe')
-    if ($nIsTarget -and -not $pIsTarget) { return @{ Accessor = $p; Certain = $true } }
-    if ($pIsTarget -and -not $nIsTarget) { return @{ Accessor = $n; Certain = $true } }
+    # The OTHER field must actually name something: an event that holds
+    # lsass.exe and nothing else would otherwise produce a WARNING naming
+    # nobody -- and that line does not even match the contract written to
+    # protect it, so no gate would have caught it.
+    if ($nIsTarget -and -not $pIsTarget -and $p) { return @{ Accessor = $p; Certain = $true } }
+    if ($pIsTarget -and -not $nIsTarget -and $n) { return @{ Accessor = $n; Certain = $true } }
     if ($pIsTarget -and $nIsTarget) { return @{ Accessor = ''; Certain = $false } }
     # Neither names lsass.exe: the event's own fields do not say which side is
     # which, so both are reported rather than one of them guessed at.
@@ -109,7 +113,8 @@ function Get-AsrAccessor {
 #   ReadError   the channel could not be read ('' when it was)
 function Get-AsrEventReport {
     param($Records, [string]$RuleMode = 'ungraded', $Exclusions = @(), [long]$Total = 0,
-          $Oldest = $null, $Newest = $null, [string]$ReadError = '', [bool]$IsElevated = $true)
+          $Oldest = $null, $Newest = $null, [string]$ReadError = '', [bool]$IsElevated = $true,
+          [long]$Unreadable = 0, [bool]$Truncated = $false, [string]$ExclusionError = '')
     $out = New-Object System.Collections.ArrayList
     $sev = 'OK'; $gapSev = 'OK'; $deferred = 0
     $ruleName = 'Defender''s rule against reading LSASS memory ("Block credential stealing from the Windows local security authority subsystem")'
@@ -122,7 +127,21 @@ function Get-AsrEventReport {
         $sev = 'WARNING'
     }
 
+    # An exclusion list that could not be read is the one state in which an
+    # empty log proves nothing at all, so it is said before anything else.
+    if ($ExclusionError) {
+        [void]$out.Add(('[WARNING] The programs excluded from ' + $ruleName + ' were NOT checked -- the exclusion list could not be read (' + (ConvertTo-PrintableText $ExclusionError) + '). An excluded program can read LSASS memory and leave no record here.'))
+        $gapSev = 'WARNING'
+    }
     $mode = ([string]$RuleMode).Trim().ToLowerInvariant()
+    $known = @('block', 'audit', 'warn', 'off', 'notconfigured', 'ungraded')
+    if ($known -notcontains $mode) {
+        # An unrecognised mode is not assumed to be blocking: that wording
+        # would claim protection this check cannot see.
+        [void]$out.Add(('[WARNING] ' + $ruleName + ' records NOT checked -- Section 9 reported its mode as ''' + (ConvertTo-PrintableText $mode) + ''', which this check does not recognise, so what an empty log means here cannot be said.'))
+        $gapSev = 'WARNING'
+        return @{ Lines = @($out.ToArray()); Sev = $sev; GapSev = $gapSev; Deferred = $deferred; Hits = 0 }
+    }
     if ($mode -eq 'off' -or $mode -eq 'notconfigured' -or $mode -eq 'ungraded') {
         $why = switch ($mode) {
             'off'           { 'the rule is turned OFF' }
@@ -137,15 +156,17 @@ function Get-AsrEventReport {
         return @{ Lines = @($out.ToArray()); Sev = $sev; GapSev = $gapSev; Deferred = $deferred; Hits = 0 }
     }
 
+    # A read that failed part-way still grades what it read: returning here
+    # would throw away the records already in hand, including the one naming
+    # the program. The gap is added beside them, never instead of them.
     if ($ReadError) {
         if ($IsElevated) {
-            [void]$out.Add(('[WARNING] ' + $ruleName + ': its records were NOT checked -- the Defender Operational log could not be read (' + (ConvertTo-PrintableText $ReadError) + ').'))
+            [void]$out.Add(('[WARNING] ' + $ruleName + ': its records were NOT checked, or only partly -- the Defender Operational log could not be read (' + (ConvertTo-PrintableText $ReadError) + '). Anything found before it stopped is below.'))
             $gapSev = 'WARNING'
         } else {
             [void]$out.Add(('[DEFERRED - ADMIN REQUIRED] ' + $ruleName + ': the Defender Operational log is not readable from a standard-user token (' + (ConvertTo-PrintableText $ReadError) + ') -- re-run as administrator.'))
             $deferred = 1
         }
-        return @{ Lines = @($out.ToArray()); Sev = $sev; GapSev = $gapSev; Deferred = $deferred; Hits = 0 }
     }
 
     # Group by the accessing program: one line per program, with a count and
@@ -162,9 +183,12 @@ function Get-AsrEventReport {
             continue
         }
         $key = $a.Accessor
-        if (-not $groups.ContainsKey($key)) { $groups[$key] = @{ Count = 0; Newest = $null; Blocked = 0; Audited = 0; User = '' } }
+        # 'Hits', not 'Count': a hashtable has a Count property of its own, and
+        # on an engine that resolved the property instead of the key every group
+        # would sort equal and "the busiest first" would be arbitrary.
+        if (-not $groups.ContainsKey($key)) { $groups[$key] = @{ Hits = 0; Newest = $null; Blocked = 0; Audited = 0; User = '' } }
         $g = $groups[$key]
-        $g.Count++
+        $g.Hits++
         if ([int]$r.Id -eq 1121) { $g.Blocked++ } else { $g.Audited++ }
         if ($null -eq $g.Newest -or ($null -ne $r.Time -and [datetime]$r.Time -gt [datetime]$g.Newest)) { $g.Newest = $r.Time }
         if (-not $g.User -and ([string]$r.User).Trim()) { $g.User = ([string]$r.User).Trim() }
@@ -172,7 +196,7 @@ function Get-AsrEventReport {
 
     $cap = 10
     $i = 0
-    foreach ($key in @($groups.Keys | Sort-Object { -$groups[$_].Count })) {
+    foreach ($key in @($groups.Keys | Sort-Object { -($groups[$_]['Hits']) })) {
         $i++
         if ($i -gt $cap) { break }
         $g = $groups[$key]
@@ -192,17 +216,47 @@ function Get-AsrEventReport {
     if ($groups.Keys.Count -gt $cap) {
         [void]$out.Add(('    ...and ' + ($groups.Keys.Count - $cap) + ' more program(s) of the same shape.'))
     }
+    # Grouped and capped like the lines above: a provider that writes a bare
+    # image name would otherwise put one line in the report per event, up to
+    # every record in the channel, for one ledger row.
+    $ugroups = @{}
     foreach ($r in @($unresolved)) {
-        [void]$out.Add(('[WARNING] A program tried to read LSASS memory at ' + (Format-When $r.Time) + ', and the event does not say which of its two fields names it -- Path = ' + (ConvertTo-PrintableText ([string]$r.Path)) + ', Process Name = ' + (ConvertTo-PrintableText ([string]$r.ProcessName)) + '. Both are reported rather than one of them guessed at (T1003.001).'))
+        $uk = ([string]$r.Path) + '|' + ([string]$r.ProcessName)
+        if (-not $ugroups.ContainsKey($uk)) { $ugroups[$uk] = @{ Hits = 0; Newest = $null; Path = [string]$r.Path; ProcessName = [string]$r.ProcessName } }
+        $ug = $ugroups[$uk]
+        $ug.Hits++
+        if ($null -eq $ug.Newest -or ($null -ne $r.Time -and [datetime]$r.Time -gt [datetime]$ug.Newest)) { $ug.Newest = $r.Time }
+    }
+    $i = 0
+    foreach ($uk in @($ugroups.Keys | Sort-Object { -($ugroups[$_]['Hits']) })) {
+        $i++
+        if ($i -gt $cap) { break }
+        $ug = $ugroups[$uk]
+        $times = 'once'
+        if ($ug.Hits -gt 1) { $times = [string]$ug.Hits + ' times' }
+        [void]$out.Add(('[WARNING] A program tried to read LSASS memory ' + $times + ', most recently ' + (Format-When $ug.Newest) + ', and the event does not say which of its two fields names it -- Path = ' + (ConvertTo-PrintableText $ug.Path) + ', Process Name = ' + (ConvertTo-PrintableText $ug.ProcessName) + '. Both are reported rather than one of them guessed at (T1003.001).'))
         $sev = 'WARNING'
     }
+    if ($ugroups.Keys.Count -gt $cap) {
+        [void]$out.Add(('    ...and ' + ($ugroups.Keys.Count - $cap) + ' more pair(s) of the same shape.'))
+    }
+    if ($Unreadable -gt 0) {
+        [void]$out.Add(('[WARNING] ' + $Unreadable + ' record(s) in the Defender log could not be read and were skipped -- NOT graded, not cleared.'))
+        $gapSev = 'WARNING'
+    }
+    if ($Truncated) {
+        [void]$out.Add(('[INFO] Only the newest ' + $Total + ' attack-surface-reduction record(s) were read; older ones were not.'))
+    }
 
-    if ($sev -eq 'OK') {
+    # The all-clear is withheld whenever the read failed or was deferred: "I
+    # could not read the log" and "no program tried" must never print together.
+    if ($sev -eq 'OK' -and -not $ReadError -and $Unreadable -eq 0) {
         $span = 'the records read'
         if ($null -ne $Oldest -and $null -ne $Newest) { $span = 'from ' + (Format-When $Oldest) + ' to ' + (Format-When $Newest) }
         elseif ($null -ne $Oldest) { $span = 'back to ' + (Format-When $Oldest) }
         $modeText = 'blocking'
         if ($mode -eq 'audit') { $modeText = 'in audit mode (it records such attempts without blocking them)' }
+        if ($mode -eq 'warn') { $modeText = 'in warn mode (it asks the person at the keyboard, who can allow it; Microsoft documents that this rule does not support warn mode)' }
         [void]$out.Add(('[OK] No program tried to read LSASS memory: ' + $ruleName + ' is ' + $modeText + ', and none of the ' + $Total + ' attack-surface-reduction record(s) in the Defender log, ' + $span + ', names it.'))
     }
     return @{ Lines = @($out.ToArray()); Sev = $sev; GapSev = $gapSev; Deferred = $deferred; Hits = $hits }
@@ -283,9 +337,36 @@ if ($SelfTest) {
     # The channel itself.
     $r = Get-AsrEventReport -Records @() -RuleMode 'block' -ReadError 'The specified channel could not be found.'
     $j = $r.Lines -join "`n"
-    T 'elevated, an unreadable Defender log is a raised gap, never an all-clear' ($r.Sev -eq 'OK' -and $r.GapSev -eq 'WARNING' -and $j -match 'NOT checked -- the Defender Operational log could not be read' -and $j -notmatch '\[OK\]') $j
+    T 'elevated, an unreadable Defender log is a raised gap, never an all-clear' ($r.Sev -eq 'OK' -and $r.GapSev -eq 'WARNING' -and $j -match 'NOT checked, or only partly -- the Defender Operational log could not be read' -and $j -notmatch '\[OK\]') $j
+    # A read that stopped PART-WAY: what it did find must survive.
+    $r = Get-AsrEventReport -Records @((NewRec 'C:\x\grab.exe' $L)) -RuleMode 'block' -Total 9 -ReadError 'The handle is invalid.'
+    $j = $r.Lines -join "`n"
+    T 'a read that failed part-way keeps the program it already found, and still declares the gap' ($r.Sev -eq 'WARNING' -and $r.GapSev -eq 'WARNING' -and $r.Hits -eq 1 -and $j -match 'C:\\x\\grab\.exe tried to read LSASS memory' -and $j -match 'only partly' -and $j -notmatch '\[OK\]') $j
+    $r = Get-AsrEventReport -Records @() -RuleMode 'block' -Total 9 -Unreadable 4
+    $j = $r.Lines -join "`n"
+    T 'records that could not be read are declared as not graded, and withhold the all-clear' ($r.GapSev -eq 'WARNING' -and $j -match '\[WARNING\] 4 record\(s\) in the Defender log could not be read and were skipped -- NOT graded, not cleared' -and $j -notmatch '\[OK\]') $j
+    $r = Get-AsrEventReport -Records @() -RuleMode 'block' -Total 20000 -Truncated $true -Oldest $t0 -Newest $t0
+    T 'a read that stopped at the cap says so, and may still print the all-clear for what it read' ($r.Sev -eq 'OK' -and ($r.Lines -join "`n") -match '\[INFO\] Only the newest 20000 attack-surface-reduction record\(s\) were read' -and ($r.Lines -join "`n") -match '\[OK\]') ($r.Lines -join ' | ')
+    $r = Get-AsrEventReport -Records @() -RuleMode 'block' -ExclusionError 'Requested registry access is not allowed.'
+    $j = $r.Lines -join "`n"
+    T 'an exclusion list that could not be read is a raised gap and withholds nothing it cannot claim' ($r.GapSev -eq 'WARNING' -and $j -match 'The programs excluded from .* were NOT checked' -and $j -match 'can read LSASS memory and leave no record here') $j
+    $r = Get-AsrEventReport -Records @() -RuleMode 'enforced' -Total 3
+    $j = $r.Lines -join "`n"
+    T 'a mode this check does not recognise is a declared gap, never assumed to be blocking' ($r.GapSev -eq 'WARNING' -and $j -match 'which this check does not recognise' -and $j -notmatch 'is blocking' -and $j -notmatch '\[OK\]') $j
+    $r = Get-AsrEventReport -Records @() -RuleMode 'warn' -Total 3 -Oldest $t0 -Newest $t0
+    T 'warn mode has its own wording and is never called blocking' ($r.Sev -eq 'OK' -and ($r.Lines -join "`n") -match 'in warn mode \(it asks the person at the keyboard' -and ($r.Lines -join "`n") -notmatch 'is blocking') ($r.Lines -join ' | ')
+    T 'an event naming lsass.exe and nothing else names nobody as the accessor: unresolved, not a blank WARNING' ((Get-AsrAccessor -Path '' -ProcessName $L).Certain -eq $false -and (Get-AsrAccessor -Path $L -ProcessName '  ').Certain -eq $false) ''
+    $r = Get-AsrEventReport -Records @((NewRec '' $L)) -RuleMode 'block' -Total 1
+    $j = $r.Lines -join "`n"
+    T 'such an event prints both fields rather than a WARNING naming nobody' ($j -notmatch '\[WARNING\]\s+tried to read' -and $j -match 'does not say which of its two fields names it') $j
+    $many2 = @()
+    foreach ($k in 1..13) { $many2 += (NewRec ('bare' + $k + '.exe') 'alsobare.exe') }
+    $r = Get-AsrEventReport -Records $many2 -RuleMode 'block' -Total 13
+    T 'unresolved lines are grouped and capped too: a provider writing bare names cannot fill the report' (@($r.Lines | Where-Object { $_ -match 'does not say which of its two fields' }).Count -eq 10 -and ($r.Lines -join "`n") -match '\.\.\.and 3 more pair\(s\)') ($r.Lines -join ' | ')
+    $r = Get-AsrEventReport -Records @((NewRec 'bare.exe' 'alsobare.exe'), (NewRec 'bare.exe' 'alsobare.exe'), (NewRec 'bare.exe' 'alsobare.exe')) -RuleMode 'block' -Total 3
+    T 'three identical unresolved events are one line, counted' (@($r.Lines | Where-Object { $_ -match 'does not say which' }).Count -eq 1 -and ($r.Lines -join "`n") -match 'read LSASS memory 3 times') ($r.Lines -join ' | ')
     $r = Get-AsrEventReport -Records @() -RuleMode 'block' -ReadError 'Attempted to perform an unauthorized operation.' -IsElevated $false
-    T 'on a standard-user token the same channel is a counted deferral, never a ledger row' ($r.Sev -eq 'OK' -and $r.GapSev -eq 'OK' -and $r.Deferred -eq 1 -and ($r.Lines -join "`n") -match '^\[DEFERRED - ADMIN REQUIRED\]' -and ($r.Lines -join "`n") -notmatch '\[OK\]') ($r.Lines -join ' | ')
+    T 'on a standard-user token the same channel is a counted deferral, never a ledger row, and never an all-clear' ($r.Sev -eq 'OK' -and $r.GapSev -eq 'OK' -and $r.Deferred -eq 1 -and ($r.Lines -join "`n") -match '^\[DEFERRED - ADMIN REQUIRED\]' -and ($r.Lines -join "`n") -notmatch '\[OK\]') ($r.Lines -join ' | ')
 
     T 'a control character in a field cannot start a report line' ((((Get-AsrEventReport -Records @((NewRec ('C:\a' + [char]10 + '[OK] fake') $L)) -RuleMode 'block' -Total 1).Lines -join "`n") -notmatch '(?m)^\[OK\] fake')) ''
 
@@ -308,6 +389,7 @@ if ($Elevated -lt 0) {
 # Per-rule exclusions, from both the policy and the local key. An exclusion
 # here lets a program read LSASS leaving no event at all.
 $exclusions = New-Object System.Collections.ArrayList
+$exclusionError = ''
 foreach ($base in @('HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Windows Defender Exploit Guard\ASR\ASROnlyPerRuleExclusions',
                     'HKLM:\SOFTWARE\Microsoft\Windows Defender\Windows Defender Exploit Guard\ASR\ASROnlyPerRuleExclusions')) {
     $k = $base + '\' + $RuleId
@@ -317,11 +399,15 @@ foreach ($base in @('HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Windows 
         foreach ($n in @($p.PSObject.Properties | Where-Object { $_.Name -notlike 'PS*' })) {
             if ($exclusions -notcontains $n.Name) { [void]$exclusions.Add($n.Name) }
         }
-    } catch { }
+    } catch {
+        # Swallowing this was the one failure that makes an empty log
+        # meaningless: an excluded program leaves no record at all.
+        if (-not $exclusionError) { $exclusionError = $_.Exception.Message }
+    }
 }
 
 $records = New-Object System.Collections.ArrayList
-$total = 0L; $oldest = $null; $newest = $null
+$total = 0L; $oldest = $null; $newest = $null; $unreadable = 0L; $truncated = $false
 $readError = ''
 try {
     $q = New-Object System.Diagnostics.Eventing.Reader.EventLogQuery('Microsoft-Windows-Windows Defender/Operational', [System.Diagnostics.Eventing.Reader.PathType]::LogName, '*[System[EventID=1121 or EventID=1122]]')
@@ -345,9 +431,12 @@ try {
                     [void]$records.Add(@{ Time = $e.TimeCreated; Id = $e.Id; RuleId = $h['ID']; Path = $h['Path']; ProcessName = $h['Process Name']; CommandLine = $h['Target Commandline']; User = $h['User'] })
                 }
             } catch {
-                # One unreadable record is skipped, never the whole read.
+                # One unreadable record is skipped, never the whole read -- and
+                # counted, so a provider this cannot parse does not read as a
+                # log with nothing in it.
+                $unreadable++
             } finally { $e.Dispose() }
-            if ($total -ge $MaxRecords) { break }
+            if ($total -ge $MaxRecords) { $truncated = $true; break }
         }
     } finally { $reader.Dispose() }
 } catch {
@@ -355,7 +444,8 @@ try {
 }
 
 $report = Get-AsrEventReport -Records @($records.ToArray()) -RuleMode $RuleMode -Exclusions @($exclusions.ToArray()) `
-    -Total $total -Oldest $oldest -Newest $newest -ReadError $readError -IsElevated ($Elevated -eq 1)
+    -Total $total -Oldest $oldest -Newest $newest -ReadError $readError -IsElevated ($Elevated -eq 1) `
+    -Unreadable $unreadable -Truncated $truncated -ExclusionError $exclusionError
 foreach ($l in $report.Lines) { $l }
 Write-Marker -Name 'asrlsass' -Sev $report.Sev
 if ($report.GapSev -ne 'OK') { Write-Marker -Name 'asrlsass_gap' -Sev $report.GapSev }

@@ -523,6 +523,27 @@ proof     = ci:lsass_dump_config.ps1
 signature = AuditLevel = \d+ -- the LSA-protection audit setting Microsoft documents
 note      = Microsoft documents Image File Execution Options\LSASS.exe\AuditLevel = 8 as LSA protection's audit mode, and it is on by default on a clean-installed Windows 11 22H2 or later. So the IFEO key for lsass.exe exists on healthy machines and says nothing by itself; this check grades the VALUES it holds (GlobalFlag's 0x200 flag) and names AuditLevel as the ordinary one. A reader who finds this key should not read its mere existence as tampering.
 
+[asr-lsass-rule-exclusion-by-management]
+class     = ADVISE
+maxsev    = WARNING
+proof     = field:a per-rule ASR exclusion is set by whoever manages the machine (Intune, Group Policy, or an EDR's own installer); adding one on a runner would be configuring the runner's Defender, which this suite does not do, and the judgement is covered by asr_lsass_events.ps1 -SelfTest in both directions
+signature = is EXCLUDED from Defender's rule against reading LSASS memory
+note      = A managed machine can legitimately carry an exclusion here: some endpoint-protection and backup products ask for one, and an administrator may have added it to stop an ASR false positive. Microsoft documents that this rule ignores ordinary antivirus exclusions and honours only its own, so whatever is listed was added for this rule deliberately. Check with whoever manages the machine. What matters is that while the exclusion stands, that program can read the credentials in LSASS and leave no record at all, so the empty log below it proves nothing about that program.
+
+[wer-localdumps-for-support]
+class     = ADVISE
+maxsev    = WARNING
+proof     = field:configuring Windows Error Reporting to dump a named program is something a support engineer or a developer does on their own machine; this suite does not configure the runner's error reporting, and the grading (per-image versus global, and which values) is covered by lsass_dump_config.ps1 -SelfTest
+signature = (Error Reporting is configured to write a dump of|is configured to START A PROGRAM when it exits)
+note      = A support engineer diagnosing a crash, or a developer debugging a service, may set Windows Error Reporting or silent-process-exit monitoring to capture a named program. That is the benign cause, and it is almost always recent and remembered. Nothing in Windows sets either of these for LSASS by itself. Remove the setting once it is no longer needed: while it stands, every exit of that program can leave its memory, credentials included, in a file on disk.
+
+[asr-lsass-event-fields-unresolved]
+class     = QUIET
+maxsev    = WARNING
+proof     = ci:asr_lsass_events.ps1
+signature = does not say which of its two fields names it
+note      = Defender's attack-surface-reduction events do not label which field holds the program that was stopped: for this rule a real capture has the accessing program in Path and lsass.exe in Process Name, and for other rules the roles are reversed. When neither field names lsass.exe the check cannot tell them apart, so it prints both rather than guessing, and groups repeats into one line. Read both paths: one of them is the program to look at. If this line appears often with the same pair, the provider on that build labels its fields differently again, which is worth reporting.
+
 [lsass-dump-by-an-administrator]
 class     = ADVISE
 maxsev    = CRITICAL

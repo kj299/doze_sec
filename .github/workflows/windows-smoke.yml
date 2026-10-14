@@ -3136,7 +3136,7 @@ jobs:
           $st = (.\tools\asr_lsass_events.ps1 -SelfTest) -join "`n"
           if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'asr_lsass_events.ps1 -SelfTest failed' }
           $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($nst -lt 22) { throw "asr_lsass_events self-test ran only $nst case(s)" }
+          if ($nst -lt 34) { throw "asr_lsass_events self-test ran only $nst case(s)" }
           Write-Host "asr_lsass_events -SelfTest OK ($nst cases)"
           # The runner's real Defender log. The rule's mode decides what an
           # empty log means, so each mode is asserted for the right line: no
@@ -3171,7 +3171,7 @@ jobs:
           $st = (.\tools\lsass_dump_config.ps1 -SelfTest) -join "`n"
           if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'lsass_dump_config.ps1 -SelfTest failed' }
           $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($nst -lt 25) { throw "lsass_dump_config self-test ran only $nst case(s)" }
+          if ($nst -lt 33) { throw "lsass_dump_config self-test ran only $nst case(s)" }
           Write-Host "lsass_dump_config -SelfTest OK ($nst cases)"
           # The runner's real LSASS: nothing configured, nothing on disk.
           $md = Join-Path $env:TEMP 'dz_ci_lsadump'
@@ -3199,7 +3199,11 @@ jobs:
             New-ItemProperty -Path $spe -Name 'LocalDumpFolder' -Value $dumpDir -PropertyType String -Force | Out-Null
             New-ItemProperty -Path $spe -Name 'DumpType' -Value 2 -PropertyType DWord -Force | Out-Null
             New-Item -ItemType Directory -Path $dumpDir -Force | Out-Null
-            Set-Content -LiteralPath (Join-Path $dumpDir 'dz_ci_dumpcfg-1234.dmp') -Value 'not a real dump' -Encoding ASCII
+            # 'MDMP' first: the check grades the HEADER, so a file without it
+            # is reported as named-like-a-dump rather than as one. Both shapes
+            # are asserted below.
+            Set-Content -LiteralPath (Join-Path $dumpDir 'dz_ci_dumpcfg-1234.dmp') -Value 'MDMP not a real dump' -Encoding ASCII -NoNewline
+            Set-Content -LiteralPath (Join-Path $dumpDir 'dz_ci_dumpcfg-notadump.dmp') -Value 'plain text, not a dump' -Encoding ASCII -NoNewline
             Remove-Item $md -Recurse -Force -EA SilentlyContinue
             New-Item -ItemType Directory -Path $md | Out-Null
             $p = (.\tools\lsass_dump_config.ps1 -MarkerDir $md -ImageName 'dz_ci_dumpcfg.exe') -join "`n"
@@ -3207,6 +3211,7 @@ jobs:
             if ($p -notmatch '\[WARNING\] Silent-process-exit monitoring is ENABLED for dz_ci_dumpcfg\.exe: .*GlobalFlag = 0x200 has the 0x200 flag set') { throw "the planted GlobalFlag was not read from a real REG_DWORD: $p" }
             if ($p -notmatch ('\[WARNING\] dz_ci_dumpcfg\.exe is configured to have its memory DUMPED when it exits: .*writing to ' + [regex]::Escape($dumpDir))) { throw "the planted dump setting was not reported with its folder: $p" }
             if ($p -notmatch '\[CRITICAL\] A memory dump of dz_ci_dumpcfg\.exe is on disk: .*dz_ci_dumpcfg-1234\.dmp') { throw "the planted dump file was not found where the setting points: $p" }
+            if ($p -notmatch '\[WARNING\] A file named like a memory dump of dz_ci_dumpcfg\.exe is on disk, but it is not one: .*dz_ci_dumpcfg-notadump\.dmp') { throw "a file named like a dump without a minidump header was not reported as that: $p" }
             if ($p -notmatch '\[INFO\] Image File Execution Options\\dz_ci_dumpcfg\.exe\\AuditLevel = 8 -- the LSA-protection audit setting') { throw "AuditLevel was not named as the ordinary setting: $p" }
             if ((Get-Content (Join-Path $md 'dz_lsadump.txt')).Trim() -ne 'CRITICAL') { throw 'the dump file did not drive a CRITICAL marker' }
             if ($p -match 'credential|LSASS') { throw 'the test image borrowed LSASS''s wording' }
@@ -3216,6 +3221,11 @@ jobs:
             Remove-Item -Path $dumpDir -Recurse -Force -EA SilentlyContinue
             Remove-Item $md -Recurse -Force -EA SilentlyContinue
           }
+          # This step's own cleanup is CHECKED, not assumed: -EA
+          # SilentlyContinue hides a failed removal, and a leftover key would
+          # make every later run of this job start dirty.
+          foreach ($k in @($ifeo, $spe)) { if (Test-Path $k) { throw "this step did not clean up after itself: $k still exists" } }
+          if (Test-Path $dumpDir) { throw "this step did not clean up after itself: $dumpDir still exists" }
           # The real LSASS keys must be untouched by this step.
           if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SilentProcessExit\lsass.exe') { throw 'this step must never create the SilentProcessExit key for the real lsass.exe' }
           exit 0

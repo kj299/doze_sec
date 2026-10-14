@@ -294,7 +294,7 @@ jobs:
                    'exactly one row in the shipped table is context-only, and it is Kernel Object'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
-          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 27 ] || { echo "only $n case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 28 ] || { echo "only $n case(s)"; exit 1; }
       - name: persistence_eval -- the owner's real autoruns, and Process Explorer's Replace Task Manager
         run: |
           out=$(pwsh -NoProfile -File tools/persistence_eval.ps1 -SelfTest); echo "$out"
@@ -401,7 +401,7 @@ jobs:
                    'with the rule off, an empty log is [SKIPPED] and raises nothing -- never an all-clear'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 22 ] || { echo "only $n case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 34 ] || { echo "only $n case(s)"; exit 1; }
       - name: lsass_dump_config -- a dump-on-exit setting or a dump file is a finding; the documented LSA-protection value is not
         run: |
           out=$(pwsh -NoProfile -File tools/lsass_dump_config.ps1 -SelfTest); echo "$out"
@@ -414,7 +414,7 @@ jobs:
                    'pointed at another program, every line names that program and none mentions LSASS'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 27 ] || { echo "only $n case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 33 ] || { echo "only $n case(s)"; exit 1; }
       - name: proc_snapshot -- one query, the former Name-PID-Path lines byte for byte, and the process tree
         run: |
           out=$(pwsh -NoProfile -File tools/proc_snapshot.ps1 -SelfTest); echo "$out"

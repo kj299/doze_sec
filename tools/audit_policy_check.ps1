@@ -85,20 +85,27 @@ function ConvertFrom-AuditpolCsv {
 #                                    classified; say so, never fabricate OFF
 function Get-AuditRowVerdict {
     param([string]$Name, [string]$Setting, [string]$Feeds, [string]$Guid = '', [bool]$Context = $false)
-    if ($Setting -and $Setting -match 'Success') {
-        return @{ Line = "[OK] $Name auditing is ON -- feeds $Feeds."; Sev = 'OK' }
-    }
-    # A CONTEXT row tells the reader which evidence is not being recorded; it is
-    # never a finding. Windows ships a SACL on LSASS that records attempts to
-    # read its memory, but only while Kernel Object auditing is on, and
-    # Microsoft's default for that subcategory is Off -- so grading it like the
-    # rows above would raise on nearly every machine AND flip the coverage
-    # block's audit visibility to REDUCED everywhere (the regression PR #248
-    # paid for). Its text carries no graded phrase, and an [INFO] tag cannot
-    # reach the ON/OFF evidence either way.
+    # A CONTEXT row tells the reader which evidence is kept and which is not,
+    # and is NEITHER a finding NOR evidence that auditing is on. It is decided
+    # FIRST, before the Success test: Windows ships a SACL on LSASS that records
+    # attempts to read its memory, but only while Kernel Object auditing is on,
+    # and Microsoft's default for that subcategory is Off. Grading its absence
+    # would raise on nearly every machine; letting its PRESENCE through the
+    # [OK] branch below was worse, and is what the first version did -- on a
+    # machine where all four graded rows were unreadable (a localized Windows)
+    # but this one was on, the coverage block then read
+    # "Audit visibility : OK" for subcategories it had failed to read. That is
+    # the regression PR #248 paid for, reintroduced by one misplaced branch, so
+    # both of this row's wordings are [INFO] and neither is a graded phrase.
     if ($Context) {
         $shownC = if ($Setting) { $Setting } else { '(not set)' }
+        if ($Setting -and $Setting -match 'Success') {
+            return @{ Line = "[INFO] $Name IS being recorded [$shownC] -- $Feeds."; Sev = 'OK'; Context = $true }
+        }
         return @{ Line = "[INFO] $Name is not being recorded [$shownC] -- $Feeds. Not a finding: Windows leaves this subcategory off by default."; Sev = 'OK'; Context = $true }
+    }
+    if ($Setting -and $Setting -match 'Success') {
+        return @{ Line = "[OK] $Name auditing is ON -- feeds $Feeds."; Sev = 'OK' }
     }
     if ($Setting -and $Setting -notmatch '^(No Auditing|Failure)$') {
         return @{ Line = "[WARNING] $Name auditing state could not be read -- auditpol reported '$Setting', which this check cannot classify (localized Windows). Verify manually: auditpol /get /subcategory:$Guid"; Sev = 'WARNING'; Gap = $true }
@@ -144,7 +151,7 @@ $script:Subs = @(
     # events as high-volume with "little to no security relevance", so the audit
     # does not ask for them and does not grade their absence -- it says, once,
     # that this evidence is not being kept.
-    @{ Guid = '{0CCE921F-69AE-11D9-BED3-505054503030}'; Name = 'Kernel Object (4656/4663: attempts to read LSASS memory)'; Context = $true; Feeds = 'with it on, Windows records which program tried to read another process''s memory, including LSASS' }
+    @{ Guid = '{0CCE921F-69AE-11D9-BED3-505054503030}'; Name = 'Kernel Object (4656/4663: attempts to read LSASS memory)'; Context = $true; Feeds = 'when it is on, Windows records which program tried to read another process''s memory, including LSASS; when it is off, nothing records that' }
 )
 
 # PURE: the whole subcategory table, graded. Rows maps a lowercase, brace-less
@@ -228,7 +235,7 @@ if ($SelfTest) {
 
     # The CONTEXT row: it names evidence that is not being kept, and it is never
     # a finding and never evidence of auditing being on.
-    $cx = Get-AuditRowVerdict -Name 'Kernel Object (4656/4663: attempts to read LSASS memory)' -Setting 'No Auditing' -Feeds 'with it on, Windows records which program tried to read another process''s memory, including LSASS' -Context $true
+    $cx = Get-AuditRowVerdict -Name 'Kernel Object (4656/4663: attempts to read LSASS memory)' -Setting 'No Auditing' -Feeds 'when it is on, Windows records which program tried to read another process''s memory, including LSASS; when it is off, nothing records that' -Context $true
     T 'a CONTEXT row that is off prints [INFO], raises nothing, and uses none of the graded phrases' ($cx.Sev -eq 'OK' -and $cx.Context -eq $true -and $cx.Line -cmatch '^\[INFO\] Kernel Object .* is not being recorded \[No Auditing\]' -and $cx.Line -cnotmatch 'auditing is (ON|OFF)') $cx.Line
     # The real table, graded end to end: the four graded rows on, Kernel Object
     # off. Exactly one [INFO], no WARNING, nothing raised.
@@ -241,7 +248,14 @@ if ($SelfTest) {
     T 'nothing recorded at all: every graded row WARNS, the context row still only informs' ($tr.Sev -eq 'WARNING' -and @($tr.Lines | Where-Object { $_ -cmatch '^\[WARNING\]' }).Count -eq ($script:Subs.Count - 1) -and @($tr.Lines | Where-Object { $_ -cmatch '^\[INFO\] Kernel Object ' }).Count -eq 1) ($tr.Lines -join ' | ')
     T 'exactly one row in the shipped table is context-only, and it is Kernel Object' (@($script:Subs | Where-Object { $_.ContainsKey('Context') -and $_.Context }).Count -eq 1 -and @($script:Subs | Where-Object { $_.ContainsKey('Context') -and $_.Context })[0].Guid -eq '{0CCE921F-69AE-11D9-BED3-505054503030}') ''
     $cx = Get-AuditRowVerdict -Name 'Kernel Object (4656/4663: attempts to read LSASS memory)' -Setting 'Success and Failure' -Feeds 'x' -Context $true
-    T 'a CONTEXT row that is ON reads like the others ([OK] ... auditing is ON)' ($cx.Sev -eq 'OK' -and $cx.Line -cmatch '^\[OK\] Kernel Object .* auditing is ON') $cx.Line
+    T 'a CONTEXT row that is ON is also [INFO] and never says the graded phrase: it is not evidence that the audit''s own subcategories are on' ($cx.Sev -eq 'OK' -and $cx.Context -eq $true -and $cx.Line -cmatch '^\[INFO\] Kernel Object .* IS being recorded \[Success and Failure\]' -and $cx.Line -cnotmatch 'auditing is (ON|OFF)') $cx.Line
+    # The shape that broke it: a localized Windows where none of the four
+    # graded rows can be read, and this one is on.
+    $loc = @{}
+    foreach ($sb in $script:Subs) { $loc[$sb.Guid.ToLower().Trim('{', '}')] = 'Erfolg' }
+    $loc['0cce921f-69ae-11d9-bed3-505054503030'] = 'Success and Failure'
+    $tr = Get-AuditRowsReport -Subs $script:Subs -Rows $loc
+    T 'all four graded rows unreadable while Kernel Object is ON: four raised gaps, and no line that could certify audit visibility' ($tr.GapSev -eq 'WARNING' -and @($tr.Lines | Where-Object { $_ -cmatch 'auditing is ON' }).Count -eq 0 -and @($tr.Lines | Where-Object { $_ -cmatch '^\[WARNING\].*cannot classify' }).Count -eq 4) ($tr.Lines -join ' | ')
     $cx = Get-AuditRowVerdict -Name 'Process Creation (4688)' -Setting 'No Auditing' -Feeds 'x'
     T 'without -Context the same setting is still a WARNING (the four graded rows are untouched)' ($cx.Sev -eq 'WARNING' -and $cx.Line -cmatch 'auditing is OFF') $cx.Line
     T 'the cannot-classify row is flagged as a GAP (it feeds the auditpol_gap marker, never the finding row)' ((Get-AuditRowVerdict -Name 'Logon' -Setting 'Erfolg' -Feeds 'x').Gap -eq $true -and -not (Get-AuditRowVerdict -Name 'Logon' -Setting 'No Auditing' -Feeds 'x').Gap) ''

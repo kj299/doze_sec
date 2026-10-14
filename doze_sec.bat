@@ -3354,7 +3354,6 @@ if exist "%TEMP%\dz_lsacopy_deferred.txt" (
 )
 echo.>> "%REPORT%"
 echo --- Programs Defender caught reading LSASS memory, and settings that would dump it (T1003.001) --->> "%REPORT%"
-echo  Command: powershell -File tools\asr_lsass_events.ps1>> "%REPORT%"
 echo  Command: powershell -File tools\lsass_dump_config.ps1>> "%REPORT%"
 echo  Command: powershell -Command "Get-WinEvent -LogName 'Microsoft-Windows-Windows Defender/Operational' -MaxEvents 200 -EA SilentlyContinue | Where-Object { $_.Id -eq 1121 -or $_.Id -eq 1122 }">> "%REPORT%"
 echo  Command: reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SilentProcessExit\lsass.exe">> "%REPORT%"
@@ -3369,6 +3368,14 @@ rem The rule's mode was measured once, in Section 9. A second Get-MpPreference
 rem here would be a second opinion, not a summary.
 set "ASR_LSASS_MODE=ungraded"
 if exist "%TEMP%\dz_asr_lsass_mode.txt" set /p ASR_LSASS_MODE=<"%TEMP%\dz_asr_lsass_mode.txt"
+rem The value becomes part of a command line, so only the five words Section 9
+rem writes are allowed through; anything else is treated as not graded.
+set "ASR_MODE_OK="
+for %%m in (block audit warn off notconfigured ungraded) do if /i "%ASR_LSASS_MODE%"=="%%m" set "ASR_MODE_OK=1"
+if not defined ASR_MODE_OK set "ASR_LSASS_MODE=ungraded"
+rem Printed with the mode this machine is in, so a reader who pastes the line
+rem sees their own state rather than a default that says nothing.
+echo  Command: powershell -File tools\asr_lsass_events.ps1 -RuleMode %ASR_LSASS_MODE%>> "%REPORT%"
 if exist "%SCRIPT_DIR%tools\asr_lsass_events.ps1" (
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\asr_lsass_events.ps1" -RuleMode "%ASR_LSASS_MODE%">> "%REPORT%" 2>&1
 ) else (

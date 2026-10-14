@@ -81,9 +81,58 @@ Two defects in this change's own tests, found while writing them:
   The lint now drops backslashes before counting, so the class cannot recur --
   and its own comment names no technique id, since it scans its own source.
 
+A read-only review before the first push found these, all fixed:
+- **The previous PR's regression, reintroduced by one misplaced branch.** The
+  context row was decided *after* the "auditing is ON" test, so on a machine
+  where all four graded subcategories were unreadable (a localized Windows)
+  but this one was on, the coverage block read `Audit visibility : OK` for
+  subcategories it had failed to read. Both of the row's wordings are now
+  `[INFO]`, decided first, and that exact shape is a self-test case in both
+  tools.
+- **A finding that named nobody.** An event holding lsass.exe in one field and
+  nothing in the other produced `[WARNING]  tried to read LSASS memory` --
+  and it did not even match the contract written to protect that line, so no
+  gate would have caught it.
+- **A report a provider could flood.** The unresolved-field lines were neither
+  grouped nor capped, so a build that writes a bare image name would put one
+  line per event in the report for a single ledger row.
+- **A gap that threw away what it had found.** A Defender-log read that failed
+  part-way returned the gap instead of the records already in hand, including
+  the one naming the program. It is now additive, as the companion tool is,
+  and the all-clear is withheld whenever a read failed.
+- **Silently swallowed failures:** an unreadable exclusion list (the one state
+  in which an empty log proves nothing), unreadable individual records, and a
+  read that stopped at the record cap -- all three are now declared.
+- **The folder the dump would actually land in was not searched.** LSASS runs
+  as SYSTEM, so the documented default folder is SYSTEM's temp folder, not the
+  folder of whoever runs the audit; only the latter was searched, and the
+  all-clear named it. Both expansions and the system profile's are searched
+  now, and a folder that could not be listed is no longer claimed as searched.
+- **A file named like a dump is not one.** The search matched 8.3 short names
+  and graded by name alone, so `lsass_notes.dmp` drew the full
+  change-your-passwords advice. Files are matched in PowerShell and graded by
+  their first four bytes: a minidump header keeps the CRITICAL, a file without
+  one is a WARNING that says it holds no process memory, and a header that
+  cannot be read stays CRITICAL and says so.
+- **A mode the tool did not know read as protection.** Section 9 can report
+  the rule in warn mode, which this check did not recognise and then described
+  as "blocking". Warn has its own wording, and an unrecognised mode is a
+  declared gap.
+- Smaller: a hashtable key named `Count` that collides with a hashtable's own
+  property (so "the busiest first" could have been arbitrary on 5.1); a
+  negative `REG_DWORD` printed sign-extended -- and the mask written to fix
+  that silently did nothing, because PowerShell reads the literal
+  `0xFFFFFFFF` as Int32 -1; folder de-duplication by exact string, so one
+  folder could be searched twice; a flag written as bare digits with no base,
+  now read both ways; four graded lines with no benign-corpus entry; two
+  missing contracts; case floors below the real counts; a printed `Command:`
+  line that would have told a reader nothing about their own machine; and a
+  CI step that never verified its own cleanup.
+
 Tests, both directions; nothing is dumped and no process is copied:
-- Self-tests: 22 cases for the event check, 27 for the dump settings, 27 for
-  the audit policy. Ten mutations each fail their own cases.
+- Self-tests: 34 cases for the event check, 33 for the dump settings, 28 for
+  the audit policy. Thirteen mutations each fail their own cases, including
+  the reintroduced coverage-block defect.
 - **helpers job:** both self-tests on 5.1; the runner's real state graded
   (nothing configured, nothing on disk, and either the all-clear or the
   declared gap for Defender's log); each of the three "no record is being
@@ -93,7 +142,8 @@ Tests, both directions; nothing is dumped and no process is copied:
   that they were not).
 - **Harness:** a file that looks like a dump of LSASS, in the folder Windows
   would use, proves the whole path end to end (line, marker, ledger row). It
-  is a few bytes of text and configures nothing, so a failed cleanup cannot
+  carries a minidump signature so it exercises the header check rather than
+  only the name rule, holds one line of text and configures nothing, so a failed cleanup cannot
   leave a machine writing credentials to disk; the finding names the harness
   marker in its own text, so a leftover cannot send its owner into an
   incident response, while still being reported as a real one would be.
