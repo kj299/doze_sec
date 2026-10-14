@@ -1877,7 +1877,10 @@ jobs:
           # Coverage mode over a synthetic report with a SKIPPED line and an
           # auditing-off line must surface both in its confidence summary.
           $rp = Join-Path $env:TEMP ("dz_rs_ci_{0}.txt" -f $PID)
-          Set-Content -LiteralPath $rp -Value @('[CRITICAL] x','[SKIPPED] y','Process Creation (4688) auditing is OFF [(not set)]') -Encoding ASCII
+          # The OFF line in the shape audit_policy_check prints it (tagged): the
+          # coverage block counts only that check's own lines, so an untagged
+          # sentence elsewhere cannot certify or reduce audit visibility.
+          Set-Content -LiteralPath $rp -Value @('[CRITICAL] x','[SKIPPED] y','[WARNING] Process Creation (4688) auditing is OFF [(not set)] -- a clean result may only mean these events are not being recorded (T1562.002).') -Encoding ASCII
           try {
             $cov = (.\tools\report_safety.ps1 -Mode Coverage -Report $rp) -join "`n"
             Write-Host $cov
