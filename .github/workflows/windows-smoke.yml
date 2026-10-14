@@ -1877,7 +1877,10 @@ jobs:
           # Coverage mode over a synthetic report with a SKIPPED line and an
           # auditing-off line must surface both in its confidence summary.
           $rp = Join-Path $env:TEMP ("dz_rs_ci_{0}.txt" -f $PID)
-          Set-Content -LiteralPath $rp -Value @('[CRITICAL] x','[SKIPPED] y','Process Creation (4688) auditing is OFF [(not set)]') -Encoding ASCII
+          # The OFF line in the shape audit_policy_check prints it (tagged): the
+          # coverage block counts only that check's own lines, so an untagged
+          # sentence elsewhere cannot certify or reduce audit visibility.
+          Set-Content -LiteralPath $rp -Value @('[CRITICAL] x','[SKIPPED] y','[WARNING] Process Creation (4688) auditing is OFF [(not set)] -- a clean result may only mean these events are not being recorded (T1562.002).') -Encoding ASCII
           try {
             $cov = (.\tools\report_safety.ps1 -Mode Coverage -Report $rp) -join "`n"
             Write-Host $cov
@@ -2881,7 +2884,7 @@ jobs:
           $st = (.\tools\masquerade_check.ps1 -SelfTest) -join "`n"
           if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'masquerade_check.ps1 -SelfTest failed' }
           $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($nst -lt 110) { throw "masquerade_check self-test ran only $nst case(s)" }
+          if ($nst -lt 125) { throw "masquerade_check self-test ran only $nst case(s)" }
           Write-Host "masquerade_check -SelfTest OK ($nst cases)"
           $sp = (.\tools\proc_snapshot.ps1 -SelfTest) -join "`n"
           if ($LASTEXITCODE -ne 0) { Write-Host $sp; throw 'proc_snapshot.ps1 -SelfTest failed' }
@@ -2926,8 +2929,10 @@ jobs:
           $old = Join-Path $env:TEMP 'dz_ci_proc4_old.tmp'
           $pm = Join-Path $env:TEMP 'dz_ci_masq_parent.txt'
           $cm = Join-Path $env:TEMP 'dz_ci_masq_count.txt'
+          $lc = Join-Path $env:TEMP 'dz_ci_masq_lsacopy.txt'
+          $oc = Join-Path $env:TEMP 'dz_ci_masq_copy.txt'
           $snap = (Resolve-Path .\tools\proc_snapshot.ps1).Path
-          Remove-Item $d2, $t2, $old, $pm, $cm, $mk -Force -EA SilentlyContinue
+          Remove-Item $d2, $t2, $old, $pm, $cm, $lc, $oc, $mk -Force -EA SilentlyContinue
           # A .cmd file, so the lines reach cmd exactly as a bat holds them (no
           # argument re-quoting by PowerShell on the way): the new call, and the
           # bats' former one-liner to compare the bytes against.
@@ -2960,9 +2965,9 @@ jobs:
           $noTicks = @($tl | Where-Object { $_.Split('|')[2] -eq '' })
           Write-Host ("tree: {0} processes, {1} without a creation time: {2}" -f $tl.Count, $noTicks.Count, ($noTicks -join ', '))
           if ($noTicks.Count -gt [math]::Max(3, [int]($tl.Count / 20))) { throw 'too many processes without a creation time for the parent rule to grade' }
-          $out = (.\tools\masquerade_check.ps1 -Path $d2 -MarkerFile $mk -TreePath $t2 -ParentMarkerFile $pm -CountMarkerFile $cm) -join "`n"
-          Write-Host (($out -split "`n" | Where-Object { $_ -match 'by parent|wrong parent|child:|parent:|instance:|started by the parent|whose parent|creation time|clock moved|holds no' }) -join "`n")
-          if ((Test-Path $pm) -or (Test-Path $cm)) { throw "the runner's own process tree was reported as masquerading by parent: $out" }
+          $out = (.\tools\masquerade_check.ps1 -Path $d2 -MarkerFile $mk -TreePath $t2 -ParentMarkerFile $pm -CountMarkerFile $cm -LsassCopyMarkerFile $lc -CopyMarkerFile $oc) -join "`n"
+          Write-Host (($out -split "`n" | Where-Object { $_ -match 'by parent|wrong parent|child:|parent:|instance:|copy:|is a copy|started by the parent|whose parent|creation time|clock moved|holds no' }) -join "`n")
+          if ((Test-Path $pm) -or (Test-Path $cm) -or (Test-Path $lc) -or (Test-Path $oc)) { throw "the runner's own process tree was reported as masquerading by parent, or as holding a copy of a system process: $out" }
           if ($out -notmatch '\[OK\] \d+ system-process name\(s\) were started by the parent Windows uses') { throw 'the real tree did not print the parent OK line' }
 
           # Synthetic children against the LIVE tree (their parents are real):
@@ -2982,7 +2987,11 @@ jobs:
           #    (a session that is ending), and the same in the session of the
           #    runner's real winlogon.exe: WARNING;
           #  - a dwm.exe in session 0 under the runner's real services.exe:
-          #    WARNING (session 0 never ends, and Windows never runs dwm there).
+          #    WARNING (session 0 never ends, and Windows never runs dwm there);
+          #  - an lsass.exe whose parent is the runner's real LSASS, with its
+          #    image: a COPY of LSASS, CRITICAL on its own row, and neither a
+          #    wrong parent nor a second instance (one finding, not three).
+          #    A tree line only: nothing is copied.
           $meTicks = ([datetime](Get-CimInstance Win32_Process -Filter ("ProcessId=" + $PID)).CreationDate).ToUniversalTime().Ticks
           $now = (Get-Date).ToUniversalTime().Ticks
           $win = $env:SystemRoot
@@ -2992,6 +3001,9 @@ jobs:
           if (-not $wlSession) { throw 'the runner''s tree holds no winlogon.exe with a session -- the per-session case needs one' }
           $servicesPid = @($tl | Where-Object { $_ -match '\|services\.exe$' } | ForEach-Object { $_.Split('|')[0] })[0]
           if (-not $servicesPid) { throw 'the runner''s tree holds no services.exe' }
+          $lsassRec = @($tl | Where-Object { $_ -match '\|lsass\.exe$' })[0]
+          if (-not $lsassRec) { throw 'the runner''s tree holds no lsass.exe' }
+          $lsassPid = $lsassRec.Split('|')[0]; $lsassPath = $lsassRec.Split('|')[4]; $lsassSession = $lsassRec.Split('|')[3]
           $before = $meTicks - 10000000
           Set-Content $t2 -Value ($tl + @(
             ("9000001|{0}|{1}|0|{2}\System32\svchost.exe|svchost.exe" -f $PID, $now, $win),
@@ -3002,10 +3014,11 @@ jobs:
             ("9000006|{0}|{1}|0|{2}\System32\services.exe|services.exe" -f $wininit, $now, $win),
             ("9000007|9999993|{0}|997|{1}\System32\dwm.exe|dwm.exe" -f $now, $win),
             ("9000008|9999994|{0}|{1}|{2}\System32\dwm.exe|dwm.exe" -f $now, $wlSession, $win),
-            ("9000009|{0}|{1}|0|{2}\System32\dwm.exe|dwm.exe" -f $servicesPid, $now, $win))) -Encoding ASCII
-          Set-Content $d2 -Value ($dl + @(("svchost.exe  9000001  {0}\System32\svchost.exe" -f $win), ("svchost.exe  9000002  {0}\System32\svchost.exe" -f $win), 'csrss.exe  9000003  ', ("svchost.exe  9000004  {0}\System32\svchost.exe" -f $win), 'csrss.exe  9000005  ', ("services.exe  9000006  {0}\System32\services.exe" -f $win), ("dwm.exe  9000007  {0}\System32\dwm.exe" -f $win), ("dwm.exe  9000008  {0}\System32\dwm.exe" -f $win), ("dwm.exe  9000009  {0}\System32\dwm.exe" -f $win)))
-          Remove-Item $pm, $cm, $mk -Force -EA SilentlyContinue
-          $out = (.\tools\masquerade_check.ps1 -Path $d2 -MarkerFile $mk -TreePath $t2 -ParentMarkerFile $pm -CountMarkerFile $cm) -join "`n"
+            ("9000009|{0}|{1}|0|{2}\System32\dwm.exe|dwm.exe" -f $servicesPid, $now, $win),
+            ("9000010|{0}|{1}|{2}|{3}|lsass.exe" -f $lsassPid, $now, $lsassSession, $lsassPath))) -Encoding ASCII
+          Set-Content $d2 -Value ($dl + @(("svchost.exe  9000001  {0}\System32\svchost.exe" -f $win), ("svchost.exe  9000002  {0}\System32\svchost.exe" -f $win), 'csrss.exe  9000003  ', ("svchost.exe  9000004  {0}\System32\svchost.exe" -f $win), 'csrss.exe  9000005  ', ("services.exe  9000006  {0}\System32\services.exe" -f $win), ("dwm.exe  9000007  {0}\System32\dwm.exe" -f $win), ("dwm.exe  9000008  {0}\System32\dwm.exe" -f $win), ("dwm.exe  9000009  {0}\System32\dwm.exe" -f $win), ("lsass.exe  9000010  {0}" -f $lsassPath)))
+          Remove-Item $pm, $cm, $lc, $oc, $mk -Force -EA SilentlyContinue
+          $out = (.\tools\masquerade_check.ps1 -Path $d2 -MarkerFile $mk -TreePath $t2 -ParentMarkerFile $pm -CountMarkerFile $cm -LsassCopyMarkerFile $lc -CopyMarkerFile $oc) -join "`n"
           Write-Host (($out -split "`n" | Where-Object { $_ -match '9000\d{3}|9999\d{3}|Windows runs one|clock moved' }) -join "`n")
           if (Test-Path $mk) { throw "the canonical-path copies were reported by PATH -- the path rule must stay clean: $out" }
           if (-not (Test-Path $pm)) { throw "no parent marker: $out" }
@@ -3024,8 +3037,90 @@ jobs:
           if ($out -notmatch ('\(PID 9000009\) has the wrong parent: PID {0} belongs to services\.exe -- Windows starts dwm\.exe only from the winlogon\.exe of its own session' -f $servicesPid)) { throw 'the dwm.exe in session 0 under services.exe was not reported -- session 0 never ends' }
           if ($out -notmatch ('\(PID 9000008\) has the wrong parent: the process that started it \(PID 9999994\) is no longer running -- Windows starts dwm\.exe only from the winlogon\.exe of its own session, which runs as long as that session')) { throw ('the dwm.exe with no parent in session {0}, whose winlogon.exe runs, was not reported' -f $wlSession) }
           if ($out -notmatch '\[WARNING\] Windows runs one services\.exe; this snapshot holds 2' -or $out -notmatch '(?m)^    instance: PID 9000006, parent wininit\.exe') { throw 'the second services.exe was not reported as one Windows never runs twice' }
-          Remove-Item $d2, $t2, $old, $pm, $cm, $mk -Force -EA SilentlyContinue
-          Write-Host 'masquerade_check live OK (by parent: the real tree is clean, the impostors are named, exited-by-design parents are quiet)'
+          if ($out -notmatch ('(?m)^\[CRITICAL\] Process lsass\.exe \(PID 9000010\) is a copy of LSASS \(PID {0}\), same (image|name) -- ' -f $lsassPid)) { throw 'the copy of the runner''s LSASS was not named as one' }
+          if (-not (Test-Path $lc) -or (Get-Content $lc).Trim() -ne 'CRITICAL') { throw 'no CRITICAL LSASS-copy marker (its own ledger row)' }
+          if ($out -match 'Windows runs one lsass' -or $out -match 'PID 9000010\) has the wrong parent') { throw 'the LSASS copy was also graded as a wrong parent or a second instance -- one finding, not three' }
+          if (Test-Path $oc) { throw 'the LSASS copy also wrote the other-copy marker' }
+          Remove-Item $d2, $t2, $old, $pm, $cm, $lc, $oc, $mk -Force -EA SilentlyContinue
+          Write-Host 'masquerade_check live OK (by parent: the real tree is clean, the impostors are named, exited-by-design parents are quiet, a copy of LSASS is CRITICAL)'
+          exit 0
+
+      - name: lsass_copy_events.ps1 -SelfTest + a real Event 4688 pair (cmd.exe started by cmd.exe) read by the same code
+        shell: powershell
+        timeout-minutes: 6
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $st = (.\tools\lsass_copy_events.ps1 -SelfTest) -join "`n"
+          if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'lsass_copy_events.ps1 -SelfTest failed' }
+          $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($nst -lt 14) { throw "lsass_copy_events self-test ran only $nst case(s)" }
+          Write-Host "lsass_copy_events -SelfTest OK ($nst cases)"
+          # The audit's own query, on the runner's real Security log: no copy of
+          # LSASS, or the declared SKIPPED when the log holds no 4688 at all.
+          $md = Join-Path $env:TEMP 'dz_ci_lsacopy'
+          Remove-Item $md -Recurse -Force -EA SilentlyContinue
+          New-Item -ItemType Directory -Path $md | Out-Null
+          $out = (.\tools\lsass_copy_events.ps1 -MarkerDir $md) -join "`n"
+          Write-Host $out
+          if ($out -match 'Exception|is not recognized|CategoryInfo') { throw "PowerShell error text in the output: $out" }
+          if (Test-Path (Join-Path $md 'dz_lsacopy.txt')) { throw "the runner's Security log was reported as holding a copy of LSASS: $out" }
+          if (Test-Path (Join-Path $md 'dz_lsacopy_gap.txt')) { throw "an administrator could not read the runner's Security log: $out" }
+          if ($out -notmatch '\[OK\] No copy of lsass\.exe in the Security log|\[SKIPPED\] Copies of lsass\.exe in the Security log NOT checked') { throw 'neither the OK line nor the declared SKIPPED' }
+          # A REAL record of the same shape, made without copying anything:
+          # cmd.exe started by cmd.exe gives Event 4688 with New Process Name and
+          # Creator Process Name both cmd.exe. That proves the field reading
+          # (NewProcessName field 5, ParentProcessName field 13, compared without
+          # regard to case) on a real event, not only on synthetic records.
+          # Touches: the audit-policy subcategory Process Creation, by GUID (the
+          # name is localized), turned on for this step and restored in finally.
+          $guid = '{0CCE922B-69AE-11D9-BED3-505054503030}'
+          # Located by the GUID, as audit_policy_check does: auditpol prints a
+          # blank first line and a localized header.
+          $row = @(auditpol /get /subcategory:$guid /r) | Where-Object { $_ -match '0CCE922B' } | Select-Object -First 1
+          $global:LASTEXITCODE = 0
+          $prior = $null
+          if ($row) { $f = $row -split ','; for ($i = 0; $i -lt $f.Count - 1; $i++) { if ($f[$i] -match '0CCE922B') { $prior = $f[$i + 1].Trim(); break } } }
+          Write-Host "Process Creation auditing before this step: '$prior'"
+          $known = @('No Auditing', 'Success', 'Failure', 'Success and Failure')
+          # Never change a policy this step cannot put back exactly -- and a proof
+          # that can quietly not run is a promise, so that fails the step.
+          if ($known -notcontains $prior) { throw "the prior Process Creation setting could not be read exactly ('$prior'); the policy is left untouched and the real-record proof did not run" }
+          $md2 = Join-Path $env:TEMP 'dz_ci_lsacopy_cmd'
+          try {
+            auditpol /set /subcategory:$guid /success:enable | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'auditpol could not enable Process Creation on this runner; the real-record proof did not run' }
+            & cmd.exe /c "cmd.exe /c exit 0"
+            $global:LASTEXITCODE = 0
+            # The record can take a moment to be readable: poll, up to 30 s.
+            $out2 = ''
+            for ($try = 0; $try -lt 15; $try++) {
+              Start-Sleep -Seconds 2
+              Remove-Item $md2 -Recurse -Force -EA SilentlyContinue
+              New-Item -ItemType Directory -Path $md2 | Out-Null
+              $out2 = (.\tools\lsass_copy_events.ps1 -MarkerDir $md2 -Image (Join-Path $env:SystemRoot 'System32\cmd.exe') -MaxRecords 5000) -join "`n"
+              if ($out2 -match '\[CRITICAL\] cmd\.exe was copied at ') { break }
+            }
+            Write-Host (($out2 -split "`n" | Select-Object -First 6) -join "`n")
+            if ($out2 -notmatch '(?m)^\[CRITICAL\] cmd\.exe was copied at .*: Event 4688 records cmd\.exe \(PID \d+\) created by cmd\.exe \(PID \d+\) itself') { throw "the real 4688 record of cmd.exe created by cmd.exe was not read as that pair: $out2" }
+            if ($out2 -match 'LSASS') { throw 'the cmd.exe run used the LSASS wording' }
+            if ((Get-Content (Join-Path $md2 'dz_lsacopy.txt')).Trim() -ne 'CRITICAL') { throw 'no CRITICAL marker for the real pair' }
+            Write-Host 'lsass_copy_events live OK: the real cmd.exe-from-cmd.exe record was read by the same code that looks for an LSASS copy'
+          } finally {
+            $sv = 'disable'; $fv = 'disable'
+            if ($prior -match 'Success') { $sv = 'enable' }
+            if ($prior -match 'Failure') { $fv = 'enable' }
+            auditpol /set /subcategory:$guid /success:$sv /failure:$fv | Out-Null
+            $global:LASTEXITCODE = 0
+            Remove-Item $md2 -Recurse -Force -EA SilentlyContinue
+          }
+          # The restore is checked, not assumed.
+          $row2 = @(auditpol /get /subcategory:$guid /r) | Where-Object { $_ -match '0CCE922B' } | Select-Object -First 1
+          $global:LASTEXITCODE = 0
+          $after = $null
+          if ($row2) { $f2 = $row2 -split ','; for ($i = 0; $i -lt $f2.Count - 1; $i++) { if ($f2[$i] -match '0CCE922B') { $after = $f2[$i + 1].Trim(); break } } }
+          if ($after -ne $prior) { throw "the Process Creation audit setting was not restored: before '$prior', after '$after'" }
+          Write-Host "Process Creation auditing restored: '$after'"
+          Remove-Item $md -Recurse -Force -EA SilentlyContinue
           exit 0
 
       - name: psv2_check.ps1 (the AMSI-downgrade path must get a definite answer)
@@ -3770,6 +3865,12 @@ jobs:
           if ($text -match 'has the wrong parent:|\[WARNING\] Windows runs one |\) runs in session \d+ -- Windows runs') { throw ('Section 4 reported a parent, one-of-each or session finding on a clean runner: {0}' -f (($text -split "`r?`n" | Where-Object { $_ -match 'has the wrong parent:|Windows runs one|runs in session|^\s+(child|parent|instance):' }) -join ' | ')) }
           if ($text -notmatch '\[OK\] \d+ system-process name\(s\) were started by the parent Windows uses') { throw 'Section 4 did not grade the process tree by parent (no OK line)' }
           Write-Host 'Section 4: the runner''s real process tree passes the parent rule'
+          # A copy of a system process: none on a clean runner, live (Section 4)
+          # or in the Security log (Section 12). Section 12 must say which: the
+          # OK line, or the declared SKIPPED when the log holds no 4688.
+          if ($text -match 'is a copy of LSASS|is a copy of its parent|lsass\.exe was copied at|lsass\.exe was started at .* by ') { throw ('a copy of a system process was reported on a clean runner: {0}' -f (($text -split "`r?`n" | Where-Object { $_ -match 'is a copy of|was copied at|lsass\.exe was started at' }) -join ' | ')) }
+          if ($text -notmatch '\[OK\] No copy of lsass\.exe in the Security log|\[SKIPPED\] Copies of lsass\.exe in the Security log NOT checked') { throw 'Section 12 printed neither the LSASS-copy OK line nor its declared SKIPPED' }
+          Write-Host ('Section 12: ' + (($text -split "`r?`n" | Where-Object { $_ -match 'No copy of lsass\.exe|Copies of lsass\.exe in the Security log' }) -join ' | '))
           # THE APOSTROPHE RUN. TEMP held an apostrophe and APPDATA an apostrophe and
           # a space: the dashboard (its script and SUMCODE/SUMCOUNT in TEMP) must
           # have printed, the stage-1 remediation script must exist and parse, and

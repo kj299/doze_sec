@@ -55,7 +55,7 @@ break untested nor drift out of sync with its test.
 | Persistence | Strong | S5 (Run/Winlogon/IFEO/AppInit/Active Setup), S6 (tasks), S7 (services), S17 (WMI subscriptions), S18 (COM hijack, registry IOCs) |
 | Privilege Escalation | Yes | S13 (UAC, accessibility binaries T1546.008), S16 (4672/4732) |
 | Defense Evasion | Strong | S4 (system-process name masquerading, T1036: by directory, and by parent -- svchost.exe not started by services.exe, lsass.exe not by wininit.exe), S9 (Defender tamper/exclusions, ASR rule state), S18 (AMSI bypass, BYOVD drivers), S16 (1102 log clear) |
-| Credential Access | Strong | S12 (LSASS PPL, WDigest, NTLM, Credential Guard), S16 (4769 Kerberoast, 4776), S18 (browser/cloud cred stores) |
+| Credential Access | Strong | S12 (LSASS PPL, WDigest, NTLM, Credential Guard; a copy of LSASS recorded in the Security log as Event 4688, lsass.exe created by lsass.exe), S4 (a copy of LSASS running now), S16 (4769 Kerberoast, 4776), S18 (browser/cloud cred stores) |
 | Discovery | Yes | S17 (4688 discovery commands: nltest, dsquery, ntdsutil) |
 | Lateral Movement | Yes | S10 (SMBv1, RDP/NLA, WinRM, sshd), S17/S18 (PsExec pipes, portproxy) |
 | Collection | Partial | S14 (staging dirs, ADS), manifest T1560 |
@@ -210,6 +210,25 @@ and 13 verify exactly that.
     catalogued in `tests\benign_corpus.txt`). A child of a service host on
     a machine whose clock stepped backward after boot is counted as not
     graded rather than flagged.
+
+- **A copy of LSASS.** Tools that dump credentials can copy LSASS (process
+  snapshotting or reflection) and read the copy, so LSASS itself is never
+  read. Section 4 names a running copy -- a system process whose parent has
+  its own name and image; LSASS CRITICAL, any other WARNING (an error report,
+  or code injection by forking). But such a copy lives for seconds, so the
+  live snapshot will almost never see one. Section 12 reads the record the
+  copy leaves: Security Event 4688 with lsass.exe created by lsass.exe. What
+  it cannot see:
+  - with process-creation auditing off there is no 4688 record at all; the
+    check says so (`[SKIPPED]`) and Section 16 raises the auditing gap;
+  - a copy older than the Security log's oldest record is gone with it; the
+    OK line names the span the log covers, and a newest record more than an
+    hour old is stated (nothing recorded since: auditing likely off now);
+  - a copy made with the image reference released (PSS_CREATE_RELEASE_SECTION)
+    has no image path to compare; Section 4 then needs the name alone, which
+    it accepts only where a path is unreadable;
+  - a standard-user token cannot read the Security log: deferred, counted.
+  With LSA Protection on, a user-mode tool cannot copy LSASS at all.
 
 ## Getting full protection value
 

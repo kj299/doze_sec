@@ -65,6 +65,24 @@ $script:Contracts = @(
        Signature = '^\s*\[WARNING\] Process \S+ \(PID \d+\) runs in session \d+ -- Windows runs .*\(T1036 masquerading by parent\)'
        Section   = '4'
        Technique = 'T1036' },
+    # A process that is a copy of its parent (masquerade_check), and the copy
+    # of LSASS recorded in the Security log (lsass_copy_events, Section 12).
+    @{ Name      = 'A copy of LSASS running (a second process holding its memory)'
+       Signature = '^\s*\[CRITICAL\] Process lsass\.exe \(PID \d+\) is a copy of LSASS'
+       Section   = '4'
+       Technique = 'T1003.001' },
+    @{ Name      = 'A system process that is a copy of its parent (an error report, or forked code)'
+       Signature = '^\s*\[WARNING\] Process \S+ \(PID \d+\) is a copy of its parent'
+       Section   = '4'
+       Technique = 'T1055' },
+    @{ Name      = 'LSASS copied, recorded in the Security log (Event 4688)'
+       Signature = '^\s*\[CRITICAL\] lsass\.exe was copied at '
+       Section   = '12'
+       Technique = 'T1003.001' },
+    @{ Name      = 'LSASS started by a parent other than wininit.exe (Event 4688)'
+       Signature = '^\s*\[WARNING\] lsass\.exe was started at .* by '
+       Section   = '12'
+       Technique = 'T1003.001' },
     # Section 9's Defender core block, extracted to tools\defender_core_check.ps1
     # (marker idiom). The runner image ships with real-time protection off, so
     # the full-run job exercises this on the real path.

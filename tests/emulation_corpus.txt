@@ -47,7 +47,7 @@ CORE|T1036|system-process name running outside its canonical directory, or start
 # ---- CI: emulated in an isolated helpers-ps51 step ----
 CI|T1014|Tarrask hidden task, via a synthetic TaskCache hive (cross_api_check)
 CI|T1053.005|hidden scheduled task, synthetic hive (cross_api_check)
-CI|T1055|process injection, staged DLL loaded into the test process (module_inspect)
+CI|T1055|process injection, staged DLL loaded into the test process (module_inspect); a system process that is a copy of its parent, the forking shape (masquerade_check, synthetic tree)
 CI|T1574|DLL hijack, staged DLL loaded from a drop path (module_inspect)
 CI|T1546.007|netsh helper DLL (persistence_extra isolated plant)
 CI|T1547.010|print port monitor (persistence_extra isolated plant)

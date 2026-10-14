@@ -482,6 +482,15 @@ So, in every `.ps1`:
   run before checking anything. Derive paths in the body from `$PSScriptRoot`
   (as `field_test.ps1` does), or have the caller pass them.
 
+- **No function named like a Windows PowerShell 5.1 built-in alias** (`cp`,
+  `r`, `h`, `sc`, `ls`...). An alias resolves before a function, so on 5.1 a
+  call to it runs the aliased cmdlet; pwsh on Linux drops many of those
+  aliases, so every Linux run passes. A self-test helper named `CP` was about
+  to call `Copy-Item` on 5.1 for every case it ran, and one named `R` never
+  ran even on Linux (`r` is `Invoke-History` everywhere): two of its cases
+  passed only because the call failed. Rule 4 of the lint below holds 5.1's
+  alias list written out, since the engine CI lints with lacks it.
+
 ```
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\lint_ps51_portability.ps1
 ```

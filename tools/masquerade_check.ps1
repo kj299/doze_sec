@@ -34,8 +34,10 @@
 #
 # MARKERS: -MarkerFile is written with WARNING when the path rule has a hit,
 # -ParentMarkerFile when the parent rule does, -CountMarkerFile when a process
-# Windows runs once is there twice or in the wrong session; the caller raises
-# each as its own ledger row via :dz_finding, so the row names what was seen.
+# Windows runs once is there twice or in the wrong session, -LsassCopyMarkerFile
+# (CRITICAL) when LSASS has a copy of itself running, -CopyMarkerFile when any
+# other system process does; the caller raises each as its own ledger row via
+# :dz_finding, so the row names what was seen.
 # Read-only. Windows PowerShell 5.1 and pwsh.
 
 [CmdletBinding()]
@@ -51,6 +53,10 @@ param(
     [string]$ParentMarkerFile,
     # One of each, and the session rule: their own ledger row.
     [string]$CountMarkerFile,
+    # A process that is a copy of its parent: LSASS (CRITICAL, T1003.001) and
+    # any other system process (WARNING, T1055), each its own ledger row.
+    [string]$LsassCopyMarkerFile,
+    [string]$CopyMarkerFile,
     [string]$SystemRoot = $env:SystemRoot,
     [switch]$SelfTest
 )
@@ -246,6 +252,24 @@ function Get-MasqueradeReport {
 # ending: it lasts until shutdown and never holds a winlogon.exe, and it is
 # where a SYSTEM service, scheduled task or remote launch lands.
 #
+# A COPY OF ITS PARENT. Process snapshotting and reflection make a new process
+# that is a copy of an existing one: the same image, and the original as its
+# parent (Microsoft, PSS_CAPTURE_VA_CLONE: the VA clone is a process, and keeps
+# the image unless PSS_CREATE_RELEASE_SECTION). Two kinds of software make one.
+# Diagnostics copy a hung process so it can keep running while it is examined
+# (Windows Error Reporting; ProcDump -r, "Dump using a clone"). And tools that
+# want LSASS's secrets copy LSASS and read the copy: the public detections for
+# that (Elastic "Potential LSASS Clone Creation via PssCaptureSnapShot", Sigma
+# "Potential Credential Dumping Via LSASS Process Clone", T1003.001) key on
+# exactly lsass.exe created by lsass.exe. So a system process whose parent has
+# its own name and image is reported as a COPY -- an LSASS copy CRITICAL, any
+# other WARNING -- once, instead of as a wrong parent and a second instance.
+# Only the names in the parent table, and not smss.exe, whose first instance
+# starts a copy of itself for each session by design: browsers, explorer.exe
+# and many others start children from their own image, so a same-name pair is
+# no signal for them. A copy made to read LSASS lives for seconds; Section 12
+# reads the Security log, where Event 4688 keeps the record.
+#
 # ONE OF EACH. Windows runs exactly one wininit.exe, services.exe, lsass.exe
 # and LsaIso.exe, all in session 0, one smss.exe started by System, and one
 # csrss.exe per session and one winlogon.exe per session other than 0. A
@@ -311,6 +335,35 @@ function Format-UtcTicks {
     param($Ticks)
     if ($null -eq $Ticks) { return 'at an unknown time' }
     return ([datetime]::new([long]$Ticks, [DateTimeKind]::Utc).ToString('yyyy-MM-dd HH:mm:ss') + 'Z')
+}
+
+# PURE: is the child a copy of its parent? The same name (case-insensitive),
+# a name Windows never starts from itself, and the same image -- or an image
+# that cannot be compared because a path is not readable (another user's
+# process on a standard-user token). A copy is made from a running original,
+# so the original is older and in the same session: a holder of the parent
+# PID that is newer, or in another session, is a reused number (session 1's
+# winlogon.exe, whose session smss.exe has exited, while session 2's newer
+# winlogon.exe holds that PID), and the other rules grade it. Where the clock
+# cannot order the two and the rightful parent exits by design, reuse is
+# expected and it is not called a copy. Returns 'same image', 'same name' (the
+# image could not be compared) or $null.
+function Test-IsCopy {
+    param($Child, $Parent, [bool]$ClockMoved = $false)
+    if ($null -eq $Child -or $null -eq $Parent) { return $null }
+    $cn = ([string]$Child.Name).Trim().ToLowerInvariant()
+    if (-not $cn -or $cn -ne ([string]$Parent.Name).Trim().ToLowerInvariant()) { return $null }
+    if (-not $script:ParentRule.ContainsKey($cn) -or $cn -eq 'smss.exe') { return $null }
+    if ($null -ne $Child.Session -and $null -ne $Parent.Session -and [long]$Child.Session -ne [long]$Parent.Session) { return $null }
+    $ordered = (-not $ClockMoved -and $null -ne $Child.Ticks -and $null -ne $Parent.Ticks)
+    if ($ordered -and [long]$Parent.Ticks -gt [long]$Child.Ticks) { return $null }
+    if (-not $ordered -and -not $script:ParentRule[$cn].Lifetime) { return $null }
+    $cp = ([string]$Child.Path).Trim(); $pp = ([string]$Parent.Path).Trim()
+    if ($cp -and $pp) {
+        if ($cp -ieq $pp) { return 'same image' }
+        return $null
+    }
+    return 'same name'
 }
 
 # PURE: one process, graded by its parent. Sev is OK, WARNING, EXITED,
@@ -478,10 +531,30 @@ function Get-ParentReport {
         return ($p + ', session ' + $s + ', started ' + (Format-UtcTicks $r.Ticks))
     }
     $hits = 0; $countHits = 0; $ok = 0; $exited = 0; $unverified = 0
+    $lsassCopies = 0; $otherCopies = 0; $copyPids = @{}
     foreach ($rec in $records) {
         $parent = $null
         if ($rec.PPid -ne $rec.Pid -and $byPid.ContainsKey($rec.PPid)) { $parent = $byPid[$rec.PPid] }
         $n = ([string]$rec.Name).ToLowerInvariant()
+        # A copy of its parent is graded once, as a copy -- not as a wrong
+        # parent and again as a second instance.
+        $how = Test-IsCopy -Child $rec -Parent $parent -ClockMoved $clockMoved
+        if ($how) {
+            $copyPids[$rec.Pid] = $true
+            $hits++
+            $nm = ConvertTo-PrintableText $rec.Name
+            $pn = ConvertTo-PrintableText $parent.Name
+            if ($n -eq 'lsass.exe') {
+                $lsassCopies++
+                [void]$out.Add(('[CRITICAL] Process ' + $nm + ' (PID ' + $rec.Pid + ') is a copy of LSASS (PID ' + $parent.Pid + '), ' + $how + ' -- a second process holding LSASS''s memory, the shape credential-dumping tools leave (T1003.001). Windows does not copy LSASS on a healthy machine; an administrator''s own dump (ProcDump -r) does.'))
+            } else {
+                $otherCopies++
+                [void]$out.Add(('[WARNING] Process ' + $nm + ' (PID ' + $rec.Pid + ') is a copy of its parent ' + $pn + ' (PID ' + $parent.Pid + '), ' + $how + ' -- Windows Error Reporting copies a hung process this way, and so does code injection by forking (T1055). If WerFault.exe is running and the copy is gone on a second look, it was the error report.'))
+            }
+            [void]$out.Add(('    copy:   ' + (Show-Proc $rec)))
+            [void]$out.Add(('    parent: ' + $pn + ' (PID ' + $parent.Pid + ') ' + (Show-Proc $parent)))
+            continue
+        }
         # Every rightful parent the rule names must be in the snapshot (a
         # complete Windows snapshot always holds System, smss, wininit,
         # winlogon, services and svchost): one missing means the snapshot is
@@ -531,6 +604,7 @@ function Get-ParentReport {
     $groups = @{}
     foreach ($rec in $records) {
         $n = ([string]$rec.Name).ToLowerInvariant()
+        if ($copyPids.ContainsKey($rec.Pid)) { continue }
         if ($script:OnlyOne -contains $n) { $k = $n } elseif ($script:OnePerSession -contains $n -and $null -ne $rec.Session) { $k = $n + '|' + $rec.Session } elseif ($n -eq 'smss.exe' -and $rec.PPid -eq 4) { $k = 'smss.exe|system' } else { continue }
         if (-not $groups.ContainsKey($k)) { $groups[$k] = New-Object System.Collections.ArrayList }
         [void]$groups[$k].Add($rec)
@@ -557,7 +631,7 @@ function Get-ParentReport {
     foreach ($rec in $records) {
         $n = ([string]$rec.Name).ToLowerInvariant()
         $bad = $false
-        if ($null -eq $rec.Session) { continue }
+        if ($null -eq $rec.Session -or $copyPids.ContainsKey($rec.Pid)) { continue }
         if ($script:Session0Only -contains $n -and $rec.Session -ne 0) { $bad = $true; $want = 'only in session 0' }
         if ($n -eq 'winlogon.exe' -and $rec.Session -eq 0) { $bad = $true; $want = 'never in session 0' }
         if (-not $bad) { continue }
@@ -587,13 +661,15 @@ function Get-ParentReport {
         } else {
             [void]$out.Add('[SKIPPED] no system-process parent could be graded -- masquerading by parent NOT verified.')
         }
-        return @{ Lines = @($out.ToArray()); Marker = $null; CountMarker = $null }
+        return @{ Lines = @($out.ToArray()); Marker = $null; CountMarker = $null; LsassCopyMarker = $null; CopyMarker = $null }
     }
-    # Two rows: a wrong parent, and a process Windows runs once found twice or
-    # in the wrong session. Each names what was seen.
-    $pm = $null; if ($hits -gt $countHits) { $pm = 'WARNING' }
+    # Four rows: a wrong parent; a process Windows runs once found twice or in
+    # the wrong session; an LSASS copy; any other copy. Each names what was seen.
+    $pm = $null; if (($hits - $countHits - $lsassCopies - $otherCopies) -gt 0) { $pm = 'WARNING' }
     $cm = $null; if ($countHits -gt 0) { $cm = 'WARNING' }
-    return @{ Lines = @($out.ToArray()); Marker = $pm; CountMarker = $cm }
+    $lm = $null; if ($lsassCopies -gt 0) { $lm = 'CRITICAL' }
+    $om = $null; if ($otherCopies -gt 0) { $om = 'WARNING' }
+    return @{ Lines = @($out.ToArray()); Marker = $pm; CountMarker = $cm; LsassCopyMarker = $lm; CopyMarker = $om }
 }
 
 if ($SelfTest) {
@@ -796,6 +872,51 @@ if ($SelfTest) {
     # read as a reused number.
     $pr = Get-ParentReport -Tree ($tree + @('2150|1000|1025|0|C:\Windows\System32\wbem\WmiPrvSE.exe|WmiPrvSE.exe'))
     T 'a WmiPrvSE.exe recorded before the first service host (a small step back soon after boot) reads as a clock that moved, not a finding' ($null -eq $pr.Marker -and ($pr.Lines -join "`n") -match '\[INFO\] The clock moved backward since this boot') ($pr.Lines -join ' | ')
+    # A copy of its parent: the same name and image as the process recorded
+    # as its parent. Both directions: what a copy is, and what is not one.
+    # Not CP: on Windows that is an alias of Copy-Item, and an alias wins over
+    # a function (pwsh on Linux drops it, so only Windows would have shown it).
+    function CopyOf { param([string]$cn, [string]$cp, [string]$pn, [string]$pp) Test-IsCopy -Child @{ Name = $cn; Path = $cp } -Parent @{ Name = $pn; Path = $pp } }
+    $L = 'C:\Windows\System32\lsass.exe'
+    T 'lsass.exe under lsass.exe with the same image is a copy' ((CopyOf 'lsass.exe' $L 'lsass.exe' $L) -eq 'same image') ''
+    T 'names and paths compare case-insensitively' ((CopyOf 'LSASS.EXE' 'c:\windows\system32\LSASS.exe' 'lsass.exe' $L) -eq 'same image') ''
+    T 'lsass.exe under lsass.exe from ANOTHER path is not a copy (the other rules grade an impostor)' ($null -eq (CopyOf 'lsass.exe' 'C:\Users\Public\lsass.exe' 'lsass.exe' $L)) ''
+    T 'with a path unreadable (another user''s process on a standard-user token), the same name is a copy, said so' ((CopyOf 'lsass.exe' '' 'lsass.exe' '') -eq 'same name' -and (CopyOf 'lsass.exe' $L 'lsass.exe' '') -eq 'same name') ''
+    T 'smss.exe under smss.exe is no copy: the first smss starts one for each session by design' ($null -eq (CopyOf 'smss.exe' 'C:\Windows\System32\smss.exe' 'smss.exe' 'C:\Windows\System32\smss.exe')) ''
+    T 'browsers and explorer start children from their own image: chrome.exe, msedge.exe or explorer.exe under itself is no copy' ($null -eq (CopyOf 'chrome.exe' 'C:\Program Files\Google\Chrome\Application\chrome.exe' 'chrome.exe' 'C:\Program Files\Google\Chrome\Application\chrome.exe') -and $null -eq (CopyOf 'msedge.exe' 'C:\x\msedge.exe' 'msedge.exe' 'C:\x\msedge.exe') -and $null -eq (CopyOf 'explorer.exe' 'C:\Windows\explorer.exe' 'explorer.exe' 'C:\Windows\explorer.exe')) ''
+    T 'a different name is no copy, and no parent is no copy' ($null -eq (CopyOf 'lsass.exe' $L 'wininit.exe' 'C:\Windows\System32\wininit.exe') -and $null -eq (Test-IsCopy -Child @{ Name = 'lsass.exe'; Path = $L } -Parent $null)) ''
+    # A reused number is not a copy: a copy is made from a running original,
+    # so the original is older and in the same session.
+    function CopyT { param($ct, $cs, $pt, $ps, [bool]$moved = $false, [string]$n = 'winlogon.exe') Test-IsCopy -Child @{ Name = $n; Path = ''; Ticks = $ct; Session = $cs } -Parent @{ Name = $n; Path = ''; Ticks = $pt; Session = $ps } -ClockMoved $moved }
+    T 'a parent PID now held by a NEWER process of the same name is a reused number, not a copy' ($null -eq (CopyT 1013 1 9000 2) -and $null -eq (CopyT 1013 1 9000 1)) ''
+    T 'the same name in ANOTHER session is no copy (a copy shares its original''s session)' ($null -eq (CopyT 9000 2 1013 1)) ''
+    T 'an older same-name parent in the same session is a copy' ((CopyT 9000 1 1013 1) -eq 'same name') ''
+    T 'where the clock cannot order them, a name whose parent exits by design is not called a copy; one whose parent cannot exit still is' ($null -eq (CopyT 9000 1 1013 1 $true) -and $null -eq (CopyT $null 1 1013 1) -and (CopyT 9000 0 1013 0 $true 'lsass.exe') -eq 'same name') ''
+    # PID 770 (session 1's exited smss) is held by chrome.exe in $tree; here it
+    # is session 2's newer winlogon.exe instead. Replaced, not appended: the
+    # first record of a PID wins.
+    $pr = Get-ParentReport -Tree ($tree | ForEach-Object { if ($_ -like '770|*') { '770|4400|9000|2|C:\Windows\System32\winlogon.exe|winlogon.exe' } else { $_ } })
+    T 'session 1''s winlogon.exe, whose exited smss.exe PID is now session 2''s newer winlogon.exe, raises nothing' ($null -eq $pr.CopyMarker -and $null -eq $pr.LsassCopyMarker -and $null -eq $pr.Marker -and ($pr.Lines -join "`n") -notmatch 'is a copy') ($pr.Lines -join ' | ')
+    $pr = Get-ParentReport -Tree ($tree + @('6000|5000|2000|1||taskhostw.exe', '5000|1000|3000|1||taskhostw.exe'))
+    T 'a taskhostw.exe whose parent PID now belongs to a newer taskhostw.exe is no copy' ($null -eq $pr.CopyMarker -and ($pr.Lines -join "`n") -notmatch 'is a copy') ($pr.Lines -join ' | ')
+    $treeL = $tree | ForEach-Object { if ($_ -like '920|*') { '920|780|1021|0|C:\Windows\System32\lsass.exe|lsass.exe' } else { $_ } }
+    $pr = Get-ParentReport -Tree ($treeL + @('9920|920|6000|0|C:\Windows\System32\lsass.exe|lsass.exe'))
+    $pt = $pr.Lines -join "`n"
+    T 'a copy of LSASS is CRITICAL, on its own row, named once: no wrong-parent line and no second-instance line for it' ($pr.LsassCopyMarker -eq 'CRITICAL' -and $null -eq $pr.Marker -and $null -eq $pr.CountMarker -and $null -eq $pr.CopyMarker -and $pt -match '(?m)^\[CRITICAL\] Process lsass\.exe \(PID 9920\) is a copy of LSASS \(PID 920\), same image -- a second process holding LSASS''s memory, the shape credential-dumping tools leave \(T1003.001\)' -and $pt -notmatch 'Windows runs one lsass' -and $pt -notmatch 'PID 9920\) has the wrong parent') $pt
+    T 'the LSASS copy shows the copy and its parent beneath it' ($pt -match '(?m)^    copy:   C:\\Windows\\System32\\lsass\.exe, session 0, started ' -and $pt -match '(?m)^    parent: lsass\.exe \(PID 920\) C:\\Windows\\System32\\lsass\.exe, session 0, started ') $pt
+    $pr = Get-ParentReport -Tree ($tree + @('9930|1000|6000|0|C:\Windows\System32\svchost.exe|svchost.exe'))
+    $pt = $pr.Lines -join "`n"
+    T 'a copy of an svchost.exe is a WARNING on its own row (an error report, or code injection by forking)' ($pr.CopyMarker -eq 'WARNING' -and $null -eq $pr.Marker -and $null -eq $pr.LsassCopyMarker -and $pt -match '(?m)^\[WARNING\] Process svchost\.exe \(PID 9930\) is a copy of its parent svchost\.exe \(PID 1000\), same image -- Windows Error Reporting copies a hung process this way, and so does code injection by forking \(T1055\)') $pt
+    $pr = Get-ParentReport -Tree ($tree + @('9940|3000|6000|1|C:\Windows\explorer.exe|explorer.exe', '9950|9951|6000|1|C:\x\chrome.exe|chrome.exe', '9951|3000|5900|1|C:\x\chrome.exe|chrome.exe', '9960|520|6000|1|C:\Windows\System32\smss.exe|smss.exe'))
+    T 'explorer under explorer, chrome under chrome and a session smss under the first smss raise nothing' ($null -eq $pr.Marker -and $null -eq $pr.CountMarker -and $null -eq $pr.CopyMarker -and $null -eq $pr.LsassCopyMarker -and ($pr.Lines -join "`n") -match '\[OK\]') ($pr.Lines -join ' | ')
+    $pr = Get-ParentReport -Tree ($treeL + @('9970|920|6000|0|C:\Users\Public\lsass.exe|lsass.exe'))
+    $pt = $pr.Lines -join "`n"
+    T 'an lsass.exe from another path under the real LSASS is no copy: graded as a wrong parent and a second instance' ($null -eq $pr.LsassCopyMarker -and $pr.Marker -eq 'WARNING' -and $pr.CountMarker -eq 'WARNING' -and $pt -match '\(PID 9970\) has the wrong parent: PID 920 belongs to lsass\.exe') $pt
+    $pr = Get-ParentReport -Tree ($tree + @('9980|9979|6000|0||lsass.exe'))
+    T 'an lsass.exe whose parent has exited is no copy (nothing to compare): graded as today' ($null -eq $pr.LsassCopyMarker -and $pr.Marker -eq 'WARNING' -and $pr.CountMarker -eq 'WARNING') ($pr.Lines -join ' | ')
+    $pr = Get-ParentReport -Tree ($tree + @('9990|920|6000|0||lsass.exe'))
+    T 'on a standard-user token (no paths) an lsass.exe under LSASS is a copy by name, and says the image could not be compared' ($pr.LsassCopyMarker -eq 'CRITICAL' -and ($pr.Lines -join "`n") -match 'is a copy of LSASS \(PID 920\), same name -- ') ($pr.Lines -join ' | ')
+
     # The renamed chain: a launcher that exits starts a fake wininit, which
     # starts a fake services, which starts an implant svchost. Every parent
     # NAME looks right; one of each is what gives it away.
@@ -841,7 +962,7 @@ if ($SelfTest) {
     T 'a PID listed twice keeps its first record (no later line can overwrite it)' ($null -eq $pr.Marker) ($pr.Lines -join ' | ')
 
     if ($fails) { Write-Output "[FAIL] $fails masquerade_check self-test expectation(s) unmet"; exit 1 }
-    Write-Output '[OK] masquerade_check self-test: canonical directories in any casing are clean, a system name anywhere else is a WARNING, and a name with no path is stated as unverified; by parent, a parent that is one process (System at PID 4, smss, wininit, services) or the winlogon of the child''s own session is clean whatever the clock did, a service host counts only when it is older than the child, anything else at a parent that cannot exit is a WARNING, a session that is ending is counted not flagged, csrss/wininit/winlogon are graded by one per session and never by the clock, and a snapshot missing a core process is SKIPPED, never OK.'
+    Write-Output '[OK] masquerade_check self-test: canonical directories in any casing are clean, a system name anywhere else is a WARNING, and a name with no path is stated as unverified; by parent, a parent that is one process (System at PID 4, smss, wininit, services) or the winlogon of the child''s own session is clean whatever the clock did, a service host counts only when it is older than the child, anything else at a parent that cannot exit is a WARNING, a session that is ending is counted not flagged, csrss/wininit/winlogon are graded by one per session and never by the clock, a snapshot missing a core process is SKIPPED, never OK, and a system process that is a copy of its parent is named as one (an LSASS copy CRITICAL), while browsers, explorer and the per-session smss are not.'
     exit 0
 }
 
@@ -881,3 +1002,5 @@ $parentReport = Get-ParentReport -Tree $tree
 foreach ($l in $parentReport.Lines) { $l }
 if ($parentReport.Marker) { Write-MarkerFile -Path $ParentMarkerFile -Value $parentReport.Marker }
 if ($parentReport.CountMarker) { Write-MarkerFile -Path $CountMarkerFile -Value $parentReport.CountMarker }
+if ($parentReport.LsassCopyMarker) { Write-MarkerFile -Path $LsassCopyMarkerFile -Value $parentReport.LsassCopyMarker }
+if ($parentReport.CopyMarker) { Write-MarkerFile -Path $CopyMarkerFile -Value $parentReport.CopyMarker }

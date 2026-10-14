@@ -26,7 +26,7 @@
 # could not fail for its own reason. It passed on pwsh 7 across four merges.
 # Real-Windows CI is what finally caught it.
 #
-# TWO RULES:
+# FOUR RULES:
 #
 #   1. No non-ASCII byte in any .ps1, anywhere in the file. A BOM-less file is
 #      decoded as ANSI by 5.1 and as UTF-8 by 7, so any such byte is two
@@ -50,6 +50,18 @@
 #      four files. A lint people learn to work around is worse than no lint.
 #      Single-quoted strings process no escapes at all and are exempt likewise.
 #
+#   3. No GetNewClosure() (below, where the rule is).
+#
+#   4. No function named like a built-in alias of Windows PowerShell 5.1. An
+#      alias resolves before a function, so on 5.1 a call to the function runs
+#      the aliased cmdlet instead -- and pwsh on Linux drops many of those
+#      aliases (cp, ls, rm, cat...), so every Linux run passes. A self-test
+#      helper named CP was about to ship this way (2026-10-14): on 5.1 each of
+#      its cases would have called Copy-Item. Another named R never ran even on
+#      Linux (r is Invoke-History on every engine), and two cases passed only
+#      because the call failed. The list is 5.1's default aliases, written out,
+#      because the engine this lint runs on in CI does not have them all.
+#
 # Read-only. Windows PowerShell 5.1 compatible; runs under pwsh on CI.
 
 [CmdletBinding()]
@@ -66,6 +78,20 @@ $script:BT = [string][char]0x60
 $script:Ps6Escapes = @(
     @{ Needle = ($script:BT + 'u{'); Name = 'backtick-u{...}' },
     @{ Needle = ($script:BT + 'e');  Name = 'backtick-e' }
+)
+
+# Windows PowerShell 5.1's built-in aliases (Get-Alias on a clean 5.1).
+$script:Ps51Aliases = @(
+    '%', '?', 'ac', 'asnp', 'cat', 'cd', 'cfs', 'chdir', 'clc', 'clear', 'clhy', 'cli', 'clp', 'cls', 'clv', 'cnsn',
+    'compare', 'copy', 'cp', 'cpi', 'cpp', 'curl', 'cvpa', 'dbp', 'del', 'diff', 'dir', 'dnsn', 'ebp', 'echo', 'epal',
+    'epcsv', 'epsn', 'erase', 'etsn', 'exsn', 'fc', 'fhx', 'fl', 'foreach', 'ft', 'fw', 'gal', 'gbp', 'gc', 'gcb', 'gci',
+    'gcm', 'gcs', 'gdr', 'ghy', 'gi', 'gin', 'gjb', 'gl', 'gm', 'gmo', 'gp', 'gps', 'gpv', 'group', 'gsn', 'gsnp', 'gsv',
+    'gtz', 'gu', 'gv', 'gwmi', 'h', 'history', 'icm', 'iex', 'ihy', 'ii', 'ipal', 'ipcsv', 'ipmo', 'ipsn', 'irm', 'ise',
+    'iwmi', 'iwr', 'kill', 'lp', 'ls', 'man', 'md', 'measure', 'mi', 'mount', 'move', 'mp', 'mv', 'nal', 'ndr', 'ni',
+    'nmo', 'npssc', 'nsn', 'nv', 'ogv', 'oh', 'popd', 'ps', 'pushd', 'pwd', 'r', 'rbp', 'rcjb', 'rcsn', 'rd', 'rdr',
+    'ren', 'ri', 'rjb', 'rm', 'rmdir', 'rmo', 'rni', 'rnp', 'rp', 'rsn', 'rsnp', 'rujb', 'rv', 'rvpa', 'rwmi', 'sajb',
+    'sal', 'saps', 'sasv', 'sbp', 'sc', 'scb', 'select', 'set', 'shcm', 'si', 'sl', 'sleep', 'sls', 'sort', 'sp', 'spjb',
+    'spps', 'spsv', 'start', 'stz', 'sujb', 'sv', 'swmi', 'tee', 'trcm', 'type', 'wget', 'where', 'wjb', 'write'
 )
 
 function Get-PortabilityDefects {
@@ -182,6 +208,20 @@ function Get-PortabilityDefects {
         }
     }
 
+    # --- Rule 4: a function named like a 5.1 built-in alias -----------------
+    foreach ($fd in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true))) {
+        # A scope prefix (function script:cp) does not stop the alias winning.
+        $fnName = ($fd.Name -replace '^(?i)(global|script|local|private):', '').ToLowerInvariant()
+        if ($script:Ps51Aliases -contains $fnName) {
+            $out += New-Object PSObject -Property @{
+                File   = $Path
+                Line   = $fd.Extent.StartLineNumber
+                Rule   = 'alias-shadowed'
+                Detail = ('function ' + $fd.Name + ' has the name of a Windows PowerShell 5.1 built-in alias; the alias wins, so on 5.1 a call to it runs the aliased cmdlet. Rename it.')
+            }
+        }
+    }
+
     # Emitted straight to the pipeline. `return $out` on an empty array yields
     # $null, and the caller's @($null) is a ONE-element array holding null.
     $out
@@ -283,6 +323,19 @@ if ($SelfTest) {
                              '$p = { FakePkg -Kind $script:k }' + $NL)
     T 'the script-scoped-variable replacement is clean' ((N $o) -eq 0) ('count=' + (N $o))
 
+    # --- rule 4 ---
+    $p4 = W 'alias.ps1' ('function CP { param($a) $a }' + $NL + '$r = CP 1' + $NL)
+    $d = @(Get-PortabilityDefects -Path $p4)
+    T 'a function named CP (Copy-Item on 5.1) is a defect' `
+      ($d.Count -eq 1 -and $d[0].Rule -eq 'alias-shadowed' -and $d[0].Line -eq 1) `
+      ("count=$($d.Count) rule=$(if($d.Count){$d[0].Rule})")
+    $q4 = W 'aliasr.ps1' ('function r { 1 }' + $NL)
+    T 'a function named r (Invoke-History) is a defect, whatever its case' ((N $q4) -eq 1) ('count=' + (N $q4))
+    $t4 = W 'aliasscope.ps1' ('function script:cp { 1 }' + $NL + 'function global:R { 2 }' + $NL)
+    T 'a scope prefix does not hide the name (script:cp, global:R)' ((N $t4) -eq 2) ('count=' + (N $t4))
+    $s4 = W 'aliasok.ps1' ('function CopyOf { param($a) $a }' + $NL + '$cp = 1' + $NL + 'Get-ChildItem | sort Name' + $NL)
+    T 'a distinct function name, a variable named $cp, and USING an alias are not defects' ((N $s4) -eq 0) ('count=' + (N $s4))
+
     # --- a file that will not parse is declared, never silently skipped ---
     $l = W 'broken.ps1' ('function f { if ($x) {' + $NL)
     $d = @(Get-PortabilityDefects -Path $l)
@@ -320,5 +373,5 @@ if ($defects.Count -gt 0) {
     exit 1
 }
 
-'[OK] lint_ps51_portability: {0} .ps1 file(s) are pure ASCII, use no PowerShell 6+ escape in a double-quoted string, and no GetNewClosure().' -f $files.Count
+'[OK] lint_ps51_portability: {0} .ps1 file(s) are pure ASCII, use no PowerShell 6+ escape in a double-quoted string, no GetNewClosure(), and no function named like a 5.1 built-in alias.' -f $files.Count
 exit 0

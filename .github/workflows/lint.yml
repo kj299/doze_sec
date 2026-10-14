@@ -368,10 +368,25 @@ jobs:
                    'userinit.exe under a living, OLDER cmd.exe in a session that is ending is WARNING: an older holder is no reused number, it started the child' \
                    'a WmiPrvSE.exe recorded before the first service host (a small step back soon after boot) reads as a clock that moved, not a finding' \
                    'a process recorded before the System-started smss.exe, alone, reads as a clock that moved' \
-                   'an svchost.exe recorded before its services.exe (but after smss), alone, reads as a clock that moved'; do
+                   'an svchost.exe recorded before its services.exe (but after smss), alone, reads as a clock that moved' \
+                   'a copy of LSASS is CRITICAL, on its own row, named once: no wrong-parent line and no second-instance line for it' \
+                   'lsass.exe under lsass.exe from ANOTHER path is not a copy (the other rules grade an impostor)' \
+                   'browsers and explorer start children from their own image: chrome.exe, msedge.exe or explorer.exe under itself is no copy' \
+                   'smss.exe under smss.exe is no copy: the first smss starts one for each session by design' \
+                   'a parent PID now held by a NEWER process of the same name is a reused number, not a copy'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 110 ] || { echo "only $n case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 125 ] || { echo "only $n case(s)"; exit 1; }
+      - name: lsass_copy_events -- an LSASS copy in the Security log is CRITICAL in any spelling; the boot start and a log with no 4688 are not
+        run: |
+          out=$(pwsh -NoProfile -File tools/lsass_copy_events.ps1 -SelfTest); echo "$out"
+          for n in 'LSASS started by wininit.exe at boot is the normal record: OK, counted' \
+                   'lsass.exe created by lsass.exe is CRITICAL: LSASS was copied, with the time and both PIDs' \
+                   'paths compare case-insensitively: a recorded spelling cannot hide a copy' \
+                   'no process-creation record at all: SKIPPED (auditing off), never OK, raises nothing'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 14 ] || { echo "only $n case(s)"; exit 1; }
       - name: proc_snapshot -- one query, the former Name-PID-Path lines byte for byte, and the process tree
         run: |
           out=$(pwsh -NoProfile -File tools/proc_snapshot.ps1 -SelfTest); echo "$out"
