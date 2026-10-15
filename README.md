@@ -2,7 +2,7 @@
 
 Windows 10/11 security forensic audit tool with SENTINEL-X CTI integration.
 
-**Version 7.3** | 18-section audit | 88 MITRE ATT&CK techniques detected | 10 IOC categories
+**Version 7.3** | 18-section audit | 89 MITRE ATT&CK techniques detected | 10 IOC categories
 
 Detection-and-response aid, not real-time protection — see [THREAT_MODEL.md](THREAT_MODEL.md) for exactly what is and is not covered.
 
@@ -110,7 +110,7 @@ Temp path check, admin detection, OS version, OS compatibility, Safe Mode, log d
 | 2 | User accounts and privilege audit | No | Rogue accounts, SID anomalies |
 | 3 | Network configuration and connections | No | C2 callbacks, DNS anomalies, open shares |
 | 4 | Running processes | No | LOLBins, RMM tools, suspicious paths, system-process names outside their directory or started by the wrong parent (T1036), a system process that is a copy of its parent (an LSASS copy: T1003.001), loaded-module inspection (DLLs inside running processes: staging-path, unsigned, non-Microsoft in core security processes — T1055/T1574) |
-| 5 | Startup and persistence | No | Run keys, Startup folders, Winlogon, IFEO debuggers, AppInit/AppCert DLLs, logon/unlock vectors (Notify, Credential Providers, Network Provider DLLs), netsh helpers, print processors and port monitors, BITS jobs, PowerShell profiles, time providers |
+| 5 | Startup and persistence | No | Run keys, Startup folders, Winlogon, IFEO debuggers, AppInit/AppCert DLLs, logon/unlock vectors (Notify, Credential Providers, Network Provider DLLs), netsh helpers, print processors and port monitors, BITS jobs (including one queued to upload a file off the machine, T1048), PowerShell profiles, time providers |
 | 6 | Scheduled tasks | No | Malicious tasks, action-path detection (PS CSV, Task-To-Run column only) |
 | 7 | Windows services | Partial | Authenticode signature gating per service binary (vendor allowlist + revocation + expiry + bad-path). A binary that is absent, or present but unreadable (WindowsApps is ACL'd to TrustedInstaller), or validly signed by a vendor outside the short allowlist, is reported as context rather than a finding -- it stays a WARNING when the path is a staging directory, the cert is expired or revoked, or the binary is unsigned; unusual accounts | MSIX/AppX packages under `C:\Program Files\WindowsApps\` are catalog-signed, so the inner binary reads as unsigned; the package's own `SignatureKind` is consulted instead (see "Catalog signing: what is covered" below)
 | 8 | Firewall configuration | Yes | Disabled profiles, risky rules |

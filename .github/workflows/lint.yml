@@ -215,8 +215,50 @@ jobs:
             || { echo 'nothing stops $badPathRx being applied to BITS local names again'; exit 1; }
           echo "$out" | grep -q 'an unreadable file list is NOT cleared' \
             || { echo 'an unreadable destination could start reading as an all-clear'; exit 1; }
+          # The DIRECTION of transfer (T1048). The age gate used to sit above
+          # every one of these arms, so a job created minutes ago -- which is
+          # what an exfiltration job and a next-stage ingress job both are --
+          # was graded on nothing at all.
+          echo "$out" | grep -q 'a job created 3 days ago fetching from a bare public IP is graded NOW' \
+            || { echo 'the age gate could move back above the destination rule, hiding every fresh job'; exit 1; }
+          echo "$out" | grep -q 'an upload one day old is reported' \
+            || { echo 'nothing stops the upload arm being put back behind the age gate'; exit 1; }
+          echo "$out" | grep -q "a file from the person's own folders escalates to CRITICAL" \
+            || { echo 'the upload payload classes are untested -- the person own files could read as routine'; exit 1; }
+          echo "$out" | grep -q 'a private LAN collector is WARNING with the management-point cause named' \
+            || { echo 'the management-agent carve-out is untested -- a ConfigMgr client could read as exfiltration'; exit 1; }
+          echo "$out" | grep -q 'an archive outside the user own folders stays WARNING' \
+            || { echo 'a diagnostics .cab could start reading as staged loot'; exit 1; }
+          echo "$out" | grep -q 'a job with no TransferType property is counted as unchecked for direction' \
+            || { echo 'an unreadable direction could be absorbed as a download -- the OK-default mistake'; exit 1; }
+          echo "$out" | grep -q 'a crafted FILE NAME cannot forge a line of its own' \
+            || { echo 'a file name could inject its own severity tag into the report'; exit 1; }
+          # Each of these pins a defect a read-only review found before the
+          # first push: a job's own name is chosen by whoever created it, and
+          # it reached both the report's line structure and the command the
+          # report tells the reader to paste.
+          echo "$out" | grep -q 'a crafted JOB NAME cannot forge a line in the destination arm' \
+            || { echo 'a job name could forge a line in the arms that do not filter it'; exit 1; }
+          echo "$out" | grep -q 'the verify line is ONE statement even when the job name holds an apostrophe' \
+            || { echo 'a job name could append a statement to the command the reader is told to paste'; exit 1; }
+          echo "$out" | grep -q 'an application config file is not a registry hive' \
+            || { echo 'config\system.json could read as a hive copy again -- CRITICAL on a clean machine'; exit 1; }
+          echo "$out" | grep -q "a shared profile folder is not the person's own" \
+            || { echo 'C:\Users\Public could read as the signed-in user own folders again'; exit 1; }
+          echo "$out" | grep -q 'a .pem is named as a certificate file, not escalated' \
+            || { echo 'a public certificate could be graded as a stolen private key'; exit 1; }
+          echo "$out" | grep -q 'a bare IPv6 collector is CRITICAL, not reassured' \
+            || { echo 'an IPv6 collector could get the reassuring sentence again'; exit 1; }
+          echo "$out" | grep -q 'an upload job with an empty file list is context, not a finding' \
+            || { echo 'the transient between creating a job and adding a file could become a finding'; exit 1; }
+          echo "$out" | grep -q 'a job whose direction could not be read is NOT covered by the all-clear' \
+            || { echo 'the all-clear could absorb a direction nobody read'; exit 1; }
+          echo "$out" | grep -q 'a standard-user enumeration says whose jobs it saw' \
+            || { echo 'a one-user enumeration could claim the whole machine again'; exit 1; }
+          echo "$out" | grep -q 'a direction that is none of the three documented types is a declared gap' \
+            || { echo 'an unrecognised direction could be read as a harmless download'; exit 1; }
           n=$(echo "$out" | grep -c '^\[OK\]')
-          [ "$n" -ge 25 ] || { echo "self-test ran only $n case(s) -- it is not exercising the rule"; exit 1; }
+          [ "$n" -ge 80 ] || { echo "self-test ran only $n case(s) -- it is not exercising the rule"; exit 1; }
 
   benign-twin-grade:
     name: "Benign twins: the ordinary state of a real machine must not raise"

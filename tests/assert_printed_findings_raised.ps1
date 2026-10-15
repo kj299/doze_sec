@@ -97,6 +97,17 @@ $script:Contracts = @(
        Signature = '^\s*\[WARNING\] Silent-process-exit monitoring is ENABLED for '
        Section   = '12'
        Technique = 'T1003.001' },
+    # A BITS job queued to upload is the Exfiltration tactic's first row, and it
+    # is deliberately NOT the T1197 row that sits beside it: that one names a
+    # notify command line or a long lifetime, neither of which was observed here.
+    @{ Name      = 'A BITS job queued to upload a file off this machine (WARNING)'
+       Signature = '^\s*\[WARNING\] BITS job .* is queued to UPLOAD a file off this machine \(T1048\)'
+       Section   = '5'
+       Technique = 'T1048' },
+    @{ Name      = 'A BITS job queued to upload a file off this machine (CRITICAL)'
+       Signature = '^\s*\[CRITICAL\] BITS job .* is queued to UPLOAD a file off this machine \(T1048\)'
+       Section   = '5'
+       Technique = 'T1048' },
     @{ Name      = 'LSASS configured to have its memory dumped when it exits'
        Signature = '^\s*\[WARNING\] \S.* is configured to have its memory DUMPED when it exits'
        Section   = '12'

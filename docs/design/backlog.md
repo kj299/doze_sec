@@ -391,6 +391,37 @@ is also what a parent that has since exited looks like) and a benign twin for
 that case pinned in the self-test. Build it when a field run or the harness
 can show the exited-parent shape; do not build it on the assumption.
 
+## Exfiltration: what is covered and what is next (opened 2026-10-15)
+
+Section 5 now grades a BITS job whose direction is Upload as T1048, which is
+the Exfiltration tactic's first coverage; the ATT&CK matrix no longer lists
+that tactic as empty. Three neighbours are open, in this order of value:
+
+1. **The records BITS leaves behind a job.** A completed or cancelled job is
+   gone from `Get-BitsTransfer`, but `Microsoft-Windows-Bits-Client/Operational`
+   keeps something. What exactly is unresolved: third-party write-ups disagree
+   on whether Event 59 marks a job created, started or resumed, and on whether
+   those events carry the URL at all. The CI step that plants an upload job now
+   PRINTS the records and the properties a real BitsJob exposes on 5.1, so the
+   next change reads them on that measurement. Do not build on the write-ups.
+2. **Archive Collected Data (T1560).** A multi-volume (`.part1.rar`, `.z01`) or
+   password-protected archive appearing in a staging folder within a short
+   window is the shape that precedes almost every exfiltration. The detection
+   is easy and the judgement is the whole piece: installers and backup tools
+   write archives to those same folders constantly, so this needs its benign
+   twins pinned first, in both directions.
+3. **Exfil Over Web Service (T1567).** A transfer to consumer cloud storage.
+   Deliberately not attempted: it needs a list of cloud destinations and there
+   is no first-party source for one, so the list would be a guess that ages
+   badly and would flag whatever sync client the person legitimately uses.
+
+Also noted while building (1): `Start-BitsTransfer -HttpMethod` lets a job use
+a method other than GET, which is how an upload reaches a server with no BITS
+Server Extension, and `-CustomHeadersWriteOnly` makes a job's HTTP headers
+unreadable to other programs on the machine. Whether a BitsJob surfaces either
+to `Get-BitsTransfer` is unknown; the measurement step above prints the
+property list, so the answer will arrive with it.
+
 ## The LSASS SACL's object-access records (open, 2026-10-14; deliberately not read)
 
 Windows ships a SACL on LSASS that records attempts to read its memory

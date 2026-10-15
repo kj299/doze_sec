@@ -177,6 +177,27 @@ proof     = ci:persistence_extra.ps1 -SelfTest
 signature = destination is a private LAN address
 note      = A long-lived BITS job fetching from a bare 10.x, 172.16-31.x, 192.168.x, 127.x or 169.254.x address is the ordinary shape of an on-premises WSUS server, an SCCM distribution point or a Microsoft Connected Cache node -- BITS is the transport all three use, and they are routinely reached by bare LAN address rather than by name. A bare PUBLIC address has no such routine cause and still raises WARNING; 172.15.x and 172.32.x are outside the private block and raise, which the self-test pins. Verify the address is one your organisation runs: Get-BitsTransfer -AllUsers | Select-Object -ExpandProperty FileList, then check it against your update infrastructure. On a home machine with no such server, a bare LAN address deserves a closer look than this INFO line gives it.
 
+[bits-upload-management-agent]
+class     = ADVISE
+maxsev    = WARNING
+proof     = ci:persistence_extra.ps1 BITS upload direction (both directions); ci:persistence_extra.ps1 -SelfTest; field:a real ConfigMgr or management agent cannot be installed on a runner, so the LAN-collector direction is proven by a planted job to a private address and by the self-test, not by the product itself
+signature = BITS job '[^']+' \(owner [^)]*\) is queued to UPLOAD a file off this machine
+note      = A BITS job whose TransferType is Upload sends a local file out over HTTP. That is the Exfiltration shape, and it is also what some management agents do on purpose: a ConfigMgr management point receives client uploads over BITS (the IIS BITS Server Extension has to be enabled on the receiving virtual directory for an upload to be accepted at all), and diagnostics collectors ship a .cab the same way. So this line is WARNING, not CRITICAL, when the collector is a hostname or a private LAN address and the file is not one of the person's own: the owner account and the collector are what tell an agent from an intrusion. It escalates to CRITICAL only on evidence -- a collector that is a bare PUBLIC IP address with no name behind it, or a file from the signed-in user's own folders, a browser profile, a mail store, a credential or key file, a registry-hive or directory-database copy, or anything read out of a volume shadow copy. An archive outside those folders stays WARNING precisely because a real agent packs diagnostics into one. Verify: Get-BitsTransfer -AllUsers | Where-Object TransferType -ne 'Download' | Select-Object DisplayName,OwnerAccount,TransferType,JobState -ExpandProperty FileList, then ask whether the collector is a server your organisation runs.
+
+[bits-no-upload-job]
+class     = QUIET
+maxsev    = OK
+proof     = ci:persistence_extra.ps1 BITS upload direction (both directions); ci:Run the full audit; fail on hang
+signature = BITS job\(s\) queued( for this user)?, none with a notify command line, an unreadable file list, a questionable destination, or a file queued to leave this machine
+note      = The ordinary state of a Windows machine: BITS jobs exist (Windows Update and the browsers' updaters park them) and every one of them is a DOWNLOAD. The all-clear names the upload direction explicitly because it now covers it; before this check existed the same sentence stopped at "destination" and said nothing about direction, so an upload job was absorbed into an all-clear that had never looked. A job whose transfer direction cannot be read is NOT covered by this line: the all-clear requires zero such jobs, and a report that has any prints a scoped INFO line plus the gap WARNING instead, which raises its own T1048 row rather than the T1197 one beside it. On a standard-user token the sentence says 'for this user', because Get-BitsTransfer -AllUsers needs administrator rights and a job owned by another account is not visible from that token.
+
+[bits-upload-config-and-shared-paths]
+class     = QUIET
+maxsev    = WARNING
+proof     = ci:persistence_extra.ps1 -SelfTest
+signature = queued to UPLOAD a file off this machine
+note      = Three path shapes that look like credential theft and are not, each pinned as a must-not-escalate case. (1) An application config file called system.json, security.xml or SAM.db under any directory named config: the registry-hive class is anchored to \Windows\System32\config\ with the extensions a hive COPY carries, because a looser form made ...\config\system.json -- one of the commonest config shapes there is -- read as a copy of a registry hive, CRITICAL, with advice to treat the machine as compromised. (2) C:\Users\Public\... and C:\Users\Default\...: those sit beside the real profiles under \Users\ but are shared or template locations that vendors write logs and shared data into, so they are not "the signed-in user's own folders" and saying so in a CRITICAL finding would be a false sentence. (3) A .pem, .crt, .cer or .der: as often a public certificate or a CA bundle as a private key, and an agent's diagnostics bundle plausibly carries one, so it is NAMED in the finding ("may be a public certificate rather than a private key, so read it") and does not escalate on the extension alone. A .pfx, .p12, .kdbx, .ppk, .key or id_rsa still does. All three are still reported: an upload job is a WARNING whatever it carries.
+
 [driver-signed-byovd-name]
 class     = QUIET
 maxsev    = WARNING
