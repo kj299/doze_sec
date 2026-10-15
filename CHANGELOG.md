@@ -35,7 +35,9 @@ confirm it. The severity follows the evidence rather than the mechanism --
 CRITICAL when the collector is a bare public IP address with no name behind it,
 or when the source is one of the person's own files (their folders, a browser
 profile, a mail store, a key or credential file, a registry-hive or
-directory-database copy, anything read out of a volume shadow copy); WARNING
+directory-database copy, anything read out of a volume shadow copy -- shared
+profile folders and certificate files excluded, see the review notes below);
+WARNING
 otherwise, with the sentence that names what tells a management agent apart,
 since a ConfigMgr management point receives client uploads this way and
 diagnostics collectors ship a `.cab` the same way. An archive outside the
@@ -46,9 +48,10 @@ It raises its own ledger row, `5 T1048`, because the T1197 row beside it names
 a notify command line or a long lifetime -- neither of which was observed.
 
 An upload job that cannot be read is not cleared: an unreadable file list says
-that WHAT is leaving could not be identified, and a job whose `TransferType`
-property is missing is counted and declared as a gap rather than assumed to be
-a download. Defaulting an unknown to the harmless value is the mistake this
+that WHAT is leaving could not be identified, and a job whose transfer
+direction cannot be read -- the property missing, blank, or holding a value
+that is none of the three documented types -- is counted and declared as a gap
+rather than assumed to be a download. Defaulting an unknown to the harmless value is the mistake this
 repo has already paid for in the block grader, the `DZ_BLKSEV` sentinel and the
 hidden-service probe.
 
@@ -79,6 +82,82 @@ and what `Microsoft-Windows-Bits-Client/Operational` recorded about the plants.
 Third-party write-ups disagree on what Event 59 even means and on whether those
 events carry the URL, so the records BITS leaves behind a finished job stay
 unread until that measurement says what is in them.
+
+A read-only review before the first push found eighteen problems, in the new
+code and in the old code this change made reachable. All are fixed:
+
+- **A job's own name could rewrite the report, and could write the command the
+  reader is told to paste.** A BITS display name is chosen by whoever creates
+  the job. It was interpolated into a single-quoted PowerShell string in the
+  `verify:` line, so a name of `ok'; Start-Process calc; 'x` closed the
+  comparison and appended a statement -- a command an attacker composes for
+  someone who has just been told their data is leaving. Apostrophes are
+  doubled now, at that line and at the older `Inspect it:` line, and a case
+  asks the PARSER whether what the reader would paste is still one statement.
+  The benign half is the same bug: a job honestly named `O'Brien backup`
+  printed a line that could not run.
+- **And a name or owner carrying a newline could forge a whole line.** Only
+  the upload arm filtered its values; the notify and destination arms
+  interpolated them raw, so a name containing CRLF and `[OK] this machine is
+  fine` produced a physical line starting with the exact token `block_sev`,
+  `verdict_audit` and `top_findings` grade on. Moving the destination signal
+  out from behind the age gate is what made that reachable for a job created
+  minutes ago, so this change widened a pre-existing hole. Every job-supplied
+  value is now normalised once, at the top of the rule.
+- **The case that was supposed to prove that was vacuous.** It tested each
+  element of the result for a leading tag while the forged text sat INSIDE an
+  element behind an indented prefix; with the filtering removed it still
+  passed. It now counts severity-tagged lines in the RENDERED text, and covers
+  the job-name and owner vectors as well as the file name.
+- **`...\config\system.json` was reported as a copy of a registry hive**:
+  CRITICAL, exit 8, with advice to change every password from a clean machine.
+  The hive rule's tail accepted any extension after `config\system`, so one of
+  the commonest application-config shapes there is matched. It is anchored to
+  `\Windows\System32\config\` with the extensions a hive copy carries. This
+  is the `\Public\` regex burn repeated, in a change that cites that rule
+  elsewhere -- so the real paths are pinned as must-not-escalate cases.
+- **`C:\Users\Public\` and `C:\Users\Default\` read as "the signed-in
+  user's own folders"**, which is false of both: vendors write shared logs
+  there. They are excluded, and pinned.
+- **A `.pem` is no longer treated as a private key.** It is as often a public
+  certificate or a CA bundle, and an agent's diagnostics bundle carries one, so
+  a certificate file is named in the finding and does not escalate on its
+  extension alone. `.pfx`, `.p12`, `.kdbx`, `.ppk`, `.key` and `id_rsa` still do.
+- **An upload job with no files added yet was reported as "could not be
+  read".** Empty and unreadable are two different claims, and the empty one is
+  also the transient between creating a job and adding a file to it -- the same
+  transient the download arm deliberately refuses to grade. It is context now,
+  raising nothing, and the note no longer points at a collector it never printed.
+- **The all-clear covered jobs whose direction was never read**, contradicting
+  the contract this change's own corpus entry states. The summary lines moved
+  into a pure function so the all-clear's three preconditions are testable at
+  all, and a report with any unread direction prints a scoped INFO line plus
+  the gap instead.
+- **The direction gap raised a T1197 row**, booking an Exfiltration gap against
+  Persistence and letting a `led` trigger for one fire on the other. It has its
+  own marker and raises `5 T1048`, like the finding it is a gap in.
+- **A standard-user run claimed machine-wide scope silently.** `-AllUsers`
+  needs administrator rights; the fallback to this user's jobs printed nothing,
+  so the all-clear spoke for the machine while it had seen one account. The
+  scope is now stated in the all-clear and in its own line, the printed
+  `verify:` command drops the switch the reader cannot use, and the
+  standard-user job asserts the scope is named.
+- **An unrecognised but non-empty direction was graded as a download** -- the
+  harmless default, against this file's own rule. Any value that is not one of
+  the three documented types is a declared gap.
+- **A bare IPv6 collector got the reassuring sentence.** The bare-address rules
+  were IPv4-only, so `http://[2001:db8::7]/u` was told to the reader as the
+  shape a management agent has. Both rules now cover IPv6 literals, including
+  the link-local and unique-local ranges as LAN context.
+- Smaller: the business OneDrive folder (`OneDrive - <Tenant>`) was not matched,
+  so the commercial case was the one that missed; a trailing space defeated the
+  `$`-anchored classes; a 31-day-old job was described as "parked near the
+  90-day maximum"; one payload case asserted the verdict rather than the reason
+  and so passed with its own rule deleted; the CI step verified its positive
+  plants but not its negative control, which would have made that assertion
+  vacuous; and a cleanup leak only warned, though a leaked suspended upload job
+  carries no harness marker and would be reported as a finding by the next
+  audit on that machine.
 
 ### The records that remain when something reads LSASS memory (T1003.001)
 A copy of LSASS made to read its secrets lives for seconds, so the live

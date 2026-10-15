@@ -458,8 +458,16 @@ try {
         ('reported: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'queued to UPLOAD|^\s+(file|to|why):' }) -join ' | '))
     Assert (@($ledger1 | Where-Object { $_ -match '\|5\|T1048\|' }).Count -eq 0) 'no T1048 row on a clean runner, standard-user token' `
         'a standard-user run raised the BITS upload row with nothing queued to upload'
-    Assert ($text1 -match 'a file queued to leave this machine|\[OK\] No BITS transfer jobs queued|NOT checked for the direction of transfer|BITS job check NOT performed') 'Section 5 stated a verdict on the direction of its BITS jobs, standard-user token' `
-        ('Section 5 printed: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'BITS job\(s\) queued|No BITS transfer jobs|direction of transfer' }) -join ' | '))
+    Assert ($text1 -match 'a file queued to leave this machine|\[OK\] No BITS transfer jobs queued|NOT checked for it|BITS job check NOT performed') 'Section 5 stated a verdict on the direction of its BITS jobs, standard-user token' `
+        ('Section 5 printed: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'BITS job\(s\) queued|No BITS transfer jobs|readable transfer direction' }) -join ' | '))
+    # SCOPE, not just verdict. Get-BitsTransfer -AllUsers needs admin, so from
+    # this token the tool sees one account's jobs -- an upload job owned by
+    # another account is invisible. An all-clear that does not say so claims
+    # the machine while it checked a user: where the TOKEN explains an absence
+    # it has to be named. Either there are no jobs at all, or the scope is
+    # stated (the fallback line, or the all-clear's own "for this user").
+    Assert ($text1 -match '\[OK\] No BITS transfer jobs queued|enumerated for THIS USER only|BITS job\(s\) queued for this user') 'Section 5 names whose BITS jobs it could see on a standard-user token' `
+        ('Section 5 printed: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'BITS job|THIS USER only' }) -join ' | '))
     $max1 = Assert-LedgerConsistency -Text $text1 -Ledger $ledger1 -Label 'run 1'
     # The bat escalates to 6 ONLY from 0 and 4: 2 is the ledger-derived
     # "findings were raised" verdict and is never discarded (its rem block

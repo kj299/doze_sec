@@ -2464,6 +2464,7 @@ del "%TEMP%\dz_portmon.txt" 2>nul
 del "%TEMP%\dz_portmon_gap.txt" 2>nul
 del "%TEMP%\dz_bits.txt" 2>nul
 del "%TEMP%\dz_bitsupload.txt" 2>nul
+del "%TEMP%\dz_bitsupload_gap.txt" 2>nul
 del "%TEMP%\dz_bits_gap.txt" 2>nul
 del "%TEMP%\dz_psprofile.txt" 2>nul
 del "%TEMP%\dz_timeprov.txt" 2>nul
@@ -2524,6 +2525,13 @@ if exist "%TEMP%\dz_bitsupload.txt" (
     set /p _BUPSEV=<"%TEMP%\dz_bitsupload.txt"
     call :dz_finding !_BUPSEV! 5 T1048 "BITS upload job - a file is queued to leave this machine"
     del "%TEMP%\dz_bitsupload.txt" 2>nul
+)
+if exist "%TEMP%\dz_bitsupload_gap.txt" (
+    rem The direction gap belongs to the row it is a gap in, T1048, not T1197.
+    set "_BUGSEV="
+    set /p _BUGSEV=<"%TEMP%\dz_bitsupload_gap.txt"
+    call :dz_finding !_BUGSEV! 5 T1048 "BITS upload direction NOT checked - the transfer direction could not be read"
+    del "%TEMP%\dz_bitsupload_gap.txt" 2>nul
 )
 if exist "%TEMP%\dz_bits_gap.txt" (
     rem A gap is its own row: the tool could not perform (part of) this check.

@@ -439,10 +439,12 @@ Found during the v7.1 coverage review; tracked for future work:
   under its owner's account -- so Section 5 grades that direction on its own
   terms and raises it as **T1048**, which is this audit's first Exfiltration
   row. The severity follows the evidence: a collector that is a bare public
-  IP address with no name behind it, or a source file that is one of the
-  person's own (their folders, a browser profile, a mail store, a key or
-  credential file, a registry-hive or directory-database copy, anything read
-  out of a volume shadow copy) is CRITICAL; a named or private-LAN collector
+  IP address with no name behind it (IPv4 or IPv6), or a source file that is
+  one of the person's own (their Documents/Desktop/Downloads/OneDrive --
+  `C:\Users\Public` and `C:\Users\Default` are excluded, being shared
+  locations), a browser profile, a mail store, a password database or a private
+  key, a hive copy out of `\Windows\System32\config\` or `ntds.dit`, or
+  anything read out of a volume shadow copy, is CRITICAL; a named or private-LAN collector
   with an ordinary file is WARNING, because a ConfigMgr management point
   receives client uploads this way and diagnostics collectors ship a `.cab`
   the same way. The destination rule is no longer gated on a job's age

@@ -575,7 +575,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $md = Join-Path $env:TEMP ("dz_pe_ci_{0}" -f $PID)
           New-Item -ItemType Directory -Path $md -Force | Out-Null
-          $markers = @('dz_netsh.txt','dz_printproc.txt','dz_portmon.txt','dz_bits.txt','dz_bitsupload.txt','dz_psprofile.txt','dz_timeprov.txt')
+          $markers = @('dz_netsh.txt','dz_printproc.txt','dz_portmon.txt','dz_bits.txt','dz_bitsupload.txt','dz_bitsupload_gap.txt','dz_psprofile.txt','dz_timeprov.txt')
           # Clean runner: a stock Windows image registers netsh helpers, print
           # processors, port monitors and time providers, and they are all
           # Microsoft-signed -- so any CRITICAL here is a false positive in the
@@ -812,8 +812,22 @@ jobs:
             # (a) A DOWNLOAD plant alone must write no upload marker and print
             # no upload line. Without this the step could pass by always
             # finding what it looks for.
-            & bitsadmin /create $dl 2>&1 | Out-Null
+            $mkDl = (& bitsadmin /create $dl 2>&1) -join ' '
             & bitsadmin /addfile $dl 'http://localhost/dz_ci_nonexistent' "$env:TEMP\dz_ci_bits_dlonly.bin" 2>&1 | Out-Null
+            # The control has to be VERIFIED, not assumed: this step's (a)
+            # assertion is a NEGATIVE one, so a plant that silently failed
+            # would make it pass having proved nothing -- loud for the plants
+            # whose absence fails a positive assertion, silent for the one
+            # whose absence makes a negative assertion vacuous is backwards.
+            $dlJob = @()
+            try { $dlJob = @(Get-BitsTransfer -AllUsers -EA Stop | Where-Object { $_.DisplayName -eq $dl }) }
+            catch { $dlJob = @(Get-BitsTransfer -EA SilentlyContinue | Where-Object { $_.DisplayName -eq $dl }) }
+            if ($dlJob.Count -lt 1) { throw ("the download control plant did not take; bitsadmin said: " + $mkDl) }
+            if ($dlJob[0].PSObject.Properties.Name -contains 'TransferType') {
+              if ([string]$dlJob[0].TransferType -notmatch '(?i)^download$') {
+                throw ("the download control plant is not a download ({0}) -- the control proves nothing" -f $dlJob[0].TransferType)
+              }
+            }
             $mdA = Join-Path $env:TEMP ("dz_pe_up_a_{0}" -f $PID)
             $outA = (.\tools\persistence_extra.ps1 -MarkerDir $mdA -BitsAgeDays 0) -join "`n"
             if ($outA -match 'queued to UPLOAD') {
@@ -859,7 +873,7 @@ jobs:
 
             if (-not $hasType) {
               Write-Host '[ SKIP ] this engine does not expose TransferType on a BitsJob, so the upload rule cannot run here; asserting the DECLARED GAP instead'
-              if ($outB -notmatch 'NOT checked for the direction of transfer') {
+              if ($outB -notmatch 'did not report a readable transfer direction and were NOT checked for it') {
                 throw 'TransferType is unreadable and the report did not declare that gap -- an unread direction would be absorbed as a download'
               }
             } else {
@@ -886,6 +900,11 @@ jobs:
               }
               $m = Join-Path $mdB 'dz_bitsupload.txt'
               if (-not (Test-Path $m)) { throw 'the upload finding wrote no marker -- it never reaches the ledger' }
+              # A direction that WAS read must not also be declared as a gap,
+              # and the gap marker is a different row (T1048, not T1197).
+              if (Test-Path (Join-Path $mdB 'dz_bitsupload_gap.txt')) {
+                throw 'the direction was read and the gap marker was written anyway -- the T1048 gap row would fire on every machine'
+              }
               if ((Get-Content -LiteralPath $m -Raw).Trim() -ne 'CRITICAL') {
                 throw ("the upload marker should carry the highest severity printed (CRITICAL), not: " + (Get-Content -LiteralPath $m -Raw))
               }
@@ -922,7 +941,14 @@ jobs:
             Remove-Item "$env:TEMP\dz_ci_bits_dlonly.bin" -Force -EA SilentlyContinue
             $left = @()
             try { $left = @(Get-BitsTransfer -AllUsers -EA SilentlyContinue | Where-Object { $_.DisplayName -like 'dz_selftest_bits_upload*' }) } catch {}
-            if ($left.Count) { Write-Host ("WARNING: {0} planted upload job(s) survived cleanup" -f $left.Count) }
+            if ($left.Count) {
+              # Not a warning: these two names carry no dz_selftest marker in a
+              # field the audit excludes, so a leaked suspended upload job
+              # would be reported as a T1048 finding by the next audit on this
+              # machine -- the "do not report our own test harness as an
+              # intrusion" class.
+              throw ("{0} planted upload job(s) survived cleanup: {1}" -f $left.Count, (($left | ForEach-Object { $_.DisplayName }) -join ', '))
+            }
           }
           Write-Host 'BITS upload OK (a download plant writes no upload finding; a named collector is WARNING with the agent cause named; a bare public IP is CRITICAL)'
           exit 0
@@ -4133,8 +4159,8 @@ jobs:
           # no-jobs line, or the declared gap. An all-clear by omission is what
           # the old wording was.
           if ($text -match 'is queued to UPLOAD a file off this machine') { throw ('a BITS upload job was reported on a clean runner: {0}' -f (($text -split "`r?`n" | Where-Object { $_ -match 'queued to UPLOAD|^\s+(file|to|why):' }) -join ' | ')) }
-          if ($text -notmatch 'a file queued to leave this machine|\[OK\] No BITS transfer jobs queued|NOT checked for the direction of transfer|BITS job check NOT performed') { throw 'Section 5 printed no verdict on the direction of its BITS jobs' }
-          Write-Host ('Section 5 (BITS): ' + (($text -split "`r?`n" | Where-Object { $_ -match 'BITS job\(s\) queued|No BITS transfer jobs|direction of transfer' }) -join ' | '))
+          if ($text -notmatch 'a file queued to leave this machine|\[OK\] No BITS transfer jobs queued|NOT checked for it|BITS job check NOT performed') { throw 'Section 5 printed no verdict on the direction of its BITS jobs' }
+          Write-Host ('Section 5 (BITS): ' + (($text -split "`r?`n" | Where-Object { $_ -match 'BITS job\(s\) queued|No BITS transfer jobs|readable transfer direction' }) -join ' | '))
           # THE APOSTROPHE RUN. TEMP held an apostrophe and APPDATA an apostrophe and
           # a space: the dashboard (its script and SUMCODE/SUMCOUNT in TEMP) must
           # have printed, the stage-1 remediation script must exist and parse, and
