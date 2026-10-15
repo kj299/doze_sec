@@ -1402,6 +1402,49 @@ function Get-RoleOfPath {
     return 'other'
 }
 
+function Resolve-LongPath {
+    # ONE FOLDER IS ONE FOLDER, WHATEVER ITS SPELLING. Windows hands %TEMP% to
+    # a process in 8.3 form when the profile name does not fit 8.3
+    # (C:\Users\RUNNER~1\AppData\Local\Temp on the CI runner; any user name
+    # longer than eight characters or holding a space), so the profile's own
+    # Temp and %TEMP% are the same directory under two names. Measured on
+    # windows-latest: one Temp listed twice, so the coverage line counted 11
+    # folders for 10 and an archive there would print twice. Each segment that
+    # holds a '~' is resolved through Directory.GetDirectories(parent,
+    # segment), which matches the short name and returns the long one.
+    # $Lister is injectable so the self-test can pin it without 8.3 names.
+    param([string]$Path, [scriptblock]$Lister = { param($parent, $seg) [System.IO.Directory]::GetDirectories($parent, $seg) })
+    if (-not $Path -or $Path -notmatch '~') { return $Path }
+    try {
+        $parts = $Path.TrimEnd('\') -split '\\'
+        if ($parts.Count -lt 2) { return $Path }
+        $cur = $parts[0] + '\'
+        for ($i = 1; $i -lt $parts.Count; $i++) {
+            $seg = $parts[$i]
+            if (-not $seg) { continue }
+            $next = $cur.TrimEnd('\') + '\' + $seg
+            if ($seg -match '~') {
+                $m = @(& $Lister $cur $seg)
+                if ($m.Count -eq 1 -and $m[0]) { $next = [string]$m[0] }
+            }
+            $cur = $next
+        }
+        return $cur
+    } catch { return $Path }
+}
+
+function Add-StagingFolder {
+    param($list, $seen, [string]$p, [string]$Role, [string]$state = 'try', $FolderDepth = $null, [scriptblock]$Lister = $null)
+    if (-not $p) { return }
+    if ($Lister) { $long = Resolve-LongPath -Path $p -Lister $Lister } else { $long = Resolve-LongPath -Path $p }
+    $k = $long.TrimEnd('\').ToLowerInvariant()
+    if ($seen.ContainsKey($k)) { return }
+    $seen[$k] = 1
+    $h = @{ Path = $long.TrimEnd('\'); Role = $Role; State = $state }
+    if ($null -ne $FolderDepth) { $h.Depth = [int]$FolderDepth }
+    [void]$list.Add($h)
+}
+
 # ---------------------------------------------------------------------------
 # SELF-TEST: synthetic archives built byte by byte from the published layouts,
 # so every parser branch and every verdict row runs on Linux pwsh and on 5.1
@@ -1944,6 +1987,14 @@ if ($SelfTest) {
         $sw0 = [System.Diagnostics.Stopwatch]::StartNew()
         $en = Get-StagingCandidates -Specs @(@{ Path = $e1; Role = 'temp'; State = 'try' }) -BudgetSeconds -1 -Stopwatch $sw0
         T 'enumeration: a folder the budget never reached has the state "budget", not "unlistable"' ($en.Folders[0].State -eq 'budget') "$($en.Folders[0].State)"
+        $lister = { param($parent, $seg) if ($seg -eq 'RUNNER~1') { @('C:\Users\runneradmin') } elseif ($seg -eq 'AMBIG~1') { @('C:\x\a', 'C:\x\b') } else { @() } }
+        T 'a short 8.3 path resolves to its long name, segment by segment' ((Resolve-LongPath -Path 'C:\Users\RUNNER~1\AppData\Local\Temp' -Lister $lister) -eq 'C:\Users\runneradmin\AppData\Local\Temp') (Resolve-LongPath -Path 'C:\Users\RUNNER~1\AppData\Local\Temp' -Lister $lister)
+        T 'a path without a short segment is returned unchanged, and an ambiguous one is left as given' (((Resolve-LongPath -Path 'C:\Users\k\Downloads' -Lister $lister) -eq 'C:\Users\k\Downloads') -and ((Resolve-LongPath -Path 'C:\x\AMBIG~1' -Lister $lister) -eq 'C:\x\AMBIG~1')) ''
+        $l8 = New-Object System.Collections.ArrayList; $s8 = @{}
+        Add-StagingFolder $l8 $s8 'C:\Users\runneradmin\AppData\Local\Temp' 'temp' -Lister $lister
+        Add-StagingFolder $l8 $s8 'C:\Users\RUNNER~1\AppData\Local\Temp\' 'temp' -Lister $lister
+        Add-StagingFolder $l8 $s8 'C:\Users\Public' 'public' -Lister $lister
+        T 'one folder is one folder: %TEMP% in 8.3 form beside the profile''s own Temp is listed ONCE, under its long name' ($l8.Count -eq 2 -and $l8[0].Path -eq 'C:\Users\runneradmin\AppData\Local\Temp') ("{0}: {1}" -f $l8.Count, (($l8 | ForEach-Object { $_.Path }) -join '; '))
         T 'roles: Public, Downloads, a system temp folder and the recycle bin are told apart by path' (((Get-RoleOfPath 'C:\Users\Public\x') -eq 'public') -and ((Get-RoleOfPath 'C:\Users\k\Downloads') -eq 'downloads') -and ((Get-RoleOfPath 'C:\Windows\Temp') -eq 'systemp') -and ((Get-RoleOfPath 'D:\$Recycle.Bin') -eq 'recycle') -and ((Get-RoleOfPath 'C:\Users\k\AppData\Local\Temp') -eq 'temp')) ''
 
         # ---- a real archive from the engine's own Compress-Archive, the plain
@@ -2002,17 +2053,6 @@ function Get-DownloadsFolder {
     return $d
 }
 
-function Add-StagingFolder {
-    param($list, $seen, [string]$p, [string]$Role, [string]$state = 'try', $FolderDepth = $null)
-    if (-not $p) { return }
-    $k = $p.TrimEnd('\').ToLowerInvariant()
-    if ($seen.ContainsKey($k)) { return }
-    $seen[$k] = 1
-    $h = @{ Path = $p.TrimEnd('\'); Role = $Role; State = $state }
-    if ($null -ne $FolderDepth) { $h.Depth = [int]$FolderDepth }
-    [void]$list.Add($h)
-}
-
 function Get-StagingFolders {
     # The folders this token should look at. Elevated: every profile's
     # Downloads and temp folder, the Public folder, the system temp folders
@@ -2028,8 +2068,10 @@ function Get-StagingFolders {
     $me = $env:USERPROFILE
     if ($me) {
         Add-StagingFolder $list $seen (Get-DownloadsFolder -ProfileDir $me) 'downloads'
-        Add-StagingFolder $list $seen $env:TEMP 'temp'
+        # The profile's own Temp first: with the dedupe below, the long
+        # spelling is the one the report names.
         Add-StagingFolder $list $seen (Join-Path $me 'AppData\Local\Temp') 'temp'
+        Add-StagingFolder $list $seen $env:TEMP 'temp'
     }
     $pub = $env:PUBLIC; if (-not $pub) { $pub = Join-Path $sysDrive 'Users\Public' }
     Add-StagingFolder $list $seen $pub 'public'

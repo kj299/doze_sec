@@ -1063,8 +1063,10 @@ jobs:
             || { echo 'a Keynote file in Downloads could be called a private key'; exit 1; }
           echo "$out" | grep -q 'a single-disk ZIP64 with 0xFFFF sentinels in its end record is NOT a split set' \
             || { echo 'every large zip could read as a volume set'; exit 1; }
+          echo "$out" | grep -q "one folder is one folder: %TEMP% in 8.3 form beside the profile's own Temp is listed ONCE" \
+            || { echo 'a short %TEMP% could make one folder read as two again'; exit 1; }
           n=$(echo "$out" | grep -c '^\[OK\]')
-          [ "$n" -ge 120 ] || { echo "self-test ran only $n case(s) -- it is not exercising the rule"; exit 1; }
+          [ "$n" -ge 125 ] || { echo "self-test ran only $n case(s) -- it is not exercising the rule"; exit 1; }
 
   coverage-matrix-lint:
     runs-on: ubuntu-latest

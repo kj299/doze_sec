@@ -1134,6 +1134,9 @@ jobs:
           # An all-clear, or -- only when a cap or the time budget is the stated
           # reason -- the same sentence scoped to what was read. Never silence.
           if ($live -notmatch '\[OK\] (\d+ archive\(s\) examined across|No archives in the) \d+ staging folder\(s\)|\[INFO\] (\d+ archive\(s\) examined across|No archives in the) \d+ staging folder\(s\)[^\r\n]*before [^\r\n]* stopped it') { throw "archive_staging printed no coverage verdict on the runner: $live" }
+          # One folder is one folder: the runner's %TEMP% is an 8.3 short path
+          # (RUNNER~1), and the first run of this step listed its Temp twice.
+          if ($live -match '~\d\\AppData\\Local\\Temp' -and $live -match 'runneradmin\\AppData\\Local\\Temp') { throw 'the same Temp folder was listed under its 8.3 short name AND its long name -- one folder read as two' }
           Write-Host ('measured on this image: ' + (($live -split "`n" | Where-Object { $_ -match 'examined across|No archives in|plain archive\(s\)|package\(s\) that are ZIP|Mark of the Web|could not be determined|named like an archive|cabinet\(s\)|volume\(s\) of split|cloud-only|held open|holds more than|time budget|Not present' }) -join ' | '))
           Remove-Item $md -Recurse -Force -EA SilentlyContinue
 

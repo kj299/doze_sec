@@ -88,7 +88,15 @@ mark could be forged to clear the strongest shape; and the live path had no
 test outside Windows -- the classifier is now a function the self-test drives
 end to end over files it writes.
 
-Proven in both directions: 126 self-test cases over synthetic archives built
+The first CI run then showed one more, by measurement: the runner's %TEMP% is
+an 8.3 short path (`C:\Users\RUNNER~1\...`), so the same Temp folder was
+examined twice under two spellings -- the coverage line counted eleven
+folders for ten, and an archive there would have printed twice. Any machine
+whose user name is longer than eight characters gets the same. Folders are
+now compared by their long name, resolved through Windows' own short-name
+match, and CI asserts no folder appears under both spellings.
+
+Proven in both directions: 129 self-test cases over synthetic archives built
 byte by byte from the specifications (every parser branch, every verdict row,
 four hostile headers, the live classifier over real files, the per-folder cap
 and the budget), with the review's fixes each pinned by a mutation that fails
