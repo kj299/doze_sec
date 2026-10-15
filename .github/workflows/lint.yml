@@ -215,8 +215,26 @@ jobs:
             || { echo 'nothing stops $badPathRx being applied to BITS local names again'; exit 1; }
           echo "$out" | grep -q 'an unreadable file list is NOT cleared' \
             || { echo 'an unreadable destination could start reading as an all-clear'; exit 1; }
+          # The DIRECTION of transfer (T1048). The age gate used to sit above
+          # every one of these arms, so a job created minutes ago -- which is
+          # what an exfiltration job and a next-stage ingress job both are --
+          # was graded on nothing at all.
+          echo "$out" | grep -q 'a job created 3 days ago fetching from a bare public IP is graded NOW' \
+            || { echo 'the age gate could move back above the destination rule, hiding every fresh job'; exit 1; }
+          echo "$out" | grep -q 'an upload one day old is reported' \
+            || { echo 'nothing stops the upload arm being put back behind the age gate'; exit 1; }
+          echo "$out" | grep -q "a file from the person's own folders escalates to CRITICAL" \
+            || { echo 'the upload payload classes are untested -- the person own files could read as routine'; exit 1; }
+          echo "$out" | grep -q 'a private LAN collector is WARNING with the management-point cause named' \
+            || { echo 'the management-agent carve-out is untested -- a ConfigMgr client could read as exfiltration'; exit 1; }
+          echo "$out" | grep -q 'an archive outside the user own folders stays WARNING' \
+            || { echo 'a diagnostics .cab could start reading as staged loot'; exit 1; }
+          echo "$out" | grep -q 'a job with no TransferType property is counted as unchecked for direction' \
+            || { echo 'an unreadable direction could be absorbed as a download -- the OK-default mistake'; exit 1; }
+          echo "$out" | grep -q 'a crafted file name cannot forge a line of its own' \
+            || { echo 'a file name could inject its own severity tag into the report'; exit 1; }
           n=$(echo "$out" | grep -c '^\[OK\]')
-          [ "$n" -ge 25 ] || { echo "self-test ran only $n case(s) -- it is not exercising the rule"; exit 1; }
+          [ "$n" -ge 48 ] || { echo "self-test ran only $n case(s) -- it is not exercising the rule"; exit 1; }
 
   benign-twin-grade:
     name: "Benign twins: the ordinary state of a real machine must not raise"

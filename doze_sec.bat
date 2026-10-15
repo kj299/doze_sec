@@ -2452,6 +2452,10 @@ echo  Command: powershell -File tools\persistence_extra.ps1>> "%REPORT%"
 echo  Netsh helpers ^(T1546.007^), print processors ^(T1547.012^), port monitors>> "%REPORT%"
 echo  ^(T1547.010^), BITS jobs ^(T1197^), PowerShell profiles ^(T1546.013^) and time>> "%REPORT%"
 echo  providers ^(T1547.003^) -- subsystem load points nothing audited before.>> "%REPORT%"
+echo  A BITS job can also run the other way: a job whose TransferType is Upload>> "%REPORT%"
+echo  is a file queued to LEAVE this machine over HTTP ^(T1048^), by a Windows>> "%REPORT%"
+echo  service, under its owner's account.>> "%REPORT%"
+echo  Command: powershell -Command "Get-BitsTransfer -AllUsers | Select-Object DisplayName,OwnerAccount,TransferType,JobState">> "%REPORT%"
 del "%TEMP%\dz_netsh.txt" 2>nul
 del "%TEMP%\dz_netsh_gap.txt" 2>nul
 del "%TEMP%\dz_printproc.txt" 2>nul
@@ -2459,6 +2463,7 @@ del "%TEMP%\dz_printproc_gap.txt" 2>nul
 del "%TEMP%\dz_portmon.txt" 2>nul
 del "%TEMP%\dz_portmon_gap.txt" 2>nul
 del "%TEMP%\dz_bits.txt" 2>nul
+del "%TEMP%\dz_bitsupload.txt" 2>nul
 del "%TEMP%\dz_bits_gap.txt" 2>nul
 del "%TEMP%\dz_psprofile.txt" 2>nul
 del "%TEMP%\dz_timeprov.txt" 2>nul
@@ -2512,6 +2517,13 @@ if exist "%TEMP%\dz_bits.txt" (
     set /p _BTSSEV=<"%TEMP%\dz_bits.txt"
     call :dz_finding !_BTSSEV! 5 T1197 "BITS job with a notify command line or an unusually long lifetime"
     del "%TEMP%\dz_bits.txt" 2>nul
+)
+if exist "%TEMP%\dz_bitsupload.txt" (
+    rem Its own row: a job queued to upload is not what the T1197 row names.
+    set "_BUPSEV="
+    set /p _BUPSEV=<"%TEMP%\dz_bitsupload.txt"
+    call :dz_finding !_BUPSEV! 5 T1048 "BITS upload job - a file is queued to leave this machine"
+    del "%TEMP%\dz_bitsupload.txt" 2>nul
 )
 if exist "%TEMP%\dz_bits_gap.txt" (
     rem A gap is its own row: the tool could not perform (part of) this check.

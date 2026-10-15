@@ -13,7 +13,7 @@ user a safe, reviewable path to fix it. The protection chain it supports:
    Secure Boot, BitLocker, SmartScreen. doze_sec *audits that these are on
    and untampered* (Sections 8, 9, 13) rather than duplicating them.
 2. **Detection** is doze_sec's core job: 14 pre-flight checks + 18 audit
-   sections + a CTI-driven IOC sweep (Section 18) covering 88 MITRE ATT&CK
+   sections + a CTI-driven IOC sweep (Section 18) covering 89 MITRE ATT&CK
    techniques and 282 indicators across 10 IOC categories. (The manifest maps
    107 techniques; the 19-technique difference is documented-but-not-yet-
    detected, and `attack_matrix.ps1` lists it on every run so the gap between
@@ -60,7 +60,7 @@ break untested nor drift out of sync with its test.
 | Lateral Movement | Yes | S10 (SMBv1, RDP/NLA, WinRM, sshd), S17/S18 (PsExec pipes, portproxy) |
 | Collection | Partial | S14 (staging dirs, ADS), manifest T1560 |
 | Command & Control | Strong | S3 (connections, DNS cache, hosts), S18 (C2 pipes/domains, VT IP reputation, tunneling tools) |
-| Exfiltration | Partial | S3/S18l (connections + IP reputation); no DLP / content inspection |
+| Exfiltration | Partial | S5 (a BITS job queued to upload a local file off the machine, T1048), S3/S18l (connections + IP reputation); no DLP / content inspection |
 | Impact | Strong (ransomware) | S18 (precursor commands T1490, extension survey T1486, encryptor hashes) |
 
 Reconnaissance and Resource Development are attacker-side tactics with no
@@ -277,6 +277,24 @@ and 13 verify exactly that.
 
 Found during the v7.1 coverage review; tracked for future work:
 
+- **Exfiltration beyond the BITS upload job.** Section 5 now grades a BITS
+  job whose direction is Upload (T1048), which is this tactic's first real
+  coverage, and three neighbours are deliberately still open. *Exfiltration
+  to a web service* (T1567 -- a transfer to consumer cloud storage) is not
+  attempted: it needs a list of cloud destinations, and there is no
+  first-party source for one, so any list would be a guess that ages badly.
+  *Archive Collected Data* (T1560 -- a multi-volume or password-protected
+  archive appearing in a staging folder) is observable but is almost
+  entirely a judgement about benign look-alikes, since installers and backup
+  tools write archives to those same folders constantly; it is worth its own
+  piece, with its benign twins pinned, rather than a rule bolted on here.
+  And the records BITS leaves BEHIND a job -- `Microsoft-Windows-Bits-Client/
+  Operational` -- are not read: third-party write-ups disagree both on what
+  Event 59 means (created, started or resumed) and on whether those events
+  carry the URL at all, so the CI step that plants an upload job now PRINTS
+  what Windows actually recorded about it. Reading them is a change to make
+  on that measurement, not on the write-ups.
+
 - ~~Attack Surface Reduction (ASR) rule state and Office macro policy
   (`VBAWarnings`, Mark-of-the-Web handling) are not explicitly audited.~~
   **Closed:** Section 9 now audits all 19 documented ASR rules by name and
@@ -416,6 +434,21 @@ Found during the v7.1 coverage review; tracked for future work:
   (T1547.010) (loaded by the SYSTEM spooler at boot), BITS jobs (T1197 --
   notify command lines, plus jobs approaching the 90-day max lifetime),
   PowerShell profiles (T1546.013) and time providers (T1547.003).
+  A BITS job also runs the other way: one whose `TransferType` is `Upload`
+  is a file queued to LEAVE the machine over HTTP, by a Windows service,
+  under its owner's account -- so Section 5 grades that direction on its own
+  terms and raises it as **T1048**, which is this audit's first Exfiltration
+  row. The severity follows the evidence: a collector that is a bare public
+  IP address with no name behind it, or a source file that is one of the
+  person's own (their folders, a browser profile, a mail store, a key or
+  credential file, a registry-hive or directory-database copy, anything read
+  out of a volume shadow copy) is CRITICAL; a named or private-LAN collector
+  with an ordinary file is WARNING, because a ConfigMgr management point
+  receives client uploads this way and diagnostics collectors ship a `.cab`
+  the same way. The destination rule is no longer gated on a job's age
+  either: it used to be, so a job created minutes ago -- which is what an
+  exfiltration job and a next-stage ingress job both are -- was graded on
+  nothing at all.
   The four DLL-backed points are judged by Authenticode rather than by a
   name allowlist: printer vendors and some VPN products legitimately add
   entries (validly-signed non-Microsoft degrades to WARNING), and judging by

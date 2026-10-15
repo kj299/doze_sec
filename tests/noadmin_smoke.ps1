@@ -450,6 +450,16 @@ try {
         ('Section 12 printed: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'memory dump of lsass|Dump settings for' }) -join ' | '))
     Assert ($text1 -match '\[OK\] No program tried to read LSASS memory|\[SKIPPED\] .* records NOT checked|\[DEFERRED - ADMIN REQUIRED\] Defender''s rule against reading LSASS memory') 'Section 12 stated a verdict for Defender''s LSASS-read records on a standard-user token' `
         ('Section 12 printed: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'reading LSASS memory' }) -join ' | '))
+    # A file queued to LEAVE the machine over BITS (Section 5, T1048). A
+    # standard-user token sees only its own jobs -- Get-BitsTransfer -AllUsers
+    # needs admin and the tool falls back -- so the verdict may cover less, but
+    # it must still be STATED, and nothing may be raised on a clean runner.
+    Assert ($text1 -notmatch 'is queued to UPLOAD a file off this machine') 'no BITS upload job on a clean runner, standard-user token' `
+        ('reported: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'queued to UPLOAD|^\s+(file|to|why):' }) -join ' | '))
+    Assert (@($ledger1 | Where-Object { $_ -match '\|5\|T1048\|' }).Count -eq 0) 'no T1048 row on a clean runner, standard-user token' `
+        'a standard-user run raised the BITS upload row with nothing queued to upload'
+    Assert ($text1 -match 'a file queued to leave this machine|\[OK\] No BITS transfer jobs queued|NOT checked for the direction of transfer|BITS job check NOT performed') 'Section 5 stated a verdict on the direction of its BITS jobs, standard-user token' `
+        ('Section 5 printed: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'BITS job\(s\) queued|No BITS transfer jobs|direction of transfer' }) -join ' | '))
     $max1 = Assert-LedgerConsistency -Text $text1 -Ledger $ledger1 -Label 'run 1'
     # The bat escalates to 6 ONLY from 0 and 4: 2 is the ledger-derived
     # "findings were raised" verdict and is never discarded (its rem block

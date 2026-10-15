@@ -6,6 +6,80 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### A file queued to LEAVE this machine over BITS (T1048) -- the Exfiltration tactic's first coverage
+Every run ended its ATT&CK matrix with `COVERAGE GAPS -- ATT&CK tactics with NO
+technique coverage: Exfiltration.` The manifest documented two exfiltration
+techniques and attributed them to a process-name IOC list; nothing graded data
+leaving. Exfiltration is the step at which the harm actually lands on the
+person, so it should not have been the one tactic with nothing in it.
+
+BITS was the right place to start, because the blind spot was structural rather
+than a matter of taste. The rule that grades BITS jobs is pure and well tested,
+and it was download-shaped throughout:
+
+- **The direction of transfer was not an input at all.** Microsoft documents
+  three job types -- Download (the default), Upload and UploadReply -- and, for
+  an upload, that the job's SOURCE is the local file and its DESTINATION is the
+  URL. Every rule read a job the other way round, so an upload job's local file
+  (the data leaving) was examined only for writes into an autostart folder, and
+  the collector receiving it was printed as "an ordinary destination".
+- **The age gate silenced exactly the shape that moves quickly.** The rule
+  returned early for any job younger than 30 days, so a job created minutes ago
+  was graded on nothing: not its destination, not its direction, not its
+  payload. An exfiltration job is minutes old, and so is the ingress job that
+  fetches the next stage.
+
+Now: an upload job is reported whatever its age, naming the file that would
+leave, the collector, the owner account and the job state, with the command to
+confirm it. The severity follows the evidence rather than the mechanism --
+CRITICAL when the collector is a bare public IP address with no name behind it,
+or when the source is one of the person's own files (their folders, a browser
+profile, a mail store, a key or credential file, a registry-hive or
+directory-database copy, anything read out of a volume shadow copy); WARNING
+otherwise, with the sentence that names what tells a management agent apart,
+since a ConfigMgr management point receives client uploads this way and
+diagnostics collectors ship a `.cab` the same way. An archive outside the
+person's own folders stays WARNING for that reason. Every reason that applies
+is printed, not the first one: ntds.dit taken out of a shadow copy is both a
+credential database and a shadow-copy read, and a reader needs both halves.
+It raises its own ledger row, `5 T1048`, because the T1197 row beside it names
+a notify command line or a long lifetime -- neither of which was observed.
+
+An upload job that cannot be read is not cleared: an unreadable file list says
+that WHAT is leaving could not be identified, and a job whose `TransferType`
+property is missing is counted and declared as a gap rather than assumed to be
+a download. Defaulting an unknown to the harmless value is the mistake this
+repo has already paid for in the block grader, the `DZ_BLKSEV` sentinel and the
+hidden-service probe.
+
+The download destination rule also moved out from behind the age gate, so a
+fresh job fetching from a bare public IP, or writing into an autostart folder,
+is graded the day it appears. The calendar keeps the one thing it is really
+about: the INFO context line for a long-parked job. The self-test case that
+used to assert "a young job is not graded on its destination at all" now
+asserts the opposite, because that case pinned a blind spot rather than a
+feature; the verbatim Edge-updater cases are unchanged and still must not
+raise.
+
+Tested in both directions, and nothing leaves the runner: 51 self-test cases
+(27 new), four mutations each failing their own cases, and a CI step that
+plants two REAL upload jobs with `bitsadmin /create /upload` -- left suspended,
+so no transfer is attempted and no receiving server is needed -- one to a named
+collector, asserted WARNING with the agent cause named, and its twin to
+198.51.100.7 (TEST-NET-2, reserved for documentation and never routed),
+asserted CRITICAL. A download-only plant in the same step must write no upload
+finding and no marker, so the step cannot pass by always finding what it looks
+for. The clean-runner gates in the full-run and standard-user jobs forbid an
+upload line and the T1048 row, and require Section 5 to state a verdict on the
+direction either way.
+
+Measured rather than argued, and printed for the next change to build on: the
+step dumps which properties a real `BitsJob` exposes on Windows PowerShell 5.1,
+and what `Microsoft-Windows-Bits-Client/Operational` recorded about the plants.
+Third-party write-ups disagree on what Event 59 even means and on whether those
+events carry the URL, so the records BITS leaves behind a finished job stay
+unread until that measurement says what is in them.
+
 ### The records that remain when something reads LSASS memory (T1003.001)
 A copy of LSASS made to read its secrets lives for seconds, so the live
 snapshot (Section 4) will rarely catch one, and the process-creation record
