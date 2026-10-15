@@ -468,6 +468,15 @@ try {
     # stated (the fallback line, or the all-clear's own "for this user").
     Assert ($text1 -match '\[OK\] No BITS transfer jobs queued|enumerated for THIS USER only|BITS job\(s\) queued for this user') 'Section 5 names whose BITS jobs it could see on a standard-user token' `
         ('Section 5 printed: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'BITS job|THIS USER only' }) -join ' | '))
+    # The Bits-Client channel's ACL for a standard-user token is not something
+    # this repo had established, so the tool probes and declares: either it
+    # read the channel (a verdict naming its span, or the empty-log line) or it
+    # says the token could not. Silence would be the only wrong answer, and a
+    # deferral must never arrive as a ledger row.
+    Assert ($text1 -match 'BITS transfer record\(s\) read,|holds no transfer records|What BITS recorded about finished transfers was NOT checked|is not readable from a standard-user token|was NOT checked -- the Bits-Client operational log is turned off|this machine has no Bits-Client operational log') 'Section 5 states a verdict on what BITS recorded, from a standard-user token' `
+        ('Section 5 printed: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'BITS transfer record|recorded about finished transfers|Bits-Client' }) -join ' | '))
+    Assert ($text1 -notmatch 'BITS recorded an UPLOAD that has already happened|BITS wrote a file straight into an autostart folder|BITS transferred to or from a bare IP address') 'no BITS history finding on a clean runner, standard-user token' `
+        ('reported: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'BITS recorded an UPLOAD|autostart folder|bare IP address' }) -join ' | '))
     $max1 = Assert-LedgerConsistency -Text $text1 -Ledger $ledger1 -Label 'run 1'
     # The bat escalates to 6 ONLY from 0 and 4: 2 is the ledger-derived
     # "findings were raised" verdict and is never discarded (its rem block

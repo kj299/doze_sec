@@ -97,6 +97,29 @@ $script:Contracts = @(
        Signature = '^\s*\[WARNING\] Silent-process-exit monitoring is ENABLED for '
        Section   = '12'
        Technique = 'T1003.001' },
+    # What BITS recorded about a transfer that is already over. The upload line
+    # is its own T1048 row for the same reason: the T1197 row beside it names
+    # a bare address, an autostart write or a staging-folder program.
+    @{ Name      = 'BITS recorded an upload that has already happened (WARNING)'
+       Signature = '^\s*\[WARNING\] BITS recorded an UPLOAD that has already happened'
+       Section   = '5'
+       Technique = 'T1048' },
+    @{ Name      = 'BITS recorded an upload that has already happened (CRITICAL)'
+       Signature = '^\s*\[CRITICAL\] BITS recorded an UPLOAD that has already happened'
+       Section   = '5'
+       Technique = 'T1048' },
+    @{ Name      = 'BITS wrote a file into an autostart folder'
+       Signature = '^\s*\[CRITICAL\] BITS wrote a file straight into an autostart folder'
+       Section   = '5'
+       Technique = 'T1197' },
+    @{ Name      = 'BITS transferred to a bare IP address'
+       Signature = '^\s*\[WARNING\] BITS transferred to or from a bare IP address'
+       Section   = '5'
+       Technique = 'T1197' },
+    @{ Name      = 'A BITS transfer driven by a program in a staging folder'
+       Signature = '^\s*\[WARNING\] A BITS transfer was driven by a program running from a staging folder'
+       Section   = '5'
+       Technique = 'T1197' },
     # A BITS job queued to upload is the Exfiltration tactic's first row, and it
     # is deliberately NOT the T1197 row that sits beside it: that one names a
     # notify command line or a long lifetime, neither of which was observed here.

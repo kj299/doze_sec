@@ -288,12 +288,16 @@ Found during the v7.1 coverage review; tracked for future work:
   entirely a judgement about benign look-alikes, since installers and backup
   tools write archives to those same folders constantly; it is worth its own
   piece, with its benign twins pinned, rather than a rule bolted on here.
-  And the records BITS leaves BEHIND a job -- `Microsoft-Windows-Bits-Client/
-  Operational` -- are not read: third-party write-ups disagree both on what
-  Event 59 means (created, started or resumed) and on whether those events
-  carry the URL at all, so the CI step that plants an upload job now PRINTS
-  what Windows actually recorded about it. Reading them is a change to make
-  on that measurement, not on the write-ups.
+  The records BITS leaves BEHIND a job are now read (Section 5,
+  `tools/bits_history.ps1`), and the disagreement among the write-ups was
+  answered by not depending on any of them: the field names come from the
+  machine's own provider schema and the roles from the values' shapes. What is
+  still not read there is the BITS **job-store database**
+  (`%ALLUSERSPROFILE%\Microsoft\Network\Downloader\qmgr.db`), which forensic
+  tooling parses for jobs the log no longer mentions. Its format is
+  undocumented, so parsing it from Windows PowerShell 5.1 would be a guess
+  about a binary layout -- exactly the kind of thing this check was built to
+  avoid -- and it stays out until there is a first-party description of it.
 
 - ~~Attack Surface Reduction (ASR) rule state and Office macro policy
   (`VBAWarnings`, Mark-of-the-Web handling) are not explicitly audited.~~
@@ -434,6 +438,33 @@ Found during the v7.1 coverage review; tracked for future work:
   (T1547.010) (loaded by the SYSTEM spooler at boot), BITS jobs (T1197 --
   notify command lines, plus jobs approaching the 90-day max lifetime),
   PowerShell profiles (T1546.013) and time providers (T1547.003).
+  Section 5 also reads what BITS RECORDED about transfers that are already
+  over (`tools/bits_history.ps1`): a completed or cancelled job is gone from
+  the queue above, so a transfer that already happened leaves only what
+  Windows wrote in `Microsoft-Windows-Bits-Client/Operational`. No account of
+  those events is hard-coded, because every third-party one disagrees with the
+  others and Microsoft publishes no schema for them: the check reads each
+  record's data items by name out of the record itself, falls back to the
+  **provider's own manifest template** on the machine being audited
+  (`ProviderMetadata.Events`), and decides what each value is from its shape --
+  `http://` is a remote, a drive-rooted or UNC value is a local path,
+  upload/download is a direction. It grades a transfer to a bare IP address
+  with no name behind it, a file written straight into an autostart folder, a
+  transfer driven by a program running from a staging folder, and a recorded
+  upload (its own **T1048** row: a file that has already left). The all-clear
+  names the span of records it read and the newest transfer in it, because
+  these logs roll over and an absence older than the oldest record proves
+  nothing; a channel that is disabled or absent is `[SKIPPED]`, since nothing
+  is being written there and an empty log then means nothing.
+  **Measured on a real Windows build (2026-10-15), not assumed:** that
+  provider defines 126 events, 94 of them with data templates; the requesting
+  program really is in the job-created event (`jobTitle, jobId, jobOwner,
+  processPath, processId`), a completion event carries `fileCount,
+  bytesTransferred, bytesTransferredFromPeer`, the start event names the job
+  and its URL, and **no event carries a transfer direction at all**. So the
+  upload row below can be raised by the queued-job check but not by this
+  history on that build, and the report says so in as many words every run
+  rather than leaving an absence to be read as an all-clear.
   A BITS job also runs the other way: one whose `TransferType` is `Upload`
   is a file queued to LEAVE the machine over HTTP, by a Windows service,
   under its owner's account -- so Section 5 grades that direction on its own

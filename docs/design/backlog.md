@@ -391,19 +391,58 @@ is also what a parent that has since exited looks like) and a benign twin for
 that case pinned in the self-test. Build it when a field run or the harness
 can show the exited-parent shape; do not build it on the assumption.
 
+## The RunOnce resume entry can fire while the audit is still running (seen 2026-10-15, CI only so far)
+
+INIT 8 writes `HKCU\...\RunOnce\*WIN11_SecurityAudit_resume` so an interrupted
+run restarts at the next logon, and `:end_script` removes it on every exit. On
+a CI runner the full-run job's report assertions twice read a report that was
+not the one under test: an 11,718-byte file headed `Dev=0 Resume=1` ending at
+`STATUS: Unsupported OS`, written six seconds into the main run. That is the
+resume entry being executed by the runner's own session while the first audit
+was still going -- so a logon during a run starts a second, redundant audit.
+
+Harmless as seen (the second run stops at the OS check on a Server image, and
+both runs are read-only but for their own output), and the CI side is fixed:
+the assertions now take the report THIS run started and declare any other
+rather than silently testing it. What is unresolved is the product question --
+on a real Windows 10/11 machine a logon during a long audit would start a
+second full audit, leaving the owner two reports, one of them partial. Options
+if it is ever worth closing: write the entry only once the run is past the
+point where resuming helps, or have the bat notice an audit already running
+(a lock file beside the report) and exit early saying so. Not worth building on
+one CI observation; recorded so the next person who sees two reports knows why.
+
 ## Exfiltration: what is covered and what is next (opened 2026-10-15)
 
 Section 5 now grades a BITS job whose direction is Upload as T1048, which is
 the Exfiltration tactic's first coverage; the ATT&CK matrix no longer lists
 that tactic as empty. Three neighbours are open, in this order of value:
 
-1. **The records BITS leaves behind a job.** A completed or cancelled job is
-   gone from `Get-BitsTransfer`, but `Microsoft-Windows-Bits-Client/Operational`
-   keeps something. What exactly is unresolved: third-party write-ups disagree
-   on whether Event 59 marks a job created, started or resumed, and on whether
-   those events carry the URL at all. The CI step that plants an upload job now
-   PRINTS the records and the properties a real BitsJob exposes on 5.1, so the
-   next change reads them on that measurement. Do not build on the write-ups.
+1. ~~**The records BITS leaves behind a job.**~~ **DONE 2026-10-15**, and the
+   schema question is ANSWERED BY MEASUREMENT rather than by the write-ups: on
+   a real Windows build the provider defines 126 events, 94 with data
+   templates; the job-created event carries `jobTitle, jobId, jobOwner,
+   processPath, processId`, a completion event carries `fileCount,
+   bytesTransferred, bytesTransferredFromPeer`, the start event names the job
+   and its URL (parsed from a REAL record in CI), and **nothing carries a
+   transfer direction**. So the community claim that the requesting process
+   lives in the job-created event is right, and the claim that these events can
+   tell an upload from a download is wrong on that build -- a completed upload
+   cannot be identified from this channel there, and if that ever matters the
+   next sources are the job-store database below or the process-creation record
+   for whatever created the job.
+   (`tools/bits_history.ps1`, Section 5). The disagreement among the write-ups
+   was answered by not depending on any of them: field names come from the
+   record's own data items and, failing that, from the provider's manifest
+   template on the audited machine; what each value is comes from its shape.
+   Graded: a bare-IP remote, an autostart write, a staging-folder program, and
+   a recorded upload (its own T1048 row). A real record is parsed in CI by
+   resuming an upload job against a dead local port, so nothing leaves the
+   runner. STILL OPEN here: the job-store database
+   (`%ALLUSERSPROFILE%\Microsoft\Network\Downloader\qmgr.db`), which holds
+   jobs the log no longer mentions; its format is undocumented, so it stays out
+   until there is a first-party description rather than a reverse-engineered
+   one.
 2. **Archive Collected Data (T1560).** A multi-volume (`.part1.rar`, `.z01`) or
    password-protected archive appearing in a staging folder within a short
    window is the shape that precedes almost every exfiltration. The detection

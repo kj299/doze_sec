@@ -258,8 +258,21 @@ function Get-DllVerdict {
 # to the reassuring half of the upload wording, which told the reader that the
 # owner account and the collector are what tell a management agent apart while
 # the collector was an address with no name at all.
-$script:BareIpRx = '^\s*https?://((\d{1,3}\.){3}\d{1,3}|\[[0-9A-Fa-f:.]+\])([:/]|$)'
-$script:PrivateIpRx = '^\s*https?://(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|\[(::1\]|[fF][eE]80:|[fF][cCdD][0-9A-Fa-f]{2}:))'
+# WHO IS AT THE OTHER END, as one judgement in one shape. This has more
+# subtlety than it looks -- IPv4 and IPv6 literals, the private ranges, and the
+# boundary at 172.31 where the private block ends -- and a second reader of the
+# same channel's history now needs the identical answer. It is therefore copied
+# byte-identical into tools\bits_history.ps1 and pinned by
+# tools\lint_shared_copies.ps1, so the live check and the history check cannot
+# drift into disagreeing about the same URL.
+function Get-RemoteHostClass {
+    param([string]$Url)
+    if ([string]::IsNullOrWhiteSpace($Url)) { return 'unknown' }
+    $u = ([string]$Url).Trim()
+    if ($u -notmatch '^\s*https?://((\d{1,3}\.){3}\d{1,3}|\[[0-9A-Fa-f:.]+\])([:/]|$)') { return 'name' }
+    if ($u -match '^\s*https?://(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|\[(::1\]|[fF][eE]80:|[fF][cCdD][0-9A-Fa-f]{2}:))') { return 'private-ip' }
+    return 'public-ip'
+}
 
 # A value read off a job goes straight into a report line, so a crafted file
 # name must not be able to start a line with a severity tag of its own. Same
@@ -485,9 +498,9 @@ function Get-BitsVerdict {
     $pubIps = @()
     $lan = @()
     foreach ($rn in @($Remotes)) {
-        if ($rn -notmatch $script:BareIpRx) { continue }
-        if ($rn -match $script:PrivateIpRx) { $lan += $rn; continue }
-        $pubIps += $rn
+        $cls = Get-RemoteHostClass -Url $rn
+        if ($cls -eq 'public-ip') { $pubIps += $rn }
+        elseif ($cls -eq 'private-ip') { $lan += $rn }
     }
     $why = @()
     foreach ($ip in @($pubIps)) { $why += "fetches from a bare public IP address ($ip)" }

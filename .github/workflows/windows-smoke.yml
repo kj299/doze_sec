@@ -953,6 +953,162 @@ jobs:
           Write-Host 'BITS upload OK (a download plant writes no upload finding; a named collector is WARNING with the agent cause named; a bare public IP is CRITICAL)'
           exit 0
 
+      - name: bits_history.ps1 -SelfTest + the runner's real channel and a real planted record
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = (.\tools\bits_history.ps1 -SelfTest) -join "`n"
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw 'bits_history self-test failed' }
+          $n = @($out -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($n -lt 72) { throw "bits_history self-test ran only $n case(s)" }
+
+          # THE RUNNER'S REAL CHANNEL, which is the benign twin at scale: a
+          # windows-latest image has done Windows Update and browser-updater
+          # transfers, all of them to NAMED hosts from programs under Program
+          # Files. None of that may raise, and the check must say what it
+          # covered rather than going quiet.
+          $md = Join-Path $env:TEMP ("dz_bh_live_{0}" -f $PID)
+          $live = (.\tools\bits_history.ps1 -MarkerDir $md) -join "`n"
+          Write-Host $live
+          if ($live -match 'Exception|ParserError|is not recognized') { throw "bits_history errored on the live channel: $live" }
+          foreach ($m in @('dz_bitshist.txt', 'dz_bitshist_up.txt', 'dz_bitshist_gap.txt')) {
+            if (Test-Path (Join-Path $md $m)) { throw ("{0} written on a clean runner: {1}" -f $m, (Get-Content (Join-Path $md $m))) }
+          }
+          # THE RUNNER IS NOT A CLEAN MACHINE, and that is the point of this
+          # pair of assertions. Earlier steps in this same job plant BITS jobs
+          # aimed at documentation addresses (TEST-NET-2 and TEST-NET-3) to
+          # prove the bare-address rule fires. The jobs are cancelled; the
+          # records BITS wrote about them are not, so without the harness-plant
+          # exclusion this check would report its own tests as transfers to a
+          # bare address -- on this runner, and for ever on any real machine
+          # where the harness has run. It did exactly that on the first run of
+          # this step, which is how the exclusion came to exist.
+          if ($live -match 'dz_ci_|dz_selftest') {
+            if ($live -notmatch "name this audit's own test plants") {
+              throw 'the channel holds records from this job''s own plants and the report did not declare them as excluded -- it would report its own tests as findings'
+            }
+            Write-Host 'the earlier steps'' plants are in this channel and were excluded with a declared count'
+          }
+          # It must have reached a verdict: the all-clear naming its span, the
+          # empty-log line, or one of the declared gaps. Silence is the one
+          # outcome that would mean nothing was checked and nothing said.
+          if ($live -notmatch 'BITS transfer record\(s\) read,|holds no transfer records|was NOT checked|NOT graded') {
+            throw "bits_history printed no verdict on the live channel: $live"
+          }
+          # MEASURED, and now asserted where it can be: the provider's own
+          # event table. #250's step printed this and asserted nothing; the
+          # schema is what this check reads field names from, so its absence
+          # is a real condition the tool has to survive.
+          Write-Host '--- measured: the Bits-Client provider schema on this engine ---'
+          try {
+            $pm = Get-WinEvent -ListProvider 'Microsoft-Windows-Bits-Client' -EA Stop
+            $withTmpl = @($pm.Events | Where-Object { $_.Template })
+            Write-Host ("events defined: {0}; with a data template: {1}" -f @($pm.Events).Count, $withTmpl.Count)
+            foreach ($em in @($withTmpl | Select-Object -First 8)) {
+              $names = @()
+              try { foreach ($d in @(([xml]$em.Template).template.data)) { if ($d.name) { $names += [string]$d.name } } } catch { }
+              Write-Host ("  Id={0}: {1}" -f $em.Id, ($names -join ', '))
+            }
+          } catch {
+            Write-Host ("  the provider schema could not be read here: " + $_.Exception.Message)
+          }
+
+          # A REAL RECORD, with nothing leaving the runner. An upload job
+          # RESUMED against a port where nothing listens fails immediately, so
+          # no data is transferred and no receiving server is needed -- but
+          # BITS writes genuine records about it, which is the only way to
+          # prove this check parses what Windows really writes rather than what
+          # a self-test hands it.
+          # Touches: bits-job:dz_selftest_bits_hist, file:%TEMP%\dz_ci_hist_payload.bin
+          $job = 'dz_selftest_bits_hist'
+          $payload = Join-Path $env:TEMP 'dz_ci_hist_payload.bin'
+          & bitsadmin /cancel $job 2>&1 | Out-Null
+          try {
+            Set-Content -LiteralPath $payload -Value 'dz_selftest history payload' -Encoding ASCII
+            & bitsadmin /create /upload $job 2>&1 | Out-Null
+            & bitsadmin /addfile $job 'http://127.0.0.1:1/dz_ci_hist.bin' $payload 2>&1 | Out-Null
+            & bitsadmin /setminretrydelay $job 60 2>&1 | Out-Null
+            & bitsadmin /resume $job 2>&1 | Out-Null
+            $deadline = (Get-Date).AddSeconds(60)
+            $seen = @()
+            while ((Get-Date) -lt $deadline) {
+              Start-Sleep -Seconds 3
+              try {
+                $seen = @(Get-WinEvent -LogName 'Microsoft-Windows-Bits-Client/Operational' -MaxEvents 80 -EA Stop |
+                          Where-Object { $_.Message -and ($_.Message -match 'dz_selftest_bits_hist|dz_ci_hist\.bin') })
+              } catch { $seen = @() }
+              if ($seen.Count -gt 0) { break }
+            }
+            if ($seen.Count -eq 0) {
+              # Declared, never silent. The tool's own paths are still proven
+              # by the self-test and by the live read above; what this cannot
+              # then prove is that it parses a REAL record, and that is said.
+              Write-Host '[ SKIP ] this runner wrote no Bits-Client record naming the planted job within 60s, so the real-record parse is unproven here'
+            } else {
+              Write-Host ("records naming the plant: {0}" -f $seen.Count)
+              foreach ($e in @($seen | Select-Object -First 5)) {
+                Write-Host ("  Id={0} {1:yyyy-MM-dd HH:mm:ss} {2}" -f $e.Id, $e.TimeCreated, (($e.Message -split "`r?`n")[0]))
+              }
+              # The tool must resolve the planted URL out of those real
+              # records, and say which field name the machine gave it. If it
+              # cannot, its declared could-not-name path is what ships, and the
+              # step asserts THAT instead -- either way the report is honest.
+              $md2 = Join-Path $env:TEMP ("dz_bh_plant_{0}" -f $PID)
+              $after = (.\tools\bits_history.ps1 -MarkerDir $md2) -join "`n"
+              Write-Host $after
+              $sawUrl = ($after -match 'dz_ci_hist\.bin')
+              $saidSo = ($after -match 'carried no value describing a transfer|none of their fields could be named')
+              if (-not $sawUrl -and -not $saidSo) {
+                throw 'the planted transfer was neither resolved nor declared unnameable -- a record was read and silently graded as nothing'
+              }
+              # THE DIRECTION, MEASURED. The tool's header says CI measures
+              # whether this channel records it rather than assuming either
+              # way, and the plant is a real UPLOAD job -- so this is the one
+              # place that can settle it. Declared either way; when a machine
+              # does record it, the upload rule bites and the T1048 row fires.
+              if ($after -match "direction='") {
+                Write-Host ('MEASURED: this channel DOES record a transfer direction -- ' + ([regex]::Match($after, "direction='[^']+'").Value))
+                if ($after -notmatch 'BITS recorded an UPLOAD that has already happened') {
+                  throw 'the direction was recorded for a real UPLOAD job and no upload finding was raised'
+                }
+              } else {
+                Write-Host 'MEASURED: this channel records NO transfer direction, so the tool states that limitation instead of guessing'
+                # Measured 2026-10-15 on windows-latest: 126 events defined, 94
+                # with data templates, and no direction field in any of them --
+                # so this branch is the expected one until a build proves
+                # otherwise, and the report must carry the limitation.
+                if ($after -notmatch 'cannot say whether a file was sent OUT or fetched in') {
+                  throw 'the direction is unrecorded and the report did not say what it therefore cannot answer'
+                }
+                if ($after -notmatch 'carried a readable transfer DIRECTION') {
+                  throw 'no direction was recorded and the report did not say so -- the limitation must be stated, not implied'
+                }
+              }
+              if ($sawUrl) {
+                Write-Host 'PROVEN: a real Bits-Client record was parsed and its URL resolved'
+                # 127.0.0.1 is private, so the planted transfer must NOT raise
+                # the bare-public-address finding: the judgement, not just the
+                # mechanism.
+                if ($after -match '\[WARNING\] BITS transferred to or from a bare IP address with no name behind it: http://127\.0\.0\.1') {
+                  throw 'a loopback collector was raised as a bare PUBLIC address -- the private-range carve-out is broken'
+                }
+              } else {
+                Write-Host 'DECLARED: this provider names no field this check can identify, and the report says so'
+              }
+              Remove-Item $md2 -Recurse -Force -EA SilentlyContinue
+            }
+          } finally {
+            & bitsadmin /cancel $job 2>&1 | Out-Null
+            Remove-Item $payload -Force -EA SilentlyContinue
+            $left = @()
+            try { $left = @(Get-BitsTransfer -AllUsers -EA SilentlyContinue | Where-Object { $_.DisplayName -eq $job }) } catch { }
+            if ($left.Count) { throw 'the planted history job survived cleanup' }
+          }
+          Remove-Item $md -Recurse -Force -EA SilentlyContinue
+          Write-Host 'bits_history OK (self-test, the runner real channel raises nothing, and the provider schema measured)'
+          exit 0
+
       - name: persistence_extra.ps1 -SelfTest (BITS destination grading, pure)
         shell: powershell
         run: |
@@ -4015,9 +4171,44 @@ jobs:
           if "%RC%"=="8" ( findstr /b /c:"CRITICAL|" "C:\SecurityAudit\SecurityReport_*.ledger" >nul 2>&1 && set "RCOK=1" )
           if "%RC%"=="8" ( echo exit 8: a CRITICAL row outranks the planted reboot on this runner image -- see the ledger )
           if not defined RCOK ( echo EXPECTED EXIT CODE 4 WITH A PENDING REBOOT PLANTED, OR 8 EXPLAINED BY A CRITICAL LEDGER ROW -- GOT %RC% & exit /b 1 )
+          rem THE REPORT THIS RUN WROTE, NOT THE NEWEST FILE IN THE FOLDER.
+          rem
+          rem This loop used to assign unconditionally, so it kept the LAST
+          rem match -- and `for` walks the glob in name order, which for
+          rem SecurityReport_<date>_<time> is chronological. That is the newest
+          rem report, which is not necessarily this run's.
+          rem
+          rem It cost a red job twice, on PR #235 and again here, both times
+          rem with the same baffling symptom: the console shows all 18 sections
+          rem and exit 8, while the check reports "the audit did not reach
+          rem Section 18". The diagnostic added for the first occurrence
+          rem printed the answer this time -- the file it read was 11,718 bytes
+          rem with a header reading `Dev=0 Resume=1` and a last line of
+          rem "STATUS: Unsupported OS", i.e. a SECOND invocation carrying only
+          rem -resume, which began six seconds into this run and so sorted
+          rem after it. That is the RunOnce resume entry this audit creates at
+          rem INIT 8 being executed by the runner's own session while the first
+          rem run was still going; harmless in itself (a -resume run with no
+          rem -dev stops at the OS check on a Server image), and nothing to do
+          rem with what the audit found.
+          rem
+          rem So: take the FIRST report, which is the one this step's own
+          rem invocation started, and declare the extra if there is one rather
+          rem than letting it silently become the thing under test.
           set "REP="
-          for %%R in ("C:\SecurityAudit\SecurityReport_*.txt") do set "REP=%%R"
+          set "REPN=0"
+          for %%R in ("C:\SecurityAudit\SecurityReport_*.txt") do (
+              set /a REPN+=1
+              if not defined REP set "REP=%%R"
+          )
           if not defined REP ( echo NO REPORT PRODUCED & exit /b 1 )
+          if not "%REPN%"=="1" (
+              echo NOTE: %REPN% report^(s^) are present; asserting on the first, which this step started:
+              echo    %REP%
+              for %%R in ("C:\SecurityAudit\SecurityReport_*.txt") do echo    also present: %%R
+              echo    a second report means the audit ran again during this job -- the RunOnce resume entry
+              echo    firing in the runner's session. Not a finding about the machine under test.
+          )
           rem A hang is caught by the job timeout; this catches an EARLY EXIT
           rem (e.g. a parse error mid-audit) that still left a partial report:
           rem the exit handler's "EXIT CODE:" line and the [18/18] banner only
@@ -4071,8 +4262,21 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          $rep = Get-ChildItem 'C:\SecurityAudit\SecurityReport_*.txt' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          # THE REPORT THIS JOB'S OWN RUN WROTE -- the OLDEST, not the newest.
+          # The step above explains why at length: the RunOnce resume entry can
+          # be executed by the runner's session while the audit is still going,
+          # and that second run writes a newer, truncated report. Sorting
+          # newest-first would hand every assertion below the wrong file.
+          $all = @(Get-ChildItem 'C:\SecurityAudit\SecurityReport_*.txt' | Sort-Object Name)
+          if ($all.Count -eq 0) { throw 'no report to check' }
+          $rep = $all[0]
+          if ($all.Count -gt 1) {
+            Write-Host ("NOTE: {0} reports present; asserting on {1}, the one this job started. Also present: {2}" -f $all.Count, $rep.Name, (($all | Select-Object -Skip 1 | ForEach-Object { $_.Name }) -join ', '))
+          }
           $text = [IO.File]::ReadAllText($rep.FullName)
+          # Everything else this step reads must come from the SAME run, so it
+          # is matched on that report's timestamp stem rather than by time.
+          $stem = ($rep.Name -replace '^SecurityReport_', '') -replace '\.txt$', ''
           # THE RESUME ENTRY MUST POINT AT THE BAT. cmd's shift moves %0 too, and the bat
           # expanded %~f0 after its parse loop, so the value it wrote on the owner's
           # 2026-09-26 run was "<checkout>\-noVtSelf" -resume: a file that does not
@@ -4161,13 +4365,21 @@ jobs:
           if ($text -match 'is queued to UPLOAD a file off this machine') { throw ('a BITS upload job was reported on a clean runner: {0}' -f (($text -split "`r?`n" | Where-Object { $_ -match 'queued to UPLOAD|^\s+(file|to|why):' }) -join ' | ')) }
           if ($text -notmatch 'a file queued to leave this machine|\[OK\] No BITS transfer jobs queued|NOT checked for it|BITS job check NOT performed') { throw 'Section 5 printed no verdict on the direction of its BITS jobs' }
           Write-Host ('Section 5 (BITS): ' + (($text -split "`r?`n" | Where-Object { $_ -match 'BITS job\(s\) queued|No BITS transfer jobs|readable transfer direction' }) -join ' | '))
+          # And what BITS RECORDED (Section 5, the history check). A clean
+          # runner's channel is full of Windows Update and updater transfers to
+          # NAMED hosts, so nothing may raise -- and the check must have
+          # reached a verdict rather than gone quiet, which is the failure mode
+          # an all-clear by omission would look like.
+          if ($text -match 'BITS recorded an UPLOAD that has already happened|BITS wrote a file straight into an autostart folder|BITS transferred to or from a bare IP address|A BITS transfer was driven by a program running from a staging folder') { throw ('the BITS history check raised on a clean runner: {0}' -f (($text -split "`r?`n" | Where-Object { $_ -match 'BITS recorded an UPLOAD|autostart folder|bare IP address|staging folder' }) -join ' | ')) }
+          if ($text -notmatch 'BITS transfer record\(s\) read,|holds no transfer records|What BITS recorded about finished transfers was NOT checked|carried no value describing a transfer') { throw 'the BITS history check printed no verdict in the real audit' }
+          Write-Host ('Section 5 (BITS history): ' + (($text -split "`r?`n" | Where-Object { $_ -match 'BITS transfer record\(s\) read|holds no transfer records|recorded about finished transfers' }) -join ' | '))
           # THE APOSTROPHE RUN. TEMP held an apostrophe and APPDATA an apostrophe and
           # a space: the dashboard (its script and SUMCODE/SUMCOUNT in TEMP) must
           # have printed, the stage-1 remediation script must exist and parse, and
           # Section 11 must show the planted history.
           if ($text -notmatch 'DASHBOARD CHECKS PASSED') { throw "no dashboard status line: the dashboard script did not run with an apostrophe in TEMP" }
           if ($text -notmatch 'dz_ci_history_marker_7c1') { throw "Section 11 did not show the planted PowerShell history from an APPDATA holding an apostrophe and a space" }
-          $rem = @(Get-ChildItem -LiteralPath 'C:\SecurityAudit' -Filter 'Remediation_*.ps1' -File | Where-Object { $_.Name -notmatch '_(enforce|undo)\.ps1$' } | Sort-Object LastWriteTime -Descending | Select-Object -First 1)[0]
+          $rem = @(Get-ChildItem -LiteralPath 'C:\SecurityAudit' -Filter ('Remediation_' + $stem + '.ps1') -File)[0]
           if (-not $rem) { throw 'no stage-1 remediation script was written with an apostrophe in TEMP' }
           $rt = $null; $re = $null
           [void][System.Management.Automation.Language.Parser]::ParseFile($rem.FullName, [ref]$rt, [ref]$re)

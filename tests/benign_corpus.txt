@@ -177,6 +177,27 @@ proof     = ci:persistence_extra.ps1 -SelfTest
 signature = destination is a private LAN address
 note      = A long-lived BITS job fetching from a bare 10.x, 172.16-31.x, 192.168.x, 127.x or 169.254.x address is the ordinary shape of an on-premises WSUS server, an SCCM distribution point or a Microsoft Connected Cache node -- BITS is the transport all three use, and they are routinely reached by bare LAN address rather than by name. A bare PUBLIC address has no such routine cause and still raises WARNING; 172.15.x and 172.32.x are outside the private block and raise, which the self-test pins. Verify the address is one your organisation runs: Get-BitsTransfer -AllUsers | Select-Object -ExpandProperty FileList, then check it against your update infrastructure. On a home machine with no such server, a bare LAN address deserves a closer look than this INFO line gives it.
 
+[bits-history-own-test-plants]
+class     = QUIET
+maxsev    = OK
+proof     = ci:bits_history.ps1 -SelfTest + the runner's real channel and a real planted record
+signature = name this audit's own test plants
+note      = This audit's own CI steps create BITS jobs aimed at documentation addresses (198.51.100.7, TEST-NET-2, and 203.0.113.10, TEST-NET-3) to prove the bare-address rule fires. The jobs are cancelled afterwards; the records BITS wrote about them are not, and they sit in Microsoft-Windows-Bits-Client/Operational until the log rolls over. CONFIRMED on the first CI run of this check: it reported both of them as transfers to a bare address, on the same job that had planted them -- and on a real machine where the harness or manual_ci has run it would have done so on every later audit, which is precisely what the Event 7045 records for a planted service did for weeks. Records naming dz_selftest or dz_ci_ are therefore left out of the grading, counted, and PRINTED: the marker sits in a URL, which a transfer's creator chooses, so the exclusion has to show what it dropped rather than ask to be trusted. A real bare-address transfer sitting beside a plant still raises, which the self-test pins.
+
+[bits-history-installer-stub]
+class     = QUIET
+maxsev    = OK
+proof     = ci:bits_history.ps1 -SelfTest + the runner's real channel and a real planted record
+signature = A BITS transfer was driven by a program running from a staging folder
+note      = The Omaha-derived updaters that use BITS by design run their INSTALLER stage out of the folders a staging rule would flag: C:\Users\<you>\Downloads\MicrosoftEdgeSetup.exe and %LOCALAPPDATA%\Temp\GUM<hex>.tmp\GoogleUpdate.exe are both ordinary, and so is any installer that extracts a stub into a temp folder. Flagging the folder alone would therefore raise on every machine that has ever installed a browser -- the path-match-alone mistake this repo has paid for twice (\AppData\ for Brave, and \Public\ matching any directory named public). So the Downloads and temporary folders raise ONLY when the binary is still on disk and is not validly signed; a stub that has deleted itself, which is the commonest state for a historical record, is not a finding, and neither is a signed one. The shared Public folder and the recycle bin raise whatever the signature, because nothing routine runs from either. Both real paths above are pinned as must-not-raise cases in all three signature states. Verify: the line names the program; check it with Get-AuthenticodeSignature and look at where it came from.
+
+[bits-history-updater-transfers]
+class     = QUIET
+maxsev    = OK
+proof     = ci:bits_history.ps1 -SelfTest + the runner's real channel and a real planted record; ci:Run the full audit; fail on hang
+signature = BITS transfer record\(s\) read,
+note      = The ordinary state of the Bits-Client operational log: it is full of Windows Update and browser-updater transfers, every one of them to a NAMED host, driven by a program under Program Files, writing into a temp folder. None of that is graded. What is graded is a transfer to a bare IP address with no name behind it (a private LAN address is context, not a finding -- an on-premises WSUS server, an SCCM distribution point or a Connected Cache node is reached that way), a file written straight into an autostart folder, a transfer driven by a program running from a staging folder, and a recorded UPLOAD, which is a file that has already left. The all-clear names the span of records it read, because these logs roll over and an absence older than the oldest record proves nothing. Field names are taken from this machine's own provider schema and printed in the all-clear, so the report states the schema it read rather than one assumed in the tool; third-party write-ups disagree about what these events mean and none of them is built on here. Verify: Get-WinEvent -LogName 'Microsoft-Windows-Bits-Client/Operational' -MaxEvents 40 | Select-Object TimeCreated,Id,LevelDisplayName
+
 [bits-upload-management-agent]
 class     = ADVISE
 maxsev    = WARNING
