@@ -54,7 +54,14 @@ if (-not $Corpus)  { $Corpus  = Join-Path $SourceDir 'tests\emulation_corpus.txt
 function Read-Techniques {
     param([string]$Text)
     $s = New-Object System.Collections.Generic.HashSet[string]
-    foreach ($m in ([regex]::Matches($Text, 'T1[0-9]{3}(\.[0-9]{3})?'))) { [void]$s.Add($m.Value) }
+    # Backslashes go first. A self-test or a harness Expect writes the technique
+    # id inside a regex, where the dot is escaped; the id would then be read as
+    # its PARENT technique -- counted as detected (so the backlog grows a
+    # phantom entry to "add a plant for") and, worse, as EMULATED when a plant's
+    # Expect carries the escaped form, which would claim test coverage no test
+    # has. lint_docs_drift and attack_matrix strip for the same reason.
+    $t = ($Text -replace '\\', '')
+    foreach ($m in ([regex]::Matches($t, 'T1[0-9]{3}(\.[0-9]{3})?'))) { [void]$s.Add($m.Value) }
     return $s
 }
 

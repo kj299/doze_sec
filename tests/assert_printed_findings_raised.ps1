@@ -83,6 +83,40 @@ $script:Contracts = @(
        Signature = '^\s*\[WARNING\] lsass\.exe was started at .* by '
        Section   = '12'
        Technique = 'T1003.001' },
+    # Defender's own record of a program reading LSASS memory, and the settings
+    # that would have Windows write LSASS's memory to a file (Section 12).
+    @{ Name      = 'A program Defender caught trying to read LSASS memory'
+       Signature = '^\s*\[WARNING\] \S.* tried to read LSASS memory: '
+       Section   = '12'
+       Technique = 'T1003.001' },
+    @{ Name      = 'A program excluded from the rule that stops LSASS reads'
+       Signature = '^\s*\[WARNING\] \S.* is EXCLUDED from Defender''s rule against reading LSASS memory'
+       Section   = '12'
+       Technique = 'T1003.001' },
+    @{ Name      = 'Silent-process-exit monitoring enabled for LSASS'
+       Signature = '^\s*\[WARNING\] Silent-process-exit monitoring is ENABLED for '
+       Section   = '12'
+       Technique = 'T1003.001' },
+    @{ Name      = 'LSASS configured to have its memory dumped when it exits'
+       Signature = '^\s*\[WARNING\] \S.* is configured to have its memory DUMPED when it exits'
+       Section   = '12'
+       Technique = 'T1003.001' },
+    @{ Name      = 'A memory dump of LSASS on disk'
+       Signature = '^\s*\[CRITICAL\] A memory dump of \S.* is on disk'
+       Section   = '12'
+       Technique = 'T1003.001' },
+    @{ Name      = 'Windows Error Reporting set to dump LSASS specifically'
+       Signature = '^\s*\[WARNING\] Windows Error Reporting is configured to write a dump of '
+       Section   = '12'
+       Technique = 'T1003.001' },
+    @{ Name      = 'LSASS configured to start a program when it exits'
+       Signature = '^\s*\[WARNING\] \S.* is configured to START A PROGRAM when it exits'
+       Section   = '12'
+       Technique = 'T1003.001' },
+    @{ Name      = 'A file named like a dump of LSASS that is not one'
+       Signature = '^\s*\[WARNING\] A file named like a memory dump of '
+       Section   = '12'
+       Technique = 'T1003.001' },
     # Section 9's Defender core block, extracted to tools\defender_core_check.ps1
     # (marker idiom). The runner image ships with real-time protection off, so
     # the full-run job exercises this on the real path.

@@ -131,7 +131,15 @@ if (Test-Path -LiteralPath $toolDir) {
 }
 foreach ($f in $srcFiles) {
     try {
-        foreach ($m in ([regex]::Matches((Get-Content -LiteralPath $f -Raw -EA Stop), 'T1[0-9]{3}(\.[0-9]{3})?'))) {
+        # Backslashes are dropped first: a sub-technique id written inside a
+        # regex, with the dot escaped as a self-test assertion escapes it,
+        # would otherwise be counted as its PARENT technique as well, and read
+        # as one more technique than the audit covers. Twice now. (And no
+        # technique id is spelled out in this comment: this lint scans its own
+        # source, so an id named in prose here would be counted too -- which
+        # is how a tool comment once raised the count by one.)
+        $srcText = ((Get-Content -LiteralPath $f -Raw -EA Stop) -replace '\\', '')
+        foreach ($m in ([regex]::Matches($srcText, 'T1[0-9]{3}(\.[0-9]{3})?'))) {
             [void]$referenced.Add($m.Value)
         }
     } catch {}

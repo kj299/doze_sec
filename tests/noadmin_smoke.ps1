@@ -441,6 +441,15 @@ try {
         ('Section 12 printed: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'Copies of lsass\.exe|No copy of lsass' }) -join ' | '))
     Assert (@($ledger1 | Where-Object { $_ -match 'LSASS copy history NOT checked' }).Count -eq 0) 'the deferred LSASS-copy history is not a ledger row' `
         'a standard-user token raised the LSASS-copy history as a gap'
+    # The dump settings are HKLM reads, so a standard-user token grades them;
+    # Defender's own log may or may not be readable from it, and whichever it
+    # is must be SAID. Neither may report a finding on a clean runner.
+    Assert ($text1 -notmatch 'tried to read LSASS memory|is EXCLUDED from Defender|Silent-process-exit monitoring is ENABLED|configured to have its memory DUMPED|A memory dump of \S+ is on disk') 'no LSASS-read record and no dump setting on a clean runner, standard-user token' `
+        ('reported: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'tried to read LSASS|EXCLUDED from Defender|Silent-process-exit|memory DUMPED|memory dump of' }) -join ' | '))
+    Assert ($text1 -match '\[OK\] Nothing is configured to write a memory dump of lsass\.exe') 'Section 12 graded the LSASS dump settings on a standard-user token' `
+        ('Section 12 printed: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'memory dump of lsass|Dump settings for' }) -join ' | '))
+    Assert ($text1 -match '\[OK\] No program tried to read LSASS memory|\[SKIPPED\] .* records NOT checked|\[DEFERRED - ADMIN REQUIRED\] Defender''s rule against reading LSASS memory') 'Section 12 stated a verdict for Defender''s LSASS-read records on a standard-user token' `
+        ('Section 12 printed: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'reading LSASS memory' }) -join ' | '))
     $max1 = Assert-LedgerConsistency -Text $text1 -Ledger $ledger1 -Label 'run 1'
     # The bat escalates to 6 ONLY from 0 and 4: 2 is the ledger-derived
     # "findings were raised" verdict and is never discarded (its rem block

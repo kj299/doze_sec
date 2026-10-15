@@ -502,6 +502,62 @@ proof     = ci:lsass_copy_events.ps1
 signature = No copy of lsass\.exe in the Security log
 note      = Windows starts LSASS once, at boot, from wininit.exe, and with process-creation auditing on that start is in the Security log as Event 4688 (lsass.exe created by wininit.exe). It is counted on the OK line, never a finding. Verify: Get-WinEvent -FilterHashtable @{LogName='Security';Id=4688} | Where-Object { $_.Properties[5].Value -like '*\lsass.exe' }.
 
+[asr-lsass-read-by-an-updater]
+class     = ADVISE
+maxsev    = WARNING
+proof     = field:producing this record means a program actually asking to read LSASS memory, which this suite does not do on a runner; the judgement (which field names the program, blocked versus audited, the rule off) is covered in both directions by asr_lsass_events.ps1 -SelfTest
+signature = tried to read LSASS memory: .*\(T1003.001\)
+note      = Microsoft's own rule reference says many programs ask for access to LSASS they do not need, and names Google Chrome's updater; the real event captured for this rule names OneDrive's updater. So a line naming an updater or a well-known vendor program under Program Files, validly signed, is the common benign shape: confirm the program is one you installed and that its path and signature are what you expect (Get-AuthenticodeSignature '<path>'). A program from a temporary folder, a download folder or a user profile, or one you do not recognise, is the finding. A line that says the access was recorded but NOT blocked means the rule is in audit mode and the read went through: Section 9 offers to put it in Block mode.
+
+[asr-lsass-rule-not-enabled]
+class     = QUIET
+maxsev    = OK
+proof     = ci:asr_lsass_events.ps1
+signature = records NOT checked -- the rule is (turned OFF|not configured)
+note      = Defender's rule against reading LSASS memory writes a record only while it is on, so with the rule off or not configured the log is empty for a reason that says nothing about the machine. That is printed as SKIPPED and raises nothing; Section 9 separately raises the rule's own state, and the remediation script offers to turn it on. This is not a gap in the audit: it is the evidence not existing yet.
+
+[lsass-auditlevel-lsa-protection]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:lsass_dump_config.ps1
+signature = AuditLevel = \d+ -- the LSA-protection audit setting Microsoft documents
+note      = Microsoft documents Image File Execution Options\LSASS.exe\AuditLevel = 8 as LSA protection's audit mode, and it is on by default on a clean-installed Windows 11 22H2 or later. So the IFEO key for lsass.exe exists on healthy machines and says nothing by itself; this check grades the VALUES it holds (GlobalFlag's 0x200 flag) and names AuditLevel as the ordinary one. A reader who finds this key should not read its mere existence as tampering.
+
+[asr-lsass-rule-exclusion-by-management]
+class     = ADVISE
+maxsev    = WARNING
+proof     = field:a per-rule ASR exclusion is set by whoever manages the machine (Intune, Group Policy, or an EDR's own installer); adding one on a runner would be configuring the runner's Defender, which this suite does not do, and the judgement is covered by asr_lsass_events.ps1 -SelfTest in both directions
+signature = is EXCLUDED from Defender's rule against reading LSASS memory
+note      = A managed machine can legitimately carry an exclusion here: some endpoint-protection and backup products ask for one, and an administrator may have added it to stop an ASR false positive. Microsoft documents that this rule ignores ordinary antivirus exclusions and honours only its own, so whatever is listed was added for this rule deliberately. Check with whoever manages the machine. What matters is that while the exclusion stands, that program can read the credentials in LSASS and leave no record at all, so the empty log below it proves nothing about that program.
+
+[wer-localdumps-for-support]
+class     = ADVISE
+maxsev    = WARNING
+proof     = field:configuring Windows Error Reporting to dump a named program is something a support engineer or a developer does on their own machine; this suite does not configure the runner's error reporting, and the grading (per-image versus global, and which values) is covered by lsass_dump_config.ps1 -SelfTest
+signature = (Error Reporting is configured to write a dump of|is configured to START A PROGRAM when it exits)
+note      = A support engineer diagnosing a crash, or a developer debugging a service, may set Windows Error Reporting or silent-process-exit monitoring to capture a named program. That is the benign cause, and it is almost always recent and remembered. Nothing in Windows sets either of these for LSASS by itself. Remove the setting once it is no longer needed: while it stands, every exit of that program can leave its memory, credentials included, in a file on disk.
+
+[asr-lsass-event-fields-unresolved]
+class     = QUIET
+maxsev    = WARNING
+proof     = ci:asr_lsass_events.ps1
+signature = does not say which of its two fields names it
+note      = Defender's attack-surface-reduction events do not label which field holds the program that was stopped: for this rule a real capture has the accessing program in Path and lsass.exe in Process Name, and for other rules the roles are reversed. When neither field names lsass.exe the check cannot tell them apart, so it prints both rather than guessing, and groups repeats into one line. Read both paths: one of them is the program to look at. If this line appears often with the same pair, the provider on that build labels its fields differently again, which is worth reporting.
+
+[file-named-like-an-lsass-dump]
+class     = ADVISE
+maxsev    = WARNING
+proof     = ci:lsass_dump_config.ps1
+signature = A file named like a memory dump of \S+ is on disk, but it is not one
+note      = A file whose name contains lsass and ends .dmp, in one of the folders Windows writes dumps to, but which does not begin with a minidump header, so it holds no process memory: notes, a renamed log, a placeholder, or a file someone copied there. It is reported because the name was chosen by something, and that is worth knowing, but it is not credentials on disk and carries none of that advice. Verify with: Get-Content -LiteralPath '<path>' -TotalCount 1, or look at the first four bytes -- a real minidump starts MDMP.
+
+[lsass-dump-by-an-administrator]
+class     = ADVISE
+maxsev    = CRITICAL
+proof     = field:a dump of LSASS can only be produced by dumping LSASS, which this suite never does; the grading of a dump file, of each dump-on-exit setting, and of the settings that are ordinary is covered in both directions by lsass_dump_config.ps1 -SelfTest
+signature = (A memory dump of \S+ is on disk|is configured to have its memory DUMPED when it exits|Silent-process-exit monitoring is ENABLED)
+note      = The benign cause is a person deliberately collecting a dump: an administrator troubleshooting LSASS with a debugger or ProcDump, an incident responder preserving evidence, or a support engineer who was asked to set silent-process-exit monitoring. Windows does not configure any of this for LSASS itself. If you, your IT department or a responder did not do it at the time shown, treat the dump as credential theft: change the passwords used on this machine from a different, clean one, and keep the file for whoever investigates. Either way the setting should be removed once it is no longer needed, since it will keep writing credentials to disk.
+
 [ztdns-helper-hidden-from-standard-user]
 class     = QUIET
 maxsev    = INFO
