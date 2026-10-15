@@ -961,7 +961,7 @@ jobs:
           Write-Host $out
           if ($LASTEXITCODE -ne 0) { throw 'bits_history self-test failed' }
           $n = @($out -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($n -lt 60) { throw "bits_history self-test ran only $n case(s)" }
+          if ($n -lt 68) { throw "bits_history self-test ran only $n case(s)" }
 
           # THE RUNNER'S REAL CHANNEL, which is the benign twin at scale: a
           # windows-latest image has done Windows Update and browser-updater
@@ -974,6 +974,21 @@ jobs:
           if ($live -match 'Exception|ParserError|is not recognized') { throw "bits_history errored on the live channel: $live" }
           foreach ($m in @('dz_bitshist.txt', 'dz_bitshist_up.txt', 'dz_bitshist_gap.txt')) {
             if (Test-Path (Join-Path $md $m)) { throw ("{0} written on a clean runner: {1}" -f $m, (Get-Content (Join-Path $md $m))) }
+          }
+          # THE RUNNER IS NOT A CLEAN MACHINE, and that is the point of this
+          # pair of assertions. Earlier steps in this same job plant BITS jobs
+          # aimed at documentation addresses (TEST-NET-2 and TEST-NET-3) to
+          # prove the bare-address rule fires. The jobs are cancelled; the
+          # records BITS wrote about them are not, so without the harness-plant
+          # exclusion this check would report its own tests as transfers to a
+          # bare address -- on this runner, and for ever on any real machine
+          # where the harness has run. It did exactly that on the first run of
+          # this step, which is how the exclusion came to exist.
+          if ($live -match 'dz_ci_|dz_selftest') {
+            if ($live -notmatch "name this audit's own test plants") {
+              throw 'the channel holds records from this job''s own plants and the report did not declare them as excluded -- it would report its own tests as findings'
+            }
+            Write-Host 'the earlier steps'' plants are in this channel and were excluded with a declared count'
           }
           # It must have reached a verdict: the all-clear naming its span, the
           # empty-log line, or one of the declared gaps. Silence is the one

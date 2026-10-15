@@ -274,9 +274,30 @@ function Get-BitsHistoryReport {
     # found" and "nothing was looked at".
     $roles = New-Object System.Collections.ArrayList
     $noFields = 0
+    $ours = New-Object System.Collections.ArrayList
     foreach ($rec in $recs) {
         $rr = Get-BitsFieldRoles -Fields $rec.Fields
         if ($rr.Resolved -eq 0) { $noFields++; continue }
+        # OUR OWN TEST PLANTS, EXCLUDED AND DECLARED.
+        #
+        # This audit's CI steps create BITS jobs that deliberately point at
+        # documentation addresses (TEST-NET-2 and TEST-NET-3) to prove the
+        # bare-address rule fires. Those jobs are cancelled, but the records
+        # BITS wrote about them stay in the log -- so every later audit on a
+        # machine where the harness ran would report them as transfers to a
+        # bare address. That is exactly what happened with the Event 7045
+        # records for a planted service, reported on every audit for weeks.
+        #
+        # So records naming this project's own markers are left out, counted,
+        # and PRINTED. Printing them is what keeps the exclusion honest: the
+        # marker sits in a URL, which an attacker could also choose, so a
+        # reader has to be able to see what was dropped rather than trust that
+        # it deserved to be.
+        $mine = ''
+        foreach ($v in @($rr.Url, $rr.LocalPath, $rr.ProcessPath, $rr.JobTitle)) {
+            if ($v -and $v -match '(?i)dz_selftest|dz_ci_') { $mine = $v; break }
+        }
+        if ($mine) { [void]$ours.Add($mine); continue }
         $rr['Time'] = $rec.Time
         $rr['Id'] = $rec.Id
         # The signature of the program that drove the transfer, measured by the
@@ -412,6 +433,11 @@ function Get-BitsHistoryReport {
     }
     if (@($byProc.Keys).Count -gt $shown) {
         [void]$out.Add('    ...and ' + (@($byProc.Keys).Count - $shown) + ' more staging-folder transfer(s) of the same shape.')
+    }
+
+    if (@($ours).Count -gt 0) {
+        $shownOurs = @(@($ours) | Sort-Object -Unique | Select-Object -First 6)
+        [void]$out.Add('[INFO] ' + (@($ours).Count) + ' record(s) name this audit''s own test plants (dz_selftest / dz_ci_) and were left out of the grading above, so a machine where this tool''s tests have run does not report them as findings for ever: ' + ([string]::Join('; ', @($shownOurs | ForEach-Object { ConvertTo-PrintableText $_ }))) + '. They are printed because the marker is in a value a transfer''s creator chooses, so you can see what was excluded rather than take it on trust.')
     }
 
     # THE DIRECTION, DECLARED. The upload rule is the only one here that
@@ -734,6 +760,27 @@ if ($SelfTest) {
     T 'a crafted URL cannot forge a line of its own' ((& $phys $r) -eq 0) (& $j $r)
     $r = Get-BitsHistoryReport -Records @((NewHistRec @{ transferType = 'Upload'; fileName = "C:\x\y`r`n[OK] fine.bin"; url = 'https://c.example.com/u' })) -Total 1 -Oldest $t0 -Newest $t0
     T 'a crafted file name cannot either' ((& $phys $r) -eq 0) (& $j $r)
+
+    # OUR OWN PLANTS, EXCLUDED AND DECLARED. The CI steps of this very tool
+    # create jobs pointing at documentation addresses to prove the rule fires;
+    # the records outlive the jobs, so without this every later audit on that
+    # machine would report them. This is the Event 7045 story, which cost weeks
+    # of false findings on a real machine.
+    $r = Get-BitsHistoryReport -Records @((NewHistRec @{ url = 'http://198.51.100.7/dz_ci_upload.bin' }),
+                                          (NewHistRec @{ url = 'http://203.0.113.10/dz_ci_nonexistent' })) -Total 2 -Oldest $t0 -Newest $t0
+    T 'records naming this audit''s own test plants are not findings' `
+      ($r.Sev -eq 'OK' -and (& $j $r) -notmatch '\[WARNING\] BITS transferred to or from a bare IP address') (& $j $r)
+    T 'and the exclusion is declared, counted and NAMES what it dropped' `
+      ((& $j $r) -match "\[INFO\] 2 record\(s\) name this audit's own test plants" -and
+       (& $j $r) -match 'dz_ci_upload\.bin' -and (& $j $r) -match 'dz_ci_nonexistent') (& $j $r)
+    $r = Get-BitsHistoryReport -Records @((NewHistRec @{ url = 'http://198.51.100.7/dz_ci_upload.bin' }),
+                                          (NewHistRec @{ url = 'http://93.184.216.34/payload.bin' })) -Total 2 -Oldest $t0 -Newest $t0
+    T 'a real bare-address transfer beside our plants still raises' `
+      ($r.Sev -eq 'WARNING' -and (& $j $r) -match 'bare IP address with no name behind it: http://93\.184\.216\.34' -and
+       (& $j $r) -notmatch '198\.51\.100\.7/dz_ci_upload\.bin \(1 record') (& $j $r)
+    $r = Get-BitsHistoryReport -Records @((NewHistRec @{ jobTitle = 'dz_selftest_bits_hist'; url = 'http://93.184.216.34/x' })) -Total 1 -Oldest $t0 -Newest $t0
+    T 'the marker is matched in the job name too, not only the URL' `
+      ($r.Sev -eq 'OK' -and (& $j $r) -match 'own test plants') (& $j $r)
 
     # The direction limitation is STATED every run when no record carries one,
     # and stating it must not raise: on a channel that never records direction

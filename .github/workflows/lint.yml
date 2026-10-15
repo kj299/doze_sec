@@ -968,10 +968,16 @@ jobs:
             || { echo 'a completed upload could be graded clean with no word about direction'; exit 1; }
           echo "$out" | grep -q 'the same record in a different insertion order resolves identically' \
             || { echo 'which value gets graded could go back to depending on hashtable order'; exit 1; }
+          echo "$out" | grep -q "records naming this audit's own test plants are not findings" \
+            || { echo 'this audit could report its own CI plants as findings for ever, as the 7045 records once were'; exit 1; }
+          echo "$out" | grep -q 'and the exclusion is declared, counted and NAMES what it dropped' \
+            || { echo 'the plant exclusion could become silent -- it must print what it dropped'; exit 1; }
+          echo "$out" | grep -q 'a real bare-address transfer beside our plants still raises' \
+            || { echo 'the exclusion could swallow a real finding sitting beside a plant'; exit 1; }
           echo "$out" | grep -q 'a path in a client-named field is still the local file' \
             || { echo 'a client-named field could take the local path place and lose the autostart rule'; exit 1; }
           n=$(echo "$out" | grep -c '^\[OK\]')
-          [ "$n" -ge 60 ] || { echo "self-test ran only $n case(s) -- it is not exercising the rule"; exit 1; }
+          [ "$n" -ge 68 ] || { echo "self-test ran only $n case(s) -- it is not exercising the rule"; exit 1; }
 
   coverage-matrix-lint:
     runs-on: ubuntu-latest

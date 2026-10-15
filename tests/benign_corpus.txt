@@ -177,6 +177,13 @@ proof     = ci:persistence_extra.ps1 -SelfTest
 signature = destination is a private LAN address
 note      = A long-lived BITS job fetching from a bare 10.x, 172.16-31.x, 192.168.x, 127.x or 169.254.x address is the ordinary shape of an on-premises WSUS server, an SCCM distribution point or a Microsoft Connected Cache node -- BITS is the transport all three use, and they are routinely reached by bare LAN address rather than by name. A bare PUBLIC address has no such routine cause and still raises WARNING; 172.15.x and 172.32.x are outside the private block and raise, which the self-test pins. Verify the address is one your organisation runs: Get-BitsTransfer -AllUsers | Select-Object -ExpandProperty FileList, then check it against your update infrastructure. On a home machine with no such server, a bare LAN address deserves a closer look than this INFO line gives it.
 
+[bits-history-own-test-plants]
+class     = QUIET
+maxsev    = OK
+proof     = ci:bits_history.ps1 -SelfTest + the runner's real channel and a real planted record
+signature = name this audit's own test plants
+note      = This audit's own CI steps create BITS jobs aimed at documentation addresses (198.51.100.7, TEST-NET-2, and 203.0.113.10, TEST-NET-3) to prove the bare-address rule fires. The jobs are cancelled afterwards; the records BITS wrote about them are not, and they sit in Microsoft-Windows-Bits-Client/Operational until the log rolls over. CONFIRMED on the first CI run of this check: it reported both of them as transfers to a bare address, on the same job that had planted them -- and on a real machine where the harness or manual_ci has run it would have done so on every later audit, which is precisely what the Event 7045 records for a planted service did for weeks. Records naming dz_selftest or dz_ci_ are therefore left out of the grading, counted, and PRINTED: the marker sits in a URL, which a transfer's creator chooses, so the exclusion has to show what it dropped rather than ask to be trusted. A real bare-address transfer sitting beside a plant still raises, which the self-test pins.
+
 [bits-history-installer-stub]
 class     = QUIET
 maxsev    = OK

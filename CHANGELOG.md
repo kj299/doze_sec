@@ -115,8 +115,24 @@ name counted as understood and was folded into the all-clear; and all four
 new finding lines had no analyst note, so each would have reached a real
 report as "No specific analyst note mapped".
 
-Tested with a real record and nothing leaving the runner: 66 self-test cases,
-thirteen mutations each failing their own cases, and a CI step that creates an
+**And CI immediately found the one thing neither the design nor the review
+had: this check reported its own test plants.** The first run flagged
+`198.51.100.7/dz_ci_upload.bin` and `203.0.113.10/dz_ci_nonexistent` as
+transfers to a bare address -- the documentation addresses that earlier steps
+in the same job plant on purpose, to prove the bare-address rule fires. The
+jobs are cancelled; the records BITS wrote about them are not. The tool was
+right and the test was wrong, but the defect was in the product: on any real
+machine where the harness or `manual_ci` has run, every later audit would have
+reported those records for as long as the log kept them -- which is exactly
+what the Event 7045 records for a planted service did for weeks. Records
+naming `dz_selftest` or `dz_ci_` are now left out of the grading, counted, and
+**printed**: the marker sits in a URL, which a transfer's creator chooses, so
+the exclusion has to show what it dropped rather than ask to be trusted. A
+real bare-address transfer sitting beside a plant still raises, and CI now
+asserts that the exclusion is what keeps that runner clean.
+
+Tested with a real record and nothing leaving the runner: 70 self-test cases,
+sixteen mutations each failing their own cases, and a CI step that creates an
 upload job and RESUMES it against a local port where nothing listens. The
 transfer fails at once, so no data is transferred and no receiving server is
 needed, but BITS writes genuine records -- which the check then parses, with
