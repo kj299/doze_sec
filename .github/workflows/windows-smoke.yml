@@ -961,7 +961,7 @@ jobs:
           Write-Host $out
           if ($LASTEXITCODE -ne 0) { throw 'bits_history self-test failed' }
           $n = @($out -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($n -lt 40) { throw "bits_history self-test ran only $n case(s)" }
+          if ($n -lt 60) { throw "bits_history self-test ran only $n case(s)" }
 
           # THE RUNNER'S REAL CHANNEL, which is the benign twin at scale: a
           # windows-latest image has done Windows Update and browser-updater
@@ -1043,9 +1043,25 @@ jobs:
               $after = (.\tools\bits_history.ps1 -MarkerDir $md2) -join "`n"
               Write-Host $after
               $sawUrl = ($after -match 'dz_ci_hist\.bin')
-              $saidSo = ($after -match 'carried no value this check could identify|none of their fields could be named')
+              $saidSo = ($after -match 'carried no value describing a transfer|none of their fields could be named')
               if (-not $sawUrl -and -not $saidSo) {
                 throw 'the planted transfer was neither resolved nor declared unnameable -- a record was read and silently graded as nothing'
+              }
+              # THE DIRECTION, MEASURED. The tool's header says CI measures
+              # whether this channel records it rather than assuming either
+              # way, and the plant is a real UPLOAD job -- so this is the one
+              # place that can settle it. Declared either way; when a machine
+              # does record it, the upload rule bites and the T1048 row fires.
+              if ($after -match "direction='") {
+                Write-Host ('MEASURED: this channel DOES record a transfer direction -- ' + ([regex]::Match($after, "direction='[^']+'").Value))
+                if ($after -notmatch 'BITS recorded an UPLOAD that has already happened') {
+                  throw 'the direction was recorded for a real UPLOAD job and no upload finding was raised'
+                }
+              } else {
+                Write-Host 'MEASURED: this channel records NO transfer direction, so the tool states that limitation instead of guessing'
+                if ($after -notmatch 'carried a readable transfer DIRECTION') {
+                  throw 'no direction was recorded and the report did not say so -- the limitation must be stated, not implied'
+                }
               }
               if ($sawUrl) {
                 Write-Host 'PROVEN: a real Bits-Client record was parsed and its URL resolved'
@@ -4285,7 +4301,7 @@ jobs:
           # reached a verdict rather than gone quiet, which is the failure mode
           # an all-clear by omission would look like.
           if ($text -match 'BITS recorded an UPLOAD that has already happened|BITS wrote a file straight into an autostart folder|BITS transferred to or from a bare IP address|A BITS transfer was driven by a program running from a staging folder') { throw ('the BITS history check raised on a clean runner: {0}' -f (($text -split "`r?`n" | Where-Object { $_ -match 'BITS recorded an UPLOAD|autostart folder|bare IP address|staging folder' }) -join ' | ')) }
-          if ($text -notmatch 'BITS transfer record\(s\) read,|holds no transfer records|What BITS recorded about finished transfers was NOT checked|carried no value this check could identify') { throw 'the BITS history check printed no verdict in the real audit' }
+          if ($text -notmatch 'BITS transfer record\(s\) read,|holds no transfer records|What BITS recorded about finished transfers was NOT checked|carried no value describing a transfer') { throw 'the BITS history check printed no verdict in the real audit' }
           Write-Host ('Section 5 (BITS history): ' + (($text -split "`r?`n" | Where-Object { $_ -match 'BITS transfer record\(s\) read|holds no transfer records|recorded about finished transfers' }) -join ' | '))
           # THE APOSTROPHE RUN. TEMP held an apostrophe and APPDATA an apostrophe and
           # a space: the dashboard (its script and SUMCODE/SUMCOUNT in TEMP) must

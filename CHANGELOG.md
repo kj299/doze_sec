@@ -64,8 +64,59 @@ newest transfer in it**, so a reader can check by hand that their own machine's
 records were read rather than trusting a count -- which is also what lets CI
 prove a real record was parsed.
 
-Tested with a real record and nothing leaving the runner: 48 self-test cases,
-ten mutations each failing their own cases, and a CI step that creates an
+A read-only review before the push found ten problems. The worst three:
+
+- **A completed exfiltration could be graded clean.** The all-clear named
+  three of the four judgements and said nothing about direction, and the
+  header's promise that an unrecorded direction "is said, not implied" was
+  not kept by any line in the file. A record holding a URL and a local path
+  but no direction -- the contested case the whole design is about -- produced
+  an all-clear with the upload printed underneath it as reassuring context.
+  The limitation is now stated every run when no record carries a direction,
+  and the all-clear claims nothing about uploads unless one did. It is stated
+  as `[INFO]` rather than raised, deliberately: if this channel never records
+  direction, a WARNING would appear on every machine, which is how a tool
+  teaches its reader to ignore it -- the same reasoning that made the
+  kernel-object audit subcategory a context row.
+- **Every browser installer stub would have been reported.** The
+  staging-folder rule fired on the folder alone, and the Omaha-derived
+  updaters that use BITS by design run their installer stage from exactly
+  there: `~\Downloads\MicrosoftEdgeSetup.exe` and
+  `%LOCALAPPDATA%\Temp\GUM<hex>.tmp\GoogleUpdate.exe` are both ordinary.
+  That is the path-match-alone mistake this repo has paid for twice already.
+  Those two folders now raise only when the binary is still on disk and is
+  not validly signed -- the live path measures that and passes it in as a
+  plain value -- while the shared Public folder and the recycle bin still
+  raise whatever the signature. Both real paths are pinned as must-not-raise
+  cases in all three signature states, and catalogued.
+- **A truncated read printed no verdict at all.** With a channel holding more
+  records than the cap, the output was one `[INFO]` line and nothing else: no
+  all-clear, no gap, nothing graded -- a section reading clean having declared
+  nothing. The span line says what was covered and the `[INFO]` says older
+  records were not read; that pair is the honest answer, and the silence was
+  not.
+
+Also fixed: "their fields could not be named **from this token** -- re-run as
+administrator" was false advice (the records were read; privilege has nothing
+to do with naming their fields) and routed a real gap through the deferral
+count, which keeps it out of the ledger; `client` was in the tiebreaker that
+decides which of two paths is the driving program, so in a provider called
+Bits-**Client** a field named `clientFile` could take the local file's place,
+losing the autostart rule -- the only CRITICAL here -- and making an ordinary
+temp-folder download look like a program running from one; which value got
+graded depended on hashtable order, so a record carrying both a requested and
+a redirected URL was graded on either (keys are sorted now and **every** URL
+and local path is graded, so a multi-file job cannot lose the one file going
+into Startup); a channel probe that failed for any reason other than "no such
+log" was treated as enabled, and keying that on English message text would
+have mis-read a localized Windows, so it catches by exception type now and
+says when it could not tell; a record whose only resolvable value was a job
+name counted as understood and was folded into the all-clear; and all four
+new finding lines had no analyst note, so each would have reached a real
+report as "No specific analyst note mapped".
+
+Tested with a real record and nothing leaving the runner: 66 self-test cases,
+thirteen mutations each failing their own cases, and a CI step that creates an
 upload job and RESUMES it against a local port where nothing listens. The
 transfer fails at once, so no data is transferred and no receiving server is
 needed, but BITS writes genuine records -- which the check then parses, with

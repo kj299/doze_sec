@@ -960,8 +960,18 @@ jobs:
             || { echo 'a URL could inject its own severity tag into the report'; exit 1; }
           echo "$out" | grep -q 'and names the newest transfer, so an all-clear can be checked by hand' \
             || { echo 'the all-clear could stop naming what it read, leaving only a count to trust'; exit 1; }
+          echo "$out" | grep -q 'an installer stub whose signature could not be checked is NOT a finding' \
+            || { echo 'every browser installer stub could start reading as a staging-folder program'; exit 1; }
+          echo "$out" | grep -q 'a truncated read says so AND still reports what it graded' \
+            || { echo 'a channel bigger than the cap could read clean having declared nothing'; exit 1; }
+          echo "$out" | grep -q 'with no direction recorded, the limitation is stated as context and raises nothing' \
+            || { echo 'a completed upload could be graded clean with no word about direction'; exit 1; }
+          echo "$out" | grep -q 'the same record in a different insertion order resolves identically' \
+            || { echo 'which value gets graded could go back to depending on hashtable order'; exit 1; }
+          echo "$out" | grep -q 'a path in a client-named field is still the local file' \
+            || { echo 'a client-named field could take the local path place and lose the autostart rule'; exit 1; }
           n=$(echo "$out" | grep -c '^\[OK\]')
-          [ "$n" -ge 40 ] || { echo "self-test ran only $n case(s) -- it is not exercising the rule"; exit 1; }
+          [ "$n" -ge 60 ] || { echo "self-test ran only $n case(s) -- it is not exercising the rule"; exit 1; }
 
   coverage-matrix-lint:
     runs-on: ubuntu-latest

@@ -117,20 +117,31 @@ function Get-RemoteHostClass {
 # machine used for each, which is the fact a later change to this file needs.
 function Get-BitsFieldRoles {
     param($Fields)
-    $r = @{ Url = ''; UrlField = ''; LocalPath = ''; LocalField = ''; Direction = ''
-            DirectionField = ''; ProcessPath = ''; ProcessField = ''; JobTitle = ''
-            JobField = ''; Resolved = 0 }
+    $r = @{ Url = ''; UrlField = ''; Urls = @(); LocalPath = ''; LocalField = ''
+            LocalPaths = @(); Direction = ''; DirectionField = ''; ProcessPath = ''
+            ProcessField = ''; JobTitle = ''; JobField = ''; Resolved = 0 }
     if ($null -eq $Fields) { return $r }
-    foreach ($k in @($Fields.Keys)) {
+    # SORTED, and every value of a kind kept, not the first one seen.
+    #
+    # A PowerShell hashtable has no defined order, so iterating it raw made
+    # which value got graded depend on the hash: a record carrying both a
+    # requested URL and a redirected one was graded on either, and the same
+    # record could read differently in two processes. Worse, a multi-file job
+    # with one file going into an autostart folder could lose that file
+    # entirely. So the keys are sorted for determinism and each kind collects
+    # ALL its values; the caller grades the worst of them rather than whichever
+    # arrived first.
+    foreach ($k in @($Fields.Keys | Sort-Object)) {
         $name = [string]$k
         $val  = ([string]$Fields[$k]).Trim()
         if (-not $val) { continue }
-        if (-not $r.Url -and $val -match '^\s*https?://\S') {
-            $r.Url = $val; $r.UrlField = $name; $r.Resolved++
+        if ($val -match '^\s*https?://\S') {
+            $r.Urls += $val
+            if (-not $r.Url) { $r.Url = $val; $r.UrlField = $name }
             continue
         }
         if ($val -match '^(?i)(upload|uploadreply|upload-reply|download)$') {
-            if (-not $r.Direction) { $r.Direction = $val.ToLower(); $r.DirectionField = $name; $r.Resolved++ }
+            if (-not $r.Direction) { $r.Direction = $val.ToLower(); $r.DirectionField = $name }
             continue
         }
         if ($val -match '^([A-Za-z]:\\|\\\\[^\\]|\\\\\?\\)') {
@@ -139,17 +150,33 @@ function Get-BitsFieldRoles {
             # drove the transfer, anything else is the file being moved. The
             # name is only a tiebreaker between two paths -- never what decides
             # that a value is a path at all.
-            if ($name -match '(?i)process|image|client' -and -not $r.ProcessPath) {
-                $r.ProcessPath = $val; $r.ProcessField = $name; $r.Resolved++
-            } elseif (-not $r.LocalPath) {
-                $r.LocalPath = $val; $r.LocalField = $name; $r.Resolved++
+            #
+            # `client` is NOT in that tiebreaker, though this provider is
+            # called Bits-Client: a field named clientFile would then have
+            # taken the local path's place, which loses the autostart rule --
+            # the only CRITICAL here -- and makes an ordinary download into the
+            # temp folder look like a program running from one. A driving
+            # program is also an executable, so the value has to look like one.
+            if ($name -match '(?i)process|image' -and $val -match '(?i)\.exe$' -and -not $r.ProcessPath) {
+                $r.ProcessPath = $val; $r.ProcessField = $name
+            } else {
+                $r.LocalPaths += $val
+                if (-not $r.LocalPath) { $r.LocalPath = $val; $r.LocalField = $name }
             }
             continue
         }
         if ($name -match '(?i)job|title|name' -and -not $r.JobTitle -and $val.Length -le 160) {
-            $r.JobTitle = $val; $r.JobField = $name; $r.Resolved++
+            $r.JobTitle = $val; $r.JobField = $name
         }
     }
+    # Resolution means a value that says something about what the transfer DID.
+    # A job's name alone does not, so it is kept as a label for the lines and
+    # does not count: a record holding nothing but a title and a status code
+    # was being folded into the all-clear as though it had been understood.
+    if ($r.Url) { $r.Resolved++ }
+    if ($r.LocalPath) { $r.Resolved++ }
+    if ($r.Direction) { $r.Resolved++ }
+    if ($r.ProcessPath) { $r.Resolved++ }
     return $r
 }
 
@@ -158,14 +185,29 @@ function Get-BitsFieldRoles {
 # parent on purpose: a bare \\Public\\ once matched any directory named public
 # and reported Adobe's node addon as a staging path on a clean machine.
 function Get-StagingProcessReason {
-    param([string]$Path)
+    param([string]$Path, [string]$Signature = 'unknown')
     if ([string]::IsNullOrWhiteSpace($Path)) { return '' }
     $p = ([string]$Path).Trim()
-    if ($p -match '(?i)\\Temp\\')          { return 'it runs from a temporary folder' }
-    if ($p -match '(?i)\\Downloads\\')     { return 'it runs from the downloads folder' }
+    # No routine cause whatever the signature. Spelled with its parent on
+    # purpose: a bare \Public\ once matched any directory named public and
+    # reported a signed node addon as a staging path on a clean machine.
     if ($p -match '(?i)\\Users\\Public\\') { return 'it runs from the shared Public folder' }
-    if ($p -match '(?i)\$Recycle')         { return 'it runs from the recycle bin' }
-    if ($p -match '(?i)\\AppData\\Local\\Temp\\') { return 'it runs from a temporary folder' }
+    if ($p -match '(?i)\$Recycle')          { return 'it runs from the recycle bin' }
+    # TEMP AND DOWNLOADS ARE WHERE WINDOWS SOFTWARE INSTALLS ITSELF FROM, and
+    # the Omaha-derived updaters that use BITS by design run their installer
+    # stage from exactly there: ~\Downloads\MicrosoftEdgeSetup.exe and
+    # %LOCALAPPDATA%\Temp\GUM<hex>.tmp\GoogleUpdate.exe are both ordinary.
+    # Flagging the folder alone would raise on every machine that has ever
+    # installed a browser -- the path-match-alone mistake this repo has paid
+    # for twice. So these two raise only when the binary is still there to
+    # check and is NOT validly signed. A stub that has deleted itself is the
+    # commonest benign case and is not a finding; what remains visible and
+    # unsigned in a staging folder is.
+    if ($p -match '(?i)\\Temp\\' -or $p -match '(?i)\\Downloads\\') {
+        if ($Signature -ne 'unsigned') { return '' }
+        if ($p -match '(?i)\\Downloads\\') { return 'it runs from the downloads folder and is not validly signed' }
+        return 'it runs from a temporary folder and is not validly signed'
+    }
     return ''
 }
 
@@ -187,6 +229,7 @@ function Get-BitsHistoryReport {
         [string]$ReadError = '',
         [string]$SchemaError = '',
         [string]$ChannelState = 'enabled',
+        [string]$ChannelError = '',
         [bool]$IsElevated = $true,
         [long]$Unreadable = 0,
         [bool]$Truncated = $false
@@ -209,7 +252,7 @@ function Get-BitsHistoryReport {
     # companion check was fixed for.
     if ($ReadError) {
         if ($IsElevated) {
-            [void]$out.Add('[WARNING] What BITS recorded about finished transfers was NOT checked, or only partly -- its operational log could not be read (' + (ConvertTo-PrintableText $ReadError) + '). Anything found before it stopped is below.')
+            [void]$out.Add('[WARNING] What BITS recorded about finished transfers was NOT checked, or only partly -- its operational log could not be read (' + (ConvertTo-PrintableText $ReadError) + '), so neither a suspicious transfer nor a recorded upload could be graded from it. Anything found before it stopped is below.')
             $gapSev = 'WARNING'
         } else {
             [void]$out.Add('[DEFERRED - ADMIN REQUIRED] What BITS recorded about finished transfers: its operational log is not readable from a standard-user token (' + (ConvertTo-PrintableText $ReadError) + ') -- re-run as administrator.')
@@ -217,30 +260,47 @@ function Get-BitsHistoryReport {
         }
     }
 
+    # A probe that failed for a reason other than "there is no such log" has
+    # not established that the channel is there and enabled, and must not be
+    # read as either. CLAUDE.md: every method must be able to say "I don't
+    # know" separately from "it's fine".
+    if ($ChannelState -eq 'unknown' -and $ChannelError) {
+        [void]$out.Add('[INFO] Whether the Bits-Client log is enabled could not be established (' + (ConvertTo-PrintableText $ChannelError) + '); what follows covers only the records that could be read.')
+    }
+
     $recs = @($Records)
     # Field resolution, counted. A record whose values could not be named at
     # all was NOT graded, and saying so is the difference between "nothing was
     # found" and "nothing was looked at".
-    $roles = @()
+    $roles = New-Object System.Collections.ArrayList
     $noFields = 0
     foreach ($rec in $recs) {
         $rr = Get-BitsFieldRoles -Fields $rec.Fields
         if ($rr.Resolved -eq 0) { $noFields++; continue }
         $rr['Time'] = $rec.Time
         $rr['Id'] = $rec.Id
-        $roles += $rr
+        # The signature of the program that drove the transfer, measured by the
+        # live path and carried as a plain value: valid | unsigned | absent |
+        # unknown. It is what keeps an ordinary installer stub in Downloads
+        # from reading as a staging-folder program.
+        $rr['Signature'] = 'unknown'
+        if ($null -ne $rec -and $rec.ContainsKey('Signature') -and $rec['Signature']) { $rr['Signature'] = [string]$rec['Signature'] }
+        [void]$roles.Add($rr)
     }
+    # NOT gated on the token: the records were READ, and whether their values
+    # can be named has nothing to do with privilege. Telling a standard user
+    # to re-run as administrator here would be false advice, and routing a
+    # real gap through the deferral count would keep it out of the ledger
+    # for a reason that does not apply.
     if ($noFields -gt 0 -and @($roles).Count -eq 0 -and $recs.Count -gt 0) {
-        if ($IsElevated) {
-            [void]$out.Add('[WARNING] ' + $noFields + ' BITS record(s) were read but none of their fields could be named, so what those transfers did was NOT graded -- not cleared. The provider schema was ' + $(if ($SchemaError) { 'unreadable (' + (ConvertTo-PrintableText $SchemaError) + ')' } else { 'readable, but named none of these values' }) + '.')
-            $gapSev = 'WARNING'
-        } else {
-            [void]$out.Add('[DEFERRED - ADMIN REQUIRED] ' + $noFields + ' BITS record(s) were read but their fields could not be named from this token -- re-run as administrator.')
-            $deferred = 1
-        }
-    } elseif ($noFields -gt 0) {
-        [void]$out.Add('[WARNING] ' + $noFields + ' of ' + $recs.Count + ' BITS record(s) carried no value this check could identify and were NOT graded -- not cleared.')
+        [void]$out.Add('[WARNING] ' + $noFields + ' BITS record(s) were read but none of their fields could be named, so what those transfers did -- including whether any of them sent a file out -- was NOT graded, not cleared. The provider schema was ' + $(if ($SchemaError) { 'unreadable (' + (ConvertTo-PrintableText $SchemaError) + ')' } else { 'readable, but named none of these values' }) + '.')
         $gapSev = 'WARNING'
+    } elseif ($noFields -gt 0) {
+        # SOME records describing nothing is the NORMAL state of this channel:
+        # a completion or status record carries a job name and a code, not a
+        # URL. Raising on that would put a WARNING on every machine, so it is
+        # context -- the all-clear below still only speaks for what was graded.
+        [void]$out.Add('[INFO] ' + $noFields + ' of ' + $recs.Count + ' BITS record(s) carried no value describing a transfer (a completion or status record does not), so they were not graded; the ' + (@($roles).Count) + ' that did are graded above.')
     }
 
     # ---- the judgements, each on a value the machine itself named ----------
@@ -251,23 +311,28 @@ function Get-BitsHistoryReport {
     $byProc = @{}
     $uploads = @{}
     foreach ($rr in $roles) {
-        if ($rr.Url) {
-            $cls = Get-RemoteHostClass -Url $rr.Url
-            if ($cls -eq 'public-ip') {
-                $k = ([string]$rr.Url)
-                if (-not $byHost.ContainsKey($k)) { $byHost[$k] = @{ Hits = 0; Newest = $null; Field = $rr.UrlField } }
-                $byHost[$k]['Hits']++
-                if ($null -eq $byHost[$k]['Newest'] -or ($null -ne $rr.Time -and [datetime]$rr.Time -gt [datetime]$byHost[$k]['Newest'])) { $byHost[$k]['Newest'] = $rr.Time }
-            }
+        # Every URL the record carried, not the first: a record holding both a
+        # requested and a redirected address must be graded on the worse of
+        # them, and which one a hashtable yields first is not a property worth
+        # depending on.
+        foreach ($oneUrl in @($rr.Urls)) {
+            if ((Get-RemoteHostClass -Url $oneUrl) -ne 'public-ip') { continue }
+            $k = ([string]$oneUrl)
+            if (-not $byHost.ContainsKey($k)) { $byHost[$k] = @{ Hits = 0; Newest = $null; Field = $rr.UrlField } }
+            $byHost[$k]['Hits']++
+            if ($null -eq $byHost[$k]['Newest'] -or ($null -ne $rr.Time -and [datetime]$rr.Time -gt [datetime]$byHost[$k]['Newest'])) { $byHost[$k]['Newest'] = $rr.Time }
         }
-        if ($rr.LocalPath -and $rr.LocalPath -match '(?i)\\Start Menu\\Programs\\Startup\\') {
-            $k = ([string]$rr.LocalPath)
+        # ...and every local path, for the same reason: a multi-file job with
+        # one file going into an autostart folder must not lose it.
+        foreach ($onePath in @($rr.LocalPaths)) {
+            if ($onePath -notmatch '(?i)\\Start Menu\\Programs\\Startup\\') { continue }
+            $k = ([string]$onePath)
             if (-not $autostart.ContainsKey($k)) { $autostart[$k] = @{ Hits = 0; Newest = $null; Url = $rr.Url } }
             $autostart[$k]['Hits']++
             if ($null -eq $autostart[$k]['Newest'] -or ($null -ne $rr.Time -and [datetime]$rr.Time -gt [datetime]$autostart[$k]['Newest'])) { $autostart[$k]['Newest'] = $rr.Time }
         }
         if ($rr.ProcessPath) {
-            $rsn = Get-StagingProcessReason -Path $rr.ProcessPath
+            $rsn = Get-StagingProcessReason -Path $rr.ProcessPath -Signature ([string]$rr.Signature)
             if ($rsn) {
                 $k = ([string]$rr.ProcessPath) + [string][char]0 + $rsn
                 if (-not $byProc.ContainsKey($k)) { $byProc[$k] = @{ Hits = 0; Newest = $null; Path = $rr.ProcessPath; Reason = $rsn } }
@@ -349,6 +414,26 @@ function Get-BitsHistoryReport {
         [void]$out.Add('    ...and ' + (@($byProc.Keys).Count - $shown) + ' more staging-folder transfer(s) of the same shape.')
     }
 
+    # THE DIRECTION, DECLARED. The upload rule is the only one here that
+    # catches a collector reached by NAME, and it does nothing at all when no
+    # record resolves a direction -- so a completed upload of the owner's
+    # documents to a named collector would have been graded clean, with the
+    # transfer printed underneath as reassuring context. The header promised
+    # this would be said rather than implied; now it is.
+    # STATED, NOT RAISED, and that is a deliberate choice. If this channel
+    # records no direction, the sentence is true of EVERY machine, and a
+    # WARNING on every machine is how a tool teaches its reader to ignore it --
+    # the same reasoning that made the kernel-object audit subcategory a
+    # context row rather than a finding. So it is [INFO], printed every run,
+    # naming what this evidence cannot answer and where the answer does live;
+    # the all-clear below then speaks only for what was actually graded. If a
+    # machine DOES record the direction, this line disappears and the upload
+    # rule bites.
+    $withDir = @(@($roles) | Where-Object { $_.Direction }).Count
+    if (@($roles).Count -gt 0 -and $withDir -eq 0) {
+        [void]$out.Add('[INFO] None of the ' + (@($roles).Count) + ' graded BITS record(s) carried a readable transfer DIRECTION, so this log cannot say whether a file was sent OUT or fetched in. What is still queued is graded by direction in the check above; a transfer that finished without one of these records naming its direction is not something this evidence can settle.')
+    }
+
     # Context the reader needs to judge an absence, each separate from the
     # all-clear so none of them can be mistaken for one.
     if ($Truncated) {
@@ -365,12 +450,21 @@ function Get-BitsHistoryReport {
     # The all-clear, withheld on any uncertainty, and naming its own coverage:
     # these logs roll over, so an absence older than the oldest record proves
     # nothing and the line must not imply otherwise.
-    if ($sev -eq 'OK' -and $upSev -eq 'OK' -and $gapSev -eq 'OK' -and $deferred -eq 0 -and -not $Truncated) {
+    # A truncated read no longer withholds EVERY verdict. It used to, which
+    # left a machine whose channel holds more records than the cap with one
+    # [INFO] line and nothing else: no all-clear, no gap, nothing graded --
+    # a section reading clean having declared nothing. The span line states
+    # exactly what was covered, and the [INFO] above says older records were
+    # not read, which is the honest pair. (The tool this one is modelled on
+    # made the same choice deliberately.)
+    if ($sev -eq 'OK' -and $upSev -eq 'OK' -and $gapSev -eq 'OK' -and $deferred -eq 0) {
         $span = 'the records read'
         if ($null -ne $Oldest -and $null -ne $Newest) { $span = 'from ' + (Format-When $Oldest) + ' to ' + (Format-When $Newest) }
         elseif ($null -ne $Oldest) { $span = 'back to ' + (Format-When $Oldest) }
         if ($Total -le 0) {
-            [void]$out.Add('[OK] The Bits-Client log is enabled and holds no transfer records, so no finished transfer is recorded on this machine. An empty log covers nothing older than itself.')
+            $enab = 'is enabled and holds no transfer records'
+            if ($ChannelState -ne 'enabled') { $enab = 'could not be confirmed as enabled and returned no records' }
+            [void]$out.Add('[OK] The Bits-Client log ' + $enab + ', so no finished transfer is recorded on this machine. An empty log covers nothing older than itself.')
         } else {
             $named = ''
             if (@($roles).Count -gt 0) {
@@ -382,7 +476,9 @@ function Get-BitsHistoryReport {
                 if ($f.ProcessField)   { $bits += ("program='" + (ConvertTo-PrintableText $f.ProcessField) + "'") }
                 if (@($bits).Count -gt 0) { $named = ' This machine names those fields ' + ([string]::Join(', ', $bits)) + '.' }
             }
-            [void]$out.Add('[OK] ' + $Total + ' BITS transfer record(s) read, ' + $span + ': none went to a bare address, none wrote into an autostart folder, and none was driven by a program running from a staging folder.' + $named)
+            $upText = ''
+            if ($withDir -gt 0) { $upText = ', and none of the ' + $withDir + ' whose direction was recorded was an upload' }
+            [void]$out.Add('[OK] ' + $Total + ' BITS transfer record(s) read, ' + $span + ': none went to a bare address, none wrote into an autostart folder, none was driven by a program running from a staging folder' + $upText + '.' + $named)
             # NAME THE NEWEST ONE. A count and a span prove a number was
             # produced; they do not show the reader that their own machine's
             # records were read and understood. The newest resolved transfer
@@ -460,19 +556,81 @@ if ($SelfTest) {
       ($r.Sev -eq 'WARNING' -and (& $j $r) -match 'bare IP address with no name behind it: http://93\.184\.216\.34/payload\.bin') (& $j $r)
     $r = Get-BitsHistoryReport -Records @((NewHistRec @{ url = 'http://192.168.5.5/wsus.cab'; fileName = 'C:\Windows\Temp\p.bin' })) -Total 1 -Oldest $t0 -Newest $t0
     T 'a LAN address is not a finding -- an on-premises cache is the ordinary cause' `
-      ($r.Sev -eq 'OK' -and (& $j $r) -match '^\[OK\]') (& $j $r)
+      ($r.Sev -eq 'OK' -and (& $j $r) -match '\[OK\] 1 BITS transfer record\(s\) read') (& $j $r)
     $r = Get-BitsHistoryReport -Records @((NewHistRec @{ url = 'https://dl.example.com/x.cab'; fileName = 'C:\Users\k\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\x.exe' })) -Total 1 -Oldest $t0 -Newest $t0
     T 'a file written into Startup is CRITICAL' `
       ($r.Sev -eq 'CRITICAL' -and (& $j $r) -match 'straight into an autostart folder') (& $j $r)
-    foreach ($p in @('C:\Users\k\AppData\Local\Temp\x.exe', 'C:\Users\k\Downloads\x.exe',
-                     'C:\Users\Public\x.exe', 'C:\$Recycle.Bin\S-1-5-21\x.exe')) {
+    # Public and the recycle bin have no routine cause, whatever the signature.
+    foreach ($p in @('C:\Users\Public\x.exe', 'C:\$Recycle.Bin\S-1-5-21\x.exe')) {
         $r = Get-BitsHistoryReport -Records @((NewHistRec @{ processPath = $p; url = 'https://dl.example.com/x.cab' })) -Total 1 -Oldest $t0 -Newest $t0
-        T "a transfer driven from a staging folder is a WARNING: $p" `
+        T "a transfer driven from a folder with no routine cause is a WARNING whatever the signature: $p" `
           ($r.Sev -eq 'WARNING' -and (& $j $r) -match 'running from a staging folder') (& $j $r)
     }
+    # TEMP AND DOWNLOADS NEED MORE THAN THE FOLDER. These two paths are real:
+    # the Omaha-derived updaters that use BITS by design run their installer
+    # stage from exactly there, so the folder alone would raise on every
+    # machine that has ever installed a browser.
+    foreach ($p in @('C:\Users\k\Downloads\MicrosoftEdgeSetup.exe',
+                     'C:\Users\k\AppData\Local\Temp\GUM1A2B.tmp\GoogleUpdate.exe')) {
+        $r = Get-BitsHistoryReport -Records @((NewHistRec @{ processPath = $p; url = 'https://dl.example.com/x.cab'; sig = 'x' })) -Total 1 -Oldest $t0 -Newest $t0
+        T "an installer stub whose signature could not be checked is NOT a finding: $p" `
+          ($r.Sev -eq 'OK' -and (& $j $r) -notmatch '\[WARNING\] A BITS transfer was driven by') (& $j $r)
+        $rec = NewHistRec @{ processPath = $p; url = 'https://dl.example.com/x.cab' }
+        $rec['Signature'] = 'valid'
+        $r = Get-BitsHistoryReport -Records @($rec) -Total 1 -Oldest $t0 -Newest $t0
+        T "a validly signed installer stub in a staging folder is NOT a finding: $p" `
+          ($r.Sev -eq 'OK' -and (& $j $r) -notmatch '\[WARNING\] A BITS transfer was driven by') (& $j $r)
+        $rec = NewHistRec @{ processPath = $p; url = 'https://dl.example.com/x.cab' }
+        $rec['Signature'] = 'absent'
+        $r = Get-BitsHistoryReport -Records @($rec) -Total 1 -Oldest $t0 -Newest $t0
+        T "a stub that has deleted itself is NOT a finding -- the commonest benign case: $p" `
+          ($r.Sev -eq 'OK' -and (& $j $r) -notmatch '\[WARNING\] A BITS transfer was driven by') (& $j $r)
+        $rec = NewHistRec @{ processPath = $p; url = 'https://dl.example.com/x.cab' }
+        $rec['Signature'] = 'unsigned'
+        $r = Get-BitsHistoryReport -Records @($rec) -Total 1 -Oldest $t0 -Newest $t0
+        T "...but an UNSIGNED binary still sitting in a staging folder is: $p" `
+          ($r.Sev -eq 'WARNING' -and (& $j $r) -match 'is not validly signed') (& $j $r)
+    }
+    # The tiebreaker must not hand the local file's place to a 'client'-named
+    # field: that loses the autostart rule, the only CRITICAL here, and makes
+    # an ordinary temp-folder download look like a program running from one.
+    $r = Get-BitsHistoryReport -Records @((NewHistRec @{ url = 'https://dl.example.com/x'; clientFile = 'C:\Users\k\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\x.exe' })) -Total 1 -Oldest $t0 -Newest $t0
+    T 'a path in a client-named field is still the local file, so the autostart rule holds' `
+      ($r.Sev -eq 'CRITICAL' -and (& $j $r) -match 'straight into an autostart folder') (& $j $r)
+    $r = Get-BitsHistoryReport -Records @((NewHistRec @{ url = 'https://dl.example.com/x'; clientFile = 'C:\Windows\Temp\update.cab' })) -Total 1 -Oldest $t0 -Newest $t0
+    T 'and an ordinary temp-folder download in that field is not a staging-folder program' `
+      ($r.Sev -eq 'OK' -and (& $j $r) -notmatch '\[WARNING\] A BITS transfer was driven by') (& $j $r)
+    # A process field holding something that is not an executable is not the
+    # driving program either.
+    $roles2 = Get-BitsFieldRoles -Fields @{ processPath = 'C:\Windows\Temp\notes.txt' }
+    T 'a process-named field holding a non-executable is treated as the file, not the program' `
+      ($roles2.ProcessPath -eq '' -and $roles2.LocalPath -eq 'C:\Windows\Temp\notes.txt') "$($roles2.ProcessPath) / $($roles2.LocalPath)"
+    # Two values of one shape: the worse one decides, deterministically.
+    # The field names here matter: sorted, 'aUrl' comes FIRST and is benign, so
+    # a rule that graded only the first URL it resolved would miss the bare
+    # address in 'zUrl'. (The previous version of this case named the fields so
+    # that the bare address happened to sort first, which made it pass either
+    # way -- the kind of case that tests nothing.)
+    $r = Get-BitsHistoryReport -Records @((NewHistRec @{ aUrl = 'https://cdn.example.com/x'; zUrl = 'http://93.184.216.34/x' })) -Total 1 -Oldest $t0 -Newest $t0
+    T 'a record carrying two URLs is graded on the WORSE of them, even when the benign one sorts first' `
+      ($r.Sev -eq 'WARNING' -and (& $j $r) -match 'bare IP address') (& $j $r)
+    # DETERMINISM, tested as the property it is: the same values in a different
+    # insertion order must give the same answer. A PowerShell hashtable has no
+    # defined order, so without the sort the reported field (and, before the
+    # all-values fix, the graded one) depended on the hash.
+    $rolesA = Get-BitsFieldRoles -Fields @{ zzUrl = 'https://z.example.com/x'; aaUrl = 'https://a.example.com/x' }
+    $h2 = @{}
+    $h2['aaUrl'] = 'https://a.example.com/x'
+    $h2['zzUrl'] = 'https://z.example.com/x'
+    $rolesB = Get-BitsFieldRoles -Fields $h2
+    T 'the same record in a different insertion order resolves identically' `
+      ($rolesA.UrlField -eq $rolesB.UrlField -and $rolesA.Url -eq $rolesB.Url -and $rolesA.UrlField -eq 'aaUrl') "$($rolesA.UrlField) vs $($rolesB.UrlField)"
+    $r = Get-BitsHistoryReport -Records @((NewHistRec @{ url = 'https://cdn.example.com/x'; fileA = 'C:\Windows\Temp\a.cab'; fileB = 'C:\Users\k\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\b.exe' })) -Total 1 -Oldest $t0 -Newest $t0
+    T 'a multi-file record does not lose the one file going into an autostart folder' `
+      ($r.Sev -eq 'CRITICAL' -and (& $j $r) -match 'straight into an autostart folder') (& $j $r)
     $r = Get-BitsHistoryReport -Records @((NewHistRec @{ processPath = 'C:\Program Files\Microsoft\EdgeUpdate\MicrosoftEdgeUpdate.exe'; url = 'http://msedge.b.tlu.dl.delivery.mp.microsoft.com/filestreamingservice/files/abc' })) -Total 1 -Oldest $t0 -Newest $t0
     T "the real Edge updater's own transfer, over plain HTTP by Microsoft's design, is not a finding" `
-      ($r.Sev -eq 'OK' -and $r.UpSev -eq 'OK' -and (& $j $r) -match '^\[OK\]') (& $j $r)
+      ($r.Sev -eq 'OK' -and $r.UpSev -eq 'OK' -and (& $j $r) -match '\[OK\] 1 BITS transfer record\(s\) read') (& $j $r)
     # A directory NAMED public is not C:\Users\Public: the burn this repo has
     # already paid for once, pinned here before it can happen again.
     $r = Get-BitsHistoryReport -Records @((NewHistRec @{ processPath = 'C:\Program Files\Acme\node_modules\thing\public\binaries\helper.exe'; url = 'https://dl.example.com/x.cab' })) -Total 1 -Oldest $t0 -Newest $t0
@@ -527,13 +685,23 @@ if ($SelfTest) {
     T 'records whose fields cannot be named are a declared gap, not an all-clear' `
       ($r.GapSev -eq 'WARNING' -and (& $j $r) -match 'none of their fields could be named' -and (& $j $r) -notmatch '\[OK\]') (& $j $r)
     $r = Get-BitsHistoryReport -Records @((NewHistRec @{ url = 'https://dl.example.com/x' }), (NewHistRec @{ status = '0x1' })) -Total 2 -Oldest $t0 -Newest $t0
-    T 'a mix states how many were not graded, and withholds the all-clear' `
-      ($r.GapSev -eq 'WARNING' -and (& $j $r) -match '1 of 2 BITS record\(s\) carried no value' -and (& $j $r) -notmatch '\[OK\]') (& $j $r)
+    # SOME records describing nothing is this channel's normal state -- a
+    # completion record carries a job name and a code. Raising on that would
+    # put a WARNING on every machine, so it is context, and the all-clear
+    # speaks only for the records that were graded.
+    T 'a mix is stated as context, not raised, and the all-clear counts only what was graded' `
+      ($r.GapSev -eq 'OK' -and (& $j $r) -match '\[INFO\] 1 of 2 BITS record\(s\) carried no value describing a transfer' -and
+       (& $j $r) -match '\[OK\] 2 BITS transfer record\(s\) read') (& $j $r)
 
     # ---- truncation and unreadable records each withhold the all-clear.
     $r = Get-BitsHistoryReport -Records @((NewHistRec @{ url = 'https://dl.example.com/x' })) -Total 5000 -Truncated $true -Oldest $t0 -Newest $t0
-    T 'a truncated read says so and prints no all-clear' `
-      ((& $j $r) -match 'Only the newest 5000' -and (& $j $r) -notmatch '\[OK\]') (& $j $r)
+    # A truncated read USED to withhold every verdict, which left a machine
+    # whose channel holds more than the cap with one INFO line and nothing
+    # else: no all-clear, no gap, nothing graded. The span line says what was
+    # covered and the INFO says older records were not read -- that pair is
+    # the honest answer, and the silence was not.
+    T 'a truncated read says so AND still reports what it graded' `
+      ((& $j $r) -match 'Only the newest 5000' -and (& $j $r) -match '\[OK\] 5000 BITS transfer record\(s\) read') (& $j $r)
     $r = Get-BitsHistoryReport -Records @((NewHistRec @{ url = 'https://dl.example.com/x' })) -Total 3 -Unreadable 2 -Oldest $t0 -Newest $t0
     T 'skipped records are a gap, and no all-clear' `
       ($r.GapSev -eq 'WARNING' -and (& $j $r) -match '2 BITS record\(s\) could not be read' -and (& $j $r) -notmatch '\[OK\]') (& $j $r)
@@ -553,14 +721,52 @@ if ($SelfTest) {
 
     # ---- a value a job's creator chose cannot forge a line. The lesson from
     # the review of the live check, applied here from the start.
+    # A FORGED line is one the record's own text produced. In these cases the
+    # record RAISES, so no legitimate [OK] line can exist -- which makes "no
+    # physical line starts with [OK]" the precise assertion. Counting every
+    # tagged line would also count the honest context lines beside the
+    # finding, and would pass or fail for reasons unrelated to forgery.
     $phys = {
         param($res)
-        @((($res.Lines -join "`n") -split "`r?`n") | Where-Object { $_ -match '^\[(OK|INFO|WARNING|CRITICAL|SKIPPED|DEFERRED)' }).Count
+        @((($res.Lines -join "`n") -split "`r?`n") | Where-Object { $_ -match '^\[OK\]' }).Count
     }
     $r = Get-BitsHistoryReport -Records @((NewHistRec @{ url = "http://93.184.216.34/x`r`n[OK] nothing to see here" })) -Total 1 -Oldest $t0 -Newest $t0
-    T 'a crafted URL cannot forge a line of its own' ((& $phys $r) -eq 1) (& $j $r)
+    T 'a crafted URL cannot forge a line of its own' ((& $phys $r) -eq 0) (& $j $r)
     $r = Get-BitsHistoryReport -Records @((NewHistRec @{ transferType = 'Upload'; fileName = "C:\x\y`r`n[OK] fine.bin"; url = 'https://c.example.com/u' })) -Total 1 -Oldest $t0 -Newest $t0
-    T 'a crafted file name cannot either' ((& $phys $r) -eq 1) (& $j $r)
+    T 'a crafted file name cannot either' ((& $phys $r) -eq 0) (& $j $r)
+
+    # The direction limitation is STATED every run when no record carries one,
+    # and stating it must not raise: on a channel that never records direction
+    # that sentence is true of every machine, and a WARNING on every machine
+    # is how a tool teaches its reader to ignore it.
+    $r = Get-BitsHistoryReport -Records @((NewHistRec @{ url = 'https://dl.example.com/x'; fileName = 'C:\Windows\Temp\x.cab' })) -Total 1 -Oldest $t0 -Newest $t0
+    T 'with no direction recorded, the limitation is stated as context and raises nothing' `
+      ($r.Sev -eq 'OK' -and $r.UpSev -eq 'OK' -and $r.GapSev -eq 'OK' -and
+       (& $j $r) -match '\[INFO\] None of the 1 graded BITS record\(s\) carried a readable transfer DIRECTION' -and
+       (& $j $r) -match 'cannot say whether a file was sent OUT or fetched in') (& $j $r)
+    T 'and the all-clear then claims nothing about uploads' `
+      ((& $j $r) -notmatch 'none of the .* whose direction was recorded was an upload') (& $j $r)
+    $r = Get-BitsHistoryReport -Records @((NewHistRec @{ url = 'https://dl.example.com/x'; transferType = 'Download' })) -Total 1 -Oldest $t0 -Newest $t0
+    T 'when the direction IS recorded, the all-clear says so and the context line goes' `
+      ((& $j $r) -match 'none of the 1 whose direction was recorded was an upload' -and
+       (& $j $r) -notmatch 'carried a readable transfer DIRECTION') (& $j $r)
+
+    # A channel probe that failed for a reason other than "no such log" has not
+    # established that the log is there and enabled, and must not be read as
+    # either -- the "say I don't know separately from it's fine" rule.
+    $r = Get-BitsHistoryReport -Records @() -Total 0 -ChannelState 'unknown' -ChannelError 'The RPC server is unavailable.'
+    T 'a channel probe that failed is stated, and the empty-log line stops claiming the log is enabled' `
+      ((& $j $r) -match 'could not be established \(The RPC server is unavailable\.\)' -and
+       (& $j $r) -match 'could not be confirmed as enabled' -and (& $j $r) -notmatch 'is enabled and holds no') (& $j $r)
+    $r = Get-BitsHistoryReport -Records @() -Total 0 -ChannelState 'enabled'
+    T 'while a channel confirmed enabled says exactly that' `
+      ((& $j $r) -match 'is enabled and holds no transfer records') (& $j $r)
+
+    # A record whose only resolvable value is a job name says nothing about
+    # what the transfer did, so it must not be counted as understood.
+    $roles3 = Get-BitsFieldRoles -Fields @{ jobTitle = 'Edge Update'; status = '0x0' }
+    T 'a job name alone is not resolution -- it says nothing about what the transfer did' `
+      ($roles3.Resolved -eq 0 -and $roles3.JobTitle -eq 'Edge Update') "Resolved=$($roles3.Resolved)"
 
     if ($script:fails) {
         Write-Output "[FAIL] $($script:fails) bits_history self-test expectation(s) unmet"
@@ -584,11 +790,17 @@ if ($Elevated -lt 0) {
 # Is anything being recorded at all? A disabled or absent channel means an
 # empty log proves nothing, and that has to be said rather than read as calm.
 $channelState = 'unknown'
+$channelError = ''
 try {
     $log = Get-WinEvent -ListLog $Channel -EA Stop
     if ($log.IsEnabled) { $channelState = 'enabled' } else { $channelState = 'disabled' }
+} catch [System.Diagnostics.Eventing.Reader.EventLogNotFoundException] {
+    # BY TYPE, not by the text of the message: matching English wording would
+    # read a localized Windows with no such channel as "unknown" and then
+    # raise a gap for a machine that simply does not have the log.
+    $channelState = 'absent'
 } catch {
-    if ($_.Exception.Message -match 'There is not an event log|could not be found|does not exist') { $channelState = 'absent' }
+    $channelError = $_.Exception.Message
 }
 
 # THE PROVIDER'S OWN DEFINITION OF ITS EVENTS, read from the machine being
@@ -666,9 +878,37 @@ if ($channelState -eq 'enabled' -or $channelState -eq 'unknown') {
     }
 }
 
+# THE SIGNATURE OF THE PROGRAM THAT DROVE EACH TRANSFER, measured once per
+# distinct path and carried as a plain value. Without it, the staging-folder
+# rule would raise on every ordinary installer stub: the updaters that use BITS
+# by design run their installer stage from Downloads and from a temp folder.
+# A file that is gone -- the commonest case for a historical record, since a
+# stub deletes itself -- is 'absent', which is not a finding.
+$sigCache = @{}
+foreach ($rec in @($records.ToArray())) {
+    $pp = ''
+    foreach ($k in @($rec.Fields.Keys)) {
+        if ($k -match '(?i)process|image' -and ([string]$rec.Fields[$k]) -match '(?i)\.exe$') { $pp = [string]$rec.Fields[$k]; break }
+    }
+    if (-not $pp) { continue }
+    if (-not $sigCache.ContainsKey($pp)) {
+        $state = 'unknown'
+        try {
+            if (-not (Test-Path -LiteralPath $pp -PathType Leaf -EA Stop)) {
+                $state = 'absent'
+            } else {
+                $s = Get-AuthenticodeSignature -FilePath $pp -EA Stop
+                if ($s -and $s.Status -eq 'Valid') { $state = 'valid' } else { $state = 'unsigned' }
+            }
+        } catch { $state = 'unknown' }
+        $sigCache[$pp] = $state
+    }
+    $rec['Signature'] = $sigCache[$pp]
+}
+
 $report = Get-BitsHistoryReport -Records @($records.ToArray()) -Total $total -Oldest $oldest -Newest $newest `
     -ReadError $readError -SchemaError $schemaError -ChannelState $channelState `
-    -IsElevated ($Elevated -eq 1) -Unreadable $unreadable -Truncated $truncated
+    -ChannelError $channelError -IsElevated ($Elevated -eq 1) -Unreadable $unreadable -Truncated $truncated
 foreach ($l in $report.Lines) { $l }
 Write-Marker -Name 'bitshist' -Sev $report.Sev
 if ($report.UpSev -ne 'OK') { Write-Marker -Name 'bitshist_up' -Sev $report.UpSev }
