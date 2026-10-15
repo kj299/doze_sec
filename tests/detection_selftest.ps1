@@ -183,6 +183,16 @@ $ioc18cExpect = '(?s)--- \[18c\] Service IOC Match ---(?:(?!--- \[18d\]).)*?dz_s
 # \beacon.bin, so a bare-name expectation would pass on the twin alone.
 $ioc18dExpect = '(?s)--- \[18d\] Suspicious File Path IOC Check ---(?:(?!--- \[18e\]).)*?\[CRITICAL\] Known malware staging files found:(?:(?!--- \[18e\]).)*?' + [regex]::Escape($iocStageFile) + '\r?\n'
 $ioc18hExpect = '(?s)--- \[18h\] Registry IOC Check ---(?:(?!--- \[18i\]).)*?\[WARNING\] Suspicious registry IOCs found:(?:(?!--- \[18i\]).)*?\\Run\\ChromeUpdate = '
+# Section 14's archive-staging check (T1560): a two-part RAR 5.0 volume set
+# whose first block is the archive-encryption header -- the `rar a -hp -v`
+# shape every intrusion report describes -- in the shared Public folder, with
+# no Mark of the Web, so it reads as made on this machine. 42 inert bytes
+# each (signature, one encryption header, filler): no archiver can open it
+# and nothing in it executes. Beside it a plain zip Compress-Archive makes,
+# the shape Explorer's "Compress" makes, which must stay quiet.
+$archDir    = 'C:\Users\Public\dz_selftest_arch'
+$archRar5Hp = [byte[]]@(0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x15, 0x04, 0x00, 0x00, 0x00, 0x0F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x09, 0x09, 0x09, 0x09, 0x09, 0x09, 0x09, 0x09)
+$archExpect = '(?s)--- \[T1560\] Archives made on this machine(?:(?!--- NTFS Alternate Data Streams).)*?\[CRITICAL\] An archive made on this machine is password-protected AND split into volumes, in a staging folder: C:\\Users\\Public\\dz_selftest_arch\\collected\.part1\.rar \(\+1 more part\(s\) of this set\)'
 # Baseline/diff: the audit auto-diffs when a snapshot exists at OUTDIR. The
 # harness seeds one BEFORE the audit runs, with the planted Run-key backdoor
 # deliberately absent from it, so the audit's diff must report that autorun as
@@ -938,6 +948,35 @@ $cases = @(
         Expect = '(?im)UserInitMprLogonScript is set'
         Plant  = { Set-ItemProperty -Path $envKey -Name UserInitMprLogonScript -Value 'C:\Users\Public\dz_evil.bat' -Force }
         Cleanup= { Remove-ItemProperty -Path $envKey -Name UserInitMprLogonScript -EA SilentlyContinue }
+    },
+    @{
+        Name   = 'A password-protected two-part RAR set with no download mark in the Public folder -> Section 14 CRITICAL (T1560)'
+        Attack = @('T1560')
+        Tier   = 'required'  # archive_staging.ps1; the rar -hp -v shape, inert bytes
+        Touches= @('file:C:\Users\Public\dz_selftest_arch\collected.part1.rar (42 inert bytes shaped like a password-protected RAR 5.0 volume)|dz_selftest_arch',
+                   'file:C:\Users\Public\dz_selftest_arch\collected.part2.rar (the same)|dz_selftest_arch')
+        Affects= @()
+        Expect = $archExpect
+        Plant  = { New-Item -ItemType Directory -Path $archDir -Force | Out-Null
+                   [System.IO.File]::WriteAllBytes((Join-Path $archDir 'collected.part1.rar'), $archRar5Hp)
+                   [System.IO.File]::WriteAllBytes((Join-Path $archDir 'collected.part2.rar'), $archRar5Hp) }
+        Cleanup= { Remove-Item -LiteralPath $archDir -Recurse -Force -EA SilentlyContinue }
+    },
+    @{
+        Name   = 'A plain zip made by Compress-Archive beside it -> NOT a Section 14 archive finding (benign twin)'
+        Tier   = 'required'
+        Touches= @('file:C:\Users\Public\dz_selftest_arch\holiday_photos.zip (a plain Compress-Archive zip of one text file)|dz_selftest_arch')
+        Affects= @()
+        Invert = $true
+        Expect = '(?s)--- \[T1560\] Archives made on this machine(?:(?!--- NTFS Alternate Data Streams).)*?\[(WARNING|CRITICAL)\][^\r\n]*dz_selftest_arch\\holiday_photos\.zip'
+        TestableIf       = { [regex]::IsMatch($text, $archExpect) }
+        UntestableReason = 'the RAR set did not reach Section 14 either, so the archive check graded nothing this run'
+        Plant  = { New-Item -ItemType Directory -Path $archDir -Force | Out-Null
+                   $src = Join-Path $archDir 'holiday_notes.txt'
+                   Set-Content -LiteralPath $src -Value 'dz_selftest: a plain text file, zipped the way Explorer does it' -Encoding ASCII
+                   Compress-Archive -LiteralPath $src -DestinationPath (Join-Path $archDir 'holiday_photos.zip') -Force
+                   Remove-Item -LiteralPath $src -Force -EA SilentlyContinue }
+        Cleanup= { Remove-Item -LiteralPath $archDir -Recurse -Force -EA SilentlyContinue }
     }
 )
 
@@ -1326,7 +1365,10 @@ try {
                        @{ Case = 'A second wininit.exe'; Row = 'WARNING|4|T1036|System process Windows runs once seen twice or in the wrong session' },
                        # Section 12's dump-settings check: its own row, which no
                        # other plant can write.
-                       @{ Case = 'A file that looks like a memory dump of LSASS'; Row = 'CRITICAL|12|T1003.001|LSASS is configured to have its memory dumped, or a dump of it is on disk' })) {
+                       @{ Case = 'A file that looks like a memory dump of LSASS'; Row = 'CRITICAL|12|T1003.001|LSASS is configured to have its memory dumped, or a dump of it is on disk' },
+                       # Section 14's archive-staging check: its own row under
+                       # Collection, which no other plant can write.
+                       @{ Case = 'A password-protected two-part RAR set'; Row = 'CRITICAL|14|T1560|Archive made on this machine in a staging folder is password-protected, split into volumes, or packs credential files - collected data packed to leave' })) {
         $cs = @($cases | Where-Object { $_.Name -like ('*' + $chk.Case + '*') -and -not $_.Invert })[0]
         if (-not ($cs -and $cs.Planted)) { Write-Host ("  [ SKIP     ] {0}: the plant did not take, so its ledger row is not checked" -f $chk.Case); continue }
         # The check is "printed but not counted": with nothing printed (a

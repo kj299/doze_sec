@@ -443,12 +443,32 @@ that tactic as empty. Three neighbours are open, in this order of value:
    jobs the log no longer mentions; its format is undocumented, so it stays out
    until there is a first-party description rather than a reverse-engineered
    one.
-2. **Archive Collected Data (T1560).** A multi-volume (`.part1.rar`, `.z01`) or
-   password-protected archive appearing in a staging folder within a short
-   window is the shape that precedes almost every exfiltration. The detection
-   is easy and the judgement is the whole piece: installers and backup tools
-   write archives to those same folders constantly, so this needs its benign
-   twins pinned first, in both directions.
+2. ~~**Archive Collected Data (T1560).**~~ **DONE 2026-10-15**
+   (`tools/archive_staging.ps1`, Section 14). The judgement was the whole
+   piece, and it rests on two facts rather than on a folder: a browser
+   download carries the Mark of the Web and an archive made here never does
+   (Microsoft documents the stream, who writes it, and that a OneDrive-synced
+   file lacks it), and a password or volume splitting is readable from the
+   archive's own header by the format owners' layouts (APPNOTE, UnRAR's
+   source, 7zFormat.txt). So a downloaded archive is context whatever it
+   holds, a plain local zip is context, a password or a volume set made here
+   raises, both together is CRITICAL, and a credential-class entry name
+   escalates. Limits stated in the report: a 7z made with `-p` but without
+   `-mhe` has a compressed header and reads "not determinable"; contents are
+   never read, only entry names; a renamed archive is found by signature up
+   to a declared probe cap; a OneDrive-synced archive reads as made here.
+   The review before the push found a crafted 7z that hung the audit, a
+   `.tmp` rename that evaded it, and a global file cap that blinded later
+   folders while the all-clear named them; all fixed and pinned (CHANGELOG).
+   STILL OPEN here: a 7z's compressed header could be decompressed (LZMA in
+   pure PowerShell is a few hundred lines) to settle the `-p`-only case and to
+   read its entry names; self-extracting `.exe` archives (the RAR or 7z
+   signature sits after a PE stub) and other users' redirected Downloads
+   folders are not examined, and the report says so; and
+   the harness plants only the hand-built shape, while the real-archiver
+   plants (`7z a -p -mhe -v`) run in the helpers job when the image carries
+   7-Zip and are declared `[ SKIP ]` otherwise -- whether windows-latest
+   carries it is measured by that step, not assumed.
 3. **Exfil Over Web Service (T1567).** A transfer to consumer cloud storage.
    Deliberately not attempted: it needs a list of cloud destinations and there
    is no first-party source for one, so the list would be a guess that ages

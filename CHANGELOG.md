@@ -6,6 +6,106 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### An archive made on this machine, packed to leave: password-protected or split, in a staging folder (T1560, Collection)
+Before data leaves a machine it is packed. Microsoft's own incident reporting
+names the shape every time -- Volt Typhoon "staging collected data in
+password-protected archives", HAFNIUM "using 7-Zip to compress stolen data
+into ZIP files", NICKEL "a renamed rar.exe or 7z.exe to archive the files" --
+and ATT&CK's menuPass entry adds "multi-part archives, often saved in the
+Recycle Bin". Nothing in this audit looked at an archive. Worse, the manifest
+claimed T1560 was covered by Section 18's process list, and no archiver was
+on that list: a documented detection that did not exist.
+
+**The judgement is the whole check**, and two facts make it honest. A file a
+browser downloaded carries the Mark of the Web (`Zone.Identifier`,
+`ZoneId=3`); Microsoft documents that Edge, Chrome and the Attachment
+Execution Service write it, that NTFS copies preserve it, and that a file the
+OneDrive sync client fetched does NOT carry it. An archive `rar.exe` or
+`7z.exe` wrote on this machine never has one, so "no mark" means made or
+copied here, and a marked archive -- whatever it holds -- came IN and is
+context, never a finding. And a password or volume splitting is what an
+attacker needs and an ordinary local archive (Explorer's "Compress", a tool's
+cache) never has; both are readable from the file's own header, by the format
+owners' published layouts (PKWARE's APPNOTE for ZIP; RARLAB's UnRAR source
+for RAR 4.x and 5.0; 7-Zip's `7zFormat.txt`), with nothing decompressed and
+no third-party tool.
+
+`tools/archive_staging.ps1` (Section 14, both bats) reads every profile's
+Downloads and temp folder, the Public folder, the system temp folders
+(Windows\Temp, SYSTEM's and the service profiles'), ProgramData (one level:
+HAFNIUM's advice was to check there), PerfLogs, and the recycle bin of every
+fixed drive -- the token's own when not elevated, the rest declared deferred.
+It finds archives by extension and -- for a renamed archive, the NICKEL shape,
+including one renamed `.tmp` or `.crdownload` -- by signature, and grades: no
+mark and password-protected is WARNING; no mark and split into volumes is
+WARNING outside Downloads (in Downloads a split set with no password is how
+torrent and file-sharing clients deliver large files, so there it is named
+context); both together is CRITICAL; a visible entry name of the credential
+class (a mail store, a password database, a wallet, a private key in a keys
+folder, a registry-hive or `ntds.dit` copy, a browser's saved-password store)
+escalates. A plain single-volume local zip and a spanned CAB set are counted
+and named, never a row. The volumes of one set are one finding, counted by
+name because 7-Zip's later volumes carry no signature. Office documents,
+MSIX/APPX, VSIX and JAR files -- ZIP by signature -- are left out by extension
+and, when renamed, by the package entry they carry. **A download mark does not
+clear everything**, because anyone can write that stream: the strongest shape,
+marked, sitting where no browser saves a download (Public, a system temp
+folder, ProgramData, the recycle bin), is still a WARNING, and every marked
+archive of that shape in Downloads is named with the origin its mark records.
+Every limit is stated rather than implied: a 7z made with a password but
+without header encryption has a compressed header and is NAMED as "not
+determinable" (never clean; raised only in Public, where nothing unpacks); a
+7z or ZIP raw volume set is read across its volumes because the header sits
+at the end of the LAST one; entry names are read from ZIP, RAR, and a 7z
+whose header is not compressed; cloud-only placeholders are not opened
+(reading one would download it) and are counted; a file held open by another
+program is named; a file or folder an administrator cannot read is a raised
+gap with its own row, and on a standard-user token a counted deferral; a cap
+(per folder, so a full temp folder cannot starve the folders after it), the
+signature-probe cap and the time budget each turn the all-clear into an
+`[INFO]` line scoped to what was read, so a partial run never goes quiet and
+never reads clean.
+
+**The read-only review before the push found sixteen problems, and four of
+them would each have shipped a defect worse than no check.** A crafted 7z of
+fourteen bytes in Downloads HUNG the whole audit -- the parser looped on a
+count read from the file -- so a drive-by download could stop every later
+section and the report; every count is now checked against the bytes that
+remain, every walk must advance, and four hostile headers are self-test cases
+that must finish at once. The CI plant for a real 7-Zip set could never have
+passed, because 7-Zip's later volumes carry no signature and so were never
+counted as parts of the set. Renaming an archive to `.tmp` was a complete
+evasion (partial-download names were skipped as "in progress"). And the file
+cap was global, so a temp folder of thirty thousand junk files blinded the
+Public folder and the recycle bin while the all-clear still named them as
+examined. Also fixed from the same review: a ZIP with one appended byte read
+as having no password (it now walks the local headers too, which also catches
+central-directory flags that were cleared); a file an administrator could not
+open was dropped without a word; a budget that ran out was worded as a
+permissions failure and raised a false gap row; a single-disk ZIP64 read as a
+volume set; a Keynote presentation (`talk.key`) read as a private key; the
+mark could be forged to clear the strongest shape; and the live path had no
+test outside Windows -- the classifier is now a function the self-test drives
+end to end over files it writes.
+
+Proven in both directions: 126 self-test cases over synthetic archives built
+byte by byte from the specifications (every parser branch, every verdict row,
+four hostile headers, the live classifier over real files, the per-folder cap
+and the budget), with the review's fixes each pinned by a mutation that fails
+its own case; on the runner, the image's
+own Temp and Downloads as the benign twin at scale; hand-built plants in the
+Public folder beside their twins (a password-protected zip holding a mail
+store is CRITICAL while the SAME bytes carrying a planted download mark are
+context; a plain `Compress-Archive` zip is context; an Office-shaped package
+renamed `.zip` is left out); and, when the image carries 7-Zip, a REAL
+`7z a -p -mhe -v` set and a real password-protected zip, declared `[ SKIP ]`
+when it does not. The plant harness adds the `rar -hp -v` shape (42 inert
+bytes per volume) beside a plain zip, with a `CRITICAL|14|T1560` ledger row.
+The manifest's T1560 line now names the check that exists; README and
+THREAT_MODEL move to 90 techniques, and Collection's row names what is
+graded and what is not (archive contents are never read; a OneDrive-synced
+archive reads as made here, and the corpus names that twin).
+
 ### What BITS recorded after the job was gone, read on the machine's own event schema (T1197, T1048)
 The BITS check added last reads the jobs BITS has QUEUED. A job that completed
 or was cancelled is gone from that list, so an exfiltration that finished was

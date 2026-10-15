@@ -983,6 +983,89 @@ jobs:
           n=$(echo "$out" | grep -c '^\[OK\]')
           [ "$n" -ge 72 ] || { echo "self-test ran only $n case(s) -- it is not exercising the rule"; exit 1; }
 
+  archive-staging-grade:
+    name: "Archive staging: a password or a volume set made here raises; a download or a plain local zip never does"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Section 14's T1560 check parses ZIP, RAR 4.x/5.0, 7z and CAB headers
+      # from the format owners' published layouts and grades on the Mark of
+      # the Web. Every parser and every verdict row is pure and runs on
+      # synthetic archives built byte by byte, so the whole rule runs here.
+      - name: Grade archives in staging folders (headers parsed, the mark decides, the twins stay quiet)
+        run: pwsh -NoProfile -File tools/archive_staging.ps1 -SelfTest
+      # By NAME, so a case cannot be deleted and still satisfy a count.
+      - name: The judgements stay pinned by name
+        run: |
+          out=$(pwsh -NoProfile -File tools/archive_staging.ps1 -SelfTest)
+          echo "$out"
+          echo "$out" | grep -q 'a DOWNLOADED archive is context whatever it holds -- it came in, it was not packed here' \
+            || { echo 'a browser download could be reported as data packed to leave'; exit 1; }
+          echo "$out" | grep -q 'a plain single-volume local archive is context, never a row' \
+            || { echo 'every zip Explorer makes could become a finding'; exit 1; }
+          echo "$out" | grep -q 'password-protected AND split, made here, is CRITICAL -- the shape every cited intrusion used' \
+            || { echo 'the shape the intrusion reports describe could stop being CRITICAL'; exit 1; }
+          echo "$out" | grep -q "a PLAIN local archive that packs credential files is WARNING, not CRITICAL -- a person's own backup is the twin" \
+            || { echo 'a backup zip holding a .pst could become an incident-response trigger'; exit 1; }
+          echo "$out" | grep -q 'a 7z EncodedHeader without 7zAES (the default) is NOT DETERMINABLE, neither clean nor password-protected' \
+            || { echo 'a 7z whose password cannot be read could read as clean'; exit 1; }
+          echo "$out" | grep -q 'a 7z EncodedHeader coded with 7zAES (-mhe) is password-protected with names hidden' \
+            || { echo 'the 7z header-encryption shape could go unrecognised'; exit 1; }
+          echo "$out" | grep -q 'a 7z volume set read across its volumes yields the header from the last one' \
+            || { echo 'a real 7-Zip volume set could lose its password verdict to the first volume alone'; exit 1; }
+          echo "$out" | grep -q 'RAR 4.x MHD_PASSWORD (headers encrypted, -hp) is password-protected with names hidden, and MHD_VOLUME a volume' \
+            || { echo 'the RAR 4.x -hp shape could go unrecognised'; exit 1; }
+          echo "$out" | grep -q 'a RAR 5.0 archive-encryption header (type 4, -hp) is password-protected with names hidden' \
+            || { echo 'the RAR 5.0 -hp shape could go unrecognised'; exit 1; }
+          echo "$out" | grep -q 'a ZipCrypto entry (general-purpose bit 0) is password-protected, names still visible' \
+            || { echo 'a password-protected zip could read as plain'; exit 1; }
+          echo "$out" | grep -q 'an Office/MSIX package is recognised by its \[Content_Types\].xml entry' \
+            || { echo 'every Word document could be graded as an archive'; exit 1; }
+          echo "$out" | grep -q 'a fake end signature inside the comment does not fool the tail scan' \
+            || { echo 'a crafted zip comment could redirect the parser'; exit 1; }
+          echo "$out" | grep -q 'a RAR renamed .dat is still a RAR by signature, headers encrypted' \
+            || { echo 'the renamed-archiver shape (NICKEL) could be missed by name'; exit 1; }
+          echo "$out" | grep -q 'a folder an administrator cannot list is a raised gap, and the all-clear is withheld' \
+            || { echo 'an unlistable staging folder could read as clean'; exit 1; }
+          echo "$out" | grep -q 'the same folder on a standard-user token is a counted DEFERRAL, never a row, and no all-clear' \
+            || { echo 'a token-caused gap could become a ledger row again'; exit 1; }
+          echo "$out" | grep -q 'and what WAS read is still stated, scoped, so a partial run never goes quiet' \
+            || { echo 'a partial run could stop saying what it covered'; exit 1; }
+          echo "$out" | grep -q 'the volumes of one set are ONE finding, the first part speaking for the rest' \
+            || { echo 'a fifty-part set could become fifty rows'; exit 1; }
+          echo "$out" | grep -q 'a crafted file or entry name cannot forge a line of its own' \
+            || { echo 'a file name could inject its own severity tag into the report'; exit 1; }
+          echo "$out" | grep -q 'the same archives in a different order produce the same report, CRITICAL first' \
+            || { echo 'the report could depend on enumeration order'; exit 1; }
+          echo "$out" | grep -q 'caps and exclusions are printed as context, and the coverage line is then scoped, never an all-clear' \
+            || { echo 'a capped run could read clean having declared nothing'; exit 1; }
+          echo "$out" | grep -q 'finishes at once and is not read as clean' \
+            || { echo 'a crafted 7z header could hang the whole audit again'; exit 1; }
+          echo "$out" | grep -q 'a FORGED mark does not clear the strongest shape where no browser saves (Public): WARNING' \
+            || { echo 'one Set-Content -Stream could clear a password-protected volume set'; exit 1; }
+          echo "$out" | grep -q 'live: an archive renamed .tmp, .partial or .crdownload is found by its signature' \
+            || { echo 'renaming an archive to .tmp could hide it again'; exit 1; }
+          echo "$out" | grep -q 'enumeration: the file cap is PER FOLDER, so a full folder cannot starve the next one' \
+            || { echo 'a temp folder full of junk could blind every folder after it'; exit 1; }
+          echo "$out" | grep -q 'a password-protected ZIP with one byte appended is still password-protected' \
+            || { echo 'one appended byte could turn a protected zip into a plain one'; exit 1; }
+          echo "$out" | grep -q 'live: a ZIP whose end record cannot be found is NOT graded "no password"' \
+            || { echo 'an unparseable zip could be cleared as having no password'; exit 1; }
+          echo "$out" | grep -q 'live: a file an administrator cannot open is counted into the gap, not silently dropped' \
+            || { echo 'a DENY ACL on the archive could make it vanish from the report'; exit 1; }
+          echo "$out" | grep -q 'a folder the time budget never reached is declared as that -- not as a permissions failure' \
+            || { echo 'a slow laptop could get a false gap row worded as an ACL failure'; exit 1; }
+          echo "$out" | grep -q 'live: a real-shaped 7-Zip set (.001 signed, .002/.003 raw) is read across its volumes' \
+            || { echo 'a real 7-Zip set could lose its part count, and the CI plant would fail on every image with 7-Zip'; exit 1; }
+          echo "$out" | grep -q 'a split set with no password in Downloads is named context' \
+            || { echo 'every scene-release RAR set in Downloads could become a WARNING'; exit 1; }
+          echo "$out" | grep -q "a Keynote presentation (talk.key) and a project's nginx/server.key are NOT the credential class" \
+            || { echo 'a Keynote file in Downloads could be called a private key'; exit 1; }
+          echo "$out" | grep -q 'a single-disk ZIP64 with 0xFFFF sentinels in its end record is NOT a split set' \
+            || { echo 'every large zip could read as a volume set'; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]')
+          [ "$n" -ge 120 ] || { echo "self-test ran only $n case(s) -- it is not exercising the rule"; exit 1; }
+
   coverage-matrix-lint:
     runs-on: ubuntu-latest
     steps:

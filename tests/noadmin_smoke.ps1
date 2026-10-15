@@ -477,6 +477,19 @@ try {
         ('Section 5 printed: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'BITS transfer record|recorded about finished transfers|Bits-Client' }) -join ' | '))
     Assert ($text1 -notmatch 'BITS recorded an UPLOAD that has already happened|BITS wrote a file straight into an autostart folder|BITS transferred to or from a bare IP address') 'no BITS history finding on a clean runner, standard-user token' `
         ('reported: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'BITS recorded an UPLOAD|autostart folder|bare IP address' }) -join ' | '))
+    # Archives made on this machine (Section 14, T1560). A standard-user
+    # token reads its own Downloads and temp folder, the Public folder and
+    # its own recycle bin; other profiles, the system temp folder and other
+    # users' bins are DEFERRED and counted, never a row. Nothing may raise on
+    # a clean runner, and the coverage must be STATED for what was read.
+    Assert ($text1 -notmatch '\[(WARNING|CRITICAL)\] An archive made on this machine ') 'no archive-staging finding on a clean runner, standard-user token' `
+        ('reported: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'An archive made on this machine' }) -join ' | '))
+    Assert (@($ledger1 | Where-Object { $_ -match '\|14\|T1560\|' }).Count -eq 0) 'no T1560 row on a clean runner, standard-user token' `
+        'a standard-user run raised the archive-staging row with nothing planted'
+    Assert ($text1 -match 'archive\(s\) examined across \d+ staging folder\(s\)|No archives in the \d+ staging folder\(s\) examined') 'Section 14 states what it read of the staging folders, standard-user token' `
+        ('Section 14 printed: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'staging folder\(s\)' }) -join ' | '))
+    Assert ($text1 -match '\[DEFERRED - ADMIN REQUIRED\] [^\r\n]*archives there were NOT checked from a standard-user token') 'Section 14 declares the folders a standard-user token cannot read as deferred' `
+        ('Section 14 printed: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'DEFERRED[^\r\n]*archives' }) -join ' | '))
     $max1 = Assert-LedgerConsistency -Text $text1 -Ledger $ledger1 -Label 'run 1'
     # The bat escalates to 6 ONLY from 0 and 4: 2 is the ledger-derived
     # "findings were raised" verdict and is never discarded (its rem block

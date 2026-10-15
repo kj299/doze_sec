@@ -13,7 +13,7 @@ user a safe, reviewable path to fix it. The protection chain it supports:
    Secure Boot, BitLocker, SmartScreen. doze_sec *audits that these are on
    and untampered* (Sections 8, 9, 13) rather than duplicating them.
 2. **Detection** is doze_sec's core job: 14 pre-flight checks + 18 audit
-   sections + a CTI-driven IOC sweep (Section 18) covering 89 MITRE ATT&CK
+   sections + a CTI-driven IOC sweep (Section 18) covering 90 MITRE ATT&CK
    techniques and 282 indicators across 10 IOC categories. (The manifest maps
    107 techniques; the 19-technique difference is documented-but-not-yet-
    detected, and `attack_matrix.ps1` lists it on every run so the gap between
@@ -58,7 +58,7 @@ break untested nor drift out of sync with its test.
 | Credential Access | Strong | S12 (LSASS PPL, WDigest, NTLM, Credential Guard; a copy of LSASS recorded in the Security log as Event 4688, lsass.exe created by lsass.exe), S4 (a copy of LSASS running now), S16 (4769 Kerberoast, 4776), S18 (browser/cloud cred stores) |
 | Discovery | Yes | S17 (4688 discovery commands: nltest, dsquery, ntdsutil) |
 | Lateral Movement | Yes | S10 (SMBv1, RDP/NLA, WinRM, sshd), S17/S18 (PsExec pipes, portproxy) |
-| Collection | Partial | S14 (staging dirs, ADS), manifest T1560 |
+| Collection | Partial | S14 (staging dirs, ADS; an archive made on this machine -- no Mark of the Web -- in a staging folder that is password-protected, split into volumes, or packs credential files, T1560, with ZIP/RAR/7z/CAB headers parsed from the format owners' specifications) |
 | Command & Control | Strong | S3 (connections, DNS cache, hosts), S18 (C2 pipes/domains, VT IP reputation, tunneling tools) |
 | Exfiltration | Partial | S5 (a BITS job queued to upload a local file off the machine, T1048), S3/S18l (connections + IP reputation); no DLP / content inspection |
 | Impact | Strong (ransomware) | S18 (precursor commands T1490, extension survey T1486, encryptor hashes) |
@@ -283,11 +283,26 @@ Found during the v7.1 coverage review; tracked for future work:
   to a web service* (T1567 -- a transfer to consumer cloud storage) is not
   attempted: it needs a list of cloud destinations, and there is no
   first-party source for one, so any list would be a guess that ages badly.
-  *Archive Collected Data* (T1560 -- a multi-volume or password-protected
-  archive appearing in a staging folder) is observable but is almost
-  entirely a judgement about benign look-alikes, since installers and backup
-  tools write archives to those same folders constantly; it is worth its own
-  piece, with its benign twins pinned, rather than a rule bolted on here.
+  *Archive Collected Data* (T1560) is now graded in Section 14
+  (`tools/archive_staging.ps1`): an archive in a staging folder that carries
+  no Mark of the Web -- so no browser fetched it; it was made or copied here
+  -- and is password-protected, split into volumes, or packs a
+  credential-class file. The headers of ZIP, RAR 4.x/5.0, 7z and CAB are
+  parsed from the format owners' own layouts, nothing is decompressed, every
+  count read from a file is bounded by the bytes that remain (a crafted
+  header cannot hang the audit), and the judgement rests on the mark: a
+  downloaded archive is context, a plain local zip is context, a password or
+  (outside Downloads) a volume set made here raises, both together is
+  CRITICAL -- and a mark does not clear the strongest shape where no browser
+  saves a download, since anyone can write it. What it states rather than
+  guesses: a 7z made with a password but without header encryption has a
+  compressed header and is named as not determinable (never clean); an
+  archive the OneDrive sync client, curl or a torrent client fetched carries
+  no mark and so reads as made here (the corpus names those twins); entry
+  names are read from ZIP, RAR and an uncompressed 7z header, contents never;
+  a renamed archive is found by signature up to a declared probe cap; files
+  deeper than the stated depth, self-extracting .exe archives and archives
+  inside archives are not examined, and the report says so.
   The records BITS leaves BEHIND a job are now read (Section 5,
   `tools/bits_history.ps1`), and the disagreement among the write-ups was
   answered by not depending on any of them: the field names come from the

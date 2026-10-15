@@ -120,6 +120,29 @@ $script:Contracts = @(
        Signature = '^\s*\[WARNING\] A BITS transfer was driven by a program running from a staging folder'
        Section   = '5'
        Technique = 'T1197' },
+    # An archive made on this machine (no Mark of the Web) that is
+    # password-protected, split into volumes, or packs credential files, in a
+    # staging folder: Section 14's own row, under Collection.
+    @{ Name      = 'An archive made on this machine, packed to leave (WARNING)'
+       Signature = '^\s*\[WARNING\] An archive made on this machine '
+       Section   = '14'
+       Technique = 'T1560' },
+    @{ Name      = 'An archive made on this machine, packed to leave (CRITICAL)'
+       Signature = '^\s*\[CRITICAL\] An archive made on this machine '
+       Section   = '14'
+       Technique = 'T1560' },
+    @{ Name      = 'A staging folder an administrator could not list (gap row)'
+       Signature = '^\s*\[WARNING\] Staging folder .* could not be listed by an administrator'
+       Section   = '14'
+       Technique = 'T1560' },
+    @{ Name      = 'A file in a staging folder an administrator could not read (gap row)'
+       Signature = '^\s*\[WARNING\] \d+ file\(s\) in staging folder .* could not be read by an administrator'
+       Section   = '14'
+       Technique = 'T1560' },
+    @{ Name      = 'An archive of the packed-to-leave shape whose download mark does not clear it'
+       Signature = '^\s*\[WARNING\] An archive carries a download mark but sits in '
+       Section   = '14'
+       Technique = 'T1560' },
     # A BITS job queued to upload is the Exfiltration tactic's first row, and it
     # is deliberately NOT the T1197 row that sits beside it: that one names a
     # notify command line or a long lifetime, neither of which was observed here.

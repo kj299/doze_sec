@@ -256,6 +256,9 @@ if (Test-Path -LiteralPath 'C:\dz_selftest_ioc' -PathType Container) { Start-Sle
 Remove-Path 'C:\dz_selftest_ioc'                                'IOC-named process directory (dz_selftest_ioc)'
 Remove-Path 'C:\dz_selftest_ioc_benign'                         'Benign twin process directory (dz_selftest_ioc_benign)'
 Remove-Path (Join-Path $env:TEMP 'dz_selftest_ioc_twin')        'Section 18d benign twin folder (%TEMP%\dz_selftest_ioc_twin)'
+# Section 14's archive-staging plants: inert bytes shaped like a RAR volume
+# set, and a plain zip, in their own folder under Public. Removed by folder.
+Remove-Path 'C:\Users\Public\dz_selftest_arch'                  'Archive-staging plant folder (dz_selftest_arch)'
 # The Section 18d plant sits at a REAL listed staging path, %TEMP%\beacon.bin,
 # so it is removed only when it holds the marker: a beacon.bin that is not ours
 # is a real indicator, and evidence -- it is kept.

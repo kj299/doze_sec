@@ -198,6 +198,76 @@ proof     = ci:bits_history.ps1 -SelfTest + the runner's real channel and a real
 signature = BITS transfer record\(s\) read,
 note      = The ordinary state of the Bits-Client operational log: it is full of Windows Update and browser-updater transfers, every one of them to a NAMED host, driven by a program under Program Files, writing into a temp folder. None of that is graded. What is graded is a transfer to a bare IP address with no name behind it (a private LAN address is context, not a finding -- an on-premises WSUS server, an SCCM distribution point or a Connected Cache node is reached that way), a file written straight into an autostart folder, a transfer driven by a program running from a staging folder, and a recorded UPLOAD, which is a file that has already left. The all-clear names the span of records it read, because these logs roll over and an absence older than the oldest record proves nothing. Field names are taken from this machine's own provider schema and printed in the all-clear, so the report states the schema it read rather than one assumed in the tool; third-party write-ups disagree about what these events mean and none of them is built on here. Verify: Get-WinEvent -LogName 'Microsoft-Windows-Bits-Client/Operational' -MaxEvents 40 | Select-Object TimeCreated,Id,LevelDisplayName
 
+[archive-downloaded-with-motw]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:archive_staging.ps1 -SelfTest + the runner's real staging folders and planted archives
+signature = archive\(s\) carry the Mark of the Web -- downloaded by a browser, not packed here
+note      = A password-protected or multi-volume archive that a browser DOWNLOADED (software distributed as a protected zip, a sample sent for analysis, a split download) carries the Zone.Identifier stream with ZoneId=3, which Microsoft documents Edge, Chrome and the Attachment Execution Service writing for Internet-zone downloads. It came IN; it was not packed here to go out, so whatever it holds it is context, counted and named, never a finding. The stream is read the way exec_probe reads it. A mark whose zone is local (0, 1, 2) is not a download and does not clear the file. Verify: Get-Item -LiteralPath '<path>' -Stream Zone.Identifier; Get-Content -LiteralPath '<path>' -Stream Zone.Identifier shows the zone and, for Chrome and Edge, the HostUrl it came from.
+
+[archive-plain-local-zip]
+class     = QUIET
+maxsev    = INFO
+proof     = harness:A plain zip made by Compress-Archive; ci:archive_staging.ps1 -SelfTest + the runner's real staging folders and planted archives; ci:Run the full audit; fail on hang
+signature = plain archive\(s\) made or copied here \(single volume, no password\)
+note      = The ordinary local archive: Explorer's "Compress to ZIP file", Compress-Archive, pip's and npm's unpack directories under %TEMP%, a VS Code or Chromium installer's transient extraction, a file copied in from a USB stick. No password, one volume, no download mark. That is never a finding -- the rule raises only on what an attacker needs and a local tool never adds (a password, volume splitting) or on a credential-class entry name (a mail store, a password database, a private key, a hive copy, a browser's saved-password store), so a zip of photos in Downloads is context. The runner's own Temp, full of tool archives, is the twin at scale. Verify: open the archive and read what it holds.
+
+[archive-opc-package]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:archive_staging.ps1 -SelfTest + the runner's real staging folders and planted archives
+signature = package\(s\) that are ZIP by signature \(Office documents, MSIX/APPX, VSIX, JAR and the like\) were left out
+note      = A .docx, .xlsx or .pptx is a ZIP by signature (Microsoft documents the Open XML package as a zip holding [Content_Types].xml), and so are MSIX/APPX packages (AppxManifest.xml), VSIX, JAR, WHL, NUPKG and XPI files. None is an archive for this purpose: they are documents and installers, left out by extension and, when renamed, by the package entry they carry. Counted so the reader sees they were seen and not graded.
+
+[archive-7z-password-undeterminable]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:archive_staging.ps1 -SelfTest + the runner's real staging folders and planted archives
+signature = archive\(s\) whose password could not be determined
+note      = 7-Zip compresses the archive header by default, so a 7z made with a password but WITHOUT header encryption (-p without -mhe) looks the same as a plain 7z until that header is decompressed, which this audit does not do; a damaged or truncated archive (an interrupted download) cannot be read through either. Each such archive is NAMED and graded only by its volume shape -- never as clean and never as password-protected -- and is raised only in the shared Public folder, where nothing unpacks. A 7z made with -mhe (header encryption, the shape in the intrusion reports) IS recognised with certainty, because its encoded header names the 7zAES coder in plaintext; so is one made with -mhc=off. Verify: 7z l <file> asks for a password only when one was set.
+
+[archive-volume-set-in-downloads]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:archive_staging.ps1 -SelfTest + the runner's real staging folders and planted archives
+signature = volume\(s\) of split archive sets with no password and no download mark sit in Downloads
+note      = A split RAR or 7z set with no password in Downloads is how torrent clients, Telegram Desktop and file-sharing sites deliver large files (scene releases are name.rar + name.r00 ...), and many of those clients write no Mark of the Web. Splitting alone is therefore named context in Downloads. The same set outside Downloads (a temp folder, Public, ProgramData, the recycle bin) is a WARNING, and a split set that is also password-protected, or that packs credential files, is raised wherever it sits.
+
+[archive-cab-set]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:archive_staging.ps1 -SelfTest + the runner's real staging folders and planted archives
+signature = cabinet\(s\) belonging to a spanned CAB set
+note      = A CAB whose header names a previous or next cabinet is part of a spanned set, which installers and driver packages write into temp folders. The Cabinet format has no encryption, and this audit does not read cabinet entry names, so a CAB set is named context and never a row. makecab and diantz are named in T1560.001, so a reader who did not install anything recently can still open the cabinets with expand -D <file>.
+
+[archive-downloaded-strong-shape]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:archive_staging.ps1 -SelfTest + the runner's real staging folders and planted archives
+signature = A downloaded archive of the packed-to-leave shape
+note      = A password-protected split archive, or one holding credential-class files, that DOES carry a download mark and sits in Downloads: software and data are distributed this way (a protected multi-part download from a vendor portal, a sample set for analysis). It came in, so it is not a row; but anyone can write a download mark, so the line NAMES it with the origin the mark records (Chrome and Edge write HostUrl), or says the mark records none.
+
+[archive-marked-misplaced]
+class     = ADVISE
+maxsev    = WARNING
+proof     = ci:archive_staging.ps1 -SelfTest + the runner's real staging folders and planted archives; field:a person moving their own protected multi-part download into Public or ProgramData is a state only a real machine produces
+signature = An archive carries a download mark but sits in
+note      = The strongest shape (password AND volumes, or a password or volumes AND credential files) with a download mark, in a folder no browser saves into: the Public folder, a system temp folder, ProgramData or the recycle bin. The benign cause is a person who downloaded such an archive and then moved it there (a move keeps the mark), or deleted it (the recycle bin keeps it too). The attacker's cause is one Set-Content -Stream Zone.Identifier on their own archive. The line names the origin the mark records; a mark with no HostUrl was not written by Chrome or Edge. Verify: Get-Content -LiteralPath '<path>' -Stream Zone.Identifier, and ask whether you downloaded it.
+
+[archive-staging-clean-machine]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:archive_staging.ps1 -SelfTest + the runner's real staging folders and planted archives; ci:Run the full audit; fail on hang
+signature = archive\(s\) examined across \d+ staging folder\(s\)|No archives in the \d+ staging folder\(s\) examined
+note      = The all-clear names the staging folders it read (every profile's Downloads and temp folder, the Public folder, the system temp folder and the recycle bins when elevated; the token's own when not) and the newest archive it saw, so a reader can check it by hand; folders a standard-user token cannot open are declared deferred and the same sentence is then printed as [INFO] scoped to what was read, never as an all-clear. Caps on files examined and signature probes, and a time budget, are printed beside it when hit.
+
+[archive-own-encrypted-backup]
+class     = ADVISE
+maxsev    = WARNING
+proof     = ci:archive_staging.ps1 -SelfTest + the runner's real staging folders and planted archives; field:a person's own password-protected backup, and a protected archive the OneDrive sync client fetched (which carries no download mark), are states only a real machine produces
+signature = An archive made on this machine is password-protected, in a staging folder
+note      = A password-protected archive with no download mark in Downloads, a temp folder, the Public folder or the recycle bin. Benign causes: a backup the person made themselves and protected (WinRAR and 7-Zip both offer it); an archive the OneDrive sync client downloaded -- Microsoft documents that a file the sync client fetches carries no Mark of the Web, so it reads as made here; a file fetched by a tool that writes no mark (curl, Invoke-WebRequest, winget, a torrent client, Telegram Desktop); an inner archive 7-Zip extracted from a marked one (7-Zip does not pass the mark on by default); a security tool's sample zip under the conventional "infected" password; a vendor support-log collector that writes a protected zip into a temp folder. Both are WARNING by design, because a password on a locally made archive is also exactly what the intrusion reports describe (Volt Typhoon "staging collected data in password-protected archives"), and the line names the file so the owner can decide. It escalates to CRITICAL only on evidence: split into volumes as well, or packing a credential-class file. Verify: the line's own command shows whether a download mark exists; then open the archive and ask whether you made it and what it holds.
+
 [bits-upload-management-agent]
 class     = ADVISE
 maxsev    = WARNING

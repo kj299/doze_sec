@@ -3877,6 +3877,46 @@ echo --- Executables in AppData --->> "%REPORT%"
 echo  Command: dir "%APPDATA%" /s /a /b ^| findstr /i /c:".exe" /c:".dll">> "%REPORT%"
 dir "%APPDATA%" /s /a /b 2>nul | findstr /i /c:".exe" /c:".dll">> "%REPORT%" 2>&1
 
+:: --- Archives made on this machine, in its staging folders (T1560) ---
+echo.>> "%REPORT%"
+echo --- Archives made on this machine, in its staging folders ^(T1560^) --->> "%REPORT%"
+echo  Before data leaves a machine it is packed. An archive a browser downloaded>> "%REPORT%"
+echo  carries the Mark of the Web; one that rar.exe or 7z.exe wrote here never does.>> "%REPORT%"
+echo  So an archive with no mark that is password-protected, split into volumes,>> "%REPORT%"
+echo  or packs credential files is the shape that precedes exfiltration.>> "%REPORT%"
+echo  Command: powershell -Command "Get-ChildItem -Path $env:TEMP,(Join-Path $env:USERPROFILE Downloads),C:\Users\Public,(Join-Path $env:windir Temp),C:\ProgramData -Recurse -Depth 2 -Include *.rar,*.7z,*.zip,*.z01,*.001,*.cab -Force -ErrorAction SilentlyContinue | Select-Object FullName,Length,LastWriteTime"   [lists candidates by name; the check also reads each file's header and download mark, finds renamed archives by signature, and covers every profile and recycle bin]>> "%REPORT%"
+del "%TEMP%\dz_archstage.txt" 2>nul
+del "%TEMP%\dz_archstage_gap.txt" 2>nul
+del "%TEMP%\dz_archstage_deferred.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\archive_staging.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\archive_staging.ps1">> "%REPORT%" 2>&1
+) else (
+    echo  [WARNING] tools\archive_staging.ps1 not found -- archives in the staging folders NOT checked.>> "%REPORT%"
+    call :dz_finding WARNING 14 T1560 "Archive staging check NOT performed - tool missing"
+)
+if exist "%TEMP%\dz_archstage.txt" (
+    set "_ASSEV="
+    set /p _ASSEV=<"%TEMP%\dz_archstage.txt"
+    call :dz_finding !_ASSEV! 14 T1560 "Archive made on this machine in a staging folder is password-protected, split into volumes, or packs credential files - collected data packed to leave"
+    del "%TEMP%\dz_archstage.txt" 2>nul
+)
+if exist "%TEMP%\dz_archstage_gap.txt" (
+    rem A gap is its own row: a staging folder an administrator could not list.
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_archstage_gap.txt"
+    call :dz_finding !_GAPSEV! 14 T1560 "Archive staging check NOT performed or partial - a staging folder could not be listed"
+    del "%TEMP%\dz_archstage_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_archstage_deferred.txt" (
+    rem A standard-user token cannot open other profiles, the system temp
+    rem folder or another user's recycle bin: a deferral, counted, never a
+    rem ledger row.
+    set "_ASDEF=0"
+    set /p _ASDEF=<"%TEMP%\dz_archstage_deferred.txt"
+    set /a DEFERRED_COUNT+=!_ASDEF!
+    del "%TEMP%\dz_archstage_deferred.txt" 2>nul
+)
+
 echo.>> "%REPORT%"
 echo --- NTFS Alternate Data Streams in Temp --->> "%REPORT%"
 echo  Command: powershell -Command "Get-ChildItem -Path $env:TEMP -Recurse -EA SilentlyContinue">> "%REPORT%"
