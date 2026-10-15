@@ -918,6 +918,51 @@ jobs:
           if ($all.Count) { $all | ForEach-Object { Write-Host "[FAIL] $_" }; exit 1 }
           Write-Host "[OK] every goto :final_exit after INIT 8 removes the RunOnce resume entry (both bats); the mutation fails as it should"
 
+  bits-history-grade:
+    name: "BITS history: the schema comes from the machine, not from a write-up"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Section 5's live check reads the jobs BITS has QUEUED; a transfer that
+      # finished is gone from it. This check reads what Windows recorded, and
+      # every third-party account of those events disagrees with the others --
+      # so the rule resolves field names from the machine's own provider schema
+      # and decides what each value IS from its shape. The whole of that is
+      # pure, so it runs here.
+      - name: Grade recorded transfers (bare address, autostart write, staging program, recorded upload)
+        run: pwsh -NoProfile -File tools/bits_history.ps1 -SelfTest
+      # By NAME, so a case cannot be deleted and still satisfy a count.
+      - name: The judgements stay pinned by name
+        run: |
+          out=$(pwsh -NoProfile -File tools/bits_history.ps1 -SelfTest)
+          echo "$out"
+          echo "$out" | grep -q 'a localized field name still yields the remote, because the shape decides' \
+            || { echo 'the roles could go back to being keyed on field names a write-up supplied'; exit 1; }
+          echo "$out" | grep -q 'a record with nothing identifiable resolves nothing, rather than guessing' \
+            || { echo 'an unidentifiable record could be graded as something'; exit 1; }
+          echo "$out" | grep -q 'records whose fields cannot be named are a declared gap, not an all-clear' \
+            || { echo 'a channel whose schema is unreadable could read as clean'; exit 1; }
+          echo "$out" | grep -q 'a disabled channel is SKIPPED, raising nothing' \
+            || { echo 'a channel that records nothing could read as an all-clear'; exit 1; }
+          echo "$out" | grep -q 'a standard-user token gets a declared DEFERRAL, never a row' \
+            || { echo 'a token-caused gap could become a ledger row again'; exit 1; }
+          echo "$out" | grep -q 'a part-way read still reports the records it had' \
+            || { echo 'a failed read could throw away what it already found'; exit 1; }
+          echo "$out" | grep -q 'a recorded upload raises its own T1048 row' \
+            || { echo 'a file that already left could be booked against Persistence'; exit 1; }
+          echo "$out" | grep -q 'a directory merely named public is not the shared Public folder' \
+            || { echo 'the Public-folder regex could go back to matching any directory named public'; exit 1; }
+          echo "$out" | grep -q "the real Edge updater's own transfer" \
+            || { echo 'the benign twin at the heart of this rule is untested'; exit 1; }
+          echo "$out" | grep -q 'the all-clear names its coverage span' \
+            || { echo 'the all-clear could stop saying what it covered -- these logs roll over'; exit 1; }
+          echo "$out" | grep -q 'a crafted URL cannot forge a line of its own' \
+            || { echo 'a URL could inject its own severity tag into the report'; exit 1; }
+          echo "$out" | grep -q 'and names the newest transfer, so an all-clear can be checked by hand' \
+            || { echo 'the all-clear could stop naming what it read, leaving only a count to trust'; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]')
+          [ "$n" -ge 40 ] || { echo "self-test ran only $n case(s) -- it is not exercising the rule"; exit 1; }
+
   coverage-matrix-lint:
     runs-on: ubuntu-latest
     steps:

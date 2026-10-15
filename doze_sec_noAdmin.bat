@@ -2185,6 +2185,53 @@ if exist "%TEMP%\dz_timeprov_gap.txt" (
     del "%TEMP%\dz_timeprov_gap.txt" 2>nul
 )
 
+:: --- What BITS recorded about transfers that are already over (T1197/T1048) ---
+echo.>> "%REPORT%"
+echo --- What BITS recorded about finished transfers ^(T1197, T1048^) --->> "%REPORT%"
+echo  The check above reads the jobs BITS has QUEUED. A job that completed or>> "%REPORT%"
+echo  was cancelled is gone from that list, so a transfer that already happened>> "%REPORT%"
+echo  leaves only what Windows wrote in its own log. Field names come from this>> "%REPORT%"
+echo  machine's provider schema, not from an assumption in this tool.>> "%REPORT%"
+echo  Command: powershell -Command "Get-WinEvent -LogName 'Microsoft-Windows-Bits-Client/Operational' -MaxEvents 40 | Select-Object TimeCreated,Id,LevelDisplayName">> "%REPORT%"
+del "%TEMP%\dz_bitshist.txt" 2>nul
+del "%TEMP%\dz_bitshist_up.txt" 2>nul
+del "%TEMP%\dz_bitshist_gap.txt" 2>nul
+del "%TEMP%\dz_bitshist_deferred.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\bits_history.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\bits_history.ps1">> "%REPORT%" 2>&1
+) else (
+    echo  [WARNING] tools\bits_history.ps1 not found -- what BITS recorded about finished transfers NOT checked.>> "%REPORT%"
+    call :dz_finding WARNING 5 T1197 "BITS transfer history NOT checked - tool missing"
+)
+if exist "%TEMP%\dz_bitshist.txt" (
+    set "_BHSEV="
+    set /p _BHSEV=<"%TEMP%\dz_bitshist.txt"
+    call :dz_finding !_BHSEV! 5 T1197 "BITS recorded a transfer to a bare address, into an autostart folder, or driven by a program in a staging folder"
+    del "%TEMP%\dz_bitshist.txt" 2>nul
+)
+if exist "%TEMP%\dz_bitshist_up.txt" (
+    rem Its own row: a transfer that already left is not what the T1197 row names.
+    set "_BHUSEV="
+    set /p _BHUSEV=<"%TEMP%\dz_bitshist_up.txt"
+    call :dz_finding !_BHUSEV! 5 T1048 "BITS recorded an upload that has already happened - a file left this machine"
+    del "%TEMP%\dz_bitshist_up.txt" 2>nul
+)
+if exist "%TEMP%\dz_bitshist_gap.txt" (
+    rem A gap is its own row: the tool could not perform (part of) this check.
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_bitshist_gap.txt"
+    call :dz_finding !_GAPSEV! 5 T1197 "BITS transfer history NOT checked or partial - its log or field names unreadable"
+    del "%TEMP%\dz_bitshist_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_bitshist_deferred.txt" (
+    rem A standard-user token may not read this channel: a deferral, counted,
+    rem never a ledger row.
+    set "_BHDEF=0"
+    set /p _BHDEF=<"%TEMP%\dz_bitshist_deferred.txt"
+    set /a DEFERRED_COUNT+=!_BHDEF!
+    del "%TEMP%\dz_bitshist_deferred.txt" 2>nul
+)
+
 echo.>> "%REPORT%"
 echo --- Logon / Unlock Persistence Vectors --->> "%REPORT%"
 echo  Command: powershell -File tools\logon_persistence.ps1>> "%REPORT%"

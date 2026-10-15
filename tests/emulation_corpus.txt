@@ -53,6 +53,7 @@ CI|T1546.007|netsh helper DLL (persistence_extra isolated plant)
 CI|T1547.010|print port monitor (persistence_extra isolated plant)
 CI|T1547.012|print processor (persistence_extra isolated plant)
 CI|T1048|a real BITS job queued to UPLOAD a local file, created SUSPENDED so nothing leaves the runner and no receiving server is needed (persistence_extra isolated plant, both the hostname collector and the bare-public-IP twin)
+CI|T1197|a real BITS job RESUMED against a local port where nothing listens, so the transfer fails and no data leaves the runner while BITS writes genuine records about it; bits_history then parses those real records rather than synthetic ones (isolated plant)
 
 # ---- UNTESTABLE by design ----
 UNTESTABLE|T1486|encrypting files on the runner is destructive

@@ -6,6 +6,77 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### What BITS recorded after the job was gone, read on the machine's own event schema (T1197, T1048)
+The BITS check added last reads the jobs BITS has QUEUED. A job that completed
+or was cancelled is gone from that list, so an exfiltration that finished was
+invisible: the audit could see an attempt in progress and nothing at all about
+one that succeeded. Windows keeps records in
+`Microsoft-Windows-Bits-Client/Operational`, and nothing in this audit read
+that channel.
+
+**The problem was not reading the log; it was knowing what the log says.**
+Every third-party account of these events disagrees with the others -- Event 59
+is described as the job being created, started and resumed; the requesting
+program is said to be in Event 3 rather than 59; whether the URL is carried at
+all is contested -- and Microsoft publishes no schema for them. Elastic's own
+BITS rule does not read the channel; it watches `svchost.exe` renaming
+`BIT*.tmp`. The backlog entry opened with the previous change said plainly: do
+not build on the write-ups.
+
+So this check hard-codes no claim about any event's meaning. It reads each
+record's data items **by name out of the record itself**, falls back to the
+**provider's own manifest template** for that event id on the machine being
+audited (`ProviderMetadata.Events`, which .NET documents and so 5.1 exposes),
+and decides what each value IS from its **shape**: `http://` is a remote, a
+drive-rooted or UNC value is a local path, upload/download is a direction. The
+field name the machine gave each value is printed in the all-clear, so the
+report states the schema it found rather than one assumed here -- and a
+localized or renamed field still reads correctly, which a name-keyed rule
+would not. A self-test case pins exactly that, with German field names.
+
+What it grades, and only where the record supports a judgement: a transfer to a
+bare IP address with no name behind it (a private LAN address stays context --
+an on-premises WSUS server, an SCCM distribution point or a Connected Cache
+node is reached that way); a file written straight into an autostart folder
+(CRITICAL: nothing legitimate streams a file into Startup); a transfer driven
+by a program running from a staging folder (`\Temp\` counts here, though
+deliberately not for a download's destination -- writing into the temp folder
+is what a downloader does, but a program RUNNING from there and driving a
+Windows service is a different claim); and a recorded UPLOAD, which gets its
+own `5 T1048` row because it is a file that has **already left**, the one thing
+the live check cannot see.
+
+The bare-address judgement now exists in two files, so it was extracted into
+`Get-RemoteHostClass` and pinned byte-identical by `lint_shared_copies`: the
+live check and the history check cannot drift into disagreeing about the same
+URL. The 84 cases of the live check's own self-test were the regression net for
+that refactor.
+
+**Nothing recorded is not an all-clear.** A disabled or absent channel is
+`[SKIPPED]`, raising nothing, because nothing is being written there. Records
+that were read but whose fields could not be named are a declared gap -- the
+difference between "nothing was found" and "nothing was looked at". An
+administrator who cannot read the channel gets a raised gap beside whatever was
+read; a standard-user token that cannot gets a counted deferral, never a ledger
+row (its ACL for that token was unestablished, and the standard-user CI job now
+measures it). The all-clear names the span of records it covers **and the
+newest transfer in it**, so a reader can check by hand that their own machine's
+records were read rather than trusting a count -- which is also what lets CI
+prove a real record was parsed.
+
+Tested with a real record and nothing leaving the runner: 48 self-test cases,
+ten mutations each failing their own cases, and a CI step that creates an
+upload job and RESUMES it against a local port where nothing listens. The
+transfer fails at once, so no data is transferred and no receiving server is
+needed, but BITS writes genuine records -- which the check then parses, with
+the step asserting either that it resolved the planted URL or that it declared
+the fields unnameable, never silently graded them as nothing. The same step
+reads the runner's real channel, full of genuine Windows Update and
+browser-updater transfers, as the benign twin at scale, and prints the
+provider's event table: the measurement the previous change could only print
+is now an assertion. A loopback collector must not be graded as a bare public
+address, which the step also checks.
+
 ### A file queued to LEAVE this machine over BITS (T1048) -- the Exfiltration tactic's first coverage
 Every run ended its ATT&CK matrix with `COVERAGE GAPS -- ATT&CK tactics with NO
 technique coverage: Exfiltration.` The manifest documented two exfiltration

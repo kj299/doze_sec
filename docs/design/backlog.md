@@ -397,13 +397,19 @@ Section 5 now grades a BITS job whose direction is Upload as T1048, which is
 the Exfiltration tactic's first coverage; the ATT&CK matrix no longer lists
 that tactic as empty. Three neighbours are open, in this order of value:
 
-1. **The records BITS leaves behind a job.** A completed or cancelled job is
-   gone from `Get-BitsTransfer`, but `Microsoft-Windows-Bits-Client/Operational`
-   keeps something. What exactly is unresolved: third-party write-ups disagree
-   on whether Event 59 marks a job created, started or resumed, and on whether
-   those events carry the URL at all. The CI step that plants an upload job now
-   PRINTS the records and the properties a real BitsJob exposes on 5.1, so the
-   next change reads them on that measurement. Do not build on the write-ups.
+1. ~~**The records BITS leaves behind a job.**~~ **DONE 2026-10-15**
+   (`tools/bits_history.ps1`, Section 5). The disagreement among the write-ups
+   was answered by not depending on any of them: field names come from the
+   record's own data items and, failing that, from the provider's manifest
+   template on the audited machine; what each value is comes from its shape.
+   Graded: a bare-IP remote, an autostart write, a staging-folder program, and
+   a recorded upload (its own T1048 row). A real record is parsed in CI by
+   resuming an upload job against a dead local port, so nothing leaves the
+   runner. STILL OPEN here: the job-store database
+   (`%ALLUSERSPROFILE%\Microsoft\Network\Downloader\qmgr.db`), which holds
+   jobs the log no longer mentions; its format is undocumented, so it stays out
+   until there is a first-party description rather than a reverse-engineered
+   one.
 2. **Archive Collected Data (T1560).** A multi-volume (`.part1.rar`, `.z01`) or
    password-protected archive appearing in a staging folder within a short
    window is the shape that precedes almost every exfiltration. The detection

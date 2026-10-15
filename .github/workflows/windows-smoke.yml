@@ -953,6 +953,124 @@ jobs:
           Write-Host 'BITS upload OK (a download plant writes no upload finding; a named collector is WARNING with the agent cause named; a bare public IP is CRITICAL)'
           exit 0
 
+      - name: bits_history.ps1 -SelfTest + the runner's real channel and a real planted record
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = (.\tools\bits_history.ps1 -SelfTest) -join "`n"
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw 'bits_history self-test failed' }
+          $n = @($out -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($n -lt 40) { throw "bits_history self-test ran only $n case(s)" }
+
+          # THE RUNNER'S REAL CHANNEL, which is the benign twin at scale: a
+          # windows-latest image has done Windows Update and browser-updater
+          # transfers, all of them to NAMED hosts from programs under Program
+          # Files. None of that may raise, and the check must say what it
+          # covered rather than going quiet.
+          $md = Join-Path $env:TEMP ("dz_bh_live_{0}" -f $PID)
+          $live = (.\tools\bits_history.ps1 -MarkerDir $md) -join "`n"
+          Write-Host $live
+          if ($live -match 'Exception|ParserError|is not recognized') { throw "bits_history errored on the live channel: $live" }
+          foreach ($m in @('dz_bitshist.txt', 'dz_bitshist_up.txt', 'dz_bitshist_gap.txt')) {
+            if (Test-Path (Join-Path $md $m)) { throw ("{0} written on a clean runner: {1}" -f $m, (Get-Content (Join-Path $md $m))) }
+          }
+          # It must have reached a verdict: the all-clear naming its span, the
+          # empty-log line, or one of the declared gaps. Silence is the one
+          # outcome that would mean nothing was checked and nothing said.
+          if ($live -notmatch 'BITS transfer record\(s\) read,|holds no transfer records|was NOT checked|NOT graded') {
+            throw "bits_history printed no verdict on the live channel: $live"
+          }
+          # MEASURED, and now asserted where it can be: the provider's own
+          # event table. #250's step printed this and asserted nothing; the
+          # schema is what this check reads field names from, so its absence
+          # is a real condition the tool has to survive.
+          Write-Host '--- measured: the Bits-Client provider schema on this engine ---'
+          try {
+            $pm = Get-WinEvent -ListProvider 'Microsoft-Windows-Bits-Client' -EA Stop
+            $withTmpl = @($pm.Events | Where-Object { $_.Template })
+            Write-Host ("events defined: {0}; with a data template: {1}" -f @($pm.Events).Count, $withTmpl.Count)
+            foreach ($em in @($withTmpl | Select-Object -First 8)) {
+              $names = @()
+              try { foreach ($d in @(([xml]$em.Template).template.data)) { if ($d.name) { $names += [string]$d.name } } } catch { }
+              Write-Host ("  Id={0}: {1}" -f $em.Id, ($names -join ', '))
+            }
+          } catch {
+            Write-Host ("  the provider schema could not be read here: " + $_.Exception.Message)
+          }
+
+          # A REAL RECORD, with nothing leaving the runner. An upload job
+          # RESUMED against a port where nothing listens fails immediately, so
+          # no data is transferred and no receiving server is needed -- but
+          # BITS writes genuine records about it, which is the only way to
+          # prove this check parses what Windows really writes rather than what
+          # a self-test hands it.
+          # Touches: bits-job:dz_selftest_bits_hist, file:%TEMP%\dz_ci_hist_payload.bin
+          $job = 'dz_selftest_bits_hist'
+          $payload = Join-Path $env:TEMP 'dz_ci_hist_payload.bin'
+          & bitsadmin /cancel $job 2>&1 | Out-Null
+          try {
+            Set-Content -LiteralPath $payload -Value 'dz_selftest history payload' -Encoding ASCII
+            & bitsadmin /create /upload $job 2>&1 | Out-Null
+            & bitsadmin /addfile $job 'http://127.0.0.1:1/dz_ci_hist.bin' $payload 2>&1 | Out-Null
+            & bitsadmin /setminretrydelay $job 60 2>&1 | Out-Null
+            & bitsadmin /resume $job 2>&1 | Out-Null
+            $deadline = (Get-Date).AddSeconds(60)
+            $seen = @()
+            while ((Get-Date) -lt $deadline) {
+              Start-Sleep -Seconds 3
+              try {
+                $seen = @(Get-WinEvent -LogName 'Microsoft-Windows-Bits-Client/Operational' -MaxEvents 80 -EA Stop |
+                          Where-Object { $_.Message -and ($_.Message -match 'dz_selftest_bits_hist|dz_ci_hist\.bin') })
+              } catch { $seen = @() }
+              if ($seen.Count -gt 0) { break }
+            }
+            if ($seen.Count -eq 0) {
+              # Declared, never silent. The tool's own paths are still proven
+              # by the self-test and by the live read above; what this cannot
+              # then prove is that it parses a REAL record, and that is said.
+              Write-Host '[ SKIP ] this runner wrote no Bits-Client record naming the planted job within 60s, so the real-record parse is unproven here'
+            } else {
+              Write-Host ("records naming the plant: {0}" -f $seen.Count)
+              foreach ($e in @($seen | Select-Object -First 5)) {
+                Write-Host ("  Id={0} {1:yyyy-MM-dd HH:mm:ss} {2}" -f $e.Id, $e.TimeCreated, (($e.Message -split "`r?`n")[0]))
+              }
+              # The tool must resolve the planted URL out of those real
+              # records, and say which field name the machine gave it. If it
+              # cannot, its declared could-not-name path is what ships, and the
+              # step asserts THAT instead -- either way the report is honest.
+              $md2 = Join-Path $env:TEMP ("dz_bh_plant_{0}" -f $PID)
+              $after = (.\tools\bits_history.ps1 -MarkerDir $md2) -join "`n"
+              Write-Host $after
+              $sawUrl = ($after -match 'dz_ci_hist\.bin')
+              $saidSo = ($after -match 'carried no value this check could identify|none of their fields could be named')
+              if (-not $sawUrl -and -not $saidSo) {
+                throw 'the planted transfer was neither resolved nor declared unnameable -- a record was read and silently graded as nothing'
+              }
+              if ($sawUrl) {
+                Write-Host 'PROVEN: a real Bits-Client record was parsed and its URL resolved'
+                # 127.0.0.1 is private, so the planted transfer must NOT raise
+                # the bare-public-address finding: the judgement, not just the
+                # mechanism.
+                if ($after -match '\[WARNING\] BITS transferred to or from a bare IP address with no name behind it: http://127\.0\.0\.1') {
+                  throw 'a loopback collector was raised as a bare PUBLIC address -- the private-range carve-out is broken'
+                }
+              } else {
+                Write-Host 'DECLARED: this provider names no field this check can identify, and the report says so'
+              }
+              Remove-Item $md2 -Recurse -Force -EA SilentlyContinue
+            }
+          } finally {
+            & bitsadmin /cancel $job 2>&1 | Out-Null
+            Remove-Item $payload -Force -EA SilentlyContinue
+            $left = @()
+            try { $left = @(Get-BitsTransfer -AllUsers -EA SilentlyContinue | Where-Object { $_.DisplayName -eq $job }) } catch { }
+            if ($left.Count) { throw 'the planted history job survived cleanup' }
+          }
+          Remove-Item $md -Recurse -Force -EA SilentlyContinue
+          Write-Host 'bits_history OK (self-test, the runner real channel raises nothing, and the provider schema measured)'
+          exit 0
+
       - name: persistence_extra.ps1 -SelfTest (BITS destination grading, pure)
         shell: powershell
         run: |
@@ -4161,6 +4279,14 @@ jobs:
           if ($text -match 'is queued to UPLOAD a file off this machine') { throw ('a BITS upload job was reported on a clean runner: {0}' -f (($text -split "`r?`n" | Where-Object { $_ -match 'queued to UPLOAD|^\s+(file|to|why):' }) -join ' | ')) }
           if ($text -notmatch 'a file queued to leave this machine|\[OK\] No BITS transfer jobs queued|NOT checked for it|BITS job check NOT performed') { throw 'Section 5 printed no verdict on the direction of its BITS jobs' }
           Write-Host ('Section 5 (BITS): ' + (($text -split "`r?`n" | Where-Object { $_ -match 'BITS job\(s\) queued|No BITS transfer jobs|readable transfer direction' }) -join ' | '))
+          # And what BITS RECORDED (Section 5, the history check). A clean
+          # runner's channel is full of Windows Update and updater transfers to
+          # NAMED hosts, so nothing may raise -- and the check must have
+          # reached a verdict rather than gone quiet, which is the failure mode
+          # an all-clear by omission would look like.
+          if ($text -match 'BITS recorded an UPLOAD that has already happened|BITS wrote a file straight into an autostart folder|BITS transferred to or from a bare IP address|A BITS transfer was driven by a program running from a staging folder') { throw ('the BITS history check raised on a clean runner: {0}' -f (($text -split "`r?`n" | Where-Object { $_ -match 'BITS recorded an UPLOAD|autostart folder|bare IP address|staging folder' }) -join ' | ')) }
+          if ($text -notmatch 'BITS transfer record\(s\) read,|holds no transfer records|What BITS recorded about finished transfers was NOT checked|carried no value this check could identify') { throw 'the BITS history check printed no verdict in the real audit' }
+          Write-Host ('Section 5 (BITS history): ' + (($text -split "`r?`n" | Where-Object { $_ -match 'BITS transfer record\(s\) read|holds no transfer records|recorded about finished transfers' }) -join ' | '))
           # THE APOSTROPHE RUN. TEMP held an apostrophe and APPDATA an apostrophe and
           # a space: the dashboard (its script and SUMCODE/SUMCOUNT in TEMP) must
           # have printed, the stage-1 remediation script must exist and parse, and
