@@ -115,6 +115,28 @@ name counted as understood and was folded into the all-clear; and all four
 new finding lines had no analyst note, so each would have reached a real
 report as "No specific analyst note mapped".
 
+**The measurement this piece existed to make, from a real Windows build:** the
+provider defines 126 events, 94 of them with data templates; the requesting
+program is in the job-created event (`jobTitle, jobId, jobOwner, processPath,
+processId`), a completion event carries `fileCount, bytesTransferred,
+bytesTransferredFromPeer`, the start event names the job and its URL -- parsed
+from a REAL record in CI, which printed `PROVEN: a real Bits-Client record was
+parsed and its URL resolved` -- and **no event carries a transfer direction**.
+So the community claim that the process lives in the job-created event is
+right, and the claim that these events can tell an upload from a download is
+wrong on this build. The upload row this check can raise is therefore
+unreachable from history there, and the report says so in as many words every
+run instead of leaving the absence to be read as an all-clear.
+
+That run also showed two display lines taking their content from the newest
+record rather than from the records as a whole, and what that costs: the schema
+line read `program='processPath'` on a channel where a URL had just been
+resolved, and the newest-transfer line -- the one that lets a reader check an
+all-clear by hand -- was missing from the report entirely, because the most
+recent record happened to be a job-created event. Both look across the graded
+records now, and a log that records only that jobs ran says exactly that rather
+than leaving a bare count behind the all-clear.
+
 A second CI round then failed the full-run job for a reason that was not this
 change's, and the diagnostic added for its first occurrence (PR #235) finally
 explained it. The job picked the report to assert on with
@@ -150,8 +172,8 @@ the exclusion has to show what it dropped rather than ask to be trusted. A
 real bare-address transfer sitting beside a plant still raises, and CI now
 asserts that the exclusion is what keeps that runner clean.
 
-Tested with a real record and nothing leaving the runner: 70 self-test cases,
-sixteen mutations each failing their own cases, and a CI step that creates an
+Tested with a real record and nothing leaving the runner: 73 self-test cases,
+eighteen mutations each failing their own cases, and a CI step that creates an
 upload job and RESUMES it against a local port where nothing listens. The
 transfer fails at once, so no data is transferred and no receiving server is
 needed, but BITS writes genuine records -- which the check then parses, with

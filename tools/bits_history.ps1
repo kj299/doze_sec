@@ -492,14 +492,29 @@ function Get-BitsHistoryReport {
             if ($ChannelState -ne 'enabled') { $enab = 'could not be confirmed as enabled and returned no records' }
             [void]$out.Add('[OK] The Bits-Client log ' + $enab + ', so no finished transfer is recorded on this machine. An empty log covers nothing older than itself.')
         } else {
+            # THE SCHEMA ACROSS THE RECORDS, not whichever one came first.
+            #
+            # This took the newest record only, and a real machine showed what
+            # that costs: the line read "names those fields program='processPath'"
+            # on a channel where a URL had just been resolved, because the
+            # newest record happened to be a job-created event carrying only
+            # the program. The point of the line is to state the schema this
+            # machine has, so it is the union of what was seen -- one example
+            # field name per role.
             $named = ''
             if (@($roles).Count -gt 0) {
-                $f = @($roles)[0]
+                $uF = ''; $lF = ''; $dF = ''; $pF = ''
+                foreach ($f in @($roles)) {
+                    if (-not $uF -and $f.UrlField)       { $uF = $f.UrlField }
+                    if (-not $lF -and $f.LocalField)     { $lF = $f.LocalField }
+                    if (-not $dF -and $f.DirectionField) { $dF = $f.DirectionField }
+                    if (-not $pF -and $f.ProcessField)   { $pF = $f.ProcessField }
+                }
                 $bits = @()
-                if ($f.UrlField)       { $bits += ("remote='" + (ConvertTo-PrintableText $f.UrlField) + "'") }
-                if ($f.LocalField)     { $bits += ("file='" + (ConvertTo-PrintableText $f.LocalField) + "'") }
-                if ($f.DirectionField) { $bits += ("direction='" + (ConvertTo-PrintableText $f.DirectionField) + "'") }
-                if ($f.ProcessField)   { $bits += ("program='" + (ConvertTo-PrintableText $f.ProcessField) + "'") }
+                if ($uF) { $bits += ("remote='" + (ConvertTo-PrintableText $uF) + "'") }
+                if ($lF) { $bits += ("file='" + (ConvertTo-PrintableText $lF) + "'") }
+                if ($dF) { $bits += ("direction='" + (ConvertTo-PrintableText $dF) + "'") }
+                if ($pF) { $bits += ("program='" + (ConvertTo-PrintableText $pF) + "'") }
                 if (@($bits).Count -gt 0) { $named = ' This machine names those fields ' + ([string]::Join(', ', $bits)) + '.' }
             }
             $upText = ''
@@ -512,15 +527,26 @@ function Get-BitsHistoryReport {
             # and it is what lets CI prove a REAL record was parsed rather than
             # only a synthetic one. [INFO], because it is context beside a
             # verdict and not a second finding.
-            if (@($roles).Count -gt 0) {
-                $nw = @($roles)[0]
+            # The newest record that actually DESCRIBES a transfer, which is
+            # not always the newest record. Taking the first one blindly meant
+            # this line vanished from a real machine's report whenever the most
+            # recent event was a job-created or completion record -- and this
+            # is the line that lets a reader check an all-clear by hand, so its
+            # absence is worst exactly when the report is reassuring.
+            $nw = $null
+            foreach ($f in @($roles)) {
+                if ($f.Url -or $f.LocalPath) { $nw = $f; break }
+            }
+            if ($null -ne $nw) {
                 $what = @()
                 if ($nw.Url)       { $what += (ConvertTo-PrintableText $nw.Url) }
                 if ($nw.LocalPath) { $what += ('to ' + (ConvertTo-PrintableText $nw.LocalPath)) }
                 if ($nw.Direction) { $what += ('(' + (ConvertTo-PrintableText $nw.Direction) + ')') }
-                if (@($what).Count -gt 0) {
-                    [void]$out.Add('[INFO] The newest transfer recorded is ' + ([string]::Join(' ', $what)) + ', at ' + (Format-When $nw.Time) + '.')
-                }
+                [void]$out.Add('[INFO] The newest transfer recorded is ' + ([string]::Join(' ', $what)) + ', at ' + (Format-When $nw.Time) + '.')
+            } elseif (@($roles).Count -gt 0) {
+                # Nothing in this log names a remote or a file: say so, rather
+                # than leaving the all-clear with only a count behind it.
+                [void]$out.Add('[INFO] None of the graded records names a remote address or a file, so there is no transfer to show here: on this machine the log records that jobs ran, not what they moved.')
             }
         }
     }
@@ -744,6 +770,22 @@ if ($SelfTest) {
     $r = Get-BitsHistoryReport -Records @((NewHistRec @{ bytesTotal = '7' })) -Total 1 -Oldest $t0 -Newest $t0
     T 'with nothing resolved there is no newest-transfer line to print' `
       ((& $j $r) -notmatch 'The newest transfer recorded is') (& $j $r)
+    # MEASURED ON A REAL MACHINE, 2026-10-15: the newest record in a live
+    # channel is often a job-created or completion event carrying only the
+    # program or a byte count. Taking the first record blindly dropped the
+    # newest-transfer line from the report entirely, and showed only that one
+    # record's field names as "the schema" -- on a channel where a URL HAD been
+    # resolved. Both lines now look across the graded records.
+    $recs3 = @((NewHistRec @{ jobTitle = 'Edge Update'; processPath = 'C:\Program Files\X\u.exe' }),
+               (NewHistRec @{ url = 'https://dl.example.com/x.cab'; fileName = 'C:\Windows\Temp\x.cab' }))
+    $r = Get-BitsHistoryReport -Records $recs3 -Total 2 -Oldest $t0 -Newest $t0
+    T 'the newest-transfer line takes the newest record that DESCRIBES a transfer' `
+      ((& $j $r) -match 'The newest transfer recorded is https://dl\.example\.com/x\.cab to C:\\Windows\\Temp\\x\.cab') (& $j $r)
+    T 'and the schema line is the union across records, not the first one''s fields' `
+      ((& $j $r) -match "remote='url'" -and (& $j $r) -match "file='fileName'" -and (& $j $r) -match "program='processPath'") (& $j $r)
+    $r = Get-BitsHistoryReport -Records @((NewHistRec @{ processPath = 'C:\Program Files\X\u.exe' })) -Total 1 -Oldest $t0 -Newest $t0
+    T 'a log that records only that jobs ran says exactly that, instead of leaving a bare count' `
+      ((& $j $r) -match 'records that jobs ran, not what they moved') (& $j $r)
 
     # ---- a value a job's creator chose cannot forge a line. The lesson from
     # the review of the live check, applied here from the start.

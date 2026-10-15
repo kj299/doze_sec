@@ -418,7 +418,19 @@ Section 5 now grades a BITS job whose direction is Upload as T1048, which is
 the Exfiltration tactic's first coverage; the ATT&CK matrix no longer lists
 that tactic as empty. Three neighbours are open, in this order of value:
 
-1. ~~**The records BITS leaves behind a job.**~~ **DONE 2026-10-15**
+1. ~~**The records BITS leaves behind a job.**~~ **DONE 2026-10-15**, and the
+   schema question is ANSWERED BY MEASUREMENT rather than by the write-ups: on
+   a real Windows build the provider defines 126 events, 94 with data
+   templates; the job-created event carries `jobTitle, jobId, jobOwner,
+   processPath, processId`, a completion event carries `fileCount,
+   bytesTransferred, bytesTransferredFromPeer`, the start event names the job
+   and its URL (parsed from a REAL record in CI), and **nothing carries a
+   transfer direction**. So the community claim that the requesting process
+   lives in the job-created event is right, and the claim that these events can
+   tell an upload from a download is wrong on that build -- a completed upload
+   cannot be identified from this channel there, and if that ever matters the
+   next sources are the job-store database below or the process-creation record
+   for whatever created the job.
    (`tools/bits_history.ps1`, Section 5). The disagreement among the write-ups
    was answered by not depending on any of them: field names come from the
    record's own data items and, failing that, from the provider's manifest

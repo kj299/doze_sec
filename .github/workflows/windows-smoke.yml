@@ -961,7 +961,7 @@ jobs:
           Write-Host $out
           if ($LASTEXITCODE -ne 0) { throw 'bits_history self-test failed' }
           $n = @($out -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($n -lt 68) { throw "bits_history self-test ran only $n case(s)" }
+          if ($n -lt 72) { throw "bits_history self-test ran only $n case(s)" }
 
           # THE RUNNER'S REAL CHANNEL, which is the benign twin at scale: a
           # windows-latest image has done Windows Update and browser-updater
@@ -1074,6 +1074,13 @@ jobs:
                 }
               } else {
                 Write-Host 'MEASURED: this channel records NO transfer direction, so the tool states that limitation instead of guessing'
+                # Measured 2026-10-15 on windows-latest: 126 events defined, 94
+                # with data templates, and no direction field in any of them --
+                # so this branch is the expected one until a build proves
+                # otherwise, and the report must carry the limitation.
+                if ($after -notmatch 'cannot say whether a file was sent OUT or fetched in') {
+                  throw 'the direction is unrecorded and the report did not say what it therefore cannot answer'
+                }
                 if ($after -notmatch 'carried a readable transfer DIRECTION') {
                   throw 'no direction was recorded and the report did not say so -- the limitation must be stated, not implied'
                 }

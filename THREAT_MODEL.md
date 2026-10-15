@@ -456,6 +456,15 @@ Found during the v7.1 coverage review; tracked for future work:
   these logs roll over and an absence older than the oldest record proves
   nothing; a channel that is disabled or absent is `[SKIPPED]`, since nothing
   is being written there and an empty log then means nothing.
+  **Measured on a real Windows build (2026-10-15), not assumed:** that
+  provider defines 126 events, 94 of them with data templates; the requesting
+  program really is in the job-created event (`jobTitle, jobId, jobOwner,
+  processPath, processId`), a completion event carries `fileCount,
+  bytesTransferred, bytesTransferredFromPeer`, the start event names the job
+  and its URL, and **no event carries a transfer direction at all**. So the
+  upload row below can be raised by the queued-job check but not by this
+  history on that build, and the report says so in as many words every run
+  rather than leaving an absence to be read as an all-clear.
   A BITS job also runs the other way: one whose `TransferType` is `Upload`
   is a file queued to LEAVE the machine over HTTP, by a Windows service,
   under its owner's account -- so Section 5 grades that direction on its own
