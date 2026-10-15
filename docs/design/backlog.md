@@ -391,6 +391,27 @@ is also what a parent that has since exited looks like) and a benign twin for
 that case pinned in the self-test. Build it when a field run or the harness
 can show the exited-parent shape; do not build it on the assumption.
 
+## The RunOnce resume entry can fire while the audit is still running (seen 2026-10-15, CI only so far)
+
+INIT 8 writes `HKCU\...\RunOnce\*WIN11_SecurityAudit_resume` so an interrupted
+run restarts at the next logon, and `:end_script` removes it on every exit. On
+a CI runner the full-run job's report assertions twice read a report that was
+not the one under test: an 11,718-byte file headed `Dev=0 Resume=1` ending at
+`STATUS: Unsupported OS`, written six seconds into the main run. That is the
+resume entry being executed by the runner's own session while the first audit
+was still going -- so a logon during a run starts a second, redundant audit.
+
+Harmless as seen (the second run stops at the OS check on a Server image, and
+both runs are read-only but for their own output), and the CI side is fixed:
+the assertions now take the report THIS run started and declare any other
+rather than silently testing it. What is unresolved is the product question --
+on a real Windows 10/11 machine a logon during a long audit would start a
+second full audit, leaving the owner two reports, one of them partial. Options
+if it is ever worth closing: write the entry only once the run is past the
+point where resuming helps, or have the bat notice an audit already running
+(a lock file beside the report) and exit early saying so. Not worth building on
+one CI observation; recorded so the next person who sees two reports knows why.
+
 ## Exfiltration: what is covered and what is next (opened 2026-10-15)
 
 Section 5 now grades a BITS job whose direction is Upload as T1048, which is

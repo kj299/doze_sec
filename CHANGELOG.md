@@ -115,6 +115,25 @@ name counted as understood and was folded into the all-clear; and all four
 new finding lines had no analyst note, so each would have reached a real
 report as "No specific analyst note mapped".
 
+A second CI round then failed the full-run job for a reason that was not this
+change's, and the diagnostic added for its first occurrence (PR #235) finally
+explained it. The job picked the report to assert on with
+`for %%R in ("...SecurityReport_*.txt") do set "REP=%%R"`, which keeps the LAST
+match -- and `for` walks a glob in name order, which for
+`SecurityReport_<date>_<time>` is chronological. So it read the NEWEST report,
+which was not the one under test: an 11,718-byte file headed `Dev=0 Resume=1`
+ending at `STATUS: Unsupported OS`, written six seconds into the run. That is
+the RunOnce resume entry the audit creates at INIT 8 being executed by the
+runner's own session while the first audit was still going. The console had
+shown all 18 sections and exit 8 both times, which is why the symptom read as
+"the audit did not reach Section 18" and made no sense. Every assertion in that
+job now takes the report this run started, matches the remediation script by
+that report's own timestamp stem, and names any other report instead of
+silently testing it; the fix was validated by reproducing the wrong pick and
+the right one against the two real filenames. That a logon during a run starts
+a second audit at all is recorded in the backlog as a product question, not
+fixed here.
+
 **And CI immediately found the one thing neither the design nor the review
 had: this check reported its own test plants.** The first run flagged
 `198.51.100.7/dz_ci_upload.bin` and `203.0.113.10/dz_ci_nonexistent` as

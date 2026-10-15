@@ -4164,9 +4164,44 @@ jobs:
           if "%RC%"=="8" ( findstr /b /c:"CRITICAL|" "C:\SecurityAudit\SecurityReport_*.ledger" >nul 2>&1 && set "RCOK=1" )
           if "%RC%"=="8" ( echo exit 8: a CRITICAL row outranks the planted reboot on this runner image -- see the ledger )
           if not defined RCOK ( echo EXPECTED EXIT CODE 4 WITH A PENDING REBOOT PLANTED, OR 8 EXPLAINED BY A CRITICAL LEDGER ROW -- GOT %RC% & exit /b 1 )
+          rem THE REPORT THIS RUN WROTE, NOT THE NEWEST FILE IN THE FOLDER.
+          rem
+          rem This loop used to assign unconditionally, so it kept the LAST
+          rem match -- and `for` walks the glob in name order, which for
+          rem SecurityReport_<date>_<time> is chronological. That is the newest
+          rem report, which is not necessarily this run's.
+          rem
+          rem It cost a red job twice, on PR #235 and again here, both times
+          rem with the same baffling symptom: the console shows all 18 sections
+          rem and exit 8, while the check reports "the audit did not reach
+          rem Section 18". The diagnostic added for the first occurrence
+          rem printed the answer this time -- the file it read was 11,718 bytes
+          rem with a header reading `Dev=0 Resume=1` and a last line of
+          rem "STATUS: Unsupported OS", i.e. a SECOND invocation carrying only
+          rem -resume, which began six seconds into this run and so sorted
+          rem after it. That is the RunOnce resume entry this audit creates at
+          rem INIT 8 being executed by the runner's own session while the first
+          rem run was still going; harmless in itself (a -resume run with no
+          rem -dev stops at the OS check on a Server image), and nothing to do
+          rem with what the audit found.
+          rem
+          rem So: take the FIRST report, which is the one this step's own
+          rem invocation started, and declare the extra if there is one rather
+          rem than letting it silently become the thing under test.
           set "REP="
-          for %%R in ("C:\SecurityAudit\SecurityReport_*.txt") do set "REP=%%R"
+          set "REPN=0"
+          for %%R in ("C:\SecurityAudit\SecurityReport_*.txt") do (
+              set /a REPN+=1
+              if not defined REP set "REP=%%R"
+          )
           if not defined REP ( echo NO REPORT PRODUCED & exit /b 1 )
+          if not "%REPN%"=="1" (
+              echo NOTE: %REPN% report^(s^) are present; asserting on the first, which this step started:
+              echo    %REP%
+              for %%R in ("C:\SecurityAudit\SecurityReport_*.txt") do echo    also present: %%R
+              echo    a second report means the audit ran again during this job -- the RunOnce resume entry
+              echo    firing in the runner's session. Not a finding about the machine under test.
+          )
           rem A hang is caught by the job timeout; this catches an EARLY EXIT
           rem (e.g. a parse error mid-audit) that still left a partial report:
           rem the exit handler's "EXIT CODE:" line and the [18/18] banner only
@@ -4220,8 +4255,21 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          $rep = Get-ChildItem 'C:\SecurityAudit\SecurityReport_*.txt' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          # THE REPORT THIS JOB'S OWN RUN WROTE -- the OLDEST, not the newest.
+          # The step above explains why at length: the RunOnce resume entry can
+          # be executed by the runner's session while the audit is still going,
+          # and that second run writes a newer, truncated report. Sorting
+          # newest-first would hand every assertion below the wrong file.
+          $all = @(Get-ChildItem 'C:\SecurityAudit\SecurityReport_*.txt' | Sort-Object Name)
+          if ($all.Count -eq 0) { throw 'no report to check' }
+          $rep = $all[0]
+          if ($all.Count -gt 1) {
+            Write-Host ("NOTE: {0} reports present; asserting on {1}, the one this job started. Also present: {2}" -f $all.Count, $rep.Name, (($all | Select-Object -Skip 1 | ForEach-Object { $_.Name }) -join ', '))
+          }
           $text = [IO.File]::ReadAllText($rep.FullName)
+          # Everything else this step reads must come from the SAME run, so it
+          # is matched on that report's timestamp stem rather than by time.
+          $stem = ($rep.Name -replace '^SecurityReport_', '') -replace '\.txt$', ''
           # THE RESUME ENTRY MUST POINT AT THE BAT. cmd's shift moves %0 too, and the bat
           # expanded %~f0 after its parse loop, so the value it wrote on the owner's
           # 2026-09-26 run was "<checkout>\-noVtSelf" -resume: a file that does not
@@ -4324,7 +4372,7 @@ jobs:
           # Section 11 must show the planted history.
           if ($text -notmatch 'DASHBOARD CHECKS PASSED') { throw "no dashboard status line: the dashboard script did not run with an apostrophe in TEMP" }
           if ($text -notmatch 'dz_ci_history_marker_7c1') { throw "Section 11 did not show the planted PowerShell history from an APPDATA holding an apostrophe and a space" }
-          $rem = @(Get-ChildItem -LiteralPath 'C:\SecurityAudit' -Filter 'Remediation_*.ps1' -File | Where-Object { $_.Name -notmatch '_(enforce|undo)\.ps1$' } | Sort-Object LastWriteTime -Descending | Select-Object -First 1)[0]
+          $rem = @(Get-ChildItem -LiteralPath 'C:\SecurityAudit' -Filter ('Remediation_' + $stem + '.ps1') -File)[0]
           if (-not $rem) { throw 'no stage-1 remediation script was written with an apostrophe in TEMP' }
           $rt = $null; $re = $null
           [void][System.Management.Automation.Language.Parser]::ParseFile($rem.FullName, [ref]$rt, [ref]$re)
