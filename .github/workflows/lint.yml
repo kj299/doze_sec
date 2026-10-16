@@ -1068,6 +1068,84 @@ jobs:
           n=$(echo "$out" | grep -c '^\[OK\]')
           [ "$n" -ge 125 ] || { echo "self-test ran only $n case(s) -- it is not exercising the rule"; exit 1; }
 
+  run-lock:
+    name: "One audit at a time: a second invocation stands down, a stale lock never blocks"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tools/run_lock.ps1 -SelfTest
+        run: pwsh -NoProfile -File tools/run_lock.ps1 -SelfTest
+      - name: The judgements stay pinned by name
+        run: |
+          out=$(pwsh -NoProfile -File tools/run_lock.ps1 -SelfTest)
+          echo "$out"
+          echo "$out" | grep -q 'a live holder with the same creation time and name: BUSY, the locks untouched' \
+            || { echo 'a second audit could run beside a live one again'; exit 1; }
+          echo "$out" | grep -q 'the PID reused by a later process: STALE, replaced' \
+            || { echo 'a reused PID could keep a dead lock alive and block every audit'; exit 1; }
+          echo "$out" | grep -q 'the holder is gone (a reboot or a crash mid-run): STALE, replaced' \
+            || { echo 'a lock left by a crash could block the resume it exists for'; exit 1; }
+          echo "$out" | grep -q 'a probe that cannot answer is UNKNOWN: the audit runs' \
+            || { echo 'a probe failure could refuse an audit on a guess'; exit 1; }
+          echo "$out" | grep -q 'a crafted lock cannot forge a line of the busy message' \
+            || { echo 'a planted lock could write its own line to the console'; exit 1; }
+          echo "$out" | grep -q 'busy when only the OUTPUT-folder lock is held' \
+            || { echo 'a second run with another TEMP (the CI full-run job) could run beside the first'; exit 1; }
+          echo "$out" | grep -q 'a lock held by the open prompt ABOVE this run' \
+            || { echo 're-running through the console-log pipe after an interrupted -noConsoleLog run could read busy against itself'; exit 1; }
+          echo "$out" | grep -q "a lock naming THIS run's own window" \
+            || { echo 'an audit interrupted in an open Command Prompt could block every later audit'; exit 1; }
+          echo "$out" | grep -q 'and the busy message says how to clear an interrupted lock, naming the file' \
+            || { echo 'the busy message could go back to saying there is nothing to do'; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]')
+          [ "$n" -ge 21 ] || { echo "self-test ran only $n case(s)"; exit 1; }
+      # Where the lock is taken and released decides whether it works at all:
+      # before the first shared %TEMP% write, the ChangeLog/Undo files and the
+      # admin check; released at BOTH exit labels every path after it reaches;
+      # and identical in both bats.
+      - name: The lock is taken before anything shared is written, and released at every exit
+        shell: pwsh
+        run: |
+          $blocks = @{}
+          foreach ($b in 'doze_sec.bat', 'doze_sec_noAdmin.bat') {
+            $l = [IO.File]::ReadAllLines($b)
+            $startAt = [array]::FindIndex($l, [Predicate[string]]{ param($x) $x -match '^:: ---- One audit at a time' })
+            $lockAt = [array]::FindIndex($l, [Predicate[string]]{ param($x) $x -match 'tools\\run_lock\.ps1" -LockFiles "%DZ_LOCK%\|%DZ_LOCK2%"' })
+            $doneAt = [array]::FindIndex($l, [Predicate[string]]{ param($x) $x -match '^:run_lock_done' })
+            if ($startAt -lt 0 -or $lockAt -lt 0 -or $doneAt -lt 0) { throw "${b}: the run lock block is missing" }
+            # A duplicated label is not a syntax error in cmd: goto takes the
+            # first one. A leftover busy tail with its own :run_lock_done (it
+            # happened while this block was being rewritten) would make EVERY
+            # audit exit 1 at startup.
+            foreach ($lab in '^:run_lock_done\b', '^:run_lock_noted\b') {
+              $nl = @($l | Where-Object { $_ -match $lab }).Count
+              if ($nl -ne 1) { throw ("{0}: label {1} is defined {2} times -- goto would take the first" -f $b, $lab, $nl) }
+            }
+            if ($doneAt -lt $lockAt) { throw "${b}: :run_lock_done comes before the lock is taken" }
+            $before = @(
+              @('the threat-list seed (the first %TEMP% write)', 'tools\\threat_list_seed\.ps1" -ShippedDir .* > "%TEMP%\\dz_seed\.txt"'),
+              @('the -resetTTP handler (it deletes the runtime threat lists)', '^if "%RESET_TTP%"=="0" goto :skip_reset_ttp'),
+              @('the -updateTTP handler', '^if "%UPDATE_TTP%"=="0" goto :skip_ttp_update'),
+              @('the ChangeLog creation', 'set "CHANGELOG='),
+              @('the admin check', '^net session')
+            )
+            foreach ($pair in $before) {
+              $at = [array]::FindIndex($l, [Predicate[string]]{ param($x) $x -match $pair[1] })
+              if ($at -ge 0 -and $lockAt -gt $at) { throw ("{0}: the run lock is taken AFTER {1}" -f $b, $pair[0]) }
+            }
+            $text = [IO.File]::ReadAllText($b)
+            foreach ($lab in ':final_exit', ':fatal_preinit_exit') {
+              $m = [regex]::Match($text, '(?m)^' + [regex]::Escape($lab) + '\r?\n((?:.*\r?\n){0,10})')
+              $win = $m.Groups[1].Value
+              foreach ($need in 'findstr /c:"token=%DZ_LOCK_ID%;" "%DZ_LOCK%" >nul 2>&1 && del "%DZ_LOCK%"', 'findstr /c:"token=%DZ_LOCK_ID%;" "%DZ_LOCK2%" >nul 2>&1 && del "%DZ_LOCK2%"') {
+                if (-not $m.Success -or -not $win.Contains($need)) { throw ("{0}: {1} does not release a run lock by its token ({2})" -f $b, $lab, $need) }
+              }
+            }
+            $blocks[$b] = ($l[$startAt..$doneAt] -join "`n")
+          }
+          if ($blocks['doze_sec.bat'] -ne $blocks['doze_sec_noAdmin.bat']) { throw 'the run lock block differs between the two bats' }
+          Write-Host '[OK] both bats take both run locks before the first shared write (the threat-list handlers and seed, the ChangeLog, the admin check), release each only by its token at both exit labels, and carry the same block'
+
   coverage-matrix-lint:
     runs-on: ubuntu-latest
     steps:

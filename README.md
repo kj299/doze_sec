@@ -54,7 +54,7 @@ doze_sec.bat -help
 | Switch | Script | Description |
 |--------|--------|-------------|
 | `-dev` | Both | Bypass unsupported OS check (Server, Win8.1, unknown builds) |
-| `-resume` | Both | Skip pre-flight steps 8-14 (used by RunOnce after reboot) |
+| `-resume` | Both | Skip pre-flight steps 8-14 (used by RunOnce after reboot). One audit runs at a time: an audit started while another is running -- the resume entry firing mid-run, or a second one started by hand -- prints that it stands down and exits 1 without writing a report, because two audits share the temp folder and the output folder and would overwrite each other's results. A lock left by a crash or a reboot never blocks; one left by an audit interrupted in a Command Prompt that is still open blocks only from another window, and the message says to close that window or delete the named lock file |
 | `-sdu` | Both | Skip threat intel list update from GitHub |
 | `-nosrp` | Both | Skip System Restore Point creation |
 | `-noAdmin` | noAdmin only | Run without elevation; defers admin-only checks |
@@ -93,6 +93,7 @@ Every run produces (timestamped, so multiple runs don't clobber each other):
 | `C:\SecurityAudit\SmartData\` | yes | SMART disk-health snapshots |
 | `C:\SecurityAudit\EventExports\` | yes | Windows event log exports |
 | `C:\SecurityAudit\ThreatLists\` | yes | Local IOC lists + CTI manifest |
+| `%TEMP%\dz_audit_running.lock`, and the same name in the output folder | while an audit runs | The run locks: one audit at a time. They name the cmd running the audit and are removed when it ends; one left behind by a reboot or crash is replaced by the next audit, which says so in its report |
 
 All artifacts from a single run share the same `<TS>`, so they group naturally when sorted by name.
 
@@ -253,7 +254,7 @@ Full tactic-by-tactic and threat-class coverage matrices — including explicit 
 
 Code 8 fires when a CRITICAL finding reaches the findings ledger (`SecurityReport_<TS>.ledger`), which is also what makes the summary verdict read ACTION REQUIRED - both derive from the same record, so they cannot disagree. It outranks 2, 4, and 6 — critical findings are the most actionable signal — but never the fatal/abort codes 1, 3, 5, 7. Automation can treat 0 as clean, 2/6 as review, 8 as incident-response trigger.
 
-**Code 1** is a *pre-flight abort* — the audit never started, so there is no report to read (it prints `Exit code: 1 -- audit did not run` to the console). It fires when the environment can't support a run: the `tools\` helper folder is missing (you copied only the `.bat`, or the download is incomplete), Windows PowerShell cannot be located, or the admin script (`doze_sec.bat`) was launched without elevation. Fix the named cause and re-run from the release folder — code 1 is never a security finding, only "could not run here." (Contrast code 5, which specifically means the script was launched from a TEMP directory.)
+**Code 1** is a *pre-flight abort* — the audit never started, so there is no report to read (it prints `Exit code: 1 -- audit did not run` to the console). It also fires when another doze_sec audit is already running with the same temp or output folder (the console says so, names it, and says how to clear a lock left by an audit interrupted in an open Command Prompt). Otherwise it fires when the environment can't support a run: the `tools\` helper folder is missing (you copied only the `.bat`, or the download is incomplete), Windows PowerShell cannot be located, or the admin script (`doze_sec.bat`) was launched without elevation. Fix the named cause and re-run from the release folder — code 1 is never a security finding, only "could not run here." (Contrast code 5, which specifically means the script was launched from a TEMP directory.)
 
 Checks that cannot run (missing IOC list, failed process/pipe/service/DNS enumeration) now report `[SKIPPED]` in the report instead of looking clean, and the TOP FINDINGS block carries a COVERAGE NOTE with the skipped count.
 

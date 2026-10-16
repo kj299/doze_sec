@@ -238,11 +238,14 @@ function Test-ExcludedRunValue {
 # path was corrected, a non-read-only run would have reported it CHANGED, as an
 # unsigned .bat autorun. Excluded by MARKER, never by name: the value name alone
 # is attacker-choosable, so the data must also point at one of our own bats.
+# The noAdmin bat writes `-resume -noAdmin` (a standard user's resumed run must
+# take the same path), which the first form of this rule did not accept, so a
+# baseline diff during a noAdmin run reported our own entry as a NEW autorun.
 function Test-OwnResumeEntry {
     param([string]$Key, [string]$Name, [string]$Value)
     if ($Key -notmatch '\\RunOnce$') { return $false }
     if ($Name -notmatch '^\*.+_resume$') { return $false }
-    return ($Value -match '\\doze_sec(_noAdmin)?\.bat"?\s+-resume"?\s*$')
+    return ($Value -match '\\doze_sec(_noAdmin)?\.bat"?\s+-resume(\s+-noAdmin)?"?\s*$')
 }
 
 # A record the diff must not compare at all. Applied to the OLD snapshot as well
@@ -641,6 +644,10 @@ if ($SelfTest) {
       (Test-ExcludedRecord -Cat 'RUN' -Id 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce\*WIN11_SecurityAudit_resume' -Detail '"C:\Users\u\src\doze_sec\doze_sec.bat" -resume') ''
     T 'the noAdmin bat resume entry is excluded too' `
       (Test-ExcludedRecord -Cat 'RUN' -Id 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce\*WIN11_SecurityAudit_resume' -Detail '"C:\x\doze_sec_noAdmin.bat" -resume') ''
+    T 'and the form the noAdmin bat actually writes, -resume -noAdmin, is excluded' `
+      (Test-ExcludedRecord -Cat 'RUN' -Id 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce\*WIN11_SecurityAudit_resume' -Detail '"C:\Users\u\doze_sec\doze_sec_noAdmin.bat" -resume -noAdmin') ''
+    T 'but our bat with any OTHER arguments after -resume is NOT excluded' `
+      (-not (Test-ExcludedRecord -Cat 'RUN' -Id 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce\*WIN11_SecurityAudit_resume' -Detail '"C:\x\doze_sec_noAdmin.bat" -resume -noAdmin & C:\Users\Public\evil.exe')) ''
     T 'the resume NAME with someone else''s data is NOT excluded (marker, never name)' `
       (-not (Test-ExcludedRecord -Cat 'RUN' -Id 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce\*WIN11_SecurityAudit_resume' -Detail 'C:\Users\Public\evil.exe -resume')) ''
     T 'the resume shape under a Run key (not RunOnce) is NOT excluded' `

@@ -6,6 +6,62 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### One audit at a time: a second invocation stands down instead of running beside the first
+INIT 8 writes a RunOnce resume entry so an interrupted run restarts at the next
+logon, and on CI it fired six seconds into a live run: a second audit ran beside
+the first. That was recorded as two reports and left as a product question.
+**Mapping it showed it was worse than two reports.** Two audits share two
+things: the fixed `%TEMP%\dz_*` names both bats write (about 146 markers and
+state files), and the output folder (the runtime threat lists Section 18
+reads, SmartData, the baseline snapshot). A second run can overwrite the
+first run's markers in the middle of a section and change its verdicts, and
+`-resetTTP` started during an audit deletes the lists it is reading. Microsoft
+documents that Windows deletes a RunOnce value BEFORE it runs the command, so
+once it fires the first run has lost its resume protection anyway; what is
+left to protect is the first run's results. A second audit started by hand, or
+the plant harness beside a real run, collides the same way.
+
+`tools/run_lock.ps1` now takes a lock in BOTH places -- `%TEMP%` and the output
+folder -- before either is written: in doze_sec.bat ahead of the
+`-resetTTP`/`-updateTTP` handlers, in both bats ahead of the threat-list seed,
+the ChangeLog/Undo files and the admin check. A run is busy if either lock is
+held. **The output-folder lock was not in the first draft, and the review
+caught why it is needed:** the CI full-run job points TEMP at a test folder,
+while the RunOnce entry runs with the user's normal TEMP -- so in the very
+incident that prompted this, the two runs shared the output folder, not TEMP,
+and a TEMP-only lock would never have seen the second one. Each lock names the
+live cmd running the audit by PID, creation time and image: a second invocation
+stands down only on positive evidence that that process is still running (exit
+1, the console says so and names it; it writes no report, ChangeLog or Undo
+file and does not touch the RunOnce entry, though the console-log wrapper's log
+of the attempt remains). A lock whose holder is gone -- the reboot or crash
+resume exists for -- or whose PID now belongs to another program, or that names
+this very command window or a process above it (an audit interrupted there,
+since one cmd runs one batch at a time), is replaced, and the report says so; an age threshold would
+have blocked that resume or let a long audit be joined. An interruption in an
+open Command Prompt read from ANOTHER window reads busy, and the message then
+says to close that window or delete the named lock file, not "nothing to do".
+A probe that cannot answer runs the audit unlocked and says so, and so does a
+helper that never ran: a lock must never refuse an audit on a guess, and must
+never be silent. Each lock carries the run's token and is released only while
+it still carries it, at both exit labels; lint.yml checks the order, the
+release and that both bats carry the same block.
+
+Proven with real processes on Windows PowerShell 5.1 (a holder cmd, a second
+invocation reading busy, the holder killed, the next one replacing the stale
+lock); with the real bat (`-readonly`) started beside a live holder of both
+locks, which must exit 1 within three minutes having written no report and
+left both locks untouched; by the field test that follows, which must replace the stale
+locks that leaves, declare it, and leave none behind; and on the console-log
+path a person takes, where a watcher records that the lock names the cmd
+running `doze_sec.bat` during the full run. The full-run job now FAILS on a
+second report, and measures and prints whether the resume entry fired.
+
+Found while mapping it and fixed here, because it is the same entry:
+`baseline_diff` recognised our own resume entry only as `... -resume`, so the
+noAdmin bat's `-resume -noAdmin` read as a NEW autorun in a baseline diff
+taken during a noAdmin run.
+
 ### An archive made on this machine, packed to leave: password-protected or split, in a staging folder (T1560, Collection)
 Before data leaves a machine it is packed. Microsoft's own incident reporting
 names the shape every time -- Volt Typhoon "staging collected data in

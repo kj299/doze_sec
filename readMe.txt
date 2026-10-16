@@ -48,6 +48,8 @@ COMMAND-LINE SWITCHES
 
   -resume       Skip pre-flight steps 8-14. Used automatically by the
                 RunOnce key if a previous run was interrupted.
+                Only one audit runs at a time: one started while another
+                is running says so and exits 1 without writing a report.
 
   -sdu          Skip threat intel list update from GitHub.
 
