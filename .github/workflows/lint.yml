@@ -1007,8 +1007,38 @@ jobs:
             || { echo 'the shape the intrusion reports describe could stop being CRITICAL'; exit 1; }
           echo "$out" | grep -q "a PLAIN local archive that packs credential files is WARNING, not CRITICAL -- a person's own backup is the twin" \
             || { echo 'a backup zip holding a .pst could become an incident-response trigger'; exit 1; }
-          echo "$out" | grep -q 'a 7z EncodedHeader without 7zAES (the default) is NOT DETERMINABLE, neither clean nor password-protected' \
+          echo "$out" | grep -q 'a 7z compressed header that will not decompress is NOT DETERMINABLE, neither clean nor password-protected' \
             || { echo 'a 7z whose password cannot be read could read as clean'; exit 1; }
+          echo "$out" | grep -q 'a 7z made with -p but WITHOUT -mhe: its compressed header is decompressed, 7zAES is found, the names are read' \
+            || { echo "7-Zip's default password shape could go back to not determinable"; exit 1; }
+          echo "$out" | grep -q 'a plain 7z as 7-Zip makes it by default (compressed header, no password) is now read as NOT password-protected' \
+            || { echo 'every plain 7z in Public could read as maybe password-protected again'; exit 1; }
+          echo "$out" | grep -q 'LZMA: a stream another encoder made decodes byte for byte to the 7z header it was made from' \
+            || { echo 'the LZMA decoder could stop being checked against an independent encoder'; exit 1; }
+          echo "$out" | grep -q 'LZMA: an end marker before the declared size stops the decode and says so, never complete' \
+            || { echo 'the distance decode could overflow 32 bits unnoticed'; exit 1; }
+          echo "$out" | grep -q 'a compressed header that fails its CRC once decompressed is not determinable, never clean' \
+            || { echo 'a corrupt decode could be read as a plain archive'; exit 1; }
+          echo "$out" | grep -q 'a header decoded only in part is trusted for what it shows: a 7zAES coder in the part is certain, its absence is not' \
+            || { echo 'a header too large to decode could be cleared from its first bytes'; exit 1; }
+          echo "$out" | grep -q 'LZMA: forty streams of random bytes each end at once' \
+            || { echo 'a crafted compressed header could hang or crash the audit'; exit 1; }
+          echo "$out" | grep -q 'LZMA: a declared size of 2^40 is capped' \
+            || { echo 'a header claiming a huge size could allocate it'; exit 1; }
+          echo "$out" | grep -q 'twenty CRC records in a PackInfo are walked to their end' \
+            || { echo 'a fixed-count loop could hide the 7zAES coder again'; exit 1; }
+          echo "$out" | grep -q 'a 7zAES id written with a leading zero byte (00 06 F1 07 01) is still 7zAES' \
+            || { echo 'a zero-padded coder id could read as no password again'; exit 1; }
+          echo "$out" | grep -q 'a coder id this audit cannot place is named and NOT read as "no password"' \
+            || { echo 'an unknown coder could be cleared'; exit 1; }
+          echo "$out" | grep -q 'a file name after seventy other file properties is still read' \
+            || { echo 'a credential file could be hidden behind dummy properties'; exit 1; }
+          echo "$out" | grep -q 'more than 64 folders (a non-solid 7z): the 7zAES coder in folder 101 is found' \
+            || { echo 'a non-solid 7z could go back to not determinable'; exit 1; }
+          echo "$out" | grep -q 'with the decode allowance spent, each compressed header is named as not decompressed' \
+            || { echo 'decoys could exhaust the decode time silently'; exit 1; }
+          echo "$out" | grep -q 'a set part whose header cannot be read is NOT cleared by a sibling' \
+            || { echo 'a decoy volume could clear a set'; exit 1; }
           echo "$out" | grep -q 'a 7z EncodedHeader coded with 7zAES (-mhe) is password-protected with names hidden' \
             || { echo 'the 7z header-encryption shape could go unrecognised'; exit 1; }
           echo "$out" | grep -q 'a 7z volume set read across its volumes yields the header from the last one' \
@@ -1066,7 +1096,7 @@ jobs:
           echo "$out" | grep -q "one folder is one folder: %TEMP% in 8.3 form beside the profile's own Temp is listed ONCE" \
             || { echo 'a short %TEMP% could make one folder read as two again'; exit 1; }
           n=$(echo "$out" | grep -c '^\[OK\]')
-          [ "$n" -ge 125 ] || { echo "self-test ran only $n case(s) -- it is not exercising the rule"; exit 1; }
+          [ "$n" -ge 157 ] || { echo "self-test ran only $n case(s) -- it is not exercising the rule"; exit 1; }
 
   run-lock:
     name: "One audit at a time: a second invocation stands down, a stale lock never blocks"
