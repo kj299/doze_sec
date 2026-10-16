@@ -953,6 +953,48 @@ jobs:
           Write-Host 'BITS upload OK (a download plant writes no upload finding; a named collector is WARNING with the agent cause named; a bare public IP is CRITICAL)'
           exit 0
 
+      - name: run_lock.ps1 -SelfTest + real processes (busy while the holder lives, replaced once it is gone)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = (.\tools\run_lock.ps1 -SelfTest) -join "`n"
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw 'run_lock self-test failed' }
+          # REAL processes on 5.1: the holder is a cmd.exe that runs the helper
+          # and then waits, exactly as a bat does; the checker is another cmd.
+          # Touches: file:%TEMP%\dz_ci_runlock\ (a lock and two state files)
+          $d = Join-Path $env:TEMP 'dz_ci_runlock'
+          New-Item -ItemType Directory -Path $d -Force | Out-Null
+          $lock = Join-Path $d 'test.lock'; $st1 = Join-Path $d 'st1.txt'; $st2 = Join-Path $d 'st2.txt'; $st3 = Join-Path $d 'st3.txt'
+          $tool = (Resolve-Path .\tools\run_lock.ps1).Path
+          $holder = $null
+          try {
+            $holder = Start-Process cmd.exe -ArgumentList '/c', ("powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$tool`" -LockFiles `"$lock`" -StateFile `"$st1`" -Label dz_ci_holder & ping -n 120 127.0.0.1 >nul") -WindowStyle Hidden -PassThru
+            $null = $holder.Handle
+            # Poll the CONTENT: Set-Content can create the file before it writes.
+            $deadline = (Get-Date).AddSeconds(60); $s1 = ''
+            while ((Get-Date) -lt $deadline -and $s1 -notmatch '^[a-z-]+$') { Start-Sleep -Milliseconds 500; $s1 = [string](Get-Content $st1 -EA SilentlyContinue | Select-Object -First 1) }
+            if ($s1 -ne 'acquired') { throw "the holder did not acquire the lock: '$s1'" }
+            $lt = Get-Content $lock -Raw
+            Write-Host ("lock: " + $lt)
+            if ($lt -notmatch ('^pid=' + $holder.Id + ';')) { throw ("the lock names pid {0}, not the holder cmd {1} -- the parent was resolved wrongly" -f ([regex]::Match($lt, 'pid=(\d+)').Groups[1].Value), $holder.Id) }
+            Start-Process cmd.exe -ArgumentList '/c', ("powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$tool`" -LockFiles `"$lock`" -StateFile `"$st2`" -Label dz_ci_checker") -WindowStyle Hidden -Wait
+            $s2 = Get-Content $st2 | Select-Object -First 1
+            if ($s2 -ne 'busy') { throw "a second invocation while the holder lives read '$s2', not busy" }
+            if ((Get-Content $lock -Raw) -ne $lt) { throw 'the busy check changed the lock' }
+            & taskkill.exe /PID $holder.Id /T /F 2>&1 | Out-Null
+            Start-Sleep -Seconds 2
+            Start-Process cmd.exe -ArgumentList '/c', ("powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$tool`" -LockFiles `"$lock`" -StateFile `"$st3`" -Label dz_ci_after") -WindowStyle Hidden -Wait
+            $s3 = Get-Content $st3 | Select-Object -First 1
+            if ($s3 -ne 'replaced-stale') { throw "after the holder died the next invocation read '$s3', not replaced-stale" }
+            Write-Host 'PROVEN with real processes on 5.1: acquired, busy while the holder lives, replaced once it is gone'
+          } finally {
+            if ($holder -and -not $holder.HasExited) { & taskkill.exe /PID $holder.Id /T /F 2>&1 | Out-Null }
+            Remove-Item -LiteralPath $d -Recurse -Force -EA SilentlyContinue
+          }
+          $global:LASTEXITCODE = 0
+          exit 0
+
       - name: bits_history.ps1 -SelfTest + the runner's real channel and a real planted record
         shell: powershell
         run: |
@@ -4271,6 +4313,37 @@ jobs:
           Set-Content -LiteralPath (Join-Path $h 'ConsoleHost_history.txt') -Value @('Get-Date', 'Write-Output dz_ci_history_marker_7c1') -Encoding ASCII
           Write-Host "planted: TEMP/TMP C:\dz_ci_o'brien\Temp, APPDATA C:\dz ci o'brien\AppData\Roaming, and a history file with a marker line"
 
+      - name: "Run lock: watch which process holds the lock during the full run (the console-log path a person takes)"
+        shell: powershell
+        run: |
+          # The full run below takes the default console-log path: the bat
+          # re-runs itself on the left side of a pipe into Tee-Object, and the
+          # audit body runs in THAT child cmd. The lock must name a process
+          # that lives exactly as long as the audit. Every other lock test uses
+          # -noConsoleLog, so this records the holder here, in the background,
+          # for the step after the run to check.
+          $w = Join-Path $env:RUNNER_TEMP 'dz_lock_watch.txt'
+          Remove-Item -LiteralPath $w -Force -EA SilentlyContinue
+          $ws = Join-Path $env:RUNNER_TEMP 'dz_lock_watch.ps1'
+          $lines = @(
+            '$deadline = (Get-Date).AddMinutes(25)',
+            'while ((Get-Date) -lt $deadline) {',
+            '  if (Test-Path ''C:\SecurityAudit\dz_audit_running.lock'') {',
+            '    $t = [IO.File]::ReadAllText(''C:\SecurityAudit\dz_audit_running.lock'')',
+            '    $m = [regex]::Match($t, ''pid=(\d+);'')',
+            '    if ($m.Success) {',
+            '      $p = Get-CimInstance Win32_Process -Filter (''ProcessId='' + $m.Groups[1].Value)',
+            '      Set-Content -LiteralPath $args[0] -Value @((''lock='' + $t), (''name='' + $p.Name), (''cmd='' + $p.CommandLine)) -Encoding ASCII',
+            '      exit 0',
+            '    }',
+            '  }',
+            '  Start-Sleep -Milliseconds 500',
+            '}'
+          )
+          Set-Content -LiteralPath $ws -Value $lines -Encoding ASCII
+          Start-Process powershell.exe -ArgumentList '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $ws + '"'), ('"' + $w + '"') -WindowStyle Hidden
+          Write-Host 'lock watcher started'
+
       - name: Run the full audit; fail on hang (timeout), fatal error, or early exit
         shell: cmd
         run: |
@@ -4331,13 +4404,18 @@ jobs:
               if not defined REP set "REP=%%R"
           )
           if not defined REP ( echo NO REPORT PRODUCED & exit /b 1 )
+          rem ONE AUDIT AT A TIME. The second report used to come from the
+          rem RunOnce resume entry firing mid-run; the run lock now makes that
+          rem invocation stand down before it writes anything, so a second
+          rem report is a defect, not a curiosity.
           if not "%REPN%"=="1" (
-              echo NOTE: %REPN% report^(s^) are present; asserting on the first, which this step started:
-              echo    %REP%
-              for %%R in ("C:\SecurityAudit\SecurityReport_*.txt") do echo    also present: %%R
-              echo    a second report means the audit ran again during this job -- the RunOnce resume entry
-              echo    firing in the runner's session. Not a finding about the machine under test.
+              echo %REPN% reports are present, and the run lock should have stopped any second audit:
+              for %%R in ("C:\SecurityAudit\SecurityReport_*.txt") do echo    %%R
+              exit /b 1
           )
+          set "STOOD=0"
+          for %%L in ("C:\SecurityAudit\AuditConsole_*.log") do findstr /c:"Another doze_sec audit is already running" "%%L" >nul 2>&1 && set "STOOD=1"
+          if "%STOOD%"=="1" ( echo MEASURED: the RunOnce resume entry fired during this run, and that second invocation stood down at the run lock ) else ( echo MEASURED: the RunOnce resume entry did not fire during this run )
           rem A hang is caught by the job timeout; this catches an EARLY EXIT
           rem (e.g. a parse error mid-audit) that still left a partial report:
           rem the exit handler's "EXIT CODE:" line and the [18/18] banner only
@@ -4386,6 +4464,23 @@ jobs:
           findstr /c:"(dz_selftest/dzsmoke/dz_probe) and were excluded" "%REP%" >nul || ( echo SECTION 18 DID NOT DECLARE THE EXCLUDED RESIDUE COUNT & exit /b 1 )
           echo Completed end-to-end through Section 18 and the exit handler.
           exit /b 0
+
+      - name: "Run lock: on the console-log path the lock named the audit's own cmd, and was released"
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $w = Join-Path $env:RUNNER_TEMP 'dz_lock_watch.txt'
+          if (-not (Test-Path $w)) { throw 'the watcher never saw the output-folder run lock during the full run -- it was not taken' }
+          $c = Get-Content $w
+          Write-Host ($c -join ' | ')
+          $name = (($c | Where-Object { $_ -like 'name=*' }) -replace '^name=', '')
+          $cmd = (($c | Where-Object { $_ -like 'cmd=*' }) -replace '^cmd=', '')
+          if ($name -ne 'cmd.exe') { throw "the lock holder was '$name', not the cmd running the audit" }
+          if ($cmd -notmatch 'doze_sec\.bat') { throw "the lock holder's command line does not run doze_sec.bat: $cmd" }
+          if (Test-Path 'C:\SecurityAudit\dz_audit_running.lock') { throw 'the full run left its output-folder run lock behind' }
+          $rep = @(Get-ChildItem 'C:\SecurityAudit\SecurityReport_*.txt' | Sort-Object Name)[0]
+          if (-not (Select-String -LiteralPath $rep.FullName -SimpleMatch -Pattern 'Run lock taken: a second audit started while this one runs will stand down' -Quiet)) { throw 'the full run''s report does not say it took the run lock' }
+          Write-Host 'PROVEN on the console-log path: the lock named the cmd running doze_sec.bat, and was released at exit'
 
       - name: The resume entry pointed at the bat, the planted reboot reached the ledger, and the entry is gone after the exit-4 run
         shell: powershell
@@ -4633,6 +4728,51 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: "Run lock: a second audit started while one runs stands down -- no report, nothing changed"
+        shell: powershell
+        timeout-minutes: 6
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # A LIVE holder takes the real lock the bats use, the way a running
+          # audit would; then the real bat is started beside it.
+          # Touches: file:%TEMP%\dz_audit_running.lock, file:C:\SecurityAudit\dz_audit_running.lock (both left STALE for the next step on purpose)
+          $lock = Join-Path $env:TEMP 'dz_audit_running.lock'
+          $lockO = 'C:\SecurityAudit\dz_audit_running.lock'
+          if (-not (Test-Path 'C:\SecurityAudit')) { New-Item -ItemType Directory -Path 'C:\SecurityAudit' | Out-Null }
+          Remove-Item -LiteralPath $lock, $lockO -Force -EA SilentlyContinue
+          $st = Join-Path $env:TEMP 'dz_ci_holder_state.txt'
+          Remove-Item -LiteralPath $st -Force -EA SilentlyContinue
+          $tool = (Resolve-Path .\tools\run_lock.ps1).Path
+          $holder = Start-Process cmd.exe -ArgumentList '/c', ("powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$tool`" -LockFiles `"$lock|$lockO`" -StateFile `"$st`" -Label dz_ci_holder & ping -n 300 127.0.0.1 >nul") -WindowStyle Hidden -PassThru
+          $null = $holder.Handle
+          $deadline = (Get-Date).AddSeconds(60); $sv = ''
+          while ((Get-Date) -lt $deadline -and $sv -notmatch '^[a-z-]+$') { Start-Sleep -Milliseconds 500; $sv = [string](Get-Content $st -EA SilentlyContinue | Select-Object -First 1) }
+          if ($sv -ne 'acquired') { throw "the holder did not take the locks: '$sv'" }
+          $lt = Get-Content $lock -Raw
+          $ltO = Get-Content $lockO -Raw
+          $before = @(Get-ChildItem 'C:\SecurityAudit\SecurityReport_*.txt' -EA SilentlyContinue).Count
+          $outF = Join-Path $env:TEMP 'dz_ci_busy_out.txt'
+          $p = Start-Process cmd.exe -ArgumentList '/c', ("doze_sec.bat -dev -readonly -noConsoleLog > `"$outF`" 2>&1") -WindowStyle Hidden -PassThru
+          $null = $p.Handle
+          if (-not $p.WaitForExit(180000)) { & taskkill.exe /PID $p.Id /T /F 2>&1 | Out-Null; & taskkill.exe /PID $holder.Id /T /F 2>&1 | Out-Null; throw 'the second audit did not stand down within 3 minutes -- it is running beside the first' }
+          $o = Get-Content $outF -Raw
+          Write-Host $o
+          if ($p.ExitCode -ne 1) { throw ("the second audit exited {0}, not 1" -f $p.ExitCode) }
+          if ($o -notmatch 'Another doze_sec audit is already running \(process ' + $holder.Id) { throw 'the second audit did not say an audit is already running, naming the holder' }
+          $after = @(Get-ChildItem 'C:\SecurityAudit\SecurityReport_*.txt' -EA SilentlyContinue).Count
+          if ($after -ne $before) { throw 'the second audit wrote a report' }
+          if ((Get-Content $lock -Raw) -ne $lt -or (Get-Content $lockO -Raw) -ne $ltO) { throw 'the second audit changed the running audit''s locks' }
+          # Now the holder dies without releasing -- a crash mid-run. The lock
+          # stays, STALE, and the field test that follows must proceed and
+          # replace it.
+          & taskkill.exe /PID $holder.Id /T /F 2>&1 | Out-Null
+          Start-Sleep -Seconds 2
+          if (-not (Test-Path $lock) -or -not (Test-Path $lockO)) { throw 'a stale lock is gone before the field test -- the next step would test nothing' }
+          Remove-Item -LiteralPath $st, $outF -Force -EA SilentlyContinue
+          Write-Host 'PROVEN: with an audit running, a second one exits 1 having written no report and left both locks untouched; the holder is now gone and its lock is stale'
+          $global:LASTEXITCODE = 0
+          exit 0
+
       - name: Run the field test (read-only audit + read-only proof + corpus check)
         shell: powershell
         run: |
@@ -4745,6 +4885,20 @@ jobs:
           # would otherwise report that exit code as the step's (the #237 lesson).
           $global:LASTEXITCODE = 0
           exit 0
+
+      - name: "Run lock: the field test replaced the stale lock and left none behind"
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $rep = Get-ChildItem 'C:\SecurityAudit\SecurityReport_*.txt' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $t = [IO.File]::ReadAllText($rep.FullName)
+          $line = ($t -split "`r?`n" | Where-Object { $_ -match 'Run lock' }) -join ' | '
+          Write-Host ("report: " + $rep.Name + " -- " + $line)
+          if ($t -notmatch '\[INFO\] Run lock: replaced a stale lock left by an audit that is no longer running') { throw 'the audit did not say it replaced the stale lock the previous step left -- a lock left by a crash must never block, and must be visible' }
+          foreach ($lk in (Join-Path $env:TEMP 'dz_audit_running.lock'), 'C:\SecurityAudit\dz_audit_running.lock') {
+            if (Test-Path $lk) { throw ("the audit left its run lock behind: {0}" -f $lk) }
+          }
+          Write-Host 'PROVEN: a stale lock was replaced and declared, and the audit released its own lock at exit'
 
       # The report prints ~176 " Command: <X>" lines -- "here is how to check
       # this yourself". lint_report_echo proves each one PARSES. Parsing is not

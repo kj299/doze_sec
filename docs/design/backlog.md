@@ -391,7 +391,22 @@ is also what a parent that has since exited looks like) and a benign twin for
 that case pinned in the self-test. Build it when a field run or the harness
 can show the exited-parent shape; do not build it on the assumption.
 
-## The RunOnce resume entry can fire while the audit is still running (seen 2026-10-15, CI only so far)
+## The RunOnce resume entry can fire while the audit is still running (seen 2026-10-15; DONE 2026-10-16)
+
+DONE: one audit at a time. `tools/run_lock.ps1` takes a lock in %TEMP% AND in
+the output folder before either is written (ahead of the threat-list handlers,
+the seed, the ChangeLog/Undo files and the admin check); it names the live cmd
+running the audit by PID, creation time and image, so a second invocation
+stands down (exit 1, no report) and a lock left by a reboot or crash is
+replaced. Mapping it showed the double run was worse than two reports: both
+runs write the same fixed %TEMP%\dz_* names and the same output folder, so the
+second could overwrite the first's markers and lists mid-run -- and in the CI
+incident it was the output folder they shared, because that job points TEMP
+elsewhere. Still open, deliberately: the resumed run re-runs every
+section from scratch (nothing marks how far the interrupted one got), and it
+carries none of the original run's switches -- Microsoft documents that
+Windows deletes a RunOnce value before running it, so carrying more state in
+it would not survive a mid-run firing either. The original note follows.
 
 INIT 8 writes `HKCU\...\RunOnce\*WIN11_SecurityAudit_resume` so an interrupted
 run restarts at the next logon, and `:end_script` removes it on every exit. On

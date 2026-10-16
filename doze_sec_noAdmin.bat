@@ -508,6 +508,45 @@ if not exist "%OUTDIR%\SmartData"   mkdir "%OUTDIR%\SmartData"
 if not exist "%OUTDIR%\EventExports" mkdir "%OUTDIR%\EventExports"
 if not exist "%OUTDIR%\ThreatLists" mkdir "%OUTDIR%\ThreatLists"
 
+:: The output-folder lock lives in the folder this run writes.
+set "DZ_LOCKDIR=%OUTDIR%"
+:: ---- One audit at a time (run lock, tools\run_lock.ps1) -------------------
+:: Two audits at once corrupt each other: both bats write the same fixed
+:: %TEMP%\dz_* names and the same output folder (the threat lists Section 18
+:: reads, SmartData, the baseline). The RunOnce resume entry written at INIT 8
+:: fired six seconds into a live CI run and started a second audit beside the
+:: first. So a lock is taken in BOTH places -- the temp folder and the output
+:: folder -- before either is written; busy if either is held by a live
+:: audit. It names the live cmd running this audit by PID, creation time and
+:: image; a lock whose holder is gone (a reboot or crash mid-run) is replaced,
+:: so a real resume proceeds. Each lock carries this run's token, and only a
+:: lock still carrying it is released. A missing or refused helper, or one
+:: that cannot tell, runs the audit unlocked and says so.
+set "DZ_LOCK=%TEMP%\dz_audit_running.lock"
+set "DZ_LOCK2=%DZ_LOCKDIR%\dz_audit_running.lock"
+set "DZ_LOCKED=0"
+set "DZ_LOCK_STATE=unknown"
+:: %RANDOM% is seeded per second, so two runs started in the same second
+:: would share it: the centiseconds of the clock separate them.
+set "DZ_LOCK_ID=%RANDOM%%TIME:~-2%%RANDOM%%RANDOM%"
+set "DZ_LOCK_STATEFILE=%TEMP%\dz_lock_state_%DZ_LOCK_ID%.txt"
+set "DZ_LOCK_NOTE=%TEMP%\dz_lock_note_%DZ_LOCK_ID%.txt"
+if exist "%SCRIPT_DIR%tools\run_lock.ps1" powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\run_lock.ps1" -LockFiles "%DZ_LOCK%|%DZ_LOCK2%" -StateFile "%DZ_LOCK_STATEFILE%" -NoteFile "%DZ_LOCK_NOTE%" -Label "%SCRIPT_NAME%" -Token "%DZ_LOCK_ID%" >nul 2>&1
+if exist "%DZ_LOCK_STATEFILE%" set /p DZ_LOCK_STATE=<"%DZ_LOCK_STATEFILE%"
+del "%DZ_LOCK_STATEFILE%" 2>nul
+if "%DZ_LOCK_STATE%"=="acquired" set "DZ_LOCKED=1"
+if "%DZ_LOCK_STATE%"=="replaced-stale" set "DZ_LOCKED=1"
+if exist "%DZ_LOCK_NOTE%" goto :run_lock_noted
+>"%DZ_LOCK_NOTE%" echo  [INFO] Run lock NOT taken: tools\run_lock.ps1 did not run, so this audit runs without protection against a second audit started beside it.
+:run_lock_noted
+if not "%DZ_LOCK_STATE%"=="busy" goto :run_lock_done
+echo.
+type "%DZ_LOCK_NOTE%"
+del "%DZ_LOCK_NOTE%" 2>nul
+set "EXIT_CODE=1"
+goto :fatal_preinit_exit
+:run_lock_done
+
 :: Seed runtime ThreatLists from the repo's shipped baseline (closes #106).
 :: %OUTDIR%\ThreatLists is the live copy -- INIT 10/14 writes freshness
 :: headers + upstream fetches here, Section 18 reads here. The repo's
@@ -635,6 +674,8 @@ echo ====================================================================>> "%RE
 (echo   Switches  : Dev=%DEV_MODE%  Resume=%RESUME_MODE%  SkipSRP=%SKIP_SRP%  ReadOnly=%READONLY_MODE%  noAdmin=%NO_ADMIN_MODE%  IsAdmin=%IS_ADMIN%)>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 echo.>> "%REPORT%"
+if exist "%DZ_LOCK_NOTE%" type "%DZ_LOCK_NOTE%">> "%REPORT%"
+del "%DZ_LOCK_NOTE%" 2>nul
 if "%IS_ADMIN%"=="0" (
     echo  [INFO] NON-ADMIN MODE: Some sections will be deferred.>> "%REPORT%"
     echo  [INFO] Sections marked [DEFERRED] require re-run as Administrator.>> "%REPORT%"
@@ -5823,6 +5864,13 @@ if exist "%REPORT_HTML%" (
 :: captured before endlocal clears all setlocal variables.
 :: Splitting them onto two lines means exit /b sees an empty var.
 :final_exit
+:: Release the run locks this audit holds -- only a lock that still carries
+:: this run's token, never one another run replaced.
+if "%DZ_LOCKED%"=="1" (
+    findstr /c:"token=%DZ_LOCK_ID%;" "%DZ_LOCK%" >nul 2>&1 && del "%DZ_LOCK%" >nul 2>&1
+    findstr /c:"token=%DZ_LOCK_ID%;" "%DZ_LOCK2%" >nul 2>&1 && del "%DZ_LOCK2%" >nul 2>&1
+)
+if defined DZ_LOCK_NOTE del "%DZ_LOCK_NOTE%" >nul 2>&1
 :: If invoked via the self-tee wrapper, write our real EXIT_CODE to the file
 :: the parent reads -- otherwise the parent's exit /b reflects Tee-Object's
 :: exit code, not ours. (closes #96)
@@ -5840,6 +5888,13 @@ endlocal & exit /b %EXIT_CODE%
 :: the code for the self-tee parent and exits. Placed after :final_exit so it
 :: is never reached by fall-through.
 :fatal_preinit_exit
+:: Release the run locks this audit holds -- only a lock that still carries
+:: this run's token, never one another run replaced.
+if "%DZ_LOCKED%"=="1" (
+    findstr /c:"token=%DZ_LOCK_ID%;" "%DZ_LOCK%" >nul 2>&1 && del "%DZ_LOCK%" >nul 2>&1
+    findstr /c:"token=%DZ_LOCK_ID%;" "%DZ_LOCK2%" >nul 2>&1 && del "%DZ_LOCK2%" >nul 2>&1
+)
+if defined DZ_LOCK_NOTE del "%DZ_LOCK_NOTE%" >nul 2>&1
 echo.
 echo  Exit code: %EXIT_CODE% -- audit did not run.
 if defined DOZE_EXIT_FILE 2>nul >"%DOZE_EXIT_FILE%" echo %EXIT_CODE%

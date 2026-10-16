@@ -923,6 +923,19 @@ added, extend the helpers-ps51 job to execute it.
 
 ## Other cmd.exe traps already documented in-code
 
+- **Two audits share %TEMP% and the output folder, so only one may run.**
+  The RunOnce resume entry fired six seconds into a live CI run: Windows
+  deletes a RunOnce value BEFORE running its command (Microsoft, "Run and
+  RunOnce Registry Keys"), so a logon during a run starts a second audit that
+  overwrites the first one's markers and lists. `tools\run_lock.ps1` takes a
+  lock in BOTH places before either is written -- the first draft locked only
+  %TEMP%, and the CI job that showed the collision points TEMP elsewhere, so it
+  would have seen nothing: lock where the collision is, measured, not where
+  you assume it is. The lock names the live cmd by PID, creation time and
+  image -- never an age, which would block the resume a crash leaves behind or
+  let a long audit be joined -- treats a lock naming its own window as stale,
+  fails OPEN and declared when it cannot tell, and is released only by the
+  run whose token it carries, at `:final_exit` and `:fatal_preinit_exit`.
 - **`shift` moves `%0` too.** After a `:parse_args` loop that shifts once per
   switch, `%0` is the LAST SWITCH typed, and `%~f0` / `%~dp0` / `%~nx0`
   resolve that word against the current directory. The RunOnce resume entry

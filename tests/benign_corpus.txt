@@ -268,6 +268,27 @@ proof     = ci:archive_staging.ps1 -SelfTest + the runner's real staging folders
 signature = An archive made on this machine is password-protected, in a staging folder
 note      = A password-protected archive with no download mark in Downloads, a temp folder, the Public folder or the recycle bin. Benign causes: a backup the person made themselves and protected (WinRAR and 7-Zip both offer it); an archive the OneDrive sync client downloaded -- Microsoft documents that a file the sync client fetches carries no Mark of the Web, so it reads as made here; a file fetched by a tool that writes no mark (curl, Invoke-WebRequest, winget, a torrent client, Telegram Desktop); an inner archive 7-Zip extracted from a marked one (7-Zip does not pass the mark on by default); a security tool's sample zip under the conventional "infected" password; a vendor support-log collector that writes a protected zip into a temp folder. Both are WARNING by design, because a password on a locally made archive is also exactly what the intrusion reports describe (Volt Typhoon "staging collected data in password-protected archives"), and the line names the file so the owner can decide. It escalates to CRITICAL only on evidence: split into volumes as well, or packing a credential-class file. Verify: the line's own command shows whether a download mark exists; then open the archive and ask whether you made it and what it holds.
 
+[run-lock-stale-replaced]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:Run lock: the field test replaced the stale lock and left none behind; ci:run_lock.ps1 -SelfTest + real processes
+signature = Run lock: replaced a stale lock left by an audit that is no longer running
+note      = An earlier audit was interrupted -- a reboot, a crash, a closed window -- and left its run locks in the temp folder and the output folder. Each lock names the process that held it by PID, creation time and image, and that process is gone (or its number now belongs to another program), so this audit replaced the lock and ran normally. That is the case the RunOnce resume entry exists for. Nothing to do; the line is printed so an interrupted run is visible rather than silent.
+
+[run-lock-taken]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:Run the full audit; fail on hang; ci:run_lock.ps1 -SelfTest + real processes
+signature = Run lock taken: a second audit started while this one runs will stand down
+note      = The ordinary state. This audit holds the run locks in %TEMP% and in its output folder for as long as it runs, so a second audit -- the resume entry firing at a logon during the run, or one started by hand -- stands down instead of overwriting this one's results in the shared temp folder. The lock is removed when the audit ends.
+
+[run-lock-not-taken]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:run_lock.ps1 -SelfTest + real processes
+signature = Run lock NOT taken
+note      = The audit could not tell whether another audit was running (Win32_Process unavailable, a lock unreadable, or tools\run_lock.ps1 refused or missing), so it ran without the lock rather than refuse to run on a guess. Two audits started at the same time would then overwrite each other's temp files; start one at a time.
+
 [bits-upload-management-agent]
 class     = ADVISE
 maxsev    = WARNING
