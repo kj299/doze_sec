@@ -43,6 +43,7 @@ CORE|T1112|Run value named on ioc_registry.txt (Section 18h); a HKCU Run value p
 CORE|T1547.002|LSA authentication package
 CORE|T1562.004|firewall profile disabled
 CORE|T1036|system-process name running outside its canonical directory, or started by a parent Windows never uses
+CORE|T1560|a two-part RAR 5.0 volume set whose first block is the archive-encryption header (the rar -hp -v shape, 42 inert bytes each, nothing an archiver can open) in C:\Users\Public\dz_selftest_arch, beside a plain Compress-Archive twin that must stay quiet (archive_staging); the helpers job adds sets made by the runner's real 7-Zip when the image carries it
 
 # ---- CI: emulated in an isolated helpers-ps51 step ----
 CI|T1014|Tarrask hidden task, via a synthetic TaskCache hive (cross_api_check)

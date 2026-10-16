@@ -1109,6 +1109,135 @@ jobs:
           Write-Host 'bits_history OK (self-test, the runner real channel raises nothing, and the provider schema measured)'
           exit 0
 
+      - name: archive_staging.ps1 -SelfTest + the runner's real staging folders and planted archives (7-Zip when the image carries it)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = (.\tools\archive_staging.ps1 -SelfTest) -join "`n"
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw 'archive_staging self-test failed' }
+          $n = @($out -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($n -lt 85) { throw "archive_staging self-test ran only $n case(s)" }
+          if ($out -match '\[SKIP\]') { throw 'the real Compress-Archive case was skipped on Windows, where it must run' }
+
+          # THE RUNNER'S REAL STAGING FOLDERS, the benign twin at scale: its
+          # Temp and Downloads hold tool archives, installer caches and
+          # Office/MSIX packages. None may raise, nothing may be deferred on
+          # an elevated token, and the check must say what it covered.
+          $md = Join-Path $env:TEMP ("dz_as_live_{0}" -f $PID)
+          $live = (.\tools\archive_staging.ps1 -MarkerDir $md) -join "`n"
+          Write-Host $live
+          if ($live -match 'Exception|ParserError|is not recognized') { throw "archive_staging errored on the runner's folders: $live" }
+          foreach ($m in @('dz_archstage.txt', 'dz_archstage_gap.txt', 'dz_archstage_deferred.txt')) {
+            if (Test-Path (Join-Path $md $m)) { throw ("{0} written on a clean runner: {1}" -f $m, (Get-Content (Join-Path $md $m))) }
+          }
+          # An all-clear, or -- only when a cap or the time budget is the stated
+          # reason -- the same sentence scoped to what was read. Never silence.
+          if ($live -notmatch '\[OK\] (\d+ archive\(s\) examined across|No archives in the) \d+ staging folder\(s\)|\[INFO\] (\d+ archive\(s\) examined across|No archives in the) \d+ staging folder\(s\)[^\r\n]*before [^\r\n]* stopped it') { throw "archive_staging printed no coverage verdict on the runner: $live" }
+          # One folder is one folder: the runner's %TEMP% is an 8.3 short path
+          # (RUNNER~1), and the first run of this step listed its Temp twice.
+          if ($live -match '~\d\\AppData\\Local\\Temp' -and $live -match 'runneradmin\\AppData\\Local\\Temp') { throw 'the same Temp folder was listed under its 8.3 short name AND its long name -- one folder read as two' }
+          Write-Host ('measured on this image: ' + (($live -split "`n" | Where-Object { $_ -match 'examined across|No archives in|plain archive\(s\)|package\(s\) that are ZIP|Mark of the Web|could not be determined|named like an archive|cabinet\(s\)|volume\(s\) of split|cloud-only|held open|holds more than|time budget|Not present' }) -join ' | '))
+          Remove-Item $md -Recurse -Force -EA SilentlyContinue
+
+          # PLANTS in the shared Public folder, each beside the twin that must
+          # stay quiet. The hand-built ones come from the published layouts
+          # and always run; the REAL ones are made by the image's own 7-Zip
+          # when it is there, and a declared [ SKIP ] when it is not. A plant
+          # is inert bytes: no archiver can open the RAR, the zips hold a line
+          # of text, nothing executes. Removed in finally; a leftover is
+          # correctly a finding on the next run, so the leak check throws.
+          # Touches: file:C:\Users\Public\dz_ci_arch\
+          $dir = 'C:\Users\Public\dz_ci_arch'
+          try {
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            $rar5hp = [byte[]]@(0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x15, 0x04, 0x00, 0x00, 0x00, 0x0F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x09, 0x09, 0x09, 0x09, 0x09, 0x09, 0x09, 0x09)
+            $zipPst = [byte[]]@(0x50, 0x4B, 0x03, 0x04, 0x14, 0x00, 0x01, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x24, 0x00, 0x00, 0x00, 0x24, 0x00, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00, 0x4F, 0x75, 0x74, 0x6C, 0x6F, 0x6F, 0x6B, 0x2E, 0x70, 0x73, 0x74, 0x64, 0x7A, 0x5F, 0x63, 0x69, 0x5F, 0x61, 0x72, 0x63, 0x68, 0x20, 0x65, 0x6E, 0x63, 0x72, 0x79, 0x70, 0x74, 0x65, 0x64, 0x2D, 0x62, 0x79, 0x2D, 0x66, 0x6C, 0x61, 0x67, 0x20, 0x70, 0x61, 0x79, 0x6C, 0x6F, 0x61, 0x64, 0x50, 0x4B, 0x01, 0x02, 0x14, 0x00, 0x14, 0x00, 0x01, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x24, 0x00, 0x00, 0x00, 0x24, 0x00, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4F, 0x75, 0x74, 0x6C, 0x6F, 0x6F, 0x6B, 0x2E, 0x70, 0x73, 0x74, 0x50, 0x4B, 0x05, 0x06, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x39, 0x00, 0x00, 0x00, 0x4D, 0x00, 0x00, 0x00, 0x00, 0x00)
+            $zipNotes = [byte[]]@(0x50, 0x4B, 0x03, 0x04, 0x14, 0x00, 0x01, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x24, 0x00, 0x00, 0x00, 0x24, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x6E, 0x6F, 0x74, 0x65, 0x73, 0x2E, 0x74, 0x78, 0x74, 0x64, 0x7A, 0x5F, 0x63, 0x69, 0x5F, 0x61, 0x72, 0x63, 0x68, 0x20, 0x65, 0x6E, 0x63, 0x72, 0x79, 0x70, 0x74, 0x65, 0x64, 0x2D, 0x62, 0x79, 0x2D, 0x66, 0x6C, 0x61, 0x67, 0x20, 0x70, 0x61, 0x79, 0x6C, 0x6F, 0x61, 0x64, 0x50, 0x4B, 0x01, 0x02, 0x14, 0x00, 0x14, 0x00, 0x01, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x24, 0x00, 0x00, 0x00, 0x24, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x6E, 0x6F, 0x74, 0x65, 0x73, 0x2E, 0x74, 0x78, 0x74, 0x50, 0x4B, 0x05, 0x06, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x37, 0x00, 0x00, 0x00, 0x4B, 0x00, 0x00, 0x00, 0x00, 0x00)
+            $zipOpc = [byte[]]@(0x50, 0x4B, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x13, 0x00, 0x00, 0x00, 0x5B, 0x43, 0x6F, 0x6E, 0x74, 0x65, 0x6E, 0x74, 0x5F, 0x54, 0x79, 0x70, 0x65, 0x73, 0x5D, 0x2E, 0x78, 0x6D, 0x6C, 0x3C, 0x54, 0x79, 0x70, 0x65, 0x73, 0x2F, 0x3E, 0x50, 0x4B, 0x01, 0x02, 0x14, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x13, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x5B, 0x43, 0x6F, 0x6E, 0x74, 0x65, 0x6E, 0x74, 0x5F, 0x54, 0x79, 0x70, 0x65, 0x73, 0x5D, 0x2E, 0x78, 0x6D, 0x6C, 0x50, 0x4B, 0x05, 0x06, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x41, 0x00, 0x00, 0x00, 0x39, 0x00, 0x00, 0x00, 0x00, 0x00)
+            # (1) the rar -hp -v shape, hand-built: CRITICAL, one row for the set.
+            [IO.File]::WriteAllBytes("$dir\collected.part1.rar", $rar5hp)
+            [IO.File]::WriteAllBytes("$dir\collected.part2.rar", $rar5hp)
+            # (2) a password-protected zip holding a mail store: CRITICAL.
+            [IO.File]::WriteAllBytes("$dir\mail.zip", $zipPst)
+            # (3) a password-protected zip of a note: WARNING.
+            [IO.File]::WriteAllBytes("$dir\private.zip", $zipNotes)
+            # (4) TWIN: the same password-protected zip, DOWNLOADED -- it carries
+            #     the mark a browser writes. Context, never a finding.
+            [IO.File]::WriteAllBytes("$dir\downloaded.zip", $zipNotes)
+            Set-Content -LiteralPath "$dir\downloaded.zip" -Stream 'Zone.Identifier' -Value "[ZoneTransfer]`r`nZoneId=3`r`nHostUrl=https://example.test/downloaded.zip"
+            # (4b) the SAME mail-store zip carrying a FORGED mark: anyone can
+            #      write the stream, and no browser saves into Public, so the
+            #      mark must not clear it.
+            [IO.File]::WriteAllBytes("$dir\marked-mail.zip", $zipPst)
+            Set-Content -LiteralPath "$dir\marked-mail.zip" -Stream 'Zone.Identifier' -Value "[ZoneTransfer]`r`nZoneId=3"
+            # (4c) a password-protected RAR renamed .tmp: found by signature.
+            [IO.File]::WriteAllBytes("$dir\cache-0001.tmp", $rar5hp)
+            # (5) TWIN: an Office/MSIX-shaped package renamed .zip: left out.
+            [IO.File]::WriteAllBytes("$dir\renamed-package.zip", $zipOpc)
+            # (6) TWIN: a plain zip the way Explorer makes one: context.
+            Set-Content -LiteralPath "$dir\notes.txt" -Value 'dz_ci_arch plain text' -Encoding ASCII
+            Compress-Archive -LiteralPath "$dir\notes.txt" -DestinationPath "$dir\holiday_photos.zip" -Force
+            # (7) the REAL thing, when the image has 7-Zip: a set made with
+            #     -p -mhe -v, the header at the end of the last volume.
+            $sz = $null
+            foreach ($cand in @('C:\Program Files\7-Zip\7z.exe', 'C:\Program Files (x86)\7-Zip\7z.exe')) { if (Test-Path $cand) { $sz = $cand; break } }
+            if (-not $sz) { try { $sz = (Get-Command 7z.exe -EA Stop).Source } catch { $sz = $null } }
+            $real = $false
+            if ($sz) {
+              $payload = "$dir\payload.bin"
+              $rnd = New-Object byte[] 40000; (New-Object Random).NextBytes($rnd); [IO.File]::WriteAllBytes($payload, $rnd)
+              & $sz a -t7z '-pdz-ci-pass' -mhe=on -v16k "$dir\real-set.7z" $payload | Out-Null
+              if ($LASTEXITCODE -ne 0) { throw "7z could not make the volume set (exit $LASTEXITCODE)" }
+              & $sz a -tzip '-pdz-ci-pass' "$dir\real-zipcrypto.zip" "$dir\notes.txt" | Out-Null
+              if ($LASTEXITCODE -ne 0) { throw "7z could not make the zip (exit $LASTEXITCODE)" }
+              Remove-Item $payload -Force
+              $vols = @(Get-ChildItem -LiteralPath $dir -Filter 'real-set.7z.*' | Sort-Object Name)
+              if ($vols.Count -lt 2) { throw ('7z made {0} volume(s), not a set' -f $vols.Count) }
+              Write-Host ("real 7-Zip plants: {0} volumes of real-set.7z, and real-zipcrypto.zip (made by {1})" -f $vols.Count, $sz)
+              $real = $true
+            } else {
+              Write-Host '[ SKIP ] no 7z.exe on this image, so the real-archiver plants did not run; the hand-built ones prove the parsers on 5.1'
+            }
+            $md2 = Join-Path $env:TEMP ("dz_as_plant_{0}" -f $PID)
+            $after = (.\tools\archive_staging.ps1 -Folders $dir -MarkerDir $md2) -join "`n"
+            Write-Host $after
+            if ($after -match 'Exception|ParserError|is not recognized') { throw "archive_staging errored on the plants: $after" }
+            if ($after -notmatch '\[CRITICAL\] An archive made on this machine is password-protected AND split into volumes, in a staging folder: C:\\Users\\Public\\dz_ci_arch\\collected\.part1\.rar \(\+1 more part\(s\) of this set\)') { throw 'the hand-built RAR -hp -v set was not CRITICAL as one row' }
+            if ($after -notmatch 'format: RAR 5\.0; password-protected with its file names hidden; volume of a set \(2 parts of the set are here\)') { throw 'the RAR set format line is wrong' }
+            if ($after -notmatch '\[CRITICAL\] An archive made on this machine is password-protected and packs credential files, in a staging folder: C:\\Users\\Public\\dz_ci_arch\\mail\.zip') { throw 'the password-protected zip holding a mail store was not CRITICAL' }
+            if ($after -notmatch 'packs: a mail store, a password database, a wallet or a private key') { throw 'the credential-class entry was not named' }
+            if ($after -notmatch '\[WARNING\] An archive made on this machine is password-protected, in a staging folder: C:\\Users\\Public\\dz_ci_arch\\private\.zip') { throw 'the password-protected zip of a note was not WARNING' }
+            # The twins. The downloaded copy of the SAME bytes must be context:
+            # the mark decides, not the content.
+            if ($after -match '\[(WARNING|CRITICAL)\][^\r\n]*dz_ci_arch\\downloaded\.zip') { throw 'a DOWNLOADED password-protected zip was reported as packed to leave -- the mark was not honoured' }
+            if ($after -notmatch '\[INFO\] 1 archive\(s\) carry the Mark of the Web -- downloaded by a browser, not packed here') { throw 'the downloaded twin was not counted as context' }
+            if ($after -match '\[(WARNING|CRITICAL)\][^\r\n]*dz_ci_arch\\holiday_photos\.zip') { throw 'a plain Compress-Archive zip was reported' }
+            if ($after -notmatch '\[INFO\] 1 plain archive\(s\) made or copied here') { throw 'the plain twin was not counted as context' }
+            if ($after -match 'renamed-package\.zip') { throw 'an Office-shaped package renamed .zip was graded' }
+            if ($after -notmatch '\[INFO\] 1 package\(s\) that are ZIP by signature') { throw 'the package twin was not counted as left out' }
+            if ($after -notmatch '\[WARNING\] An archive carries a download mark but sits in the shared Public folder, where no browser saves a download, and is password-protected and packs credential files, in a staging folder: C:\\Users\\Public\\dz_ci_arch\\marked-mail\.zip') { throw 'a FORGED mark cleared a password-protected zip holding a mail store in Public' }
+            if ($after -notmatch '\[WARNING\] An archive made on this machine is password-protected, in a staging folder: C:\\Users\\Public\\dz_ci_arch\\cache-0001\.tmp') { throw 'a password-protected RAR renamed .tmp was not found by its signature' }
+            $sevFile = Join-Path $md2 'dz_archstage.txt'
+            if (-not (Test-Path $sevFile) -or (Get-Content $sevFile) -ne 'CRITICAL') { throw 'the marker does not carry CRITICAL' }
+            if ($after -match '\[OK\]') { throw 'an all-clear printed beside findings' }
+            if ($real) {
+              # The set 7-Zip wrote: the header is in the LAST volume, read
+              # across the volumes, and -mhe shows as 7zAES in the encoded
+              # header. One row for the set.
+              if ($after -notmatch '\[CRITICAL\] An archive made on this machine is password-protected AND split into volumes, in a staging folder: C:\\Users\\Public\\dz_ci_arch\\real-set\.7z\.001 \(\+\d+ more part\(s\) of this set\)') { throw 'the REAL 7-Zip -p -mhe -v set was not CRITICAL as one row (the cross-volume header read failed on a real set)' }
+              if ($after -notmatch 'format: 7z; password-protected with its file names hidden; volume of a set') { throw 'the real 7z set format line is wrong' }
+              if ($after -notmatch '\[WARNING\] An archive made on this machine is password-protected, in a staging folder: C:\\Users\\Public\\dz_ci_arch\\real-zipcrypto\.zip') { throw 'the REAL 7-Zip-made password-protected zip was not WARNING' }
+              Write-Host 'PROVEN on a real archiver: a 7-Zip -p -mhe -v set reads CRITICAL as one row, and a 7-Zip password-protected zip reads WARNING'
+            }
+            Remove-Item $md2 -Recurse -Force -EA SilentlyContinue
+            Write-Host 'archive_staging OK (self-test on 5.1, the runner folders raise nothing, every plant graded and every twin quiet)'
+          } finally {
+            Remove-Item -LiteralPath $dir -Recurse -Force -EA SilentlyContinue
+            if (Test-Path -LiteralPath $dir) { throw 'the archive plant folder survived cleanup -- it would be reported on the next run' }
+          }
+          exit 0
+
       - name: persistence_extra.ps1 -SelfTest (BITS destination grading, pure)
         shell: powershell
         run: |
@@ -4373,6 +4502,16 @@ jobs:
           if ($text -match 'BITS recorded an UPLOAD that has already happened|BITS wrote a file straight into an autostart folder|BITS transferred to or from a bare IP address|A BITS transfer was driven by a program running from a staging folder') { throw ('the BITS history check raised on a clean runner: {0}' -f (($text -split "`r?`n" | Where-Object { $_ -match 'BITS recorded an UPLOAD|autostart folder|bare IP address|staging folder' }) -join ' | ')) }
           if ($text -notmatch 'BITS transfer record\(s\) read,|holds no transfer records|What BITS recorded about finished transfers was NOT checked|carried no value describing a transfer') { throw 'the BITS history check printed no verdict in the real audit' }
           Write-Host ('Section 5 (BITS history): ' + (($text -split "`r?`n" | Where-Object { $_ -match 'BITS transfer record\(s\) read|holds no transfer records|recorded about finished transfers' }) -join ' | '))
+          # Archives made on this machine (Section 14, T1560). A runner's Temp
+          # holds plain tool archives and Office/MSIX packages, none of which
+          # is graded; the check must have reached a verdict naming what it
+          # read, and no row may exist with nothing planted.
+          if ($text -match '\[(WARNING|CRITICAL)\] An archive made on this machine ') { throw ('the archive-staging check raised on a clean runner: {0}' -f (($text -split "`r?`n" | Where-Object { $_ -match 'An archive made on this machine|^\s+(format|download mark|packs):' }) -join ' | ')) }
+          if ($text -notmatch '\[OK\] (\d+ archive\(s\) examined across|No archives in the) \d+ staging folder\(s\)|\[INFO\] (\d+ archive\(s\) examined across|No archives in the) \d+ staging folder\(s\)[^\r\n]*before [^\r\n]* stopped it') { throw 'the archive-staging check printed no coverage verdict in the real audit (elevated: every staging folder must be readable)' }
+          if ($text -match 'could not be listed by an administrator -- archives there were NOT checked|could not be read by an administrator -- they were NOT checked') { throw ('an administrator could not read a staging folder or file on a clean runner: {0}' -f (($text -split "`r?`n" | Where-Object { $_ -match 'by an administrator' }) -join ' | ')) }
+          $ledArch = Join-Path 'C:\SecurityAudit' ('SecurityReport_' + $stem + '.ledger')
+          if ((Test-Path -LiteralPath $ledArch) -and @(Get-Content -LiteralPath $ledArch | Where-Object { $_ -match '\|14\|T1560\|' }).Count) { throw 'a T1560 ledger row on a clean runner' }
+          Write-Host ('Section 14 (archives): ' + (($text -split "`r?`n" | Where-Object { $_ -match 'staging folder\(s\)|plain archive\(s\)|package\(s\) that are ZIP' }) -join ' | '))
           # THE APOSTROPHE RUN. TEMP held an apostrophe and APPDATA an apostrophe and
           # a space: the dashboard (its script and SUMCODE/SUMCOUNT in TEMP) must
           # have printed, the stage-1 remediation script must exist and parse, and

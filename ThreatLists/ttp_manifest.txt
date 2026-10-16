@@ -1,4 +1,4 @@
-# Last verified by doze_sec: 2026-10-03 00:00:00 sha256:9656ADD85959DB96
+# Last verified by doze_sec: 2026-10-15 21:18:10 sha256:E0D3529E00CB3C2F
 # SENTINEL-X CTI -- TTP Manifest (MITRE ATT&CK v14+)
 # Updated: 2026-03-29
 # Source: MDDR 2024-2025, CISA KEV, Mandiant M-Trends 2025, CrowdStrike Threat Report 2025
@@ -60,7 +60,7 @@ T1021.006|Lateral Movement|WinRM|APT29,Volt Typhoon|Sec 10 WinRM status
 T1570|Lateral Movement|Lateral Tool Transfer|All groups|Sec 3 network shares
 #
 # === COLLECTION ===
-T1560|Collection|Archive Collected Data|All APT|Sec 18 process IOCs (7z, rar)
+T1560|Collection|Archive Collected Data|All APT|Sec 14 archive_staging.ps1: an archive made here (no Mark of the Web) in a staging folder that is password-protected, split into volumes, or packs credential files
 #
 # === COMMAND AND CONTROL ===
 T1071.001|C2|Web Protocols|All groups|Sec 3 ESTABLISHED connections
