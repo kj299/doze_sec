@@ -747,9 +747,14 @@ cache entry for a listed domain (HOSTS-free, e.g. a resolver-side record), on
 the CI runner only. Each gets a benign twin that must not raise. Assert that
 each reaches the ledger under its own section and technique.
 
-### A Ctrl+C in the console-log window leaves the wrapper's variables set (open, 2026-10-17)
+### A Ctrl+C in the console-log window leaves the wrapper's variables set (DONE, 2026-10-17)
+Fixed: both bats trust the wrapper's variables only with the `-dzTeeChild`
+token the wrapper passes its child, and never reuse a timestamp another run's
+ChangeLog, Undo file or report carries. The helpers job proves both with real
+runs on both bats (CHANGELOG). The original note follows.
+
 Found by the read-only review of the inherited-OUTDIR fix; it predates that
-change. Neither bat has fixed it yet. The console-log wrapper sets `DOZE_TEED`,
+change. At the time neither bat had fixed it. The console-log wrapper sets `DOZE_TEED`,
 `DOZE_LOG_TS`, `DOZE_CONSOLE_LOG` and `DOZE_EXIT_FILE` before `setlocal`, so
 the child it re-runs can see them, and clears them only after the child
 returns. If a person presses Ctrl+C and answers Y to "Terminate batch job",

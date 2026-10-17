@@ -1098,6 +1098,92 @@ jobs:
           n=$(echo "$out" | grep -c '^\[OK\]')
           [ "$n" -ge 157 ] || { echo "self-test ran only $n case(s) -- it is not exercising the rule"; exit 1; }
 
+  console-log-wrapper:
+    name: "Console-log wrapper: a leftover from an interrupted run is cleared, and no run reuses another's timestamp"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The wrapper runs in the person's own Command Prompt and clears its
+      # DOZE_* variables only after its child returns, so a Ctrl+C answered
+      # "Terminate batch job? Y" left them set; the next audit in that window
+      # skipped its capture, took the old timestamp and recreated that run's
+      # ChangeLog_ and Undo_ files with ">". The helpers job proves the
+      # behaviour on Windows; this pins the shape in both bats.
+      - name: The child guard needs the child token, clears every DOZE_* the wrapper sets, and a taken timestamp is never reused
+        shell: pwsh
+        run: |
+          $guards = @{}
+          foreach ($b in 'doze_sec.bat', 'doze_sec_noAdmin.bat') {
+            $l = [IO.File]::ReadAllLines($b)
+            $gAt = [array]::FindIndex($l, [Predicate[string]]{ param($x) $x -match '^:: THE CHILD GUARD IS TRUSTED ONLY WITH THE CHILD TOKEN' })
+            $skipAt = [array]::FindIndex($l, [Predicate[string]]{ param($x) $x -eq 'if defined DOZE_TEED goto :_console_log_done' })
+            $doneAt = [array]::FindIndex($l, [Predicate[string]]{ param($x) $x -eq ':_console_log_done' })
+            if ($gAt -lt 0 -or $skipAt -lt 0 -or $doneAt -lt 0 -or $gAt -gt $skipAt) { throw "${b}: the child guard is missing or comes after the DOZE_TEED skip" }
+            $firstCode = [array]::FindIndex($l, [Predicate[string]]{ param($x) $x -notmatch '^\s*(@echo off|::|$)' })
+            if ($firstCode -lt $gAt) { throw ("{0}: line {1} runs before the child guard: {2}" -f $b, ($firstCode + 1), $l[$firstCode]) }
+            $guard = $l[$gAt..($skipAt - 1)] -join "`n"
+            $guards[$b] = $guard
+            $m = [regex]::Match($guard, 'for %%v in \(([A-Z_ ]+)\) do if defined %%v')
+            if (-not $m.Success) { throw "${b}: the guard does not clear a list of DOZE_* variables" }
+            $cleared = $m.Groups[1].Value -split '\s+' | Where-Object { $_ }
+            if ($guard -notmatch 'if not defined _DZ_TEE_CHILD for %%v') { throw "${b}: the leftovers are not cleared whenever the child token is absent" }
+            $wrapperSets = @($l[$skipAt..$doneAt] | ForEach-Object { foreach ($mm in [regex]::Matches($_, 'set "(DOZE_[A-Z_]+)=[^"]')) { $mm.Groups[1].Value } } | Where-Object { $_ -ne 'DOZE_EXIT_CODE' } | Sort-Object -Unique)
+            if ($wrapperSets.Count -lt 4) { throw "${b}: found only $($wrapperSets.Count) DOZE_* variables the wrapper sets -- this check is broken" }
+            foreach ($v in $wrapperSets) { if ($cleared -notcontains $v) { throw "${b}: the wrapper sets $v but the guard does not clear a leftover $v" } }
+            $calls = @($l | Where-Object { $_ -match '^call "%~f0" ' })
+            if ($calls.Count -ne 1 -or $calls[0] -notmatch '^call "%~f0" -dzTeeChild %\* 2>&1 \| ') { throw "${b}: the wrapper does not pass -dzTeeChild FIRST to the child it starts (the guard would clear a real child's settings)" }
+            if (@($l | Where-Object { $_ -match '"%~1"=="-dzTeeChild"' }).Count) { throw "${b}: -dzTeeChild is internal and must not be parsed as a switch" }
+            $tsAt = [array]::FindIndex($l, [Predicate[string]]{ param($x) $x -match 'set "TIMESTAMP=%DOZE_LOG_TS%"' })
+            $clAt = [array]::FindIndex($l, [Predicate[string]]{ param($x) $x -match '^set "CHANGELOG=' })
+            foreach ($art in 'ChangeLog_!TIMESTAMP!.txt', 'Undo_!TIMESTAMP!.bat', 'SecurityReport_!TIMESTAMP!.txt') {
+              $at = [array]::FindIndex($l, [Predicate[string]]{ param($x) $x -eq ('if exist "%OUTDIR%\' + $art + '" set "DZ_TS_TAKEN=!TIMESTAMP!"') })
+              if ($at -lt 0 -or $at -lt $tsAt -or $at -gt $clAt) { throw "${b}: no check that $art is free before the ChangeLog is created" }
+            }
+            $reAt = [array]::FindIndex($l, [Predicate[string]]{ param($x) $x -match '^if defined DZ_TS_TAKEN set "TIMESTAMP=!TIMESTAMP!_r' })
+            if ($reAt -lt 0 -or $reAt -gt $clAt) { throw "${b}: a taken timestamp is not replaced before the ChangeLog is created" }
+            if (-not @($l | Where-Object { $_ -match '^if defined DZ_TS_TAKEN echo  \[INFO\] .*>> "%REPORT%"$' }).Count) { throw "${b}: the report does not say when a taken timestamp was replaced" }
+          }
+          if ($guards['doze_sec.bat'] -ne $guards['doze_sec_noAdmin.bat']) { throw 'the child guard differs between the two bats' }
+          # The code lines are pinned EXACTLY: a review showed this job still
+          # passing with the token scan deleted (a real child then clears its
+          # own settings and nests wrappers without end), with the clearing
+          # set removed, with an initialiser removed (the flag then comes
+          # from the caller's environment), and with a constant rename suffix.
+          $wantGuard = @(
+            'set "_DZ_TEE_CHILD="',
+            'set "_DZ_STALE="',
+            'for %%a in (%*) do if /i "%%~a"=="-dzTeeChild" set "_DZ_TEE_CHILD=1"',
+            'if not defined _DZ_TEE_CHILD for %%v in (DOZE_TEED DOZE_LOG_TS DOZE_CONSOLE_LOG DOZE_LOG_DIR DOZE_EXIT_FILE) do if defined %%v (',
+            '    set "_DZ_STALE=1"',
+            '    set "%%v="',
+            ')',
+            'if defined _DZ_STALE echo  [*] Console-log settings left behind by an interrupted audit in this window were cleared; this run starts fresh.',
+            'set "_DZ_TEE_CHILD="',
+            'set "_DZ_STALE="'
+          )
+          $wantTs = @(
+            'set "DZ_TS_TAKEN="',
+            'if exist "%OUTDIR%\ChangeLog_!TIMESTAMP!.txt" set "DZ_TS_TAKEN=!TIMESTAMP!"',
+            'if exist "%OUTDIR%\Undo_!TIMESTAMP!.bat" set "DZ_TS_TAKEN=!TIMESTAMP!"',
+            'if exist "%OUTDIR%\SecurityReport_!TIMESTAMP!.txt" set "DZ_TS_TAKEN=!TIMESTAMP!"',
+            'if defined DZ_TS_TAKEN set "TIMESTAMP=!TIMESTAMP!_r!RANDOM!!RANDOM!"'
+          )
+          foreach ($b in 'doze_sec.bat', 'doze_sec_noAdmin.bat') {
+            $l = [IO.File]::ReadAllLines($b)
+            $gCode = @($guards[$b] -split "`n" | Where-Object { $_ -notmatch '^\s*::' })
+            if (($gCode -join "`n") -ne ($wantGuard -join "`n")) { throw ("{0}: the child guard's code is not exactly the reviewed block:`n{1}" -f $b, ($gCode -join "`n")) }
+            $tsAt = [array]::FindIndex($l, [Predicate[string]]{ param($x) $x -eq 'set "DZ_TS_TAKEN="' })
+            $clAt = [array]::FindIndex($l, [Predicate[string]]{ param($x) $x -match '^set "CHANGELOG=' })
+            if ($tsAt -lt 0 -or $clAt -lt $tsAt) { throw "${b}: the timestamp guard is missing or after the ChangeLog" }
+            $tsCode = @($l[$tsAt..($clAt - 1)] | Where-Object { $_ -notmatch '^\s*(::|$)' })
+            if (($tsCode -join "`n") -ne ($wantTs -join "`n")) { throw ("{0}: the timestamp guard's code is not exactly the reviewed block:`n{1}" -f $b, ($tsCode -join "`n")) }
+            $ndAt = [array]::FindIndex($l, [Predicate[string]]{ param($x) $x -eq 'if not defined DOZE_LOG_TS set "DOZE_LOG_TS=unknown"' })
+            $sfxAt = [array]::FindIndex($l, [Predicate[string]]{ param($x) $x -match '^if exist ".*\\AuditConsole_%DOZE_LOG_TS%\.log" set "DOZE_LOG_TS=%DOZE_LOG_TS%_r%RANDOM%%RANDOM%"$' })
+            $logAt = [array]::FindIndex($l, [Predicate[string]]{ param($x) $x -match '^set "DOZE_CONSOLE_LOG=' })
+            if ($ndAt -lt 0 -or $sfxAt -lt $ndAt -or $logAt -lt $sfxAt) { throw "${b}: the wrapper does not give a console-log name another run already wrote a suffix before naming its log" }
+          }
+          Write-Host '[OK] both bats clear console-log leftovers unless started as the wrapper''s child, the wrapper passes the child token first, and a timestamp another run''s files carry is never reused'
+
   run-lock:
     name: "One audit at a time: a second invocation stands down, a stale lock never blocks"
     runs-on: ubuntu-latest
