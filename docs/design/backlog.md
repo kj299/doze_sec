@@ -468,16 +468,18 @@ that tactic as empty. Three neighbours are open, in this order of value:
    source, 7zFormat.txt). So a downloaded archive is context whatever it
    holds, a plain local zip is context, a password or a volume set made here
    raises, both together is CRITICAL, and a credential-class entry name
-   escalates. Limits stated in the report: a 7z made with `-p` but without
-   `-mhe` has a compressed header and reads "not determinable"; contents are
+   escalates. Limits stated in the report: a 7z header that is not LZMA, is
+   larger than the decode cap or fails its CRC reads "not determinable"; contents are
    never read, only entry names; a renamed archive is found by signature up
    to a declared probe cap; a OneDrive-synced archive reads as made here.
    The review before the push found a crafted 7z that hung the audit, a
    `.tmp` rename that evaded it, and a global file cap that blinded later
    folders while the all-clear named them; all fixed and pinned (CHANGELOG).
-   STILL OPEN here: a 7z's compressed header could be decompressed (LZMA in
-   pure PowerShell is a few hundred lines) to settle the `-p`-only case and to
-   read its entry names; self-extracting `.exe` archives (the RAR or 7z
+   DONE (2026-10-16): a 7z's compressed header is decompressed (a pure
+   PowerShell LZMA decoder in `tools/archive_staging.ps1`, checked against
+   liblzma-made vectors and a real 7-Zip `-p` archive in CI), so the `-p`
+   without `-mhe` case reads WARNING with its names, and a plain 7z in Public
+   no longer reads "may be password-protected". STILL OPEN here: self-extracting `.exe` archives (the RAR or 7z
    signature sits after a PE stub) and other users' redirected Downloads
    folders are not examined, and the report says so; and
    the harness plants only the hand-built shape, while the real-archiver

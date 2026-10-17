@@ -36,7 +36,8 @@
 #      has. Both are readable from the file's own header bytes, by the format
 #      owners' published layouts (PKWARE's APPNOTE for ZIP; RARLAB's UnRAR
 #      source for RAR 4.x and 5.0; 7-Zip's 7zFormat.txt), with no third-party
-#      tool and nothing decompressed.
+#      tool. The one thing decompressed is a 7z's own header, which 7-Zip
+#      LZMA-compresses by default (below); file contents never are.
 # So: no mark AND a password is WARNING; no mark AND volumes is WARNING outside
 # Downloads (a split set in Downloads is how torrent and file-sharing clients
 # deliver large files, and many of them write no mark, so there it is named
@@ -48,10 +49,14 @@
 # cannot carry a password, and installers write spanned sets.
 #
 # WHAT THIS CANNOT TELL, SAID RATHER THAN IMPLIED: a 7z made with a password
-# but WITHOUT header encryption looks like a plain 7z unless its compressed
-# header is decompressed, so it is reported as "not determinable" and named
-# (raised only in the Public folder, where nothing unpacks); entry names are
-# read from ZIP, RAR and a 7z whose header is not compressed, contents never;
+# but WITHOUT header encryption looks like a plain 7z until its compressed
+# header is decompressed. The header is LZMA by default, and this tool decodes
+# it (capped at 256 KiB of header, 10 seconds each and 30 seconds per run,
+# smallest first, after every other archive has been graded; CRC-checked)
+# and reads its coders and names; a header coded with anything else, one
+# larger than the cap, one that fails its CRC, does not decode or is not
+# reached in that time is reported as "not determinable" and named (raised only in the Public folder, where nothing
+# unpacks); entry names are read from ZIP, RAR and 7z, contents never;
 # a self-extracting .exe archive is not opened; files are examined to a stated
 # depth with stated caps; a cloud-only placeholder is not read (reading it
 # would download it); and a file the OneDrive client synced carries no mark,
@@ -586,9 +591,11 @@ function Get-RarFacts {
 # an EncodedHeader coded with 7zAES is -mhe, headers encrypted -- certain; a
 # plain Header whose MainStreamsInfo carries 7zAES is -p, data encrypted and
 # names visible -- certain; an EncodedHeader WITHOUT 7zAES is the default
-# (compressed header), and whether the files inside are encrypted is not
-# determinable without decompressing it -- said, not guessed. Every count read
-# here is checked against the bytes left before any loop runs on it.
+# (an LZMA-compressed header), and whether the files inside are encrypted is
+# inside it: the header is decoded (Invoke-LzmaDecode, below) and read as a
+# plain Header. A header that cannot be decoded stays not determinable --
+# said, not guessed. Every count read here is checked against the bytes left
+# before any loop runs on it.
 # ---------------------------------------------------------------------------
 
 function Read-SevenZipDigests {
@@ -608,45 +615,89 @@ function Read-SevenZipDigests {
         $p += $nb
     }
     if (($p + 4 * $n) -gt $Buf.Count) { return @{ Ok = $false; Next = $p; Defined = @() } }
-    return @{ Ok = $true; Next = ($p + 4 * $n); Defined = $def }
+    # The CRC of each item, -1 where none is defined.
+    $vals = New-Object long[] ([int]$Count)
+    $q = $p
+    for ($i = 0; $i -lt $Count; $i++) { if ($def[$i]) { $vals[$i] = Get-U32 $Buf $q; $q += 4 } else { $vals[$i] = -1 } }
+    return @{ Ok = $true; Next = ($p + 4 * $n); Defined = $def; Values = $vals }
+}
+
+function ConvertTo-SevenZipMethodId {
+    # A coder id as 7-Zip reads it: a big-endian NUMBER (id = id << 8 | b),
+    # so leading zero bytes do not change it -- 00 06 F1 07 01 is still
+    # 7zAES. Hex of the value without leading zeros; Copy (0) is '00'.
+    param([byte[]]$Buf, [long]$Pos, [int]$Size)
+    $start = $Pos; $end = $Pos + $Size
+    while ($start -lt ($end - 1) -and $Buf[$start] -eq 0) { $start++ }
+    $hex = ''
+    for ($i = $start; $i -lt $end; $i++) { $hex += ('{0:X2}' -f [int]$Buf[$i]) }
+    return $hex
+}
+
+function Get-SevenZipCoderClass {
+    # 'crypto' for 7-Zip's crypto range (06 F1 ..., 7zAES is 06 F1 07 01);
+    # 'known' for the compression and filter methods 7-Zip's Methods.txt
+    # lists (and the 04 F7 range of external codecs, zstd and the like);
+    # 'unknown' otherwise -- a coder this audit cannot place is never read
+    # as "no password".
+    param([string]$Id)
+    if ($Id -like '06F1*') { return 'crypto' }
+    if ($Id.Length -eq 2 -and @('00', '03', '04', '05', '06', '07', '08', '09', '0A', '0B', '21') -contains $Id) { return 'known' }
+    foreach ($pre in @('0301', '0303', '0304', '0401', '0402', '04F7')) { if ($Id.StartsWith($pre)) { return 'known' } }
+    return 'unknown'
 }
 
 function Read-SevenZipStreamsInfo {
     # Parses PackInfo (0x06), CodersInfo (0x07) and SubStreamsInfo (0x08) from
     # $Pos up to and including the 0x00 that ends the StreamsInfo; returns the
-    # coder ids seen (hex). Ok is false on anything it does not understand or
-    # any count the remaining bytes cannot hold.
+    # coder ids seen (hex, as numbers -- see ConvertTo-SevenZipMethodId). Ok
+    # is false on anything it does not understand, any count the remaining
+    # bytes cannot hold, and a record list that reaches the end of the buffer
+    # without its 0x00: 7-Zip reads such lists with no limit, so neither does
+    # this, and every record consumes at least one byte, so the walk is
+    # bounded by the buffer. Also returns what an EncodedHeader needs to be
+    # decoded: PackPos, the first pack sizes, and (for the first 64 folders)
+    # each folder's coders (Id, Props), unpack sizes and CRC (-1 if none);
+    # FolderCount is the real count.
     param([byte[]]$Buf, [long]$Pos)
+    $idSet = @{}
     $ids = New-Object System.Collections.ArrayList
-    $bad = { param($p) return @{ Ids = @($ids.ToArray()); Next = $p; Ok = $false } }
+    $packPos = -1
+    $packSizes = New-Object System.Collections.ArrayList
+    $folders = New-Object System.Collections.ArrayList
+    $folderCount = 0
+    $bad = { param($p) return @{ Ids = @($ids.ToArray()); Next = $p; Ok = $false; PackPos = $packPos; PackSizes = @($packSizes.ToArray()); Folders = @($folders.ToArray()); FolderCount = $folderCount } }
     $p = $Pos
     $numPack = 0
     if ($p -lt $Buf.Count -and $Buf[$p] -eq 0x06) {
         $p++
         $pp = Read-SevenZipNumber $Buf $p; if (-not $pp.Ok -or $pp.Value -lt 0) { return (& $bad $p) }; $p = $pp.Next
+        $packPos = $pp.Value
         $np = Read-SevenZipNumber $Buf $p; if (-not $np.Ok -or $np.Value -lt 0 -or $np.Value -gt ($Buf.Count - $np.Next)) { return (& $bad $p) }
         $p = $np.Next; $numPack = $np.Value
-        $guard = 0
-        while ($p -lt $Buf.Count -and $guard -lt 16) {
-            $guard++
+        $ended = $false
+        while ($p -lt $Buf.Count) {
             $id = [int]$Buf[$p]; $p++
-            if ($id -eq 0x00) { break }
+            if ($id -eq 0x00) { $ended = $true; break }
             if ($id -eq 0x09) {
-                for ($i = 0; $i -lt $numPack; $i++) { $s = Read-SevenZipNumber $Buf $p; if (-not $s.Ok -or $s.Value -lt 0) { return (& $bad $p) }; $p = $s.Next }
+                for ($i = 0; $i -lt $numPack; $i++) { $s = Read-SevenZipNumber $Buf $p; if (-not $s.Ok -or $s.Value -lt 0) { return (& $bad $p) }; if ($packSizes.Count -lt 64) { [void]$packSizes.Add([long]$s.Value) }; $p = $s.Next }
                 continue
             }
             if ($id -eq 0x0A) { $dg = Read-SevenZipDigests -Buf $Buf -Pos $p -Count $numPack; if (-not $dg.Ok) { return (& $bad $p) }; $p = $dg.Next; continue }
             return (& $bad $p)
         }
+        if (-not $ended) { return (& $bad $p) }
     }
-    $folderOut = @(); $folderCrc = @()
+    $folderOut = New-Object System.Collections.Generic.List[int]
+    $folderCrc = @()
     if ($p -lt $Buf.Count -and $Buf[$p] -eq 0x07) {
         $p++
         if ($p -ge $Buf.Count -or $Buf[$p] -ne 0x0B) { return (& $bad $p) }
         $p++
         $nf = Read-SevenZipNumber $Buf $p
-        if (-not $nf.Ok -or $nf.Value -lt 0 -or $nf.Value -gt 64 -or $nf.Value -gt ($Buf.Count - $nf.Next)) { return (& $bad $p) }
+        if (-not $nf.Ok -or $nf.Value -lt 0 -or $nf.Value -gt ($Buf.Count - $nf.Next)) { return (& $bad $p) }
         $p = $nf.Next
+        $folderCount = [int]$nf.Value
         if ($p -ge $Buf.Count) { return (& $bad $p) }
         $ext = [int]$Buf[$p]; $p++
         if ($ext -ne 0) { return (& $bad $p) }
@@ -655,37 +706,45 @@ function Read-SevenZipStreamsInfo {
             if (-not $nc.Ok -or $nc.Value -le 0 -or $nc.Value -gt 16) { return (& $bad $p) }
             $p = $nc.Next
             $inTotal = 0; $outTotal = 0
+            $coders = @()
             for ($ci = 0; $ci -lt $nc.Value; $ci++) {
                 if ($p -ge $Buf.Count) { return (& $bad $p) }
                 $flag = [int]$Buf[$p]; $p++
                 $idSize = $flag -band 0x0F
-                if (($p + $idSize) -gt $Buf.Count) { return (& $bad $p) }
-                $hex = ''
-                for ($i = 0; $i -lt $idSize; $i++) { $hex += ('{0:X2}' -f [int]$Buf[$p + $i]) }
-                [void]$ids.Add($hex)
+                if ($idSize -lt 1 -or ($p + $idSize) -gt $Buf.Count) { return (& $bad $p) }
+                $hex = ConvertTo-SevenZipMethodId -Buf $Buf -Pos $p -Size $idSize
+                if (-not $idSet.ContainsKey($hex)) { $idSet[$hex] = $true; [void]$ids.Add($hex) }
                 $p += $idSize
                 if (($flag -band 0x10) -ne 0) {
                     $ni = Read-SevenZipNumber $Buf $p; $no = Read-SevenZipNumber $Buf $ni.Next
                     if (-not $ni.Ok -or -not $no.Ok -or $ni.Value -lt 1 -or $ni.Value -gt 32 -or $no.Value -lt 1 -or $no.Value -gt 32) { return (& $bad $p) }
                     $p = $no.Next; $inTotal += $ni.Value; $outTotal += $no.Value
                 } else { $inTotal += 1; $outTotal += 1 }
+                $props = New-Object byte[] 0
                 if (($flag -band 0x20) -ne 0) {
                     $ps = Read-SevenZipNumber $Buf $p
                     if (-not $ps.Ok -or $ps.Value -lt 0 -or $ps.Value -gt ($Buf.Count - $ps.Next)) { return (& $bad $p) }
+                    if ($fi -lt 64 -and $ps.Value -gt 0 -and $ps.Value -le 64) { $props = New-Object byte[] ([int]$ps.Value); [Array]::Copy($Buf, [int]$ps.Next, $props, 0, [int]$ps.Value) }
                     $p = $ps.Next + $ps.Value
                 }
+                if ($fi -lt 64) { $coders += ,@{ Id = $hex; Props = $props } }
             }
             $bind = $outTotal - 1
             for ($i = 0; $i -lt $bind; $i++) { $x = Read-SevenZipNumber $Buf $p; $y = Read-SevenZipNumber $Buf $x.Next; if (-not $x.Ok -or -not $y.Ok) { return (& $bad $p) }; $p = $y.Next }
             $packed = $inTotal - $bind
             if ($packed -gt 1) { for ($i = 0; $i -lt $packed; $i++) { $x = Read-SevenZipNumber $Buf $p; if (-not $x.Ok) { return (& $bad $p) }; $p = $x.Next } }
-            $folderOut += $outTotal
+            $folderOut.Add([int]$outTotal)
+            if ($fi -lt 64) { [void]$folders.Add(@{ Coders = $coders; UnpackSizes = @(); Crc = [long]-1 }) }
         }
         # CodersUnpackSize (0x0C): one number per output stream of each folder;
         # then optional digests; then the 0x00 that ends CodersInfo.
         if ($p -lt $Buf.Count -and $Buf[$p] -eq 0x0C) {
             $p++
-            foreach ($o in $folderOut) { for ($i = 0; $i -lt $o; $i++) { $x = Read-SevenZipNumber $Buf $p; if (-not $x.Ok) { return (& $bad $p) }; $p = $x.Next } }
+            for ($fx = 0; $fx -lt $folderOut.Count; $fx++) {
+                $sizes = @()
+                for ($i = 0; $i -lt $folderOut[$fx]; $i++) { $x = Read-SevenZipNumber $Buf $p; if (-not $x.Ok) { return (& $bad $p) }; if ($fx -lt 64) { $sizes += [long]$x.Value }; $p = $x.Next }
+                if ($fx -lt 64) { $folders[$fx].UnpackSizes = $sizes }
+            }
         } else { return (& $bad $p) }
         $folderCrc = New-Object bool[] ([int]$nf.Value)
         if ($p -lt $Buf.Count -and $Buf[$p] -eq 0x0A) {
@@ -693,6 +752,7 @@ function Read-SevenZipStreamsInfo {
             $dg = Read-SevenZipDigests -Buf $Buf -Pos $p -Count $nf.Value
             if (-not $dg.Ok) { return (& $bad $p) }
             $folderCrc = $dg.Defined; $p = $dg.Next
+            for ($i = 0; $i -lt $folders.Count; $i++) { $folders[$i].Crc = [long]$dg.Values[$i] }
         }
         if ($p -lt $Buf.Count -and $Buf[$p] -eq 0x00) { $p++ } else { return (& $bad $p) }
     }
@@ -700,25 +760,25 @@ function Read-SevenZipStreamsInfo {
         # SubStreamsInfo: [0x0D streams per folder] [0x09 sizes] [0x0A
         # digests] 0x00 -- walked so the FilesInfo (the names) is reached.
         $p++
-        $nfo = @($folderOut).Count
-        $streams = @(); for ($i = 0; $i -lt $nfo; $i++) { $streams += 1 }
-        $guard = 0
-        while ($p -lt $Buf.Count -and $guard -lt 8) {
-            $guard++
+        $nfo = $folderOut.Count
+        $streams = New-Object long[] $nfo
+        for ($i = 0; $i -lt $nfo; $i++) { $streams[$i] = 1 }
+        $ended = $false
+        while ($p -lt $Buf.Count) {
             $id = [int]$Buf[$p]; $p++
-            if ($id -eq 0x00) { break }
+            if ($id -eq 0x00) { $ended = $true; break }
             if ($id -eq 0x0D) {
                 for ($i = 0; $i -lt $nfo; $i++) { $x = Read-SevenZipNumber $Buf $p; if (-not $x.Ok -or $x.Value -lt 0 -or $x.Value -gt 1000000) { return (& $bad $p) }; $streams[$i] = $x.Value; $p = $x.Next }
                 continue
             }
             if ($id -eq 0x09) {
-                $need = 0; foreach ($s in $streams) { if ($s -gt 1) { $need += $s - 1 } }
+                $need = [long]0; foreach ($s in $streams) { if ($s -gt 1) { $need += $s - 1 } }
                 if ($need -gt ($Buf.Count - $p)) { return (& $bad $p) }
                 for ($i = 0; $i -lt $need; $i++) { $x = Read-SevenZipNumber $Buf $p; if (-not $x.Ok) { return (& $bad $p) }; $p = $x.Next }
                 continue
             }
             if ($id -eq 0x0A) {
-                $cnt = 0
+                $cnt = [long]0
                 for ($i = 0; $i -lt $nfo; $i++) { $crcKnown = ($i -lt @($folderCrc).Count -and $folderCrc[$i]); if (-not ($streams[$i] -eq 1 -and $crcKnown)) { $cnt += $streams[$i] } }
                 $dg = Read-SevenZipDigests -Buf $Buf -Pos $p -Count $cnt
                 if (-not $dg.Ok) { return (& $bad $p) }
@@ -727,14 +787,356 @@ function Read-SevenZipStreamsInfo {
             }
             return (& $bad $p)
         }
+        if (-not $ended) { return (& $bad $p) }
     }
-    if ($p -lt $Buf.Count -and $Buf[$p] -eq 0x00) { $p++ }
-    return @{ Ids = @($ids.ToArray()); Next = $p; Ok = $true }
+    # The 0x00 that ends this StreamsInfo is required: a buffer that stops
+    # first is a header not read through.
+    if ($p -lt $Buf.Count -and $Buf[$p] -eq 0x00) { $p++ } else { return (& $bad $p) }
+    return @{ Ids = @($ids.ToArray()); Next = $p; Ok = $true; PackPos = $packPos; PackSizes = @($packSizes.ToArray()); Folders = @($folders.ToArray()); FolderCount = $folderCount }
+}
+
+# ---------------------------------------------------------------------------
+# LZMA, for the one thing 7-Zip compresses by default: its own header. The
+# steps are those of LzmaSpec.cpp, the reference decoder Igor Pavlov placed in
+# the public domain beside lzma-specification.txt in the LZMA SDK. Only what a
+# 7z EncodedHeader needs: a raw stream, its five property bytes, a declared
+# unpacked size.
+#
+# WRITTEN FOR A HOSTILE FILE. The output is capped ($MaxOut) and allocated
+# once; every pass of the loop writes at least one byte or stops, so the loop
+# runs at most $MaxOut times; input that runs out, a distance reaching before
+# the start of the output and a malformed property byte are refusals, never a
+# guess; and a stopwatch bounds the wall clock. A refusal leaves the archive
+# "not determinable", which it was before this decoder existed.
+#
+# A class, not functions: the range decoder is called once per coded bit, and
+# a class method costs a fraction of a PowerShell function call. Both engines
+# (Windows PowerShell 5.0+ and pwsh) run it. Every value is held in an Int64
+# and masked to 32 bits, because PowerShell reads 0xFFFFFFFF as Int32 -1 and
+# widens an Int32 overflow to Double.
+# ---------------------------------------------------------------------------
+
+class DzLzmaRangeDecoder {
+    [byte[]]$In
+    [int]$InPos
+    [int]$InEnd
+    [long]$Range
+    [long]$Code
+    [int[]]$P
+    [bool]$Starved
+
+    [void]Normalize() {
+        if ($this.Range -lt 16777216) {
+            $this.Range = ($this.Range -shl 8) -band 4294967295
+            $nb = 0
+            if ($this.InPos -lt $this.InEnd) { $nb = [int]$this.In[$this.InPos]; $this.InPos++ } else { $this.Starved = $true }
+            $this.Code = (($this.Code -shl 8) -bor $nb) -band 4294967295
+        }
+    }
+    [int]Bit([int]$i) {
+        $pr = $this.P[$i]
+        $bound = ($this.Range -shr 11) * $pr
+        $b = 0
+        if ($this.Code -lt $bound) { $this.Range = $bound; $this.P[$i] = $pr + ((2048 - $pr) -shr 5) }
+        else { $this.Range -= $bound; $this.Code -= $bound; $this.P[$i] = $pr - ($pr -shr 5); $b = 1 }
+        $this.Normalize()
+        return $b
+    }
+    [int]Tree([int]$base, [int]$bits) {
+        $m = 1
+        for ($i = 0; $i -lt $bits; $i++) { $m = ($m -shl 1) + $this.Bit($base + $m) }
+        return ($m - (1 -shl $bits))
+    }
+    [int]ReverseTree([int]$base, [int]$bits) {
+        $m = 1; $s = 0
+        for ($i = 0; $i -lt $bits; $i++) { $b = $this.Bit($base + $m); $m = ($m -shl 1) + $b; $s = $s -bor ($b -shl $i) }
+        return $s
+    }
+    [long]Direct([int]$bits) {
+        $res = [long]0
+        for ($i = 0; $i -lt $bits; $i++) {
+            $this.Range = $this.Range -shr 1
+            $b = 0
+            if ($this.Code -ge $this.Range) { $this.Code -= $this.Range; $b = 1 }
+            $this.Normalize()
+            $res = ($res -shl 1) -bor $b
+        }
+        return $res
+    }
+    [int]Length([int]$base, [int]$posState) {
+        if ($this.Bit($base) -eq 0) { return $this.Tree($base + 2 + ($posState -shl 3), 3) }
+        if ($this.Bit($base + 1) -eq 0) { return (8 + $this.Tree($base + 130 + ($posState -shl 3), 3)) }
+        return (16 + $this.Tree($base + 258, 8))
+    }
+}
+
+function Invoke-LzmaDecode {
+    # Returns @{ Ok; Bytes; Complete; Why }. Ok with Complete false means the
+    # output stopped early (the cap, the clock, or an end marker before the
+    # declared size) and Why says which; the bytes so far are returned.
+    param([byte[]]$Data, [byte[]]$Props, [long]$UnpackSize, [int]$MaxOut = 262144, [double]$Seconds = 10)
+    $r = @{ Ok = $false; Bytes = (New-Object byte[] 0); Complete = $false; Why = '' }
+    if ($null -eq $Props -or $Props.Count -ne 5) { $r.Why = 'its LZMA properties are not five bytes'; return $r }
+    $d = [int]$Props[0]
+    if ($d -ge 225) { $r.Why = 'its LZMA property byte is out of range'; return $r }
+    $lc = $d % 9; $d = [int][math]::Floor($d / 9); $lp = $d % 5; $pb = [int][math]::Floor($d / 5)
+    # 7-Zip writes its headers with lc=3 lp=0; a larger literal context only
+    # makes the probability table (0x300 << (lc+lp) entries) slow to set up.
+    if (($lc + $lp) -gt 4) { $r.Why = 'its LZMA literal settings (lc+lp above 4) are not what 7-Zip writes for a header'; return $r }
+    if ($UnpackSize -lt 0) { $r.Why = 'its declared size is negative'; return $r }
+    if ($null -eq $Data -or $Data.Count -lt 5) { $r.Why = 'its packed stream is shorter than the range coder start'; return $r }
+    if ($Data[0] -ne 0) { $r.Why = 'its range coder does not start with a zero byte'; return $r }
+    $want = [int][math]::Min($UnpackSize, [long]$MaxOut)
+    $z = [DzLzmaRangeDecoder]::new()
+    $z.In = $Data; $z.InPos = 5; $z.InEnd = $Data.Count; $z.Starved = $false
+    $code = [long]0
+    for ($i = 1; $i -le 4; $i++) { $code = ($code -shl 8) -bor [long]$Data[$i] }
+    $z.Code = $code; $z.Range = 4294967295
+    if ($z.Code -eq $z.Range) { $r.Why = 'its range coder is corrupt'; return $r }
+    # The probability model, laid out as in LzmaSpec.cpp: the state bits,
+    # the distance slots and their trees, the two length coders, then the
+    # literal coders (0x300 per literal context).
+    $kIsRep = 192; $kIsRepG0 = 204; $kIsRepG1 = 216; $kIsRepG2 = 228; $kIsRep0Long = 240
+    $kPosSlot = 432; $kPosDec = 688; $kAlign = 803; $kLen = 819; $kRepLen = 1333; $kLit = 1847
+    $n = $kLit + (0x300 -shl ($lc + $lp))
+    $z.P = New-Object int[] $n
+    for ($i = 0; $i -lt $n; $i++) { $z.P[$i] = 1024 }
+    $out = New-Object byte[] $want
+    $pbMask = (1 -shl $pb) - 1; $lpMask = (1 -shl $lp) - 1
+    $state = 0; $rep0 = [long]0; $rep1 = [long]0; $rep2 = [long]0; $rep3 = [long]0
+    $o = 0; $marker = $false; $timedOut = $false
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $tick = 0
+    while ($o -lt $want) {
+        if ($z.Starved) { $r.Why = 'its packed stream ends before the header does'; return $r }
+        $tick++
+        if (($tick -band 1023) -eq 1 -and $sw.Elapsed.TotalSeconds -gt $Seconds) { $timedOut = $true; break }
+        $posState = $o -band $pbMask
+        if ($z.Bit(($state -shl 4) + $posState) -eq 0) {
+            $prev = 0; if ($o -gt 0) { $prev = [int]$out[$o - 1] }
+            $base = $kLit + 0x300 * ((($o -band $lpMask) -shl $lc) + ($prev -shr (8 - $lc)))
+            $sym = 1
+            if ($state -ge 7) {
+                $mb = [int]$out[$o - $rep0 - 1]
+                while ($sym -lt 0x100) {
+                    $mbit = ($mb -shr 7) -band 1; $mb = $mb -shl 1
+                    $bit = $z.Bit($base + ((1 + $mbit) -shl 8) + $sym)
+                    $sym = ($sym -shl 1) -bor $bit
+                    if ($mbit -ne $bit) { break }
+                }
+            }
+            while ($sym -lt 0x100) { $sym = ($sym -shl 1) -bor $z.Bit($base + $sym) }
+            $out[$o] = [byte]($sym - 0x100); $o++
+            if ($state -lt 4) { $state = 0 } elseif ($state -lt 10) { $state -= 3 } else { $state -= 6 }
+            continue
+        }
+        $len = 0
+        if ($z.Bit($kIsRep + $state) -ne 0) {
+            if ($o -eq 0) { $r.Why = 'its stream repeats a match before any output'; return $r }
+            if ($z.Bit($kIsRepG0 + $state) -eq 0) {
+                if ($z.Bit($kIsRep0Long + ($state -shl 4) + $posState) -eq 0) {
+                    if ($state -lt 7) { $state = 9 } else { $state = 11 }
+                    $out[$o] = $out[$o - $rep0 - 1]; $o++
+                    continue
+                }
+            } else {
+                if ($z.Bit($kIsRepG1 + $state) -eq 0) { $dist = $rep1 }
+                else {
+                    if ($z.Bit($kIsRepG2 + $state) -eq 0) { $dist = $rep2 } else { $dist = $rep3; $rep3 = $rep2 }
+                    $rep2 = $rep1
+                }
+                $rep1 = $rep0; $rep0 = $dist
+            }
+            $len = $z.Length($kRepLen, $posState)
+            if ($state -lt 7) { $state = 8 } else { $state = 11 }
+        } else {
+            $rep3 = $rep2; $rep2 = $rep1; $rep1 = $rep0
+            $len = $z.Length($kLen, $posState)
+            if ($state -lt 7) { $state = 7 } else { $state = 10 }
+            $ls = $len; if ($ls -gt 3) { $ls = 3 }
+            $slot = $z.Tree($kPosSlot + ($ls -shl 6), 6)
+            if ($slot -lt 4) { $rep0 = [long]$slot }
+            else {
+                $nd = ($slot -shr 1) - 1
+                # Int64 before the shift: slot 63 shifts by 30, past Int32.
+                $dist = ([long](2 -bor ($slot -band 1))) -shl $nd
+                if ($slot -lt 14) { $dist += $z.ReverseTree([int]($kPosDec + $dist - $slot), $nd) }
+                else { $dist += ($z.Direct($nd - 4) -shl 4); $dist += $z.ReverseTree($kAlign, 4) }
+                $rep0 = $dist
+            }
+            if ($rep0 -eq 4294967295) { $marker = $true; break }
+        }
+        if ($rep0 -ge $o) { $r.Why = 'its stream refers to data before the start of the header'; return $r }
+        $len += 2
+        $src = $o - [int]$rep0 - 1
+        for ($k = 0; $k -lt $len -and $o -lt $want; $k++) { $out[$o] = $out[$src + $k]; $o++ }
+    }
+    if ($z.Starved) { $r.Why = 'its packed stream ends before the header does'; return $r }
+    $r.Ok = $true
+    $r.Complete = ([long]$o -eq $UnpackSize)
+    if ($o -lt $want) { $short = New-Object byte[] $o; [Array]::Copy($out, $short, $o); $out = $short }
+    $r.Bytes = $out
+    if (-not $r.Complete) {
+        if ($timedOut) { $r.Why = ('decoding stopped at the ' + [string]$Seconds + '-second limit') }
+        elseif ($marker) { $r.Why = 'its stream ends before the size it declares' }
+        else { $r.Why = ('the header is larger than the ' + [string]$MaxOut + '-byte decode cap') }
+    }
+    return $r
+}
+
+function Get-Crc32 {
+    # CRC-32 (IEEE 802.3, reflected 0xEDB88320), the digest 7z stores.
+    param([byte[]]$Buf)
+    if ($null -eq $script:Crc32Table) {
+        $t = New-Object long[] 256
+        for ($n = 0; $n -lt 256; $n++) {
+            $c = [long]$n
+            for ($k = 0; $k -lt 8; $k++) { if (($c -band 1) -ne 0) { $c = 3988292384 -bxor ($c -shr 1) } else { $c = $c -shr 1 } }
+            $t[$n] = $c
+        }
+        $script:Crc32Table = $t
+    }
+    $t = $script:Crc32Table
+    $c = [long]4294967295
+    foreach ($b in $Buf) { $c = $t[[int](($c -bxor $b) -band 0xFF)] -bxor ($c -shr 8) }
+    return ($c -bxor 4294967295)
+}
+
+function Read-SevenZipHeader {
+    # A plain Header, from the byte after its 0x01: ArchiveProperties, the
+    # additional and main StreamsInfo (whose coders say whether the data is
+    # encrypted), then FilesInfo with the names. Returns @{ Encrypted;
+    # Entries; Why }; Encrypted is $null whenever the walk stopped before
+    # it could rule a 7zAES coder out.
+    param([byte[]]$Buf, [long]$Pos)
+    $r = @{ Encrypted = $null; Entries = @(); Why = ''; NameCount = 0 }
+    $p = $Pos
+    if ($p -lt $Buf.Count -and $Buf[$p] -eq 0x02) {
+        # ArchiveProperties: {type, size, data} until type 0. Each step
+        # moves forward and stays inside the buffer; there is no count
+        # limit (7-Zip has none), and running out of buffer first is a
+        # header not read through.
+        $p++
+        $ended = $false
+        while ($p -lt $Buf.Count) {
+            $pt = [int]$Buf[$p]; $p++
+            if ($pt -eq 0x00) { $ended = $true; break }
+            $s = Read-SevenZipNumber $Buf $p
+            if (-not $s.Ok -or $s.Value -lt 0 -or $s.Value -gt ($Buf.Count - $s.Next)) { $r.Why = 'archive properties unreadable'; return $r }
+            $p = $s.Next + $s.Value
+        }
+        if (-not $ended) { $r.Why = 'archive properties unreadable'; return $r }
+    }
+    $enc = $false; $walked = $true; $unknown = @()
+    foreach ($sect in @(0x03, 0x04)) {
+        if ($p -lt $Buf.Count -and $Buf[$p] -eq $sect) {
+            $p++
+            $si = Read-SevenZipStreamsInfo -Buf $Buf -Pos $p
+            foreach ($id in @($si.Ids)) { $cls = Get-SevenZipCoderClass $id; if ($cls -eq 'crypto') { $enc = $true } elseif ($cls -eq 'unknown') { $unknown += $id } }
+            if (-not $si.Ok) { $walked = $false; break }
+            $p = $si.Next
+        }
+    }
+    # After the streams come the FilesInfo (0x05) or the end of the Header
+    # (0x00); anything else, or the end of the buffer, is a header not read
+    # through.
+    if ($walked -and -not ($p -lt $Buf.Count -and ($Buf[$p] -eq 0x05 -or $Buf[$p] -eq 0x00))) { $walked = $false }
+    if (-not $walked) {
+        if ($enc) { $r.Encrypted = $true } else { $r.Encrypted = $null }
+        $r.Why = 'streams info not fully walked'
+        return $r
+    }
+    if ($enc) { $r.Encrypted = $true }
+    elseif ($unknown.Count) { $r.Encrypted = $null; $r.Why = 'coded with a method this audit does not know (' + ((@($unknown | Select-Object -First 3) | ForEach-Object { ConvertTo-PrintableText $_ }) -join ', ') + ')' }
+    else { $r.Encrypted = $false }
+    if ($p -lt $Buf.Count -and $Buf[$p] -eq 0x05) {
+        $p++
+        $nfi = Read-SevenZipNumber $Buf $p
+        if (-not $nfi.Ok -or $nfi.Value -lt 0) { $r.Why = 'files info unreadable'; if (-not $enc) { $r.Encrypted = $null }; return $r }
+        $p = $nfi.Next
+        $names = New-Object System.Collections.ArrayList
+        $ended = $false
+        while ($p -lt $Buf.Count) {
+            $pt = [int]$Buf[$p]; $p++
+            if ($pt -eq 0x00) { $ended = $true; break }
+            $ps = Read-SevenZipNumber $Buf $p
+            if (-not $ps.Ok -or $ps.Value -lt 0 -or $ps.Value -gt ($Buf.Count - $ps.Next)) {
+                # A files record that cannot be walked: the header was not
+                # read through, so "no password" is not established.
+                $r.Why = 'files info unreadable'
+                if (-not $enc) { $r.Encrypted = $null }
+                break
+            }
+            $p = $ps.Next
+            if ($pt -eq 0x11 -and $ps.Value -gt 1 -and $Buf[$p] -eq 0) {
+                $txt = [System.Text.Encoding]::Unicode.GetString($Buf, [int]($p + 1), [int]($ps.Value - 1))
+                foreach ($nm in ($txt -split "`0")) { if ($nm) { $r.NameCount++; if ($names.Count -lt 500) { [void]$names.Add($nm) } } }
+            }
+            $p += $ps.Value
+        }
+        if (-not $ended -and -not $r.Why) {
+            # The property list ran off the buffer: the names were not all
+            # read, so "no credential file inside" is not established.
+            $r.Why = 'files info unreadable'
+            if (-not $enc) { $r.Encrypted = $null }
+        }
+        $r.Entries = @($names.ToArray())
+    }
+    return $r
+}
+
+function Get-SevenZipDecodePlan {
+    # What an EncodedHeader without 7zAES needs to be read: one pack stream,
+    # one folder, one coder -- LZMA (03 01 01, what 7-Zip writes by default)
+    # or Copy (00). Anything else is named and left not determinable.
+    param($Info)
+    $bad = { param($w) return @{ Ok = $false; Why = $w } }
+    if (-not $Info.Ok) { return (& $bad 'whose streams info could not be walked') }
+    if (@($Info.Folders).Count -ne 1 -or @($Info.PackSizes).Count -ne 1 -or $Info.PackPos -lt 0) { return (& $bad 'with an unexpected stream layout') }
+    $f = $Info.Folders[0]
+    $codeIds = (@($f.Coders) | ForEach-Object { [string]$_.Id }) -join '+'
+    if (@($f.Coders).Count -ne 1 -or @($f.UnpackSizes).Count -ne 1) { return (& $bad ('coded with ' + $codeIds + ', which this audit does not decode')) }
+    $c = $f.Coders[0]
+    if ($c.Id -ne '030101' -and $c.Id -ne '00') { return (& $bad ('coded with ' + $codeIds + ', which this audit does not decode')) }
+    if ($c.Id -eq '030101' -and @($c.Props).Count -ne 5) { return (& $bad 'whose LZMA properties are malformed') }
+    # An offset past 2^62 would widen to Double when 32 is added.
+    if ($Info.PackPos -gt 4611686018427387904 -or [long]$Info.PackSizes[0] -le 0 -or [long]$f.UnpackSizes[0] -lt 0) { return (& $bad 'whose packed stream position or size is impossible') }
+    return @{ Ok = $true; Why = ''; Coder = [string]$c.Id; Props = [byte[]]$c.Props; PackOffset = (32 + [long]$Info.PackPos); PackSize = [long]$Info.PackSizes[0]; UnpackSize = [long]$f.UnpackSizes[0]; Crc = [long]$f.Crc }
+}
+
+function Resolve-SevenZipEncodedHeader {
+    # Decodes the packed header $Plan names and reads it as a plain Header.
+    # Returns @{ Encrypted; Entries; Why; Decoded; Complete }. A header read
+    # only in part is trusted only for what it shows: the coders come before
+    # the names, so a 7zAES coder seen in the part is certain, while its
+    # absence is not -- that stays not determinable.
+    param($Plan, [byte[]]$Packed, [int]$MaxOut = 262144, [double]$Seconds = 10)
+    $r = @{ Encrypted = $null; Entries = @(); Why = ''; Decoded = $false; Complete = $false; NameCount = 0 }
+    if ($null -eq $Packed -or [long]$Packed.Count -lt $Plan.PackSize) { $r.Why = 'compressed header: its packed bytes could not be read in full, so a password is not determinable'; return $r }
+    if ($Plan.Coder -eq '00') {
+        $n = [int][math]::Min([math]::Min($Plan.UnpackSize, [long]$Packed.Count), [long]$MaxOut)
+        $bytes = New-Object byte[] $n; [Array]::Copy($Packed, $bytes, $n)
+        $d = @{ Ok = $true; Bytes = $bytes; Complete = ([long]$n -eq $Plan.UnpackSize); Why = 'its stored header is larger than the read cap' }
+    } else {
+        $d = Invoke-LzmaDecode -Data $Packed -Props $Plan.Props -UnpackSize $Plan.UnpackSize -MaxOut $MaxOut -Seconds $Seconds
+        if (-not $d.Ok) { $r.Why = 'compressed header could not be decompressed (' + $d.Why + '), so a password is not determinable'; return $r }
+    }
+    $bytes = [byte[]]$d.Bytes
+    $r.Complete = [bool]$d.Complete
+    if ($r.Complete -and $Plan.Crc -ge 0 -and (Get-Crc32 $bytes) -ne $Plan.Crc) { $r.Why = 'compressed header failed its CRC check once decompressed, so a password is not determinable'; return $r }
+    if ($bytes.Count -lt 1 -or $bytes[0] -ne 0x01) { $r.Why = 'compressed header did not decompress to a 7z header, so a password is not determinable'; return $r }
+    $h = Read-SevenZipHeader -Buf $bytes -Pos 1
+    $r.Decoded = $true
+    $r.Entries = @($h.Entries); $r.NameCount = [int]$h.NameCount
+    if ($r.Complete) { $r.Encrypted = $h.Encrypted; $r.Why = [string]$h.Why; return $r }
+    if ($h.Encrypted -eq $true) { $r.Encrypted = $true; return $r }
+    $r.Why = 'compressed header decompressed only in part (' + [string]$d.Why + '), so a password is not determinable'
+    return $r
 }
 
 function Get-SevenZipFactsFromBytes {
     param([byte[]]$Sig, [long]$FileLength, [byte[]]$NextHeader, [switch]$SignatureOnly)
-    $r = @{ Parsed = $false; Encrypted = $null; HeadersEncrypted = $false; MultiVolume = $false; Beyond = $false; Entries = @(); Why = ''; NextOffset = -1; NextSize = 0 }
+    $r = @{ Parsed = $false; Encrypted = $null; HeadersEncrypted = $false; MultiVolume = $false; Beyond = $false; Entries = @(); Why = ''; NextOffset = -1; NextSize = 0; Decode = $null; HeaderDecoded = $false; NameCount = 0 }
     if ($null -eq $Sig -or $Sig.Count -lt 32) { $r.Why = 'too short for a signature header'; return $r }
     $off = Get-U64 $Sig 12; $size = Get-U64 $Sig 20
     $r.NextOffset = $off; $r.NextSize = $size
@@ -753,70 +1155,19 @@ function Get-SevenZipFactsFromBytes {
     $r.Parsed = $true
     if ($NextHeader[0] -eq 0x17) {
         $si = Read-SevenZipStreamsInfo -Buf $NextHeader -Pos 1
-        if (@($si.Ids) -contains '06F10701') { $r.Encrypted = $true; $r.HeadersEncrypted = $true }
-        else { $r.Encrypted = $null; $r.Why = 'compressed header: a password without header encryption is not determinable without decompressing it' }
+        if (@(@($si.Ids) | Where-Object { (Get-SevenZipCoderClass $_) -eq 'crypto' }).Count) { $r.Encrypted = $true; $r.HeadersEncrypted = $true; return $r }
+        # The default: the header itself is LZMA-compressed. Whether the
+        # files are encrypted is inside it, so the caller decodes it from the
+        # plan; until then it is not determinable, and stays so if the
+        # decode is refused.
+        $plan = Get-SevenZipDecodePlan -Info $si
+        if ($plan.Ok) { $r.Decode = $plan; $r.Why = 'compressed header: not decompressed yet, so a password is not determinable' }
+        else { $r.Why = 'compressed header ' + $plan.Why + ', so a password is not determinable' }
         return $r
     }
     if ($NextHeader[0] -eq 0x01) {
-        $p = [long]1
-        if ($p -lt $NextHeader.Count -and $NextHeader[$p] -eq 0x02) {
-            # ArchiveProperties: {type, size, data} until type 0. Each step
-            # must move forward and stay inside the buffer.
-            $p++
-            $guard = 0
-            while ($p -lt $NextHeader.Count -and $guard -lt 64) {
-                $guard++
-                $pt = [int]$NextHeader[$p]; $p++
-                if ($pt -eq 0x00) { break }
-                $s = Read-SevenZipNumber $NextHeader $p
-                if (-not $s.Ok -or $s.Value -lt 0 -or $s.Value -gt ($NextHeader.Count - $s.Next)) { $r.Why = 'archive properties unreadable'; return $r }
-                $p = $s.Next + $s.Value
-            }
-        }
-        $enc = $false; $walked = $true
-        foreach ($sect in @(0x03, 0x04)) {
-            if ($p -lt $NextHeader.Count -and $NextHeader[$p] -eq $sect) {
-                $p++
-                $si = Read-SevenZipStreamsInfo -Buf $NextHeader -Pos $p
-                if (@($si.Ids) -contains '06F10701') { $enc = $true }
-                if (-not $si.Ok) { $walked = $false; break }
-                $p = $si.Next
-            }
-        }
-        if (-not $walked) {
-            if ($enc) { $r.Encrypted = $true } else { $r.Encrypted = $null }
-            $r.Why = 'streams info not fully walked'
-            return $r
-        }
-        $r.Encrypted = $enc
-        if ($p -lt $NextHeader.Count -and $NextHeader[$p] -eq 0x05) {
-            $p++
-            $nfi = Read-SevenZipNumber $NextHeader $p
-            if (-not $nfi.Ok -or $nfi.Value -lt 0) { return $r }
-            $p = $nfi.Next
-            $names = New-Object System.Collections.ArrayList
-            $guard = 0
-            while ($p -lt $NextHeader.Count -and $guard -lt 64) {
-                $guard++
-                $pt = [int]$NextHeader[$p]; $p++
-                if ($pt -eq 0x00) { break }
-                $ps = Read-SevenZipNumber $NextHeader $p
-                if (-not $ps.Ok -or $ps.Value -lt 0 -or $ps.Value -gt ($NextHeader.Count - $ps.Next)) {
-                    # A files record that cannot be walked: the header was not
-                    # read through, so "no password" is not established.
-                    $r.Why = 'files info unreadable'
-                    if (-not $enc) { $r.Encrypted = $null }
-                    break
-                }
-                $p = $ps.Next
-                if ($pt -eq 0x11 -and $ps.Value -gt 1 -and $NextHeader[$p] -eq 0) {
-                    $txt = [System.Text.Encoding]::Unicode.GetString($NextHeader, [int]($p + 1), [int]($ps.Value - 1))
-                    foreach ($nm in ($txt -split "`0")) { if ($nm -and $names.Count -lt 500) { [void]$names.Add($nm) } }
-                }
-                $p += $ps.Value
-            }
-            $r.Entries = @($names.ToArray())
-        }
+        $h = Read-SevenZipHeader -Buf $NextHeader -Pos 1
+        $r.Encrypted = $h.Encrypted; $r.Entries = @($h.Entries); $r.NameCount = [int]$h.NameCount; if ($h.Why) { $r.Why = $h.Why }
         return $r
     }
     $r.Why = 'next header of an unknown kind'
@@ -827,7 +1178,10 @@ function Get-SevenZipFacts {
     # $SpanPaths / $SpanSizes: this file first, then the later volumes of its
     # set in order, so a header that lies beyond the first volume (where
     # 7-Zip always puts it) is read from the volume that holds it.
-    param([string]$Path, [long]$Length, [string[]]$SpanPaths = @(), [long[]]$SpanSizes = @())
+    # $DecodeSeconds bounds the decompression of a compressed header;
+    # -NoDecode leaves a compressed header for the caller to decode later
+    # (Invoke-SevenZipHeaderDecode), with the plan in .Decode.
+    param([string]$Path, [long]$Length, [string[]]$SpanPaths = @(), [long[]]$SpanSizes = @(), [double]$DecodeSeconds = 10, [switch]$NoDecode)
     $span = ($SpanPaths.Count -gt 1)
     $total = $Length
     if ($span) {
@@ -842,7 +1196,37 @@ function Get-SevenZipFacts {
     $want = [int][math]::Min([long]$pre.NextSize, 1048576)
     if ($span) { $nh = Read-SpanBytes -Paths $SpanPaths -Sizes $SpanSizes -Offset (32 + $pre.NextOffset) -Count $want }
     else { $nh = Read-FileBytes -Path $Path -Offset (32 + $pre.NextOffset) -Count $want }
-    return (Get-SevenZipFactsFromBytes -Sig $sig -FileLength $total -NextHeader $nh)
+    $f = Get-SevenZipFactsFromBytes -Sig $sig -FileLength $total -NextHeader $nh
+    if ($null -eq $f.Decode) {
+        if ([long]$pre.NextSize -gt [long]$want -and $f.Encrypted -ne $true) {
+            # A plain header larger than the read: only a 7zAES coder seen in
+            # the part read is certain.
+            $f.Encrypted = $null; $f.Why = 'its header is larger than the 1 MiB read, and the part read does not settle it'
+        }
+        return $f
+    }
+    if ($NoDecode) { return $f }
+    return (Invoke-SevenZipHeaderDecode -Facts $f -Path $Path -Total $total -SpanPaths $SpanPaths -SpanSizes $SpanSizes -Seconds $DecodeSeconds)
+}
+
+function Invoke-SevenZipHeaderDecode {
+    # Reads the packed header the plan in $Facts.Decode names, decodes it and
+    # updates $Facts; returns it.
+    param($Facts, [string]$Path, [long]$Total, [string[]]$SpanPaths = @(), [long[]]$SpanSizes = @(), [double]$Seconds = 10)
+    $f = $Facts
+    $pl = $f.Decode
+    if ($pl.PackSize -gt 1048576 -or ($pl.PackOffset + $pl.PackSize) -gt $Total) {
+        $f.Why = 'compressed header: its packed stream lies outside the file or is larger than 1 MiB, so a password is not determinable'
+        return $f
+    }
+    if ($SpanPaths.Count -gt 1) { $packed = Read-SpanBytes -Paths $SpanPaths -Sizes $SpanSizes -Offset $pl.PackOffset -Count ([int]$pl.PackSize) }
+    else { $packed = Read-FileBytes -Path $Path -Offset $pl.PackOffset -Count ([int]$pl.PackSize) }
+    $res = Resolve-SevenZipEncodedHeader -Plan $pl -Packed $packed -Seconds $Seconds
+    $f.HeaderDecoded = [bool]$res.Decoded
+    $f.Encrypted = $res.Encrypted
+    $f.Entries = @($res.Entries); $f.NameCount = [int]$res.NameCount
+    $f.Why = [string]$res.Why
+    return $f
 }
 
 # CAB (Microsoft Cabinet Format): flags at 0x1E carry cfhdrPREV_CABINET 0x0001
@@ -980,7 +1364,7 @@ function Get-ArchiveVerdict {
     if ($und) {
         # Nothing unpacks into the Public folder; an archive there whose
         # password cannot be determined is not routine.
-        if ($Role -eq 'public') { return @{ Sev = 'WARNING'; Class = 'packed'; Clause = 'may be password-protected (its header does not say, and this audit does not decompress it), and sits in the shared Public folder, where nothing unpacks' } }
+        if ($Role -eq 'public') { return @{ Sev = 'WARNING'; Class = 'packed'; Clause = 'may be password-protected (whether it is could not be read from its header), and sits in the shared Public folder, where nothing unpacks' } }
         return @{ Sev = 'OK'; Class = 'undetermined'; Clause = '' }
     }
     return @{ Sev = 'OK'; Class = 'plain'; Clause = '' }
@@ -1132,7 +1516,7 @@ function Get-ArchiveStagingReport {
     $und = @($graded | Where-Object { $_.V.Class -eq 'undetermined' } | ForEach-Object { $_.A } | Sort-Object { [string]$_.Path })
     if ($und.Count) {
         $nm = @($und | Select-Object -First 5 | ForEach-Object { ConvertTo-PrintableText $_.Path })
-        [void]$out.Add('[INFO] ' + [string]$und.Count + ' archive(s) whose password could not be determined -- a 7z''s header is compressed unless it was made with header encryption, and a damaged or truncated archive cannot be read through; graded by their volume shape only: ' + ($nm -join '; ') + $(if ($und.Count -gt 5) { '; ...and ' + [string]($und.Count - 5) + ' more' } else { '' }))
+        [void]$out.Add('[INFO] ' + [string]$und.Count + ' archive(s) whose password could not be determined -- a 7z header coded with a method this audit does not decode, larger than its 256 KiB cap, failing its CRC, or not decoded within its time (10 s each, 30 s per run, smallest first), and a damaged or truncated archive, cannot be read through; graded by their volume shape only: ' + ($nm -join '; ') + $(if ($und.Count -gt 5) { '; ...and ' + [string]($und.Count - 5) + ' more' } else { '' }))
     }
     if ([int]$Probes.Packages -gt 0) { [void]$out.Add('[INFO] ' + [string]$Probes.Packages + ' package(s) that are ZIP by signature (Office documents, MSIX/APPX, VSIX, JAR and the like) were left out: a document is not an archive for this purpose') }
     if ([int]$Probes.NotArchive -gt 0) { [void]$out.Add('[INFO] ' + [string]$Probes.NotArchive + ' file(s) named like an archive are not one by signature') }
@@ -1218,7 +1602,13 @@ function Get-ZoneOfFile {
 }
 
 function Invoke-ArchiveClassification {
-    param($Candidates, [int]$MaxProbes = 5000, [double]$BudgetSeconds = 120, $Stopwatch = $null, $FolderStats = $null,
+    # $DecodeAllowanceSeconds: the wall clock all compressed 7z headers of
+    # this run may spend decoding, together. They are decoded AFTER every
+    # archive has been graded on its header bytes, smallest packed header
+    # first, so a folder of slow decoys cannot use up the run's budget before
+    # the other archives are examined, and a real header (a few KB) is
+    # decoded before them.
+    param($Candidates, [int]$MaxProbes = 5000, [double]$BudgetSeconds = 120, $Stopwatch = $null, $FolderStats = $null, [double]$DecodeAllowanceSeconds = 30,
           [scriptblock]$ZoneReader = { param($p) Get-ZoneOfFile -Path $p },
           [scriptblock]$HeadReader = { param($p) Read-FileBytes -Path $p -Offset 0 -Count 512 })
     if ($null -eq $Stopwatch) { $Stopwatch = [System.Diagnostics.Stopwatch]::StartNew() }
@@ -1259,6 +1649,7 @@ function Invoke-ArchiveClassification {
     $probes.Probed = $probedOthers
 
     $archives = New-Object System.Collections.ArrayList
+    $pending = New-Object System.Collections.ArrayList
     foreach ($c in @($order.ToArray())) {
         if ($Stopwatch.Elapsed.TotalSeconds -gt $BudgetSeconds) { $probes.BudgetHit = $true; break }
         $it = $c.Item
@@ -1302,7 +1693,7 @@ function Invoke-ArchiveClassification {
                 $spanP += [string]$sib.Item.FullName; $spanS += [long]$sib.Item.Length
             }
         }
-        $enc = $null; $multi = $false; $multiWhy = ''; $entries = @(); $hdrEnc = $false; $opc = $false; $count = 0; $parseError = ''
+        $x = $null; $enc = $null; $multi = $false; $multiWhy = ''; $entries = @(); $hdrEnc = $false; $opc = $false; $count = 0; $parseError = ''
         try {
             switch ($kind) {
                 'zip'      { $x = Get-ZipFacts -Path $path -Length $len -SpanPaths $spanP -SpanSizes $spanS; $enc = $x.Encrypted; $multi = [bool]$x.Split; if ($multi) { $multiWhy = 'the end record names more than one disk' }; $entries = @($x.Entries); $opc = [bool]$x.Opc; $count = [int]$x.EntryCount; if ($null -eq $enc -and $x.Why) { $parseError = $x.Why } }
@@ -1310,8 +1701,9 @@ function Invoke-ArchiveClassification {
                 'rar4'     { $x = Get-RarFacts -Path $path -Length $len; $enc = $x.Encrypted; $hdrEnc = [bool]$x.HeadersEncrypted; $multi = [bool]$x.MultiVolume; if ($multi) { $multiWhy = 'the archive header carries the volume flag' }; $entries = @($x.Entries); $count = [int]$x.Count; if (-not $x.Parsed) { $parseError = $x.Why; if (-not $enc) { $enc = $null } } }
                 'rar5'     { $x = Get-RarFacts -Path $path -Length $len; $enc = $x.Encrypted; $hdrEnc = [bool]$x.HeadersEncrypted; $multi = [bool]$x.MultiVolume; if ($multi) { $multiWhy = 'the archive header carries the volume flag' }; $entries = @($x.Entries); $count = [int]$x.Count; if (-not $x.Parsed) { $parseError = $x.Why; if (-not $enc) { $enc = $null } } }
                 '7z'       {
-                    $x = Get-SevenZipFacts -Path $path -Length $len -SpanPaths $spanP -SpanSizes $spanS
-                    $enc = $x.Encrypted; $hdrEnc = [bool]$x.HeadersEncrypted; $entries = @($x.Entries); $count = $entries.Count
+                    # A compressed header is decoded after the loop (below).
+                    $x = Get-SevenZipFacts -Path $path -Length $len -SpanPaths $spanP -SpanSizes $spanS -NoDecode
+                    $enc = $x.Encrypted; $hdrEnc = [bool]$x.HeadersEncrypted; $entries = @($x.Entries); $count = [math]::Max([int]$x.NameCount, $entries.Count)
                     if ($spanP.Count -gt 1) { $multi = $true; $multiWhy = [string]$spanP.Count + ' volumes read as one stream' }
                     if ($x.Beyond) { $parseError = $x.Why }
                     elseif (-not $x.Parsed) { $parseError = $x.Why }
@@ -1328,18 +1720,46 @@ function Invoke-ArchiveClassification {
         }
         if (-not $multi) { $setKey = '' }
         $zr = & $ZoneReader $path
-        [void]$archives.Add(@{ Path = $path; Name = [string]$it.Name; Folder = $c.Folder; Role = [string]$c.Role; Length = $len; Modified = $it.LastWriteTimeUtc; Kind = $kind
-                               Zone = [int]$zr.Zone; HostUrl = [string]$zr.HostUrl; Encrypted = $enc; HeadersEncrypted = $hdrEnc; MultiVolume = $multi; MultiVolumeWhy = $multiWhy
-                               Entries = $entries; EntryCount = $count; ParseError = $parseError; SetKey = $setKey; SetIndex = $index; SetMembers = $members })
+        $rec = @{ Path = $path; Name = [string]$it.Name; Folder = $c.Folder; Role = [string]$c.Role; Length = $len; Modified = $it.LastWriteTimeUtc; Kind = $kind
+                  Zone = [int]$zr.Zone; HostUrl = [string]$zr.HostUrl; Encrypted = $enc; HeadersEncrypted = $hdrEnc; MultiVolume = $multi; MultiVolumeWhy = $multiWhy
+                  Entries = $entries; EntryCount = $count; ParseError = $parseError; SetKey = $setKey; SetIndex = $index; SetMembers = $members }
+        [void]$archives.Add($rec)
+        if ($kind -eq '7z' -and $null -ne $x -and $null -ne $x.Decode -and $null -eq $enc) {
+            $tot = $len; if ($spanP.Count -gt 1) { $tot = 0; foreach ($q in $spanS) { $tot += [long]$q } }
+            [void]$pending.Add(@{ Rec = $rec; Facts = $x; Path = $path; Total = $tot; SpanP = $spanP; SpanS = $spanS; Size = [long]$x.Decode.PackSize })
+        }
     }
-    # A set is ONE archive: what one volume established (the header) holds
-    # for every part, so the parts cannot grade apart.
+    # The compressed 7z headers, smallest first, within the run's decode
+    # allowance and its overall budget; whatever is left is named, never
+    # cleared.
+    $spent = 0.0; $decoded = 0
+    foreach ($pd in @($pending.ToArray() | Sort-Object @{ Expression = { [long]$_.Size } }, @{ Expression = { [string]$_.Path } })) {
+        $left = [math]::Min([math]::Min(10.0, $DecodeAllowanceSeconds - $spent), $BudgetSeconds - $Stopwatch.Elapsed.TotalSeconds)
+        if ($left -lt 0.5) {
+            $pd.Rec.ParseError = 'compressed header not decompressed: the run''s ' + [string]$DecodeAllowanceSeconds + '-second decode allowance was spent on ' + [string]$decoded + ' smaller header(s) first'
+            continue
+        }
+        $dsw = [System.Diagnostics.Stopwatch]::StartNew()
+        try {
+            $y = Invoke-SevenZipHeaderDecode -Facts $pd.Facts -Path $pd.Path -Total $pd.Total -SpanPaths $pd.SpanP -SpanSizes $pd.SpanS -Seconds $left
+            $pd.Rec.Encrypted = $y.Encrypted
+            $pd.Rec.Entries = @($y.Entries); $pd.Rec.EntryCount = [math]::Max([int]$y.NameCount, @($y.Entries).Count)
+            if ($null -eq $y.Encrypted) { $pd.Rec.ParseError = [string]$y.Why } else { $pd.Rec.ParseError = '' }
+        } catch { $pd.Rec.ParseError = 'compressed header not decompressed: ' + $_.Exception.Message }
+        $spent += $dsw.Elapsed.TotalSeconds; $decoded++
+    }
+    # A set is ONE archive: a password one volume's header established holds
+    # for every part, so the parts cannot grade apart. Only a password
+    # crosses between parts: "no password" read from one part does not clear
+    # a part whose own header could not be read, because a decoy named as a
+    # volume of the set would otherwise speak for it.
     $bySet = @{}
     foreach ($a in @($archives.ToArray())) { if ($a.SetKey) { if (-not $bySet.ContainsKey($a.SetKey)) { $bySet[$a.SetKey] = @() }; $bySet[$a.SetKey] += ,$a } }
     foreach ($k in @($bySet.Keys)) {
         $known = @($bySet[$k] | Where-Object { $null -ne $_.Encrypted } | Sort-Object @{ Expression = { -not ($_.Encrypted -eq $true) } }, @{ Expression = { [string]$_.Path } })
         if ($known.Count -eq 0) { continue }
         $lead = $known[0]
+        if ($lead.Encrypted -ne $true) { continue }
         foreach ($a in @($bySet[$k])) {
             if ($null -eq $a.Encrypted -or ($lead.Encrypted -eq $true -and $a.Encrypted -ne $true)) {
                 $a.Encrypted = $lead.Encrypted; $a.HeadersEncrypted = $lead.HeadersEncrypted
@@ -1581,6 +2001,39 @@ if ($SelfTest) {
         $sig = Join-Bytes @((B @(0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 0x00, 0x04)), (U32 0), (U64 $pack.Count), (U64 $size), (U32 0))
         return (Join-Bytes @($sig, $pack, $nh))
     }
+    # ---- a 7z whose next header is an EncodedHeader over real packed bytes,
+    # as 7-Zip writes one by default (-mhc=on): the packed header sits right
+    # after the signature header (PackPos 0) and the EncodedHeader names its
+    # coder, its unpacked size and, when $Crc is given, the CRC of the header
+    # it unpacks to.
+    # 7z's own number encoding (7zFormat.txt; Read-SevenZipNumber reads it):
+    # n leading one bits in the first byte, n little-endian bytes after it.
+    # Vint above is RAR's encoding, the same only below 128.
+    function N7 {
+        param([long]$v)
+        $n = 0
+        while ($n -lt 8 -and $v -ge ([long]1 -shl (7 * ($n + 1)))) { $n++ }
+        $first = ((0xFF -shl (8 - $n)) -band 0xFF) -bor [int](($v -shr (8 * $n)) -band 0xFF)
+        if ($n -eq 8) { $first = 0xFF }
+        $o = @([byte]$first)
+        for ($i = 0; $i -lt $n; $i++) { $o += [byte](($v -shr (8 * $i)) -band 0xFF) }
+        return [byte[]]$o
+    }
+    function New-SevenZipEncodedBytes {
+        param([byte[]]$Packed, [long]$UnpackSize, [long]$Crc = -1, [string]$Coder = 'lzma', [long]$PackSize = -1, [byte[]]$Props = $null)
+        if ($null -eq $Props) { $Props = B @(0x5D, 0x00, 0x00, 0x10, 0x00) }
+        if ($PackSize -lt 0) { $PackSize = $Packed.Count }
+        switch ($Coder) {
+            'lzma'  { $cd = Join-Bytes @((B @(0x23, 0x03, 0x01, 0x01, 0x05)), $Props) }
+            'lzma2' { $cd = B @(0x21, 0x21, 0x01, 0x18) }
+            'copy'  { $cd = B @(0x01, 0x00) }
+        }
+        $crcPart = $null
+        if ($Crc -ge 0) { $crcPart = Join-Bytes @((B @(0x0A, 0x01)), (U32 $Crc)) }
+        $nh = Join-Bytes @((B @(0x17, 0x06)), (Vint 0), (Vint 1), (B @(0x09)), (N7 $PackSize), (B @(0x00, 0x07, 0x0B)), (Vint 1), (B @(0x00)), (Vint 1), $cd, (B @(0x0C)), (N7 $UnpackSize), $crcPart, (B @(0x00, 0x00)))
+        $sig = Join-Bytes @((B @(0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 0x00, 0x04)), (U32 0), (U64 $Packed.Count), (U64 $nh.Count), (U32 0))
+        return (Join-Bytes @($sig, $Packed, $nh))
+    }
     function New-CabBytes { param([int]$Flags) $h = New-Object byte[] 0x24; $h[0] = 0x4D; $h[1] = 0x53; $h[2] = 0x43; $h[3] = 0x46; $h[0x1E] = [byte]($Flags -band 0xFF); return $h }
     function Put { param([string]$Name, [byte[]]$Bytes, [string]$Dir = $tdir) $p = Join-Path $Dir $Name; [System.IO.File]::WriteAllBytes($p, $Bytes); return $p }
     function Facts {
@@ -1721,7 +2174,7 @@ if ($SelfTest) {
         T 'a 7z EncodedHeader coded with 7zAES (-mhe) is password-protected with names hidden' ($f.Parsed -and $f.Encrypted -eq $true -and $f.HeadersEncrypted) "$($f.Parsed)/$($f.Encrypted)/$($f.Why)"
         $p = Put 'default.7z' (New-SevenZipBytes -HeaderKind 'encoded-lzma')
         $f = Facts $p
-        T 'a 7z EncodedHeader without 7zAES (the default) is NOT DETERMINABLE, neither clean nor password-protected' ($null -eq $f.Encrypted -and $f.Why -match 'compressed header') "$($f.Encrypted)/$($f.Why)"
+        T 'a 7z compressed header that will not decompress is NOT DETERMINABLE, neither clean nor password-protected' ($null -eq $f.Encrypted -and $f.Why -match 'compressed header') "$($f.Encrypted)/$($f.Why)"
         $p = Put 'p.7z' (New-SevenZipBytes -HeaderKind 'plain-aes' -Names @('secrets\id_rsa', 'notes.txt'))
         $f = Facts $p
         T 'a plain 7z Header whose streams carry 7zAES (-p -mhc=off) is password-protected with the names read' ($f.Encrypted -eq $true -and -not $f.HeadersEncrypted -and $f.Entries[0] -eq 'secrets\id_rsa') "$($f.Encrypted)/$($f.Entries -join ',')"
@@ -1751,6 +2204,155 @@ if ($SelfTest) {
         $f = Get-SevenZipFacts -Path $v1 -Length $cut -SpanPaths @($v1, $v2) -SpanSizes @([long]$cut, [long]$cut)
         T 'with the last volume missing the header is beyond what is here, and that is said' ($f.Beyond -and $null -eq $f.Encrypted -and $f.Why -match 'beyond the volumes present') "$($f.Encrypted)/$($f.Why)"
         Remove-Item -LiteralPath $v1, $v2, $v3 -Force
+
+        # ---- the compressed header, decompressed. Vectors made by Python's
+        # lzma module (liblzma, raw LZMA1) from the plain headers the
+        # builder above writes, so the decoder is checked against an encoder
+        # it shares no code with; the CRCs are zlib's.
+        $hdrAes = [byte[]](New-SevenZipBytes -HeaderKind 'plain-aes' -Names @('secrets\id_rsa', 'notes.txt'))[40..134]
+        $hdrPlain = [byte[]](New-SevenZipBytes -HeaderKind 'plain' -Names @('a.txt', 'b.txt'))[40..97]
+        $lzAes = [Convert]::FromBase64String('AACBMweuD84/w+eIBwj+5VlOfAWwIfYuIP5Wb/ulvdgyF90jPU7O0qqCcLpU8U71etcJvDy0YKsY7wgFth8Wrq/7vO+P+kTU+nYE3D8Fkux7//+iG4AA')
+        $lzPlain = [Convert]::FromBase64String('AACBMweuD84/w+eIKjEfPNUXRzZ03OjtEA5rhSjfVbNlWU/tnuianWmUHucWtdC19///RH3AAA==')
+        $lzProps = B @(0x5D, 0x00, 0x00, 0x10, 0x00)
+        $d = Invoke-LzmaDecode -Data $lzAes -Props $lzProps -UnpackSize $hdrAes.Count
+        T 'LZMA: a stream another encoder made decodes byte for byte to the 7z header it was made from' ($d.Ok -and $d.Complete -and [Convert]::ToBase64String($d.Bytes) -eq [Convert]::ToBase64String($hdrAes)) "$($d.Ok)/$($d.Complete)/$($d.Why)/$(@($d.Bytes).Count)"
+        T 'CRC-32 of a decoded header equals the one zlib computed for it' ((Get-Crc32 $hdrAes) -eq 3774331717 -and (Get-Crc32 $hdrPlain) -eq 698215715) ('{0:X8}/{1:X8}' -f (Get-Crc32 $hdrAes), (Get-Crc32 $hdrPlain))
+        $txt = Join-Bytes @((Asc ('The quick brown fox jumps over the lazy dog. ' * 40)), [byte[]](0..255), (Asc ('abcabcabcabd' * 30)))
+        $lzTxt = [Convert]::FromBase64String('ACoa2dR0RO8pRtClfuS4ZIEJWYn+mQ7JesAuCfaxbTbbuzZJTMyB+hhgJYdoGgAdVAatZTQVjBXyJRpZ7SvvGQ0dyqTU8BkxWTBHBp4+a+Zf91D2u6IdL5Ph60O6GXWnsyQCT0jqqp1OTReQwybPu7R5d3h+ZU+gA7+vzj6uwvQILWGLb+sGftdAtHFm64qcFe/HYfmir0JscWwsaCatbUpNzwubqbBfvwz58KEJnu3dFw3LvGhVbZi6oA6mkdK5wiEv8n7HQ6qeedmiJZOzcthpznLMxsazE8F7JicMojmDp6OUaOVtWCJfXsoIE6s/+vJ0IzH9rx9E+Yc5J6r+EL1ml351XeN3PtKjxK/U5QcxB2WsxKh95jTCyO+WcEAyVQyHcajVzWDC6BjzC39A2rY3m9SrXXRWg5mQ6eYvGwIJEyGCJTVo//SZXQA=')
+        $d = Invoke-LzmaDecode -Data $lzTxt -Props (B @(0x12, 0x00, 0x00, 0x01, 0x00)) -UnpackSize $txt.Count
+        T 'LZMA: other literal and position settings (lc=0 lp=2 pb=0), long matches and every byte value decode exactly' ($d.Ok -and $d.Complete -and (Get-Crc32 $d.Bytes) -eq 0x5E79038D) "$($d.Ok)/$($d.Complete)/$($d.Why)"
+        $d = Invoke-LzmaDecode -Data $lzTxt -Props (B @(0x12, 0x00, 0x00, 0x01, 0x00)) -UnpackSize ($txt.Count + 10)
+        T 'LZMA: an end marker before the declared size stops the decode and says so, never complete' ($d.Ok -and -not $d.Complete -and @($d.Bytes).Count -eq $txt.Count -and $d.Why -match 'ends before the size') "$($d.Ok)/$($d.Complete)/$($d.Why)"
+        $d = Invoke-LzmaDecode -Data ([byte[]]$lzTxt[0..150]) -Props (B @(0x12, 0x00, 0x00, 0x01, 0x00)) -UnpackSize $txt.Count
+        T 'LZMA: a stream cut short is refused, not padded out' (-not $d.Ok -and $d.Why -match 'ends before the header') "$($d.Ok)/$($d.Why)"
+        $bad1 = Invoke-LzmaDecode -Data (Join-Bytes @((B @(1)), [byte[]]$lzAes[1..($lzAes.Count - 1)])) -Props $lzProps -UnpackSize 95
+        $bad2 = Invoke-LzmaDecode -Data $lzAes -Props (B @(225, 0, 0, 16, 0)) -UnpackSize 95
+        $bad3 = Invoke-LzmaDecode -Data $lzAes -Props (B @(0x5D, 0, 0, 16)) -UnpackSize 95
+        T 'LZMA: a non-zero first byte, a property byte past 224 and short properties are each refused' (-not $bad1.Ok -and -not $bad2.Ok -and -not $bad3.Ok) "$($bad1.Why)/$($bad2.Why)/$($bad3.Why)"
+        $d = Invoke-LzmaDecode -Data $lzTxt -Props (B @(0x12, 0x00, 0x00, 0x01, 0x00)) -UnpackSize 1099511627776 -MaxOut 100
+        T 'LZMA: a declared size of 2^40 is capped -- 100 bytes allocated and decoded, the cap named' ($d.Ok -and -not $d.Complete -and @($d.Bytes).Count -eq 100 -and $d.Why -match 'decode cap') "$($d.Ok)/$(@($d.Bytes).Count)/$($d.Why)"
+        $d = Invoke-LzmaDecode -Data $lzTxt -Props (B @(0x12, 0x00, 0x00, 0x01, 0x00)) -UnpackSize $txt.Count -Seconds -1
+        T 'LZMA: the clock is checked from the first symbol, and a decode it stops is named, not complete' ($d.Ok -and -not $d.Complete -and $d.Why -match 'second limit') "$($d.Ok)/$($d.Why)"
+        # Random bytes behind a valid start: every one must end at once,
+        # refused or capped, and never throw.
+        $rng = New-Object System.Random 7
+        $threw = 0; $over = 0
+        $secs = Timed {
+            for ($i = 0; $i -lt 40; $i++) {
+                $junk = New-Object byte[] (64 + $rng.Next(448)); $rng.NextBytes($junk); $junk[0] = 0
+                try { $x = Invoke-LzmaDecode -Data $junk -Props $lzProps -UnpackSize 4096; if (@($x.Bytes).Count -gt 4096) { $over++ } } catch { $threw++ }
+            }
+        }
+        T 'LZMA: forty streams of random bytes each end at once -- refused or bounded, none throws' ($threw -eq 0 -and $over -eq 0 -and $secs -lt 30) "threw=$threw over=$over secs=$secs"
+
+        $p = Put 'p-nomhe.7z' (New-SevenZipEncodedBytes -Packed $lzAes -UnpackSize $hdrAes.Count -Crc 3774331717)
+        $f = Facts $p
+        T 'a 7z made with -p but WITHOUT -mhe: its compressed header is decompressed, 7zAES is found, the names are read' ($f.Encrypted -eq $true -and -not $f.HeadersEncrypted -and $f.Entries[0] -eq 'secrets\id_rsa' -and -not $f.Why) "$($f.Encrypted)/$($f.HeadersEncrypted)/$($f.Entries -join ',')/$($f.Why)"
+        $p = Put 'plain-default.7z' (New-SevenZipEncodedBytes -Packed $lzPlain -UnpackSize $hdrPlain.Count -Crc 698215715)
+        $f = Facts $p
+        T 'a plain 7z as 7-Zip makes it by default (compressed header, no password) is now read as NOT password-protected' ($f.Encrypted -eq $false -and $f.Entries[1] -eq 'b.txt') "$($f.Encrypted)/$($f.Entries -join ',')/$($f.Why)"
+        $p = Put 'crc.7z' (New-SevenZipEncodedBytes -Packed $lzPlain -UnpackSize $hdrPlain.Count -Crc 698215716)
+        $f = Facts $p
+        T 'a compressed header that fails its CRC once decompressed is not determinable, never clean' ($null -eq $f.Encrypted -and $f.Why -match 'CRC') "$($f.Encrypted)/$($f.Why)"
+        $p = Put 'lzma2hdr.7z' (New-SevenZipEncodedBytes -Packed $lzPlain -UnpackSize $hdrPlain.Count -Coder 'lzma2')
+        $f = Facts $p
+        T 'a header coded with something other than LZMA (here LZMA2) is named and left not determinable' ($null -eq $f.Encrypted -and $f.Why -match 'coded with 21') "$($f.Encrypted)/$($f.Why)"
+        $p = Put 'farpack.7z' (New-SevenZipEncodedBytes -Packed $lzPlain -UnpackSize $hdrPlain.Count -PackSize 99999)
+        $f = Facts $p
+        T 'a packed header said to reach past the end of the file is not read, and not determinable' ($null -eq $f.Encrypted -and $f.Why -match 'outside the file') "$($f.Encrypted)/$($f.Why)"
+        $p = Put 'bomb.7z' (New-SevenZipEncodedBytes -Packed $lzPlain -UnpackSize 2147483648)
+        $f = Facts $p
+        T 'a header claiming 2 GiB unpacked is never allocated at that size, and what is not decoded is not determinable' ($null -eq $f.Encrypted -and $f.Why -match 'only in part') "$($f.Encrypted)/$($f.Why)"
+        $p = Put 'stored.7z' (New-SevenZipEncodedBytes -Packed $hdrAes -UnpackSize $hdrAes.Count -Crc 3774331717 -Coder 'copy')
+        $f = Facts $p
+        T 'a header stored with the Copy coder is read as it stands' ($f.Encrypted -eq $true -and $f.Entries[0] -eq 'secrets\id_rsa') "$($f.Encrypted)/$($f.Why)"
+        $pre = Get-SevenZipFactsFromBytes -Sig ([byte[]](New-SevenZipEncodedBytes -Packed $lzAes -UnpackSize $hdrAes.Count)[0..31]) -FileLength 1000 -NextHeader ([byte[]](New-SevenZipEncodedBytes -Packed $lzAes -UnpackSize $hdrAes.Count)[(32 + $lzAes.Count)..(31 + $lzAes.Count + 40)])
+        $part = Resolve-SevenZipEncodedHeader -Plan $pre.Decode -Packed $lzAes -MaxOut 40
+        $partP = Resolve-SevenZipEncodedHeader -Plan @{ Coder = '030101'; Props = $lzProps; PackSize = $lzPlain.Count; UnpackSize = $hdrPlain.Count; Crc = -1 } -Packed $lzPlain -MaxOut 40
+        T 'a header decoded only in part is trusted for what it shows: a 7zAES coder in the part is certain, its absence is not' ($part.Encrypted -eq $true -and -not $part.Complete -and $null -eq $partP.Encrypted -and $partP.Why -match 'only in part') "$($part.Encrypted)/$($partP.Encrypted)/$($partP.Why)"
+        # The real -p -v shape without -mhe: the packed header and the
+        # EncodedHeader both at the end of the LAST volume, read across all.
+        $whole = New-SevenZipEncodedBytes -Packed $lzAes -UnpackSize $hdrAes.Count -Crc 3774331717
+        $cut = 50
+        $v1 = Join-Path $tdir 'nomhe.7z.001'; $v2 = Join-Path $tdir 'nomhe.7z.002'; $v3 = Join-Path $tdir 'nomhe.7z.003'
+        [System.IO.File]::WriteAllBytes($v1, [byte[]]$whole[0..($cut - 1)])
+        [System.IO.File]::WriteAllBytes($v2, [byte[]]$whole[$cut..(2 * $cut - 1)])
+        [System.IO.File]::WriteAllBytes($v3, [byte[]]$whole[(2 * $cut)..($whole.Count - 1)])
+        $f = Get-SevenZipFacts -Path $v1 -Length $cut -SpanPaths @($v1, $v2, $v3) -SpanSizes @([long]$cut, [long]$cut, [long]($whole.Count - 2 * $cut))
+        T 'a -p volume set without -mhe: the compressed header is read across the volumes and decompressed' ($f.Encrypted -eq $true -and -not $f.HeadersEncrypted -and $f.HeaderDecoded) "$($f.Encrypted)/$($f.HeaderDecoded)/$($f.Why)"
+        Remove-Item -LiteralPath $v1, $v2, $v3 -Force
+
+        # ---- what the review found: a record list that ends at a fixed
+        # count, an id written with a leading zero byte, a header that stops
+        # early, names after many properties, more than 64 folders. Each one
+        # 7-Zip opens as password-protected; each read as plain before.
+        $cAes = Join-Bytes @((B @(0x24, 0x06, 0xF1, 0x07, 0x01)), (B @(0x02, 0x3F, 0x00)))
+        $cLz = B @(0x23, 0x03, 0x01, 0x01, 0x05, 0x5D, 0x00, 0x00, 0x01, 0x00)
+        $fAes = Join-Bytes @((Vint 2), $cAes, $cLz, (B @(0x00, 0x01)))
+        $codersAes = Join-Bytes @((B @(0x07, 0x0B, 0x01, 0x00)), $fAes, (B @(0x0C, 0x40, 0x40, 0x00)))
+        $packOne = B @(0x06, 0x00, 0x01, 0x09, 0x08)
+        $crcRec = Join-Bytes @((B @(0x0A, 0x01)), (U32 1))
+        $many = @(); for ($i = 0; $i -lt 20; $i++) { $many += ,$crcRec }
+        $nh = Join-Bytes @((B @(0x01, 0x04)), $packOne, (Join-Bytes $many), (B @(0x00)), $codersAes, (B @(0x00, 0x00)))
+        $f = Facts (Put 'many-crc.7z' (New-SevenZipBytes -HeaderKind 'raw' -RawHeader $nh))
+        T 'twenty CRC records in a PackInfo are walked to their end: the 7zAES coder after them is found' ($f.Encrypted -eq $true) "$($f.Encrypted)/$($f.Why)"
+        $props = @(); for ($i = 0; $i -lt 65; $i++) { $props += ,(B @(0x01, 0x01, 0x00)) }
+        $nh = Join-Bytes @((B @(0x01, 0x02)), (Join-Bytes $props), (B @(0x00, 0x04)), $packOne, (B @(0x00)), $codersAes, (B @(0x00, 0x00)))
+        $f = Facts (Put 'many-props.7z' (New-SevenZipBytes -HeaderKind 'raw' -RawHeader $nh))
+        T 'sixty-five archive properties are walked to their end: the 7zAES coder after them is found' ($f.Encrypted -eq $true) "$($f.Encrypted)/$($f.Why)"
+        $h = Read-SevenZipHeader -Buf (B @(0x01, 0x04, 0x06, 0x00, 0x01, 0x09, 0x10)) -Pos 1
+        T 'a header that stops inside its PackInfo is NOT "no password"' ($null -eq $h.Encrypted) "$($h.Encrypted)/$($h.Why)"
+        $h = Read-SevenZipHeader -Buf (Join-Bytes @((B @(0x01, 0x04)), $packOne, (B @(0x00, 0x00)))) -Pos 1
+        T 'a header that stops after its streams, with neither names nor its end byte, is NOT "no password"' ($null -eq $h.Encrypted) "$($h.Encrypted)/$($h.Why)"
+        $cAes5 = Join-Bytes @((B @(0x25, 0x00, 0x06, 0xF1, 0x07, 0x01)), (B @(0x02, 0x3F, 0x00)))
+        $nh = Join-Bytes @((B @(0x01, 0x04)), $packOne, (B @(0x00, 0x07, 0x0B, 0x01, 0x00)), (Vint 2), $cAes5, $cLz, (B @(0x00, 0x01, 0x0C, 0x40, 0x40, 0x00, 0x00, 0x00)))
+        $f = Facts (Put 'aes5.7z' (New-SevenZipBytes -HeaderKind 'raw' -RawHeader $nh))
+        T 'a 7zAES id written with a leading zero byte (00 06 F1 07 01) is still 7zAES, as 7-Zip reads ids as numbers' ($f.Encrypted -eq $true) "$($f.Encrypted)/$($f.Why)"
+        $cOdd = B @(0x04, 0xDE, 0xAD, 0xBE, 0xEF)
+        $nh = Join-Bytes @((B @(0x01, 0x04)), $packOne, (B @(0x00, 0x07, 0x0B, 0x01, 0x00, 0x01)), $cOdd, (B @(0x0C, 0x40, 0x00, 0x00, 0x00)))
+        $f = Facts (Put 'odd-coder.7z' (New-SevenZipBytes -HeaderKind 'raw' -RawHeader $nh))
+        T 'a coder id this audit cannot place is named and NOT read as "no password"' ($null -eq $f.Encrypted -and $f.Why -match 'DEADBEEF') "$($f.Encrypted)/$($f.Why)"
+        $name = [System.Text.Encoding]::Unicode.GetBytes("vault.kdbx`0")
+        $dummies = @(); for ($i = 0; $i -lt 70; $i++) { $dummies += ,(B @(0x19, 0x00)) }
+        $nh = Join-Bytes @((B @(0x01, 0x04)), $packOne, (B @(0x00, 0x07, 0x0B, 0x01, 0x00, 0x01)), $cLz, (B @(0x0C, 0x40, 0x00, 0x00)), (B @(0x05, 0x01)), (Join-Bytes $dummies), (B @(0x11)), (Vint ($name.Count + 1)), (B @(0x00)), $name, (B @(0x00, 0x00)))
+        $f = Facts (Put 'late-name.7z' (New-SevenZipBytes -HeaderKind 'raw' -RawHeader $nh))
+        T 'a file name after seventy other file properties is still read, so a credential file cannot be hidden behind them' ($f.Encrypted -eq $false -and $f.Entries -contains 'vault.kdbx') "$($f.Encrypted)/$($f.Entries -join ',')/$($f.Why)"
+        $fLz = Join-Bytes @((Vint 1), $cLz)
+        $pk = @(); $fs = @(); $us = @(); for ($i = 0; $i -lt 100; $i++) { $pk += ,(B @(0x08)); $fs += ,$fLz; $us += ,(B @(0x40)) }
+        $nhPlain = Join-Bytes @((B @(0x01, 0x04, 0x06, 0x00)), (Vint 100), (B @(0x09)), (Join-Bytes $pk), (B @(0x00, 0x07, 0x0B)), (Vint 100), (B @(0x00)), (Join-Bytes $fs), (B @(0x0C)), (Join-Bytes $us), (B @(0x00, 0x00, 0x00)))
+        $nhAes = Join-Bytes @((B @(0x01, 0x04, 0x06, 0x00)), (Vint 101), (B @(0x09)), (Join-Bytes $pk), (B @(0x08, 0x00, 0x07, 0x0B)), (Vint 101), (B @(0x00)), (Join-Bytes $fs), $fAes, (B @(0x0C)), (Join-Bytes $us), (B @(0x40, 0x40, 0x00, 0x00, 0x00)))
+        $fa = Facts (Put 'folders-aes.7z' (New-SevenZipBytes -HeaderKind 'raw' -RawHeader $nhAes))
+        $fp = Facts (Put 'folders-plain.7z' (New-SevenZipBytes -HeaderKind 'raw' -RawHeader $nhPlain))
+        T 'more than 64 folders (a non-solid 7z): the 7zAES coder in folder 101 is found, and 100 plain folders read plain' ($fa.Encrypted -eq $true -and $fp.Encrypted -eq $false) "$($fa.Encrypted)/$($fa.Why)/$($fp.Encrypted)/$($fp.Why)"
+        # A plain header that ends, but whose declared size runs past the
+        # 1 MiB this tool reads: the part read does not settle it.
+        $nhBig = Join-Bytes @((B @(0x01, 0x04)), $packOne, (B @(0x00, 0x07, 0x0B, 0x01, 0x00, 0x01)), $cLz, (B @(0x0C, 0x40, 0x00, 0x00, 0x00)))
+        $pad = New-Object byte[] (1100000 - $nhBig.Count)
+        $f = Facts (Put 'big-header.7z' (New-SevenZipBytes -HeaderKind 'raw' -RawHeader (Join-Bytes @($nhBig, $pad))))
+        T 'a plain header larger than the 1 MiB read is NOT "no password" from its first part' ($null -eq $f.Encrypted -and $f.Why -match '1 MiB') "$($f.Encrypted)/$($f.Why)"
+        $l1 = Invoke-LzmaDecode -Data $lzAes -Props (B @(44, 0, 0, 16, 0)) -UnpackSize 95
+        $l2 = Invoke-LzmaDecode -Data $lzAes -Props (B @(224, 0, 0, 16, 0)) -UnpackSize 95
+        T 'LZMA: literal settings 7-Zip never writes for a header (lc+lp above 4) are refused before the table is built' (-not $l1.Ok -and -not $l2.Ok -and $l1.Why -match 'lc\+lp') "$($l1.Why)/$($l2.Why)"
+        # The run-wide decode allowance: once it is spent, a compressed header
+        # is named as not decompressed, never cleared.
+        $dd = NewDir 'allowance'
+        Put 'one.7z' (New-SevenZipEncodedBytes -Packed $lzAes -UnpackSize $hdrAes.Count -Crc 3774331717) $dd | Out-Null
+        Put 'two.7z' (New-SevenZipEncodedBytes -Packed $lzPlain -UnpackSize $hdrPlain.Count -Crc 698215715) $dd | Out-Null
+        $cands = @(); foreach ($it in @(Get-ChildItem -LiteralPath $dd -File)) { $cands += @{ Item = $it; Folder = $dd; Role = 'public' } }
+        $res = Invoke-ArchiveClassification -Candidates $cands -ZoneReader { param($p) @{ Zone = -1; HostUrl = '' } } -DecodeAllowanceSeconds 0
+        $named = @($res.Archives | Where-Object { $null -eq $_.Encrypted -and $_.ParseError -match 'decode allowance was spent' })
+        T 'with the decode allowance spent, each compressed header is named as not decompressed and left not determinable' ($named.Count -eq 2) (($res.Archives | ForEach-Object { "$($_.Name)=$($_.Encrypted):$($_.ParseError)" }) -join ' | ')
+        $res = Invoke-ArchiveClassification -Candidates $cands -ZoneReader { param($p) @{ Zone = -1; HostUrl = '' } }
+        $one = @($res.Archives | Where-Object { $_.Name -eq 'one.7z' })[0]; $two = @($res.Archives | Where-Object { $_.Name -eq 'two.7z' })[0]
+        T 'the classifier decodes compressed headers after grading the rest: one -p archive, one plain' ($one.Encrypted -eq $true -and $two.Encrypted -eq $false -and -not $one.ParseError) "$($one.Encrypted)/$($two.Encrypted)/$($one.ParseError)"
+        # A part of a set whose own header cannot be read is not cleared by
+        # a sibling's "no password".
+        $ds = NewDir 'setprop'
+        Put 'x.part1.rar' (New-Rar5Bytes -ArchFlags 1 -Files @(@{ Name = 'a.txt'; Data = 'a' })) $ds | Out-Null
+        Put 'x.part2.rar' (Join-Bytes @((B @(0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00)), (B @(0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF)))) $ds | Out-Null
+        $cl = Classify -Dir $ds
+        $p2 = @($cl.Res.Archives | Where-Object { $_.Name -eq 'x.part2.rar' })[0]
+        T 'a set part whose header cannot be read is NOT cleared by a sibling that reads "no password"' ($null -ne $p2 -and $null -eq $p2.Encrypted) "$(if ($p2) { "$($p2.Encrypted)/$($p2.ParseError)" } else { 'part2 not graded' })"
 
         # ---- hostile headers: every one must finish at once and never be
         # read as clean. Each was a hang before the bounds came from the

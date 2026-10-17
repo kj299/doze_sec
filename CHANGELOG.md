@@ -6,6 +6,99 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### A 7z made with a password but without header encryption is read, not "not determinable"
+7-Zip compresses an archive's header by default once the archive holds more
+than one file (for a single file it writes the header plain, and that case
+was always read). `7z a -p` without `-mhe` is the ordinary shape when someone
+sets a password, and its header names its 7zAES coder and its files only once
+it is decompressed. Section 14 read every such archive as "password not
+determinable" and graded it by volume shape alone. That had two costs:
+- **A real password-protected 7z made on the machine read as context**
+  everywhere except the Public folder.
+- **Every plain multi-file 7z in Public was a WARNING.** 7-Zip writes the
+  same compressed header with no password, so there an ordinary
+  `7z a a.txt b.txt` read "may be password-protected".
+
+`tools/archive_staging.ps1` now decodes the header with a pure PowerShell
+LZMA decoder (the steps of the LZMA SDK's public-domain `LzmaSpec.cpp`) and
+reads the result as a plain 7z Header. A `-p` 7z now reads WARNING with its
+file names, and its credential-class names escalate as for ZIP and RAR. A
+plain 7z is plain context.
+
+The decoder is written for a hostile file:
+- the output is capped at 256 KiB and allocated once;
+- every pass of the loop writes a byte or stops;
+- a stream that runs out, a distance reaching before the output, and a bad
+  property byte are refusals, never guesses, and literal settings 7-Zip never
+  writes for a header (lc+lp above 4) are refused before the table is built;
+- the decoded header must match the CRC 7-Zip stored;
+- the clock is checked from the first symbol.
+
+A header decoded only in part is trusted only for what it shows. The coders
+come before the names, so a 7zAES coder seen in the part is certain, and its
+absence stays not determinable.
+
+Compressed headers are decoded AFTER every other archive has been graded,
+smallest packed header first, within 10 s each and 30 s for the whole run. A
+folder of slow decoys therefore cannot spend the run's budget before the
+other archives are examined, and a real header (a few KB) is decoded before
+them. A header left over when that time is spent is named, never cleared.
+
+**The review before the push found the parser underneath had four ways to
+read a password-protected 7z as plain.** 7-Zip itself opens every one of
+them as password-protected:
+- **Fixed-count loops.** The PackInfo, ArchiveProperties, SubStreamsInfo and
+  FilesInfo walks stopped after 16, 64, 8 or 64 records and then carried on
+  as if they had finished. Twenty CRC records before the coders, or 65
+  archive properties, hid the 7zAES coder. Seventy file properties before the
+  names hid a `vault.kdbx` inside. Every record list is now walked to its
+  terminator, as 7-Zip walks it. A list that runs off the buffer is a header
+  not read through, and so is a StreamsInfo without its end byte or a Header
+  that continues with anything but names or its end.
+- **Ids compared as strings.** 7-Zip reads a coder id as a number, so
+  `00 06 F1 07 01` is still 7zAES. Ids are now compared as numbers, the whole
+  crypto range (`06 F1 ...`) counts as encrypted, and a coder id outside the
+  methods 7-Zip's `Methods.txt` lists is named and left not determinable,
+  never read as "no password".
+- **Headers larger than the read.** A plain header larger than the 1 MiB read
+  was graded from its first part. Now only a 7zAES coder seen in that part
+  counts.
+- **A 64-folder cap.** A non-solid archive (`-ms=off`) has one folder per
+  file, and above 64 folders it read "not determinable" with the wrong reason
+  given; in Public its plain twin still raised. Every folder's coders are now
+  read.
+
+The review also found:
+- the volume-set logic copied one part's "no password" onto a sibling whose
+  own header could not be read, so a decoy named as a volume of the set
+  spoke for it; only a password crosses between parts now;
+- the CI twin, as first written, would have failed on every image with
+  7-Zip, because a one-file 7z has a plain header (measured with 7-Zip
+  24.09, now two files);
+- the entry count of a 7z was the 500-name cap, not the number of files.
+
+The decoder is checked against an encoder it shares no code with: vectors
+made by Python's liblzma from the headers the self-test builds, decoded byte
+for byte, with zlib's CRCs. The self-test covers non-default literal and
+position settings, an end marker before the declared size, a stream cut
+short, malformed properties, a declared size of 2^40, and forty streams of
+random bytes. The reviewer separately ran 80 liblzma vectors over every
+allowed lc/lp/pb, 450 byte-mutated real archives and real 7-Zip archives
+(BCJ, BCJ2, `-mx9`, 3000 files) against it. Writing the vectors found a
+defect in the first draft: the distance for slot 63 is shifted by 30, and as
+an Int32 that overflowed and broke the end marker. The value is now widened
+to Int64 before the shift, and the end-marker case fails without that.
+
+In CI, the image's own 7-Zip makes:
+- a `-p` archive without `-mhe` that packs a file named like a password
+  database. The step checks that 7-Zip really wrote a compressed header, then
+  asserts CRITICAL with the name read from inside it;
+- a plain two-file twin, which must read as plain;
+- 3000-file non-solid archives with and without a password. Their decode
+  time on Windows PowerShell 5.1 is MEASURED: the `-p` one must read
+  password-protected, and the plain one either plain or named as stopped by
+  the clock.
+
 ### One audit at a time: a second invocation stands down instead of running beside the first
 INIT 8 writes a RunOnce resume entry so an interrupted run restarts at the next
 logon, and on CI it fired six seconds into a live run: a second audit ran beside

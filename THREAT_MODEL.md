@@ -288,18 +288,23 @@ Found during the v7.1 coverage review; tracked for future work:
   no Mark of the Web -- so no browser fetched it; it was made or copied here
   -- and is password-protected, split into volumes, or packs a
   credential-class file. The headers of ZIP, RAR 4.x/5.0, 7z and CAB are
-  parsed from the format owners' own layouts, nothing is decompressed, every
-  count read from a file is bounded by the bytes that remain (a crafted
+  parsed from the format owners' own layouts, nothing but a 7z's own header
+  is decompressed, every count read from a file is bounded by the bytes that remain (a crafted
   header cannot hang the audit), and the judgement rests on the mark: a
   downloaded archive is context, a plain local zip is context, a password or
   (outside Downloads) a volume set made here raises, both together is
   CRITICAL -- and a mark does not clear the strongest shape where no browser
   saves a download, since anyone can write it. What it states rather than
   guesses: a 7z made with a password but without header encryption has a
-  compressed header and is named as not determinable (never clean); an
+  compressed header, which is decoded (LZMA, the 7-Zip default; capped at
+  256 KiB of header, 10 seconds each and 30 seconds per run, smallest first,
+  CRC-checked) to read its coders and names -- a header coded otherwise,
+  larger than the cap, failing its CRC, not decoding or not reached in that
+  time, or naming a coder this audit cannot place, is named as not
+  determinable (never clean); an
   archive the OneDrive sync client, curl or a torrent client fetched carries
   no mark and so reads as made here (the corpus names those twins); entry
-  names are read from ZIP, RAR and an uncompressed 7z header, contents never;
+  names are read from ZIP, RAR and 7z headers, contents never;
   a renamed archive is found by signature up to a declared probe cap; files
   deeper than the stated depth, self-extracting .exe archives and archives
   inside archives are not examined, and the report says so.
