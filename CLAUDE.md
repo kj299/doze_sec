@@ -947,6 +947,13 @@ added, extend the helpers-ps51 job to execute it.
   unconditionally, after the argument parse, and the lock folder is derived
   from it; the run-lock lint step enforces both, and the full-run job runs
   `-resetTTP` with OUTDIR naming a decoy that must come out untouched.
+  The console-log wrapper's own variables were the same class:
+  it sets `DOZE_*` in the person's Command Prompt and clears them after its
+  child returns, so a Ctrl+C ("Terminate batch job? Y") left them set and
+  the next run there skipped its capture and recreated the interrupted
+  run's ChangeLog and Undo file with `>`. A run trusts them now only with
+  the `-dzTeeChild` token the wrapper passes its child, and never reuses a
+  timestamp another run's files carry.
 - **`shift` moves `%0` too.** After a `:parse_args` loop that shifts once per
   switch, `%0` is the LAST SWITCH typed, and `%~f0` / `%~dp0` / `%~nx0`
   resolve that word against the current directory. The RunOnce resume entry

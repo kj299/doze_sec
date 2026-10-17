@@ -6,6 +6,25 @@
 :: Exports DOZE_LOG_TS for artifact-filename correlation (closes #94).
 :: Captures real EXIT_CODE via DOZE_EXIT_FILE (closes #96).
 :: Cleans env vars before exit so a second run in same CMD window works (closes #95).
+:: THE CHILD GUARD IS TRUSTED ONLY WITH THE CHILD TOKEN. The wrapper below
+:: runs in the person's own Command Prompt and clears DOZE_* only after its
+:: child returns, so a Ctrl+C answered "Terminate batch job? Y" leaves them set
+:: in that window. The next audit there then skipped its console capture, took
+:: the old run's timestamp, and recreated its ChangeLog_ and Undo_ files with
+:: ">" -- erasing the interrupted run's record of what it changed and how to
+:: undo it. The wrapper passes -dzTeeChild to the child it starts, and the
+:: argument parse ignores it; without that token every DOZE_* variable is a
+:: leftover, and is cleared.
+set "_DZ_TEE_CHILD="
+set "_DZ_STALE="
+for %%a in (%*) do if /i "%%~a"=="-dzTeeChild" set "_DZ_TEE_CHILD=1"
+if not defined _DZ_TEE_CHILD for %%v in (DOZE_TEED DOZE_LOG_TS DOZE_CONSOLE_LOG DOZE_LOG_DIR DOZE_EXIT_FILE) do if defined %%v (
+    set "_DZ_STALE=1"
+    set "%%v="
+)
+if defined _DZ_STALE echo  [*] Console-log settings left behind by an interrupted audit in this window were cleared; this run starts fresh.
+set "_DZ_TEE_CHILD="
+set "_DZ_STALE="
 if defined DOZE_TEED goto :_console_log_done
 if /i "%~1"=="-help"      goto :_console_log_done
 if /i "%~1"=="-h"         goto :_console_log_done
@@ -22,6 +41,9 @@ for %%a in (%*) do if /i "%%~a"=="-noAdmin" set "DOZE_LOG_DIR=%USERPROFILE%\Secu
 if not exist "%DOZE_LOG_DIR%" mkdir "%DOZE_LOG_DIR%" >nul 2>&1
 for /f "usebackq" %%t in (`powershell -NoProfile -NonInteractive -Command "Get-Date -Format yyyyMMdd_HHmmss"`) do set "DOZE_LOG_TS=%%t"
 if not defined DOZE_LOG_TS set "DOZE_LOG_TS=unknown"
+:: Tee-Object overwrites, so a console log another run already wrote under this
+:: name (the "unknown" fallback, or two starts in one second) gets a suffix.
+if exist "%DOZE_LOG_DIR%\AuditConsole_%DOZE_LOG_TS%.log" set "DOZE_LOG_TS=%DOZE_LOG_TS%_r%RANDOM%%RANDOM%"
 set "DOZE_CONSOLE_LOG=%DOZE_LOG_DIR%\AuditConsole_%DOZE_LOG_TS%.log"
 set "DOZE_EXIT_FILE=%TEMP%\dz_rc_%DOZE_LOG_TS%_%RANDOM%.tmp"
 set "DOZE_TEED=1"
@@ -30,7 +52,7 @@ echo  [*] Console output also being captured to: %DOZE_CONSOLE_LOG%
 :: profile folder such as C:\Users\o'neil -- or one with a typographic
 :: apostrophe, which PowerShell also treats as a quote -- would end a quoted
 :: string early and lose the whole console capture. -LiteralPath: no wildcards.
-call "%~f0" %* 2>&1 | powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$input | Tee-Object -LiteralPath $env:DOZE_CONSOLE_LOG"
+call "%~f0" -dzTeeChild %* 2>&1 | powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$input | Tee-Object -LiteralPath $env:DOZE_CONSOLE_LOG"
 set "DOZE_EXIT_CODE=0"
 if exist "%DOZE_EXIT_FILE%" (
     set /p DOZE_EXIT_CODE=<"%DOZE_EXIT_FILE%"
@@ -582,6 +604,17 @@ if defined DOZE_LOG_TS (
     if not defined TIMESTAMP set "TIMESTAMP=NODATE_!RANDOM!_!RANDOM!"
 )
 
+:: A timestamp another run's files already carry is never reused: ChangeLog_
+:: and Undo_ are created with ">", so reusing one overwrites the record of what
+:: that run changed and how to undo it. Leftover console-log settings from an
+:: interrupted run were the known way in (guarded at the top); this holds
+:: whatever the way.
+set "DZ_TS_TAKEN="
+if exist "%OUTDIR%\ChangeLog_!TIMESTAMP!.txt" set "DZ_TS_TAKEN=!TIMESTAMP!"
+if exist "%OUTDIR%\Undo_!TIMESTAMP!.bat" set "DZ_TS_TAKEN=!TIMESTAMP!"
+if exist "%OUTDIR%\SecurityReport_!TIMESTAMP!.txt" set "DZ_TS_TAKEN=!TIMESTAMP!"
+if defined DZ_TS_TAKEN set "TIMESTAMP=!TIMESTAMP!_r!RANDOM!!RANDOM!"
+
 :: ---- Initialize Undo script and Change Log --------------------------
 set "CHANGELOG=%OUTDIR%\ChangeLog_!TIMESTAMP!.txt"
 set "UNDO_BAT=%OUTDIR%\Undo_!TIMESTAMP!.bat"
@@ -675,6 +708,7 @@ echo ====================================================================>> "%RE
 echo ====================================================================>> "%REPORT%"
 echo.>> "%REPORT%"
 if exist "%DZ_LOCK_NOTE%" type "%DZ_LOCK_NOTE%">> "%REPORT%"
+if defined DZ_TS_TAKEN echo  [INFO] Files named with timestamp %DZ_TS_TAKEN% already existed in the output folder -- another run's ChangeLog, Undo file or report. This run's files carry %TIMESTAMP% instead, so none of that run's files was overwritten; its console log, if any, is named on the Console log line.>> "%REPORT%"
 del "%DZ_LOCK_NOTE%" 2>nul
 if "%IS_ADMIN%"=="0" (
     echo  [INFO] NON-ADMIN MODE: Some sections will be deferred.>> "%REPORT%"
@@ -963,6 +997,11 @@ echo  Report    : %REPORT%>> "%REPORT%"
 echo  SMART data: %OUTDIR%\SmartData>> "%REPORT%"
 echo  Event logs: %OUTDIR%\EventExports>> "%REPORT%"
 echo  Threat IPs: %OUTDIR%\ThreatLists>> "%REPORT%"
+if defined DOZE_CONSOLE_LOG (
+    echo  Console log: %DOZE_CONSOLE_LOG%>> "%REPORT%"
+) else (
+    echo  Console log: ^(disabled via -noConsoleLog^)>> "%REPORT%"
+)
 echo.>> "%REPORT%"
 echo %C_GREEN%[INIT 6/14]%C_RESET% Log dirs: %OUTDIR%
 

@@ -1123,7 +1123,7 @@ try {
     # that, so assert the shape explicitly. (NODATE_* is the script's
     # last-ditch fallback for a broken PowerShell -- on this runner PowerShell
     # provably works, so NODATE here would also be a regression.)
-    $badName = $report.Name -notmatch '^SecurityReport_\d{8}_\d{6}\.txt$'
+    $badName = $report.Name -notmatch '^SecurityReport_\d{8}_\d{6}(_r\d+)?\.txt$'
 
     # REQUIRED: a test-harness report must be unmistakable as one. -selftest
     # stamps a banner and quarantines output under selftest\; a real user opened

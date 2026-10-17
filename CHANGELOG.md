@@ -6,6 +6,63 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### An interrupted run's ChangeLog and Undo file are never overwritten by the next run
+The console-log wrapper runs in the person's own Command Prompt. It sets
+`DOZE_TEED`, `DOZE_LOG_TS`, `DOZE_CONSOLE_LOG` and `DOZE_EXIT_FILE` there and
+clears them only after its child returns. A Ctrl+C answered "Terminate batch
+job? Y" ends the batch before that, so the variables stayed set in the window.
+The next audit started there:
+- read `DOZE_TEED` as "I am the wrapper's child" and skipped its console
+  capture;
+- took the interrupted run's timestamp from `DOZE_LOG_TS`;
+- created `ChangeLog_<TS>.txt` and `Undo_<TS>.bat` with `>`, erasing the
+  interrupted run's record of what it changed and how to undo it, the one
+  pair of files that run left behind;
+- said in its report that the console was captured to a log it never wrote.
+
+Found by the read-only review of the inherited-OUTDIR fix (#255); it had
+been there since the wrapper was written.
+
+Both bats now trust the wrapper's variables only in the child the wrapper
+starts. The wrapper passes it an internal `-dzTeeChild` token as its first
+argument (the argument parse ignores it), and a run without that token
+clears every variable the wrapper sets, says so on the console, and starts fresh,
+capture included. Separately, a timestamp that another run's ChangeLog, Undo
+file or report already carries is never reused, whatever the way in. The run
+names its files `<TS>_r<random>` and says so in its report.
+
+A `lint.yml` job pins the shape in both bats:
+- the guard runs first;
+- it clears every variable the wrapper sets (checked against the wrapper's
+  own quoted `set` lines), and its code lines are pinned exactly;
+- the token goes first on the child's command line;
+- the three files are checked before the ChangeLog is created.
+
+The Windows helpers job proves it on both bats with real runs. It plants the
+leftover state and an interrupted run's ChangeLog and Undo file, then starts
+each bat the way a person does. The runner is a Server image, so without
+`-dev` each run stops at the OS check (exit 3) right after creating its files.
+The run must clear the leftovers, capture its console under a fresh
+timestamp, leave both planted files unchanged, and return exit 3 through
+the wrapper. Then a real child handed the taken timestamp must rename its
+files and say so in its report.
+
+The read-only review before the push found no defect in the bats, but found
+the new lint passing on mutations that break the guard:
+- the token scan deleted, after which a real child clears its own settings
+  and nests wrappers without end;
+- the clearing `set` removed;
+- an initialiser removed, so the flag comes from the caller's environment;
+- a constant rename suffix.
+
+The lint now pins both blocks' code lines exactly, and all fourteen of the
+reviewer's mutations fail it. The review also found:
+- the console log could still be overwritten under the `unknown` fallback
+  name (the wrapper now gives a name already used a suffix);
+- the noAdmin report printed no `Console log:` line (it does now, and the
+  rename note points to it);
+- the harness would have rejected a renamed report (it allows `_r<n>` now).
+
 ### An OUTDIR inherited from the environment no longer reaches the threat-list handlers
 `doze_sec.bat` decided its output folder only for `-selftest` before the
 `-resetTTP` and `-updateTTP` handlers ran, and those handlers fell back with
