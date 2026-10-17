@@ -6,6 +6,39 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### An OUTDIR inherited from the environment no longer reaches the threat-list handlers
+`doze_sec.bat` decided its output folder only for `-selftest` before the
+`-resetTTP` and `-updateTTP` handlers ran, and those handlers fell back with
+`if not defined OUTDIR`. cmd passes every variable of the calling environment
+to the script, and OUTDIR is a common name in build tools. So with one set:
+- `-resetTTP` deleted `ioc_*.txt`, `ttp_manifest.txt`, `ttp_update_*.txt`
+  and `ttp_generated_checks.bat` under `<that folder>\ThreatLists`;
+- `-updateTTP` seeded and merged its update there, where the audit (which set
+  OUTDIR again, unconditionally, further down) never reads it;
+- both did so outside the folder the run lock had just guarded.
+
+Found by reading while writing the run lock, not reported. OUTDIR is now set
+once, unconditionally, right after the argument parse. The lock folder is
+derived from it, and the later second assignment is gone, so the handlers and
+the audit cannot use two folders. `doze_sec_noAdmin.bat` already set it
+unconditionally. The run-lock lint step fails on any `if defined OUTDIR` on a
+non-comment line, on a read before the set (`%OUTDIR%`, `!OUTDIR!` or
+`$env:OUTDIR`), and on a lock folder not derived from OUTDIR; it fails on the
+old bat. The full-run job runs `-resetTTP` with OUTDIR naming a decoy folder
+that holds a planted list. It requires the decoy to hold only that file, with
+its content unchanged.
+
+The review found the same flaw twice more in the `-updateTTP` handler.
+`IOC_GUID` names a temp file the handler writes and deletes, and `TTP_TODAY`
+names the update file it writes, rewrites and deletes. Both had an
+`if not defined` fallback, so an inherited value reached those paths: on
+`-importTTP`, and whenever PowerShell printed no date. Both are now cleared at
+the top of the handler, and the lint requires it. One more finding is
+recorded in the backlog, not fixed here: a Ctrl+C in the window that started
+the console-log wrapper leaves its `DOZE_*` variables set, so the next run in
+that same window skips the capture and reuses the old timestamp. It then
+overwrites the interrupted run's ChangeLog and Undo file.
+
 ### A 7z made with a password but without header encryption is read, not "not determinable"
 7-Zip compresses an archive's header by default once the archive holds more
 than one file (for a single file it writes the header plain, and that case

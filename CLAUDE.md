@@ -936,6 +936,17 @@ added, extend the helpers-ps51 job to execute it.
   let a long audit be joined -- treats a lock naming its own window as stale,
   fails OPEN and declared when it cannot tell, and is released only by the
   run whose token it carries, at `:final_exit` and `:fatal_preinit_exit`.
+- **A variable the bat reads before it sets is ENVIRONMENT INPUT.** cmd
+  hands the child every variable of the parent, and `setlocal` keeps them, so
+  `if not defined X set "X=default"` silently takes whatever the caller's
+  environment holds. `doze_sec.bat` decided OUTDIR that way in its
+  `-resetTTP`/`-updateTTP` handlers, and OUTDIR is a common name in build
+  tools: `-resetTTP` deleted the `ioc_*.txt` lists in the folder the
+  environment named, and `-updateTTP` wrote where the audit never reads,
+  outside the folder the run lock guards. OUTDIR is now set once,
+  unconditionally, after the argument parse, and the lock folder is derived
+  from it; the run-lock lint step enforces both, and the full-run job runs
+  `-resetTTP` with OUTDIR naming a decoy that must come out untouched.
 - **`shift` moves `%0` too.** After a `:parse_args` loop that shifts once per
   switch, `%0` is the LAST SWITCH typed, and `%~f0` / `%~dp0` / `%~nx0`
   resolve that word against the current directory. The RunOnce resume entry

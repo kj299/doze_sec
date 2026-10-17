@@ -1172,6 +1172,28 @@ jobs:
               }
             }
             $blocks[$b] = ($l[$startAt..$doneAt] -join "`n")
+            # OUTDIR is decided once, before the first line that reads it, and
+            # the output-folder lock is that folder. An "if not defined OUTDIR"
+            # fallback let an OUTDIR inherited from the environment reach the
+            # -resetTTP/-updateTTP handlers, which then deleted and wrote threat
+            # lists in that folder, outside the one the lock guards.
+            if (@($l | Where-Object { $_ -notmatch '^\s*(::|rem\b)' -and $_ -match '(?i)\bif\s+(not\s+)?defined\s+OUTDIR\b' }).Count) { throw "${b}: OUTDIR is still tested with 'if defined' -- an inherited OUTDIR would be used" }
+            $setAt = [array]::FindIndex($l, [Predicate[string]]{ param($x) $x -match '^\s*set "OUTDIR=' -and $x -notmatch '%OUTDIR%' })
+            $readAt = [array]::FindIndex($l, [Predicate[string]]{ param($x) $x -notmatch '^\s*(::|rem\b)' -and ($x -match '(%|!)OUTDIR(%|!|:)' -or $x -match '(?i)\$env:OUTDIR\b') -and $x -notmatch '^\s*(if\s.*)?set "OUTDIR=' })
+            if ($setAt -lt 0) { throw "${b}: OUTDIR is never set" }
+            if ($readAt -lt 0 -or $readAt -lt $setAt) { throw ("{0}: OUTDIR is read (line {1}) before it is set (line {2})" -f $b, ($readAt + 1), ($setAt + 1)) }
+            if ($b -eq 'doze_sec.bat' -and $l[$setAt] -notmatch '^set "OUTDIR=C:\\SecurityAudit"$') { throw "${b}: the first OUTDIR set is not the unconditional one" }
+            if (@($l | Where-Object { $_ -match '^set "DZ_LOCKDIR=%OUTDIR%"$' }).Count -ne 1 -or @($l | Where-Object { $_ -match 'set "DZ_LOCKDIR=' }).Count -ne 1) { throw "${b}: the output-folder lock is not derived from OUTDIR, once" }
+            # The -updateTTP handler's other "if not defined" fallbacks name files
+            # it writes and deletes; they are cleared before the handler decides them.
+            if ($b -eq 'doze_sec.bat') {
+              $hAt = [array]::FindIndex($l, [Predicate[string]]{ param($x) $x -match '^if "%UPDATE_TTP%"=="0" goto :skip_ttp_update' })
+              foreach ($v in 'IOC_GUID', 'TTP_TODAY') {
+                $clrAt = [array]::FindIndex($l, [Predicate[string]]{ param($x) $x -eq ('set "' + $v + '="') })
+                $useAt = [array]::FindIndex($l, [Predicate[string]]{ param($x) $x -match ('if not defined ' + $v + '\b') })
+                if ($clrAt -lt $hAt -or $useAt -lt $clrAt) { throw "${b}: $v is not cleared at the top of the -updateTTP handler -- an inherited value would name the file it writes and deletes" }
+              }
+            }
           }
           if ($blocks['doze_sec.bat'] -ne $blocks['doze_sec_noAdmin.bat']) { throw 'the run lock block differs between the two bats' }
           Write-Host '[OK] both bats take both run locks before the first shared write (the threat-list handlers and seed, the ChangeLog, the admin check), release each only by its token at both exit labels, and carry the same block'

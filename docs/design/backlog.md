@@ -746,3 +746,23 @@ started from a copy of a harmless binary renamed to a listed name, and a DNS
 cache entry for a listed domain (HOSTS-free, e.g. a resolver-side record), on
 the CI runner only. Each gets a benign twin that must not raise. Assert that
 each reaches the ledger under its own section and technique.
+
+### A Ctrl+C in the console-log window leaves the wrapper's variables set (open, 2026-10-17)
+Found by the read-only review of the inherited-OUTDIR fix; it predates that
+change. Neither bat has fixed it yet. The console-log wrapper sets `DOZE_TEED`,
+`DOZE_LOG_TS`, `DOZE_CONSOLE_LOG` and `DOZE_EXIT_FILE` before `setlocal`, so
+the child it re-runs can see them, and clears them only after the child
+returns. If a person presses Ctrl+C and answers Y to "Terminate batch job",
+those lines never run and the values stay in that Command Prompt. The next
+audit started in the same window then:
+- reads `DOZE_TEED` and skips the console capture;
+- takes `TIMESTAMP` from the old `DOZE_LOG_TS`;
+- creates `ChangeLog_<TS>.txt` and `Undo_<TS>.bat` with `>`, overwriting the
+  interrupted run's record of the changes it made and of how to undo them;
+- says the console was captured when it was not.
+
+Proposed fix: the child accepts `DOZE_LOG_TS` only when no `SecurityReport_`,
+`ChangeLog_` or `Undo_` file with that timestamp exists yet. Otherwise it
+treats the variables as stale, clears them and starts its own capture. Prove
+it with a CI step that leaves the variables set in a cmd and checks that the
+next run's ChangeLog has a new name.
