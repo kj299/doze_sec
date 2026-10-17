@@ -263,10 +263,17 @@ set "CTI_SKILL_SWITCH=%~1"
 shift
 goto :parse_args
 :args_done
+:: OUTDIR is decided HERE, once, unconditionally, before anything reads it.
+:: It used to be set only for -selftest at this point, and the -resetTTP and
+:: -updateTTP handlers below fell back to it with an "if not defined" test,
+:: so an OUTDIR inherited from the environment (a common name in build tools)
+:: reached them: -resetTTP deleted the ioc_*.txt lists in THAT folder, and
+:: -updateTTP wrote its merge where the audit never reads it, outside the
+:: folder the run lock guards.
 :: -selftest: quarantine everything a test-harness run writes under a subdir,
 :: so a report full of PLANTED findings can never be mistaken for, or
-:: auto-diffed against, a real audit. Set early so ThreatLists seeding and
-:: the audit agree on OUTDIR.
+:: auto-diffed against, a real audit.
+set "OUTDIR=C:\SecurityAudit"
 if "%SELFTEST_MODE%"=="1" set "OUTDIR=C:\SecurityAudit\selftest"
 :: -readonly: change nothing on this machine outside OUTDIR and the temp
 :: folder, and make no network connections. Forces the skips that keep the
@@ -496,10 +503,10 @@ endlocal & exit /b 0
 :help_done
 
 :: The output-folder lock lives in the folder this run will write (its
-:: -selftest quarantine when -selftest), decided here because the
-:: -resetTTP/-updateTTP handlers below already write into it.
-set "DZ_LOCKDIR=C:\SecurityAudit"
-if "%SELFTEST_MODE%"=="1" set "DZ_LOCKDIR=C:\SecurityAudit\selftest"
+:: -selftest quarantine when -selftest): OUTDIR, decided after the argument
+:: parse, because the -resetTTP/-updateTTP handlers below already write
+:: into it.
+set "DZ_LOCKDIR=%OUTDIR%"
 if not exist "%DZ_LOCKDIR%" mkdir "%DZ_LOCKDIR%"
 :: ---- One audit at a time (run lock, tools\run_lock.ps1) -------------------
 :: Two audits at once corrupt each other: both bats write the same fixed
@@ -547,7 +554,6 @@ goto :fatal_preinit_exit
 ::   clean slate, then fresh pull.
 :: ====================================================================
 if "%RESET_TTP%"=="0" goto :skip_reset_ttp
-if not defined OUTDIR set "OUTDIR=C:\SecurityAudit"
 echo.
 echo ====================================================================
 echo  -resetTTP: Restoring runtime ThreatLists to the shipped baseline
@@ -584,8 +590,13 @@ if defined IMPORT_TTP_FILE (
 echo ====================================================================
 echo.
 
-:: Ensure OUTDIR is set before use (main OUTDIR set later, but -updateTTP runs early)
-if not defined OUTDIR set "OUTDIR=C:\SecurityAudit"
+:: OUTDIR was decided after the argument parse. The two names this handler
+:: decides with an "if not defined" fallback are cleared first, so neither is
+:: taken from the caller's environment: IOC_GUID names a temp file that is
+:: written and deleted, TTP_TODAY names the update file that is written,
+:: rewritten and deleted.
+set "IOC_GUID="
+set "TTP_TODAY="
 if not exist "%OUTDIR%\ThreatLists" mkdir "%OUTDIR%\ThreatLists" 2>nul
 :: Seed the runtime ThreatLists from the shipped baseline BEFORE merging, so
 :: -updateTTP appends new IOCs to the runtime copy (never the git checkout).
@@ -969,8 +980,8 @@ goto :fatal_preinit_exit
 :: EARLY PATH AND POWERSHELL SETUP
 :: (Must happen before any PS calls or report file creation)
 :: ====================================================================
-set "OUTDIR=C:\SecurityAudit"
-if "%SELFTEST_MODE%"=="1" set "OUTDIR=%OUTDIR%\selftest"
+:: OUTDIR was decided once, after the argument parse; not again here, so the
+:: handlers above and the audit below cannot write to two different folders.
 if not exist "%OUTDIR%"             mkdir "%OUTDIR%"
 if not exist "%OUTDIR%\SmartData"   mkdir "%OUTDIR%\SmartData"
 if not exist "%OUTDIR%\EventExports" mkdir "%OUTDIR%\EventExports"

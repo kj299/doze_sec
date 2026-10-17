@@ -4432,12 +4432,29 @@ jobs:
           set "TEMP=C:\dz_ci_o'brien\Temp"
           set "TMP=C:\dz_ci_o'brien\Temp"
           set "APPDATA=C:\dz ci o'brien\AppData\Roaming"
+          rem AN INHERITED OUTDIR. OUTDIR is a common variable name in build tools,
+          rem and the -resetTTP/-updateTTP handlers once fell back to whatever the
+          rem environment held: -resetTTP deleted the ioc_*.txt lists in that folder.
+          rem This run passes -resetTTP with OUTDIR naming a decoy that holds a
+          rem planted list; the decoy must come out untouched and hold no output.
+          rem Touches: file:C:\dz_ci_outdir_decoy\ (removed below)
+          if not exist "C:\dz_ci_outdir_decoy\ThreatLists" mkdir "C:\dz_ci_outdir_decoy\ThreatLists"
+          >"C:\dz_ci_outdir_decoy\ThreatLists\ioc_dz_ci_decoy.txt" echo dz_ci_outdir_decoy planted list
+          set "OUTDIR=C:\dz_ci_outdir_decoy"
           call doze_sec.bat -dev -sdu -nosrp -resetTTP -dnsprobe
           set RC=%ERRORLEVEL%
+          set "OUTDIR="
           set "TEMP=%DZ_REAL_TEMP%"
           set "TMP=%DZ_REAL_TMP%"
           set "APPDATA=%DZ_REAL_APPDATA%"
           echo doze_sec.bat exit code: %RC%
+          if not exist "C:\dz_ci_outdir_decoy\ThreatLists\ioc_dz_ci_decoy.txt" ( echo INHERITED OUTDIR: -resetTTP deleted a list in the folder an environment variable named & exit /b 1 )
+          findstr /x /c:"dz_ci_outdir_decoy planted list" "C:\dz_ci_outdir_decoy\ThreatLists\ioc_dz_ci_decoy.txt" >nul || ( echo INHERITED OUTDIR: the planted list in the decoy folder was rewritten & exit /b 1 )
+          dir /b /s /a-d "C:\dz_ci_outdir_decoy" > "%RUNNER_TEMP%\dz_decoy_files.txt"
+          rem Windows' own find.exe, by path: the image puts Git's GNU find on PATH too.
+          %SystemRoot%\System32\find.exe /c /v "" < "%RUNNER_TEMP%\dz_decoy_files.txt" | findstr /x "1" >nul || ( echo INHERITED OUTDIR: the audit wrote into the folder an environment variable named: & type "%RUNNER_TEMP%\dz_decoy_files.txt" & exit /b 1 )
+          rmdir /s /q "C:\dz_ci_outdir_decoy"
+          echo inherited OUTDIR: the decoy folder came out untouched, its planted list intact
           if "%RC%"=="1" ( echo FATAL ERROR exit code 1 & exit /b 1 )
           rem THE PENDING-REBOOT PATH. The step above planted PendingFileRenameOperations,
           rem so this run must read "Reboot pending" and exit 4 -- or 8, because a
