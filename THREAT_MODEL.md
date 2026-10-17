@@ -305,9 +305,19 @@ Found during the v7.1 coverage review; tracked for future work:
   archive the OneDrive sync client, curl or a torrent client fetched carries
   no mark and so reads as made here (the corpus names those twins); entry
   names are read from ZIP, RAR and 7z headers, contents never;
-  a renamed archive is found by signature up to a declared probe cap; files
-  deeper than the stated depth, self-extracting .exe archives and archives
-  inside archives are not examined, and the report says so.
+  a renamed archive is found by signature up to a declared probe cap; a
+  self-extracting program is read when its archive sits in the first 64 KiB
+  past its code (the PE overlay, per Microsoft's PE format) or in padding
+  inside its certificate table, every candidate graded and the most severe
+  kept (a cabinet or ZIP must pass its own structure check; a 7z or RAR CRC
+  only breaks ties, since a zeroed CRC must not hide one); it is left out when it is
+  validly signed by its publisher and the archive is not in the certificate
+  table (an installer; appending an archive after signing breaks the
+  signature, and a signature that cannot be checked counts as unsigned); a
+  program whose header cannot be read is declared NOT checked; files deeper
+  than the stated depth,
+  an SFX whose archive lies further in or inside its resources (IExpress),
+  and archives inside archives are not examined, and the report says so.
   The records BITS leaves BEHIND a job are now read (Section 5,
   `tools/bits_history.ps1`), and the disagreement among the write-ups was
   answered by not depending on any of them: the field names come from the

@@ -57,7 +57,9 @@
 # larger than the cap, one that fails its CRC, does not decode or is not
 # reached in that time is reported as "not determinable" and named (raised only in the Public folder, where nothing
 # unpacks); entry names are read from ZIP, RAR and 7z, contents never;
-# a self-extracting .exe archive is not opened; files are examined to a stated
+# a self-extracting program is read when its archive sits in the first 64 KiB
+# past its code (the PE overlay), and left out when it is validly signed by its
+# publisher (an installer); files are examined to a stated
 # depth with stated caps; a cloud-only placeholder is not read (reading it
 # would download it); and a file the OneDrive client synced carries no mark,
 # so a downloaded archive it fetched reads as made here (the corpus names that
@@ -333,6 +335,7 @@ function Get-ZipFactsFromBytes {
     }
     if ($cdOff -lt 0 -or $cdSize -lt 0 -or $total -lt 0) { $r.Why = 'a negative central-directory size or offset'; return $r }
     $r.Parsed = $true; $r.CdOffset = $cdOff; $r.CdSize = $cdSize; $r.EntryCount = $total
+    $r.EocdPos = $tailStart + $eocd; $r.Zip64 = $z64
     if ($total -eq 0) { $r.Encrypted = $false }
     return $r
 }
@@ -407,7 +410,8 @@ function Get-ZipLocalFromBytes {
 function Get-ZipFacts {
     # $SpanPaths / $SpanSizes: this file first, then the later raw volumes of
     # its set (7-Zip's name.zip.001, .002 ...), read as one stream.
-    param([string]$Path, [long]$Length, [string[]]$SpanPaths = @(), [long[]]$SpanSizes = @())
+    # $Base: where the archive starts (past a self-extracting program's code).
+    param([string]$Path, [long]$Length, [string[]]$SpanPaths = @(), [long[]]$SpanSizes = @(), [long]$Base = 0)
     $span = ($SpanPaths.Count -gt 1)
     $total = $Length
     if ($span) { $total = 0; foreach ($s in $SpanSizes) { $total += [long]$s } }
@@ -421,6 +425,14 @@ function Get-ZipFacts {
         if ($span) { $cd = Read-SpanBytes -Paths $SpanPaths -Sizes $SpanSizes -Offset $f.CdOffset -Count $want }
         else { $cd = Read-FileBytes -Path $Path -Offset $f.CdOffset -Count $want }
         $e = Get-ZipEntriesFromBytes -Cd $cd
+        if ($e.Count -eq 0 -and -not $span -and -not $f.Zip64 -and ($f.EocdPos - $f.CdSize) -ge 0 -and ($f.EocdPos - $f.CdSize) -ne $f.CdOffset) {
+            # Data before the archive (a self-extracting program, or bytes
+            # prepended) leaves the stated offsets relative to the archive's
+            # own start; the central directory then ends where the end record
+            # begins, which is where archivers look next.
+            $cd = Read-FileBytes -Path $Path -Offset ($f.EocdPos - $f.CdSize) -Count $want
+            $e = Get-ZipEntriesFromBytes -Cd $cd
+        }
         if ($e.Count -gt 0) {
             $cdRead = $true
             $f.Encrypted = $e.Encrypted; $f.Entries = $e.Entries; $f.Opc = $e.Opc
@@ -432,7 +444,7 @@ function Get-ZipFacts {
     # The local headers, read from the front, settle what the central
     # directory could not -- and catch central flags that were cleared.
     if ($span) { $head = Read-SpanBytes -Paths $SpanPaths -Sizes $SpanSizes -Offset 0 -Count 1048576 }
-    else { $head = Read-FileBytes -Path $Path -Offset 0 -Count 1048576 }
+    else { $head = Read-FileBytes -Path $Path -Offset $Base -Count 1048576 }
     $lo = Get-ZipLocalFromBytes -Head $head
     if ($lo.Encrypted) { $f.Encrypted = $true }
     if ($lo.Opc) { $f.Opc = $true }
@@ -574,11 +586,13 @@ function Get-RarFactsFromBytes {
 }
 
 function Get-RarFacts {
-    param([string]$Path, [long]$Length)
+    # $Base: where the archive starts in the file (0, or past a
+    # self-extracting program's code).
+    param([string]$Path, [long]$Length, [long]$Base = 0)
     # Headers up to the first data area are what is needed; 1 MB covers any
     # real main header plus the first file headers, and the walker skips packed
     # data by its declared size without reading it.
-    $buf = Read-FileBytes -Path $Path -Offset 0 -Count 1048576
+    $buf = Read-FileBytes -Path $Path -Offset $Base -Count 1048576
     return (Get-RarFactsFromBytes -Buf $buf)
 }
 
@@ -1181,13 +1195,16 @@ function Get-SevenZipFacts {
     # $DecodeSeconds bounds the decompression of a compressed header;
     # -NoDecode leaves a compressed header for the caller to decode later
     # (Invoke-SevenZipHeaderDecode), with the plan in .Decode.
-    param([string]$Path, [long]$Length, [string[]]$SpanPaths = @(), [long[]]$SpanSizes = @(), [double]$DecodeSeconds = 10, [switch]$NoDecode)
+    # $Base: where the archive starts (past a self-extracting program's
+    # code); every 7z offset is relative to it, and the length is what
+    # follows it.
+    param([string]$Path, [long]$Length, [string[]]$SpanPaths = @(), [long[]]$SpanSizes = @(), [double]$DecodeSeconds = 10, [switch]$NoDecode, [long]$Base = 0)
     $span = ($SpanPaths.Count -gt 1)
     $total = $Length
     if ($span) {
         $total = 0; foreach ($s in $SpanSizes) { $total += [long]$s }
         $sig = Read-SpanBytes -Paths $SpanPaths -Sizes $SpanSizes -Offset 0 -Count 32
-    } else { $sig = Read-FileBytes -Path $Path -Offset 0 -Count 32 }
+    } else { $total = $Length - $Base; $sig = Read-FileBytes -Path $Path -Offset $Base -Count 32 }
     $pre = Get-SevenZipFactsFromBytes -Sig $sig -FileLength $total -NextHeader $null -SignatureOnly
     if (-not $pre.Parsed -or $pre.Beyond -or $pre.NextSize -le 0) {
         if ($pre.Beyond -and $span) { $pre.Why = 'the header lies beyond the volumes present here' }
@@ -1195,8 +1212,9 @@ function Get-SevenZipFacts {
     }
     $want = [int][math]::Min([long]$pre.NextSize, 1048576)
     if ($span) { $nh = Read-SpanBytes -Paths $SpanPaths -Sizes $SpanSizes -Offset (32 + $pre.NextOffset) -Count $want }
-    else { $nh = Read-FileBytes -Path $Path -Offset (32 + $pre.NextOffset) -Count $want }
+    else { $nh = Read-FileBytes -Path $Path -Offset ($Base + 32 + $pre.NextOffset) -Count $want }
     $f = Get-SevenZipFactsFromBytes -Sig $sig -FileLength $total -NextHeader $nh
+    $f.Base = $Base
     if ($null -eq $f.Decode) {
         if ([long]$pre.NextSize -gt [long]$want -and $f.Encrypted -ne $true) {
             # A plain header larger than the read: only a 7zAES coder seen in
@@ -1206,13 +1224,13 @@ function Get-SevenZipFacts {
         return $f
     }
     if ($NoDecode) { return $f }
-    return (Invoke-SevenZipHeaderDecode -Facts $f -Path $Path -Total $total -SpanPaths $SpanPaths -SpanSizes $SpanSizes -Seconds $DecodeSeconds)
+    return (Invoke-SevenZipHeaderDecode -Facts $f -Path $Path -Total $total -SpanPaths $SpanPaths -SpanSizes $SpanSizes -Seconds $DecodeSeconds -Base $Base)
 }
 
 function Invoke-SevenZipHeaderDecode {
     # Reads the packed header the plan in $Facts.Decode names, decodes it and
     # updates $Facts; returns it.
-    param($Facts, [string]$Path, [long]$Total, [string[]]$SpanPaths = @(), [long[]]$SpanSizes = @(), [double]$Seconds = 10)
+    param($Facts, [string]$Path, [long]$Total, [string[]]$SpanPaths = @(), [long[]]$SpanSizes = @(), [double]$Seconds = 10, [long]$Base = 0)
     $f = $Facts
     $pl = $f.Decode
     if ($pl.PackSize -gt 1048576 -or ($pl.PackOffset + $pl.PackSize) -gt $Total) {
@@ -1220,13 +1238,207 @@ function Invoke-SevenZipHeaderDecode {
         return $f
     }
     if ($SpanPaths.Count -gt 1) { $packed = Read-SpanBytes -Paths $SpanPaths -Sizes $SpanSizes -Offset $pl.PackOffset -Count ([int]$pl.PackSize) }
-    else { $packed = Read-FileBytes -Path $Path -Offset $pl.PackOffset -Count ([int]$pl.PackSize) }
+    else { $packed = Read-FileBytes -Path $Path -Offset ($Base + $pl.PackOffset) -Count ([int]$pl.PackSize) }
     $res = Resolve-SevenZipEncodedHeader -Plan $pl -Packed $packed -Seconds $Seconds
     $f.HeaderDecoded = [bool]$res.Decoded
     $f.Encrypted = $res.Encrypted
     $f.Entries = @($res.Entries); $f.NameCount = [int]$res.NameCount
     $f.Why = [string]$res.Why
     return $f
+}
+
+# ---------------------------------------------------------------------------
+# SELF-EXTRACTING ARCHIVES. An SFX is a Windows program with the archive
+# appended after its last section -- the PE "overlay": WinRAR SFX, 7-Zip
+# -sfx, ZIP SFX. Any archiver opens it, and a double-click unpacks it, so a
+# password-protected SFX made here is the same shape as a password-protected
+# .rar. The layout is Microsoft's PE format specification: e_lfanew at 0x3C
+# names the "PE\0\0" header; the COFF header holds the section count and the
+# optional-header size; the optional header's data directory 4 is the
+# certificate table, whose address is a FILE offset; each 40-byte section
+# entry gives SizeOfRawData (+16) and PointerToRawData (+20). The overlay is
+# what lies past the furthest section, less the certificate table. Every
+# offset is checked against the bytes read, so a crafted header cannot send
+# a read anywhere else.
+# ---------------------------------------------------------------------------
+
+function Get-PeOverlayInfo {
+    # $Head: the first 4096 bytes. Returns @{ IsPe; Parsed; Regions; Why };
+    # Regions are @{ Start; End } file ranges of overlay data (before and
+    # after a certificate table).
+    param([byte[]]$Head, [long]$FileLength)
+    $r = @{ IsPe = $false; Parsed = $false; Regions = @(); Why = '' }
+    if ($null -eq $Head -or $Head.Count -lt 64 -or $Head[0] -ne 0x4D -or $Head[1] -ne 0x5A) { $r.Why = 'not a program'; return $r }
+    $r.IsPe = $true
+    $pe = Get-U32 $Head 0x3C
+    if ($pe -lt 64 -or ($pe + 24) -gt $Head.Count -or -not (Test-BytesAt $Head $pe @(0x50, 0x45, 0x00, 0x00))) { $r.Why = 'no PE header within the first 4 KiB'; return $r }
+    $nsec = Get-U16 $Head ($pe + 6)
+    $optSize = Get-U16 $Head ($pe + 20)
+    if ($nsec -lt 1 -or $nsec -gt 96) { $r.Why = 'a section count out of range'; return $r }
+    $opt = $pe + 24
+    if ($optSize -lt 2 -or ($opt + $optSize) -gt $Head.Count) { $r.Why = 'an optional header past the first 4 KiB'; return $r }
+    $magic = Get-U16 $Head $opt
+    if ($magic -eq 0x10B) { $dd = 96 } elseif ($magic -eq 0x20B) { $dd = 112 } else { $r.Why = 'an optional header of an unknown kind'; return $r }
+    $certStart = -1; $certSize = 0
+    if (($dd + 40) -le $optSize -and (Get-U32 $Head ($opt + $dd - 4)) -gt 4) {
+        $certStart = Get-U32 $Head ($opt + $dd + 32); $certSize = Get-U32 $Head ($opt + $dd + 36)
+    }
+    $sec = $opt + $optSize
+    if (($sec + 40 * $nsec) -gt $Head.Count) { $r.Why = 'a section table past the first 4 KiB'; return $r }
+    $end = [long]0
+    for ($i = 0; $i -lt $nsec; $i++) {
+        $s = $sec + 40 * $i
+        $size = Get-U32 $Head ($s + 16); $ptr = Get-U32 $Head ($s + 20)
+        if ($size -gt 0 -and ($ptr + $size) -gt $end) { $end = $ptr + $size }
+    }
+    if ($end -le 0 -or $end -gt $FileLength) { $r.Why = 'sections that reach past the end of the file'; return $r }
+    $r.Parsed = $true
+    $r.CertStart = -1; $r.CertSize = 0
+    $regions = @()
+    if ($certSize -gt 0 -and $certStart -ge $end -and ($certStart + $certSize) -le $FileLength) {
+        $r.CertStart = [long]$certStart; $r.CertSize = [long]$certSize
+        if ($certStart -gt $end) { $regions += ,@{ Start = $end; End = [long]$certStart } }
+        if (($certStart + $certSize) -lt $FileLength) { $regions += ,@{ Start = [long]($certStart + $certSize); End = $FileLength } }
+    } elseif ($end -lt $FileLength) { $regions += ,@{ Start = $end; End = $FileLength } }
+    $r.Regions = $regions
+    return $r
+}
+
+function Test-SfxCandidate {
+    # A signature inside a program's overlay is only a candidate: the bytes
+    # behind it must be that format's own header, checked the way the
+    # format checks itself -- 7z's StartHeaderCRC over bytes 12..31
+    # (7zFormat.txt), RAR 5.0's CRC32 over its first block (UnRAR
+    # headers5.hpp), RAR 4.x's HEAD_CRC over the main header, a cabinet's
+    # size, file-table offset and version 1.3 (Microsoft Cabinet Format).
+    # A ZIP is checked by parsing it (its end record must resolve). The
+    # caller uses the 7z and RAR checks to RANK, not to drop: an archiver may
+    # still open an archive whose header CRC is wrong, so a broken CRC must
+    # not hide one; a cabinet that fails is dropped (it cannot carry a
+    # password, and a four-byte magic collides in ordinary data).
+    param([string]$Kind, [byte[]]$B, [long]$Remaining)
+    if ($null -eq $B) { return $false }
+    switch ($Kind) {
+        '7z' {
+            if ($B.Count -lt 32) { return $false }
+            $part = New-Object byte[] 20; [Array]::Copy($B, 12, $part, 0, 20)
+            return ((Get-Crc32 $part) -eq (Get-U32 $B 8))
+        }
+        'rar5' {
+            if ($B.Count -lt 16) { return $false }
+            $v = Read-Vint $B 12
+            if (-not $v.Ok -or $v.Value -lt 1 -or ($v.Next + $v.Value) -gt $B.Count) { return $false }
+            $n = [int]($v.Next + $v.Value - 12)
+            $part = New-Object byte[] $n; [Array]::Copy($B, 12, $part, 0, $n)
+            return ((Get-Crc32 $part) -eq (Get-U32 $B 8))
+        }
+        'rar4' {
+            if ($B.Count -lt 20) { return $false }
+            $size = Get-U16 $B 12
+            if ($size -lt 7 -or (7 + $size) -gt $B.Count) { return $false }
+            $n = $size - 2
+            $part = New-Object byte[] $n; [Array]::Copy($B, 9, $part, 0, $n)
+            return (((Get-Crc32 $part) -band 0xFFFF) -eq (Get-U16 $B 7))
+        }
+        'cab' {
+            if ($B.Count -lt 26) { return $false }
+            $cb = Get-U32 $B 8; $cf = Get-U32 $B 16
+            return ($cb -ge 0x24 -and $cb -le $Remaining -and $cf -lt $cb -and $B[24] -eq 3 -and $B[25] -eq 1)
+        }
+        'zip' { return $true }
+    }
+    return $false
+}
+
+function Find-SfxArchive {
+    # Every archive signature in $Window that starts before $Limit and passes
+    # Test-SfxCandidate, in order. 7-Zip's installer SFX puts a configuration
+    # block before the archive, and an attacker can put a decoy there; the
+    # caller grades every candidate and keeps the most severe. At most 64
+    # signature look-alikes are examined: past that the window is called
+    # crowded, not clean.
+    param([byte[]]$Window, [long]$Limit = 65536, [long]$Remaining = [long]::MaxValue)
+    $r = @{ Candidates = @(); TooMany = $false }
+    if ($null -eq $Window -or $Window.Count -lt 8) { return $r }
+    $text = [System.Text.Encoding]::GetEncoding(28591).GetString($Window)
+    $hits = New-Object System.Collections.ArrayList
+    $looked = 0
+    foreach ($sig in @(('Rar!' + [char]0x1A + [char]0x07), ('7z' + [char]0xBC + [char]0xAF + [char]0x27 + [char]0x1C), ('PK' + [char]0x03 + [char]0x04), 'MSCF')) {
+        $from = 0
+        while ($from -lt $text.Length) {
+            $i = $text.IndexOf($sig, $from, [System.StringComparison]::Ordinal)
+            if ($i -lt 0 -or $i -ge $Limit) { break }
+            $looked++
+            if ($looked -gt 64) { $r.TooMany = $true; break }
+            $n = [int][math]::Min(512, $Window.Count - $i)
+            $slice = New-Object byte[] $n; [Array]::Copy($Window, $i, $slice, 0, $n)
+            $k = Get-ArchiveKind -Head $slice
+            if (@('zip', 'rar4', 'rar5', '7z', 'cab') -contains $k) {
+                $ok = Test-SfxCandidate -Kind $k -B $slice -Remaining ($Remaining - $i)
+                if ($ok -or $k -ne 'cab') { [void]$hits.Add(@{ Offset = [long]$i; Kind = $k; Checked = [bool]$ok }) }
+            }
+            $from = $i + 1
+        }
+        if ($r.TooMany) { break }
+    }
+    $r.Candidates = @($hits.ToArray() | Sort-Object @{ Expression = { [long]$_.Offset } })
+    return $r
+}
+
+function Get-CertPaddingRegions {
+    # The certificate table is not hashed by Authenticode, so bytes padded
+    # into it keep a signature Valid (Microsoft, CVE-2013-3900). A
+    # WIN_CERTIFICATE is dwLength(4), wRevision 0x0200, wCertificateType 2
+    # (PKCS#7), then a DER SEQUENCE; whatever lies past that SEQUENCE inside
+    # the table is padding, and is scanned. A table that is not a
+    # WIN_CERTIFICATE at all is scanned whole. Regions are marked InCert:
+    # an archive found there is graded whatever the signature says.
+    param([long]$CertStart, [long]$CertSize, [byte[]]$CertHead)
+    $whole = @(@{ Start = $CertStart; End = ($CertStart + $CertSize); InCert = $true })
+    if ($null -eq $CertHead -or $CertHead.Count -lt 12) { return $whole }
+    $len = Get-U32 $CertHead 0
+    if ((Get-U16 $CertHead 4) -ne 0x0200 -or (Get-U16 $CertHead 6) -ne 0x0002 -or $len -lt 12 -or $len -gt $CertSize -or $CertHead[8] -ne 0x30) { return $whole }
+    $l1 = [int]$CertHead[9]
+    if ($l1 -lt 0x80) { $der = 2 + $l1 }
+    elseif ($l1 -eq 0x81) { $der = 3 + [int]$CertHead[10] }
+    elseif ($l1 -eq 0x82) { $der = 4 + ([int]$CertHead[10] -shl 8) + [int]$CertHead[11] }
+    elseif ($l1 -eq 0x83 -and $CertHead.Count -ge 13) { $der = 5 + ([int]$CertHead[10] -shl 16) + ([int]$CertHead[11] -shl 8) + [int]$CertHead[12] }
+    else { return $whole }
+    $blobEnd = $CertStart + 8 + [long]$der
+    if ($blobEnd -gt ($CertStart + $CertSize)) { return $whole }
+    if ($blobEnd -lt ($CertStart + $CertSize)) { return @(@{ Start = $blobEnd; End = ($CertStart + $CertSize); InCert = $true }) }
+    return @()
+}
+
+function Find-SfxInFile {
+    # The I/O half: reads the program's head, the certificate table's head,
+    # and one window per overlay region. Returns @{ Parsed; HasCert;
+    # Candidates (Base, Kind, InCert); Why }. Parsed is false when the header
+    # could not be read -- that program was NOT checked, and the caller says so.
+    param([string]$Path, [long]$Length)
+    $r = @{ Parsed = $false; HasCert = $false; Candidates = @(); Why = '' }
+    $pe = Get-PeOverlayInfo -Head (Read-FileBytes -Path $Path -Offset 0 -Count 4096) -FileLength $Length
+    if (-not $pe.Parsed) { $r.Why = $pe.Why; return $r }
+    $r.Parsed = $true
+    $regions = @()
+    foreach ($reg in @($pe.Regions)) { $regions += ,@{ Start = $reg.Start; End = $reg.End; InCert = $false } }
+    if ([long]$pe.CertSize -gt 0) {
+        $r.HasCert = $true
+        $regions += @(Get-CertPaddingRegions -CertStart $pe.CertStart -CertSize $pe.CertSize -CertHead (Read-FileBytes -Path $Path -Offset $pe.CertStart -Count 16))
+    }
+    $cands = @(); $crowded = $false
+    foreach ($reg in $regions) {
+        $len = [long]$reg.End - [long]$reg.Start
+        if ($len -lt 32) { continue }
+        $w = Read-FileBytes -Path $Path -Offset $reg.Start -Count ([int][math]::Min($len, [long](65536 + 512)))
+        $f = Find-SfxArchive -Window $w -Limit 65536 -Remaining $len
+        if ($f.TooMany) { $crowded = $true }
+        foreach ($c in @($f.Candidates)) { $cands += ,@{ Base = ([long]$reg.Start + [long]$c.Offset); Kind = [string]$c.Kind; InCert = [bool]$reg.InCert; Checked = [bool]$c.Checked } }
+    }
+    $r.Candidates = $cands
+    if ($crowded -and $cands.Count -eq 0) { $r.Parsed = $false; $r.Why = 'more archive-signature look-alikes past its code than are checked' }
+    if ($cands.Count -eq 0 -and -not $r.Why) { $r.Why = 'no archive in the first 64 KiB past its code' }
+    return $r
 }
 
 # CAB (Microsoft Cabinet Format): flags at 0x1E carry cfhdrPREV_CABINET 0x0001
@@ -1469,6 +1681,7 @@ function Get-ArchiveStagingReport {
         if ($v.Class -eq 'marked-misplaced') { $who = 'An archive' }
         [void]$out.Add(('[' + $v.Sev + '] ' + $who + ' ' + $v.Clause + ', in a staging folder: ' + (ConvertTo-PrintableText $a.Path) + $moreText + ' (' + $mb + ' MB, written ' + (Format-When $a.Modified) + ') (T1560)'))
         $fmt = Get-KindLabel ([string]$a.Kind)
+        if ($a.Sfx) { $fmt += ' inside a self-extracting program (the archive starts at byte ' + [string]$a.SfxBase + ')' }
         $bits = @()
         if ($a.Encrypted -eq $true) { if ($a.HeadersEncrypted) { $bits += 'password-protected with its file names hidden' } else { $bits += 'password-protected, file names visible' } }
         elseif ($null -eq $a.Encrypted) { $bits += 'password not determinable' + $(if ($a.ParseError) { ' (' + (ConvertTo-PrintableText $a.ParseError) + ')' } else { '' }) }
@@ -1518,6 +1731,14 @@ function Get-ArchiveStagingReport {
         $nm = @($und | Select-Object -First 5 | ForEach-Object { ConvertTo-PrintableText $_.Path })
         [void]$out.Add('[INFO] ' + [string]$und.Count + ' archive(s) whose password could not be determined -- a 7z header coded with a method this audit does not decode, larger than its 256 KiB cap, failing its CRC, or not decoded within its time (10 s each, 30 s per run, smallest first), and a damaged or truncated archive, cannot be read through; graded by their volume shape only: ' + ($nm -join '; ') + $(if ($und.Count -gt 5) { '; ...and ' + [string]($und.Count - 5) + ' more' } else { '' }))
     }
+    if ([int]$Probes.SfxScanned -gt 0) {
+        $sfxLine = '[INFO] ' + [string]$Probes.SfxScanned + ' program file(s) were checked for an archive appended after their code (a self-extracting archive); ' + [string]$Probes.SfxFound + ' held one'
+        if ([int]$Probes.SfxSigned -gt 0) { $sfxLine += ', ' + [string]$Probes.SfxSigned + ' of them validly signed by their publisher and left out: an installer is not an archive packed here' }
+        [void]$out.Add($sfxLine + '.')
+    }
+    if ([int]$Probes.SfxUnparsed -gt 0) {
+        [void]$out.Add('[INFO] ' + [string]$Probes.SfxUnparsed + ' program file(s) were NOT checked for an appended archive -- their header could not be read: ' + ((@($Probes.SfxUnparsedNames) | ForEach-Object { ConvertTo-PrintableText $_ }) -join '; ') + $(if ([int]$Probes.SfxUnparsed -gt 3) { '; ...and ' + [string]([int]$Probes.SfxUnparsed - 3) + ' more' } else { '' }))
+    }
     if ([int]$Probes.Packages -gt 0) { [void]$out.Add('[INFO] ' + [string]$Probes.Packages + ' package(s) that are ZIP by signature (Office documents, MSIX/APPX, VSIX, JAR and the like) were left out: a document is not an archive for this purpose') }
     if ([int]$Probes.NotArchive -gt 0) { [void]$out.Add('[INFO] ' + [string]$Probes.NotArchive + ' file(s) named like an archive are not one by signature') }
     if ([int]$Probes.Cloud -gt 0) { [void]$out.Add('[INFO] ' + [string]$Probes.Cloud + ' cloud-only placeholder(s) were not opened: reading one would download it from the cloud. They are not covered.') }
@@ -1545,7 +1766,7 @@ function Get-ArchiveStagingReport {
         [void]$out.Add('[INFO] The time budget ran out before every staging folder and file was examined' + $w + ' -- what follows covers only what was read')
         [void]$scopeReasons.Add('the time budget')
     }
-    [void]$out.Add('[INFO] Not examined by design: archives inside other archives, self-extracting .exe archives, other users'' redirected Downloads folders, and folders deeper than ' + [string]$Depth + ' level(s) below each staging folder.')
+    [void]$out.Add('[INFO] Not examined by design: archives inside other archives, a self-extracting program whose archive starts more than 64 KiB past its code or sits inside its resources (as IExpress packages do), other users'' redirected Downloads folders, and folders deeper than ' + [string]$Depth + ' level(s) below each staging folder.')
 
     # ---- the coverage sentence. An all-clear only when nothing was raised,
     # nothing could not be read, nothing was deferred and no cap or budget
@@ -1601,6 +1822,37 @@ function Get-ZoneOfFile {
     return @{ Zone = $zone; HostUrl = $hostUrl }
 }
 
+function Read-ArchiveFacts {
+    # One archive of a known kind, read at $Base: what the per-kind readers
+    # established, normalised. Used for each archive and for each candidate
+    # inside a self-extracting program.
+    param([string]$Kind, [string]$Path, [long]$Length, [long]$Base = 0, [string[]]$SpanP = @(), [long[]]$SpanS = @(), [byte[]]$Head = $null)
+    $kind = $Kind
+    $x = $null; $enc = $null; $multi = $false; $multiWhy = ''; $entries = @(); $hdrEnc = $false; $opc = $false; $count = 0; $parseError = ''
+    try {
+        switch ($kind) {
+            'zip'      { $x = Get-ZipFacts -Path $Path -Length $Length -SpanPaths $SpanP -SpanSizes $SpanS -Base $Base; $enc = $x.Encrypted; $multi = [bool]$x.Split; if ($multi) { $multiWhy = 'the end record names more than one disk' }; $entries = @($x.Entries); $opc = [bool]$x.Opc; $count = [int]$x.EntryCount; if ($null -eq $enc -and $x.Why) { $parseError = $x.Why } }
+            'zip-span' { $x = Get-ZipLocalFromBytes -Head (Read-FileBytes -Path $Path -Offset $Base -Count 1048576); if ($x.Encrypted) { $enc = $true } else { $enc = $null; $parseError = 'a first segment holds no end record' }; $multi = $true; $multiWhy = 'the first segment of a split set'; $entries = @($x.Entries); $opc = [bool]$x.Opc }
+            'rar4'     { $x = Get-RarFacts -Path $Path -Length $Length -Base $Base; $enc = $x.Encrypted; $hdrEnc = [bool]$x.HeadersEncrypted; $multi = [bool]$x.MultiVolume; if ($multi) { $multiWhy = 'the archive header carries the volume flag' }; $entries = @($x.Entries); $count = [int]$x.Count; if (-not $x.Parsed) { $parseError = $x.Why; if (-not $enc) { $enc = $null } } }
+            'rar5'     { $x = Get-RarFacts -Path $Path -Length $Length -Base $Base; $enc = $x.Encrypted; $hdrEnc = [bool]$x.HeadersEncrypted; $multi = [bool]$x.MultiVolume; if ($multi) { $multiWhy = 'the archive header carries the volume flag' }; $entries = @($x.Entries); $count = [int]$x.Count; if (-not $x.Parsed) { $parseError = $x.Why; if (-not $enc) { $enc = $null } } }
+            '7z'       {
+                # A compressed header is decoded after the loop (below).
+                $x = Get-SevenZipFacts -Path $Path -Length $Length -SpanPaths $SpanP -SpanSizes $SpanS -NoDecode -Base $Base
+                $enc = $x.Encrypted; $hdrEnc = [bool]$x.HeadersEncrypted; $entries = @($x.Entries); $count = [math]::Max([int]$x.NameCount, $entries.Count)
+                if ($SpanP.Count -gt 1) { $multi = $true; $multiWhy = [string]$SpanP.Count + ' volumes read as one stream' }
+                if ($x.Beyond) { $parseError = $x.Why }
+                elseif (-not $x.Parsed) { $parseError = $x.Why }
+                elseif ($null -eq $enc) { if ($x.Why) { $parseError = $x.Why } else { $parseError = 'compressed header' } }
+            }
+            'cab'      { $cabHead = $Head; if ($Base -gt 0 -or $null -eq $cabHead) { $cabHead = Read-FileBytes -Path $Path -Offset $Base -Count 512 }; $x = Get-CabFactsFromBytes -Head $cabHead; $enc = $false; $multi = [bool]$x.MultiVolume; if ($multi) { $multiWhy = 'the cabinet header names a previous or next cabinet' } }
+            default    { $enc = $false }
+        }
+    } catch { $parseError = $_.Exception.Message; if ($enc -ne $true) { $enc = $null } }
+    $zipParsed = $false
+    if ($kind -eq 'zip' -and $null -ne $x -and $x.Parsed) { $zipParsed = $true }
+    return @{ X = $x; Enc = $enc; Multi = $multi; MultiWhy = $multiWhy; Entries = @($entries); HdrEnc = $hdrEnc; Opc = $opc; Count = $count; ParseError = $parseError; ZipParsed = $zipParsed; Kind = $kind; Base = $Base }
+}
+
 function Invoke-ArchiveClassification {
     # $DecodeAllowanceSeconds: the wall clock all compressed 7z headers of
     # this run may spend decoding, together. They are decoded AFTER every
@@ -1610,10 +1862,11 @@ function Invoke-ArchiveClassification {
     # decoded before them.
     param($Candidates, [int]$MaxProbes = 5000, [double]$BudgetSeconds = 120, $Stopwatch = $null, $FolderStats = $null, [double]$DecodeAllowanceSeconds = 30,
           [scriptblock]$ZoneReader = { param($p) Get-ZoneOfFile -Path $p },
-          [scriptblock]$HeadReader = { param($p) Read-FileBytes -Path $p -Offset 0 -Count 512 })
+          [scriptblock]$HeadReader = { param($p) Read-FileBytes -Path $p -Offset 0 -Count 512 },
+          [scriptblock]$SignatureReader = { param($p) [string](Get-AuthenticodeSignature -LiteralPath $p -ErrorAction Stop).Status })
     if ($null -eq $Stopwatch) { $Stopwatch = [System.Diagnostics.Stopwatch]::StartNew() }
     if ($null -eq $FolderStats) { $FolderStats = @{} }
-    $probes = @{ Files = @($Candidates).Count; Probed = 0; ProbeCap = $false; BudgetHit = $false; NotArchive = 0; Packages = 0; Cloud = 0 }
+    $probes = @{ Files = @($Candidates).Count; Probed = 0; ProbeCap = $false; BudgetHit = $false; NotArchive = 0; Packages = 0; Cloud = 0; SfxScanned = 0; SfxFound = 0; SfxSigned = 0; SfxUnparsed = 0; SfxUnparsedNames = @() }
     $cands = @($Candidates | Where-Object { $null -ne $_ })
     # Members of every volume-shaped name, per directory, counted over ALL
     # candidates -- including 7-Zip's signature-less later volumes.
@@ -1669,6 +1922,55 @@ function Invoke-ArchiveClassification {
         }
         $kind = Get-ArchiveKind -Head $head
         $ext = ([string]$it.Extension).ToLowerInvariant()
+        $sfx = $false; $sfxBase = [long]0; $fx = $null
+        if ($kind -eq 'none' -and $null -ne $head -and $head.Count -ge 2 -and $head[0] -eq 0x4D -and $head[1] -eq 0x5A) {
+            # A program: is an archive appended after its code?
+            $sf = $null
+            try { $sf = Find-SfxInFile -Path $path -Length $len } catch { $sf = @{ Parsed = $false; Why = [string]$_.Exception.Message } }
+            if (-not $sf.Parsed) {
+                # NOT checked, and said so: a header that cannot be read is not
+                # a program with nothing appended.
+                $probes.SfxUnparsed++
+                if (@($probes.SfxUnparsedNames).Count -lt 3) { $probes.SfxUnparsedNames += ($path + ' (' + [string]$sf.Why + ')') }
+            } else {
+                $probes.SfxScanned++
+                $cands = @($sf.Candidates)
+                if ($cands.Count -gt 0 -and $sf.HasCert -and @($cands | Where-Object { -not $_.InCert }).Count -gt 0) {
+                    # A publisher signs the whole file, archive included, and
+                    # appending an archive afterwards breaks the signature, so
+                    # a VALID one means an installer, not an archive packed
+                    # here. A signature that cannot be checked counts as
+                    # unsigned. A program with no certificate table is not
+                    # asked at all (hashing a large unsigned file costs the
+                    # run's time for nothing). An archive found INSIDE the
+                    # certificate table (padding Authenticode does not hash)
+                    # is graded whatever the signature says.
+                    if ($Stopwatch.Elapsed.TotalSeconds -gt $BudgetSeconds) { $probes.BudgetHit = $true; break }
+                    $st = ''
+                    try { $st = [string](& $SignatureReader $path) } catch { $st = 'Unknown' }
+                    if ($st -eq 'Valid') {
+                        $cands = @($cands | Where-Object { $_.InCert })
+                        if ($cands.Count -eq 0) { $probes.SfxFound++; $probes.SfxSigned++; continue }
+                    }
+                }
+                # Every candidate is graded and the most severe kept: a
+                # password beats "not determinable" beats "no password", so a
+                # decoy archive in front of the real one cannot clear it; at
+                # equal severity one whose own CRC checked out wins. A ZIP
+                # candidate counts only when its end record resolves (or its
+                # own headers show a password); a package inside sorts last.
+                $best = $null; $bestRank = -1
+                foreach ($cd in @($cands | Sort-Object @{ Expression = { -not $_.Checked } }, @{ Expression = { [long]$_.Base } } | Select-Object -First 8)) {
+                    $f = Read-ArchiveFacts -Kind $cd.Kind -Path $path -Length $len -Base ([long]$cd.Base)
+                    if ($cd.Kind -eq 'zip' -and -not $f.ZipParsed -and $f.Enc -ne $true) { continue }
+                    $rank = 1
+                    if ($f.Enc -eq $true) { $rank = 3 } elseif ($null -eq $f.Enc) { $rank = 2 }
+                    if ($f.Opc) { $rank = 0 }
+                    if ($rank -gt $bestRank) { $best = $f; $bestRank = $rank }
+                }
+                if ($null -ne $best) { $probes.SfxFound++; $kind = [string]$best.Kind; $sfx = $true; $sfxBase = [long]$best.Base; $fx = $best }
+            }
+        }
         if ($kind -eq 'none') {
             # A later raw volume of a set (name.7z.002) is not an archive by
             # itself; it is counted as a member of its set, not here.
@@ -1693,26 +1995,8 @@ function Invoke-ArchiveClassification {
                 $spanP += [string]$sib.Item.FullName; $spanS += [long]$sib.Item.Length
             }
         }
-        $x = $null; $enc = $null; $multi = $false; $multiWhy = ''; $entries = @(); $hdrEnc = $false; $opc = $false; $count = 0; $parseError = ''
-        try {
-            switch ($kind) {
-                'zip'      { $x = Get-ZipFacts -Path $path -Length $len -SpanPaths $spanP -SpanSizes $spanS; $enc = $x.Encrypted; $multi = [bool]$x.Split; if ($multi) { $multiWhy = 'the end record names more than one disk' }; $entries = @($x.Entries); $opc = [bool]$x.Opc; $count = [int]$x.EntryCount; if ($null -eq $enc -and $x.Why) { $parseError = $x.Why } }
-                'zip-span' { $x = Get-ZipLocalFromBytes -Head (Read-FileBytes -Path $path -Offset 0 -Count 1048576); if ($x.Encrypted) { $enc = $true } else { $enc = $null; $parseError = 'a first segment holds no end record' }; $multi = $true; $multiWhy = 'the first segment of a split set'; $entries = @($x.Entries); $opc = [bool]$x.Opc }
-                'rar4'     { $x = Get-RarFacts -Path $path -Length $len; $enc = $x.Encrypted; $hdrEnc = [bool]$x.HeadersEncrypted; $multi = [bool]$x.MultiVolume; if ($multi) { $multiWhy = 'the archive header carries the volume flag' }; $entries = @($x.Entries); $count = [int]$x.Count; if (-not $x.Parsed) { $parseError = $x.Why; if (-not $enc) { $enc = $null } } }
-                'rar5'     { $x = Get-RarFacts -Path $path -Length $len; $enc = $x.Encrypted; $hdrEnc = [bool]$x.HeadersEncrypted; $multi = [bool]$x.MultiVolume; if ($multi) { $multiWhy = 'the archive header carries the volume flag' }; $entries = @($x.Entries); $count = [int]$x.Count; if (-not $x.Parsed) { $parseError = $x.Why; if (-not $enc) { $enc = $null } } }
-                '7z'       {
-                    # A compressed header is decoded after the loop (below).
-                    $x = Get-SevenZipFacts -Path $path -Length $len -SpanPaths $spanP -SpanSizes $spanS -NoDecode
-                    $enc = $x.Encrypted; $hdrEnc = [bool]$x.HeadersEncrypted; $entries = @($x.Entries); $count = [math]::Max([int]$x.NameCount, $entries.Count)
-                    if ($spanP.Count -gt 1) { $multi = $true; $multiWhy = [string]$spanP.Count + ' volumes read as one stream' }
-                    if ($x.Beyond) { $parseError = $x.Why }
-                    elseif (-not $x.Parsed) { $parseError = $x.Why }
-                    elseif ($null -eq $enc) { if ($x.Why) { $parseError = $x.Why } else { $parseError = 'compressed header' } }
-                }
-                'cab'      { $x = Get-CabFactsFromBytes -Head $head; $enc = $false; $multi = [bool]$x.MultiVolume; if ($multi) { $multiWhy = 'the cabinet header names a previous or next cabinet' } }
-                default    { $enc = $false }
-            }
-        } catch { $parseError = $_.Exception.Message; if ($enc -ne $true) { $enc = $null } }
+        if ($null -eq $fx) { $fx = Read-ArchiveFacts -Kind $kind -Path $path -Length $len -SpanP $spanP -SpanS $spanS -Head $head }
+        $x = $fx.X; $enc = $fx.Enc; $multi = [bool]$fx.Multi; $multiWhy = [string]$fx.MultiWhy; $entries = @($fx.Entries); $hdrEnc = [bool]$fx.HdrEnc; $opc = [bool]$fx.Opc; $count = [int]$fx.Count; $parseError = [string]$fx.ParseError
         if ($opc) { $probes.Packages++; continue }
         if (-not $multi -and $null -ne $vol -and ($vol.Alone -or $members -ge 2)) {
             $multi = $true
@@ -1722,11 +2006,11 @@ function Invoke-ArchiveClassification {
         $zr = & $ZoneReader $path
         $rec = @{ Path = $path; Name = [string]$it.Name; Folder = $c.Folder; Role = [string]$c.Role; Length = $len; Modified = $it.LastWriteTimeUtc; Kind = $kind
                   Zone = [int]$zr.Zone; HostUrl = [string]$zr.HostUrl; Encrypted = $enc; HeadersEncrypted = $hdrEnc; MultiVolume = $multi; MultiVolumeWhy = $multiWhy
-                  Entries = $entries; EntryCount = $count; ParseError = $parseError; SetKey = $setKey; SetIndex = $index; SetMembers = $members }
+                  Entries = $entries; EntryCount = $count; ParseError = $parseError; SetKey = $setKey; SetIndex = $index; SetMembers = $members; Sfx = $sfx; SfxBase = $sfxBase }
         [void]$archives.Add($rec)
         if ($kind -eq '7z' -and $null -ne $x -and $null -ne $x.Decode -and $null -eq $enc) {
-            $tot = $len; if ($spanP.Count -gt 1) { $tot = 0; foreach ($q in $spanS) { $tot += [long]$q } }
-            [void]$pending.Add(@{ Rec = $rec; Facts = $x; Path = $path; Total = $tot; SpanP = $spanP; SpanS = $spanS; Size = [long]$x.Decode.PackSize })
+            $tot = $len - $sfxBase; if ($spanP.Count -gt 1) { $tot = 0; foreach ($q in $spanS) { $tot += [long]$q } }
+            [void]$pending.Add(@{ Rec = $rec; Facts = $x; Path = $path; Total = $tot; SpanP = $spanP; SpanS = $spanS; Size = [long]$x.Decode.PackSize; Base = $sfxBase })
         }
     }
     # The compressed 7z headers, smallest first, within the run's decode
@@ -1741,7 +2025,7 @@ function Invoke-ArchiveClassification {
         }
         $dsw = [System.Diagnostics.Stopwatch]::StartNew()
         try {
-            $y = Invoke-SevenZipHeaderDecode -Facts $pd.Facts -Path $pd.Path -Total $pd.Total -SpanPaths $pd.SpanP -SpanSizes $pd.SpanS -Seconds $left
+            $y = Invoke-SevenZipHeaderDecode -Facts $pd.Facts -Path $pd.Path -Total $pd.Total -SpanPaths $pd.SpanP -SpanSizes $pd.SpanS -Seconds $left -Base $pd.Base
             $pd.Rec.Encrypted = $y.Encrypted
             $pd.Rec.Entries = @($y.Entries); $pd.Rec.EntryCount = [math]::Max([int]$y.NameCount, @($y.Entries).Count)
             if ($null -eq $y.Encrypted) { $pd.Rec.ParseError = [string]$y.Why } else { $pd.Rec.ParseError = '' }
@@ -1926,7 +2210,8 @@ if ($SelfTest) {
     function New-Rar4Bytes {
         param([int]$MainFlags = 0, [object[]]$Files = @())
         $sig = B @(0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00)
-        $main = Join-Bytes @((U16 0), (B @(0x73)), (U16 $MainFlags), (U16 13), (U16 0), (U32 0))
+        $mainBody = Join-Bytes @((B @(0x73)), (U16 $MainFlags), (U16 13), (U16 0), (U32 0))
+        $main = Join-Bytes @((U16 ((Get-Crc32 $mainBody) -band 0xFFFF)), $mainBody)
         $parts = @($sig, $main)
         if (($MainFlags -band 0x0080) -ne 0) { $parts += (B @(1, 2, 3, 4, 5, 6, 7, 8)); return (Join-Bytes $parts) }
         foreach ($f in $Files) {
@@ -1946,7 +2231,10 @@ if ($SelfTest) {
         if ($Data) { $hdr = Join-Bytes @($hdr, (Vint $Data.Count)) }
         $hdr = Join-Bytes @($hdr, $Body)
         if ($Extra) { $hdr = Join-Bytes @($hdr, $Extra) }
-        $blk = Join-Bytes @((U32 0), (Vint $hdr.Count), $hdr)
+        # The block CRC is real (CRC32 over the size field and the header), as
+        # every archiver writes it: the self-extracting reader checks it.
+        $sized = Join-Bytes @((Vint $hdr.Count), $hdr)
+        $blk = Join-Bytes @((U32 (Get-Crc32 $sized)), $sized)
         if ($Data) { $blk = Join-Bytes @($blk, $Data) }
         return $blk
     }
@@ -1998,7 +2286,8 @@ if ($SelfTest) {
             $nh = Join-Bytes @($nh, (B @(0x05)), (Vint $Names.Count), (B @(0x11)), (Vint ($txt.Count + 1)), (B @(0x00)), $txt, (B @(0x00, 0x00)))
         }
         $size = $nh.Count; if ($Truncate) { $size = $nh.Count + 4096 }
-        $sig = Join-Bytes @((B @(0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 0x00, 0x04)), (U32 0), (U64 $pack.Count), (U64 $size), (U32 0))
+        $tail20 = Join-Bytes @((U64 $pack.Count), (U64 $size), (U32 0))
+        $sig = Join-Bytes @((B @(0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 0x00, 0x04)), (U32 (Get-Crc32 $tail20)), $tail20)
         return (Join-Bytes @($sig, $pack, $nh))
     }
     # ---- a 7z whose next header is an EncodedHeader over real packed bytes,
@@ -2031,7 +2320,8 @@ if ($SelfTest) {
         $crcPart = $null
         if ($Crc -ge 0) { $crcPart = Join-Bytes @((B @(0x0A, 0x01)), (U32 $Crc)) }
         $nh = Join-Bytes @((B @(0x17, 0x06)), (Vint 0), (Vint 1), (B @(0x09)), (N7 $PackSize), (B @(0x00, 0x07, 0x0B)), (Vint 1), (B @(0x00)), (Vint 1), $cd, (B @(0x0C)), (N7 $UnpackSize), $crcPart, (B @(0x00, 0x00)))
-        $sig = Join-Bytes @((B @(0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 0x00, 0x04)), (U32 0), (U64 $Packed.Count), (U64 $nh.Count), (U32 0))
+        $tail20 = Join-Bytes @((U64 $Packed.Count), (U64 $nh.Count), (U32 0))
+        $sig = Join-Bytes @((B @(0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 0x00, 0x04)), (U32 (Get-Crc32 $tail20)), $tail20)
         return (Join-Bytes @($sig, $Packed, $nh))
     }
     function New-CabBytes { param([int]$Flags) $h = New-Object byte[] 0x24; $h[0] = 0x4D; $h[1] = 0x53; $h[2] = 0x43; $h[3] = 0x46; $h[0x1E] = [byte]($Flags -band 0xFF); return $h }
@@ -2354,6 +2644,185 @@ if ($SelfTest) {
         $p2 = @($cl.Res.Archives | Where-Object { $_.Name -eq 'x.part2.rar' })[0]
         T 'a set part whose header cannot be read is NOT cleared by a sibling that reads "no password"' ($null -ne $p2 -and $null -eq $p2.Encrypted) "$(if ($p2) { "$($p2.Encrypted)/$($p2.ParseError)" } else { 'part2 not graded' })"
 
+        # ---- self-extracting programs. A minimal PE (Microsoft's PE format
+        # specification): a DOS header whose e_lfanew points at "PE\0\0", a
+        # COFF header with one section, an optional header (PE32 or PE32+)
+        # whose data directory 4 is the certificate table, and one section
+        # of 0x200 bytes at 0x200, so the program's code ends at 0x400.
+        function New-PeStub {
+            param([switch]$Plus, [long]$CertAt = 0, [long]$CertSize = 0, [int]$Sections = 1, [int]$Lfanew = 0x40)
+            $optSize = 224; $magic = 0x10B; $dd = 96
+            if ($Plus) { $optSize = 240; $magic = 0x20B; $dd = 112 }
+            $b = New-Object byte[] 0x400
+            $b[0] = 0x4D; $b[1] = 0x5A
+            [Array]::Copy([BitConverter]::GetBytes([int]$Lfanew), 0, $b, 0x3C, 4)
+            if (($Lfanew + 4) -le $b.Count) { $b[$Lfanew] = 0x50; $b[$Lfanew + 1] = 0x45 }
+            $coff = $Lfanew + 4
+            if (($coff + 20) -le $b.Count) {
+                [Array]::Copy([BitConverter]::GetBytes([uint16]$Sections), 0, $b, $coff + 2, 2)
+                [Array]::Copy([BitConverter]::GetBytes([uint16]$optSize), 0, $b, $coff + 16, 2)
+            }
+            $opt = $Lfanew + 24
+            if (($opt + $optSize) -le $b.Count) {
+                [Array]::Copy([BitConverter]::GetBytes([uint16]$magic), 0, $b, $opt, 2)
+                [Array]::Copy([BitConverter]::GetBytes([int]16), 0, $b, $opt + $dd - 4, 4)
+                [Array]::Copy([BitConverter]::GetBytes([int]$CertAt), 0, $b, $opt + $dd + 32, 4)
+                [Array]::Copy([BitConverter]::GetBytes([int]$CertSize), 0, $b, $opt + $dd + 36, 4)
+                $sec = $opt + $optSize
+                if (($sec + 40) -le $b.Count) {
+                    [Array]::Copy([BitConverter]::GetBytes([int]0x200), 0, $b, $sec + 16, 4)
+                    [Array]::Copy([BitConverter]::GetBytes([int]0x200), 0, $b, $sec + 20, 4)
+                }
+            }
+            return $b
+        }
+        $stub = New-PeStub
+        $pi = Get-PeOverlayInfo -Head ([byte[]](Join-Bytes @($stub, (New-Object byte[] 100)))[0..1023]) -FileLength 1124
+        T 'PE overlay: a PE32 program''s code ends after its last section, and what follows is the overlay' ($pi.Parsed -and @($pi.Regions).Count -eq 1 -and $pi.Regions[0].Start -eq 0x400 -and $pi.Regions[0].End -eq 1124) "$($pi.Parsed)/$($pi.Why)/$(@($pi.Regions).Count)"
+        $pi = Get-PeOverlayInfo -Head (New-PeStub -Plus) -FileLength 2048
+        T 'PE overlay: the PE32+ (64-bit) layout is read the same way' ($pi.Parsed -and $pi.Regions[0].Start -eq 0x400) "$($pi.Parsed)/$($pi.Why)"
+        $pi = Get-PeOverlayInfo -Head (New-PeStub -CertAt 0x400 -CertSize 0x100) -FileLength 0x500
+        T 'PE overlay: a signed program whose only extra bytes are its certificate has no overlay' ($pi.Parsed -and @($pi.Regions).Count -eq 0) "$($pi.Parsed)/$(@($pi.Regions).Count)"
+        $pi = Get-PeOverlayInfo -Head (New-PeStub -CertAt 0x500 -CertSize 0x100) -FileLength 0x700
+        T 'PE overlay: bytes before the certificate and after it are both overlay' (@($pi.Regions).Count -eq 2 -and $pi.Regions[0].End -eq 0x500 -and $pi.Regions[1].Start -eq 0x600) "$(@($pi.Regions).Count)"
+        $bad1 = Get-PeOverlayInfo -Head (New-PeStub -Lfanew 5000) -FileLength 4096
+        $bad2 = Get-PeOverlayInfo -Head (New-PeStub -Sections 1000) -FileLength 4096
+        $bad3 = Get-PeOverlayInfo -Head (Asc 'MZ this is not really a program at all, just two letters') -FileLength 60
+        T 'PE overlay: an e_lfanew past the head, 1000 sections, or no PE header at all is NOT parsed, and nothing throws' (-not $bad1.Parsed -and -not $bad2.Parsed -and -not $bad3.Parsed) "$($bad1.Why)/$($bad2.Why)/$($bad3.Why)"
+        $sfxDir = NewDir 'sfx'
+        $rar5hp = New-Rar5Bytes -Crypt $true
+        Put 'collected.exe' (Join-Bytes @($stub, $rar5hp)) $sfxDir | Out-Null
+        Put 'notes-p.exe' (Join-Bytes @($stub, (Asc ';!@Install@!UTF-8!' + "`r`nTitle=`"x`"`r`n;!@InstallEnd@!"), (New-SevenZipEncodedBytes -Packed $lzAes -UnpackSize $hdrAes.Count -Crc 3774331717))) $sfxDir | Out-Null
+        Put 'plain7z.exe' (Join-Bytes @($stub, (New-SevenZipEncodedBytes -Packed $lzPlain -UnpackSize $hdrPlain.Count -Crc 698215715))) $sfxDir | Out-Null
+        $zipRel = New-ZipBytes -Entries @(@{ Name = 'Outlook.pst'; Flags = 1; Data = 'x' })
+        Put 'zip-archive-relative.exe' (Join-Bytes @($stub, $zipRel)) $sfxDir | Out-Null
+        Put 'zip-file-relative.exe' (New-ZipBytes -Entries @(@{ Name = 'keys.kdbx'; Flags = 1; Data = 'x' }) -Prefix $stub) $sfxDir | Out-Null
+        Put 'zip-plain.exe' (Join-Bytes @($stub, (New-ZipBytes -Entries @(@{ Name = 'readme.txt'; Data = 'x' })))) $sfxDir | Out-Null
+        Put 'nooverlay.exe' $stub $sfxDir | Out-Null
+        $far = New-Object byte[] 70000
+        Put 'far.exe' (Join-Bytes @($stub, $far, $rar5hp)) $sfxDir | Out-Null
+        $cands = @(); foreach ($it in @(Get-ChildItem -LiteralPath $sfxDir -File)) { $cands += @{ Item = $it; Folder = $sfxDir; Role = 'public' } }
+        $res = Invoke-ArchiveClassification -Candidates $cands -ZoneReader { param($p) @{ Zone = -1; HostUrl = '' } } -SignatureReader { param($p) 'NotSigned' }
+        $by = @{}; foreach ($a in @($res.Archives)) { $by[$a.Name] = $a }
+        T 'SFX: a RAR 5.0 -hp archive behind a program is found, read at its own offset, and password-protected' ($by.ContainsKey('collected.exe') -and $by['collected.exe'].Kind -eq 'rar5' -and $by['collected.exe'].Sfx -and $by['collected.exe'].SfxBase -eq 0x400 -and $by['collected.exe'].Encrypted -eq $true) "$(($by.Keys | Sort-Object) -join ',')"
+        T 'SFX: a 7z behind 7-Zip''s installer configuration block is found, its compressed header decoded at the right base, names read' ($by.ContainsKey('notes-p.exe') -and $by['notes-p.exe'].Encrypted -eq $true -and @($by['notes-p.exe'].Entries) -contains 'secrets\id_rsa') "$(if ($by['notes-p.exe']) { "$($by['notes-p.exe'].Encrypted)/$($by['notes-p.exe'].ParseError)" })"
+        T 'SFX: a plain 7z behind a program is plain' ($by.ContainsKey('plain7z.exe') -and $by['plain7z.exe'].Encrypted -eq $false) "$(if ($by['plain7z.exe']) { "$($by['plain7z.exe'].Encrypted)/$($by['plain7z.exe'].ParseError)" })"
+        T 'SFX: a ZIP behind a program is read whether its offsets count from its own start or from the file''s, its credential names seen' ($by.ContainsKey('zip-archive-relative.exe') -and $by['zip-archive-relative.exe'].Encrypted -eq $true -and @($by['zip-archive-relative.exe'].Entries) -contains 'Outlook.pst' -and $by.ContainsKey('zip-file-relative.exe') -and @($by['zip-file-relative.exe'].Entries) -contains 'keys.kdbx' -and $by.ContainsKey('zip-plain.exe') -and $by['zip-plain.exe'].Encrypted -eq $false -and -not $by['zip-plain.exe'].ParseError) "$(if ($by['zip-archive-relative.exe']) { "$($by['zip-archive-relative.exe'].Encrypted)/$($by['zip-archive-relative.exe'].ParseError)/$(@($by['zip-archive-relative.exe'].Entries) -join ',')" })"
+        T 'SFX: a program with nothing appended, and one whose archive starts past 64 KiB, are not graded (the second is the declared limit)' (-not $by.ContainsKey('nooverlay.exe') -and -not $by.ContainsKey('far.exe') -and $res.Probes.SfxScanned -eq 8 -and $res.Probes.SfxFound -eq 6) "scanned=$($res.Probes.SfxScanned) found=$($res.Probes.SfxFound) $(($by.Keys | Sort-Object) -join ',')"
+        $script:SigCalls = 0
+        $resS = Invoke-ArchiveClassification -Candidates $cands -ZoneReader { param($p) @{ Zone = -1; HostUrl = '' } } -SignatureReader { param($p) $script:SigCalls++; 'Valid' }
+        T 'SFX: a program with no certificate table is never asked for its signature (no hashing for nothing) and is graded' ($script:SigCalls -eq 0 -and @($resS.Archives | Where-Object { $_.Sfx }).Count -eq 6 -and $resS.Probes.SfxSigned -eq 0) "calls=$($script:SigCalls) graded=$(@($resS.Archives | Where-Object { $_.Sfx }).Count)"
+        $resE = Invoke-ArchiveClassification -Candidates $cands -ZoneReader { param($p) @{ Zone = -1; HostUrl = '' } } -SignatureReader { param($p) throw 'no Authenticode here' }
+        T 'SFX: a signature that cannot be checked counts as unsigned -- graded, never left out' (@($resE.Archives | Where-Object { $_.Sfx }).Count -eq 6 -and $resE.Probes.SfxSigned -eq 0) "graded=$(@($resE.Archives | Where-Object { $_.Sfx }).Count)"
+        # A signed installer: the archive sits before the certificate table,
+        # which is a well-formed WIN_CERTIFICATE (dwLength, revision 0x0200,
+        # type 2, a DER SEQUENCE).
+        function New-WinCert {
+            param([int]$Der = 64, [byte[]]$Pad = $null)
+            $seq = Join-Bytes @((B @(0x30, 0x82, (($Der -shr 8) -band 0xFF), ($Der -band 0xFF))), (New-Object byte[] $Der))
+            $body = Join-Bytes @($seq, $Pad)
+            return (Join-Bytes @((U32 (8 + $body.Count)), (U16 0x0200), (U16 0x0002), $body))
+        }
+        $sigDir = NewDir 'sfxsigned'
+        $arc = New-SevenZipEncodedBytes -Packed $lzAes -UnpackSize $hdrAes.Count -Crc 3774331717
+        $cert = New-WinCert
+        Put 'vendor-installer.exe' (Join-Bytes @((New-PeStub -CertAt (0x400 + $arc.Count) -CertSize $cert.Count), $arc, $cert)) $sigDir | Out-Null
+        $sigC = @(); foreach ($it in @(Get-ChildItem -LiteralPath $sigDir -File)) { $sigC += @{ Item = $it; Folder = $sigDir; Role = 'public' } }
+        $script:SigCalls = 0
+        $rs = Invoke-ArchiveClassification -Candidates $sigC -ZoneReader { param($p) @{ Zone = -1; HostUrl = '' } } -SignatureReader { param($p) $script:SigCalls++; 'Valid' }
+        T 'SFX: a program validly signed by its publisher is left out and counted -- an installer, not an archive packed here' ($script:SigCalls -eq 1 -and @($rs.Archives).Count -eq 0 -and $rs.Probes.SfxSigned -eq 1 -and $rs.Probes.SfxFound -eq 1) "calls=$($script:SigCalls) signed=$($rs.Probes.SfxSigned) graded=$(@($rs.Archives).Count)"
+        $rm = Invoke-ArchiveClassification -Candidates $sigC -ZoneReader { param($p) @{ Zone = -1; HostUrl = '' } } -SignatureReader { param($p) 'HashMismatch' }
+        T 'SFX: a signature that no longer matches the file (an archive appended after signing) is graded, never left out' (@($rm.Archives).Count -eq 1 -and $rm.Archives[0].Encrypted -eq $true -and $rm.Probes.SfxSigned -eq 0) "graded=$(@($rm.Archives).Count)"
+        Remove-Item -LiteralPath $sigDir -Recurse -Force
+        # The certificate table is not hashed by Authenticode, so an archive
+        # PADDED INTO it keeps the signature Valid (CVE-2013-3900). Found
+        # there, it is graded whatever the signature says -- and so is one in
+        # a table that is not a WIN_CERTIFICATE at all.
+        $padDir = NewDir 'sfxpad'
+        $padded = New-WinCert -Pad $arc
+        Put 'padded-cert.exe' (Join-Bytes @((New-PeStub -CertAt 0x400 -CertSize $padded.Count), $padded)) $padDir | Out-Null
+        Put 'fake-cert.exe' (Join-Bytes @((New-PeStub -CertAt 0x400 -CertSize $arc.Count), $arc)) $padDir | Out-Null
+        # A real installer's plain archive before its certificate, and a
+        # password-protected one padded into that certificate: the signature
+        # IS asked (there is a candidate outside the table), comes back Valid,
+        # and still only the outside candidate is excused.
+        $plainArc = New-SevenZipEncodedBytes -Packed $lzPlain -UnpackSize $hdrPlain.Count -Crc 698215715
+        Put 'signed-plus-padding.exe' (Join-Bytes @((New-PeStub -CertAt (0x400 + $plainArc.Count) -CertSize $padded.Count), $plainArc, $padded)) $padDir | Out-Null
+        $padC = @(); foreach ($it in @(Get-ChildItem -LiteralPath $padDir -File)) { $padC += @{ Item = $it; Folder = $padDir; Role = 'public' } }
+        $rp = Invoke-ArchiveClassification -Candidates $padC -ZoneReader { param($p) @{ Zone = -1; HostUrl = '' } } -SignatureReader { param($p) 'Valid' }
+        $pby = @{}; foreach ($a in @($rp.Archives)) { $pby[$a.Name] = $a }
+        T 'SFX: an archive padded into a valid certificate table, or in a table that is no certificate, is found and graded even with a Valid signature' ($pby.ContainsKey('padded-cert.exe') -and $pby['padded-cert.exe'].Encrypted -eq $true -and $pby.ContainsKey('fake-cert.exe') -and $pby['fake-cert.exe'].Encrypted -eq $true -and $pby.ContainsKey('signed-plus-padding.exe') -and $pby['signed-plus-padding.exe'].Encrypted -eq $true) "$(($pby.Keys | Sort-Object) -join ',') signed=$($rp.Probes.SfxSigned)"
+        Remove-Item -LiteralPath $padDir -Recurse -Force
+        # DECOYS: a signature with nothing valid behind it, or a real plain
+        # archive, in front of the real password-protected one. Every
+        # candidate is graded and the most severe kept.
+        $decDir = NewDir 'sfxdecoy'
+        $encRar = New-Rar5Bytes -Crypt $true
+        $plainZip = New-ZipBytes -Entries @(@{ Name = 'readme.txt'; Data = 'x' })
+        Put 'cab-decoy.exe' (Join-Bytes @($stub, (Asc 'MSCF'), (New-Object byte[] 60), $encRar)) $decDir | Out-Null
+        Put '7z-decoy.exe' (Join-Bytes @($stub, (B @(0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 0x00, 0x04)), (New-Object byte[] 24), $encRar)) $decDir | Out-Null
+        Put 'pk-decoy.exe' (Join-Bytes @($stub, (B @(0x50, 0x4B, 0x03, 0x04)), (New-Object byte[] 40), $encRar)) $decDir | Out-Null
+        Put 'zip-decoy.exe' (Join-Bytes @($stub, $plainZip, $encRar)) $decDir | Out-Null
+        $zeroCrc = [byte[]]$encRar.Clone(); for ($i = 8; $i -lt 12; $i++) { $zeroCrc[$i] = 0 }
+        Put 'rar-zero-crc.exe' (Join-Bytes @($stub, (Asc 'MSCF'), (New-Object byte[] 60), $zeroCrc)) $decDir | Out-Null
+        $decC = @(); foreach ($it in @(Get-ChildItem -LiteralPath $decDir -File)) { $decC += @{ Item = $it; Folder = $decDir; Role = 'public' } }
+        $rd = Invoke-ArchiveClassification -Candidates $decC -ZoneReader { param($p) @{ Zone = -1; HostUrl = '' } } -SignatureReader { param($p) 'NotSigned' }
+        $dby = @{}; foreach ($a in @($rd.Archives)) { $dby[$a.Name] = $a }
+        $allEnc = (@('cab-decoy.exe', '7z-decoy.exe', 'pk-decoy.exe', 'zip-decoy.exe', 'rar-zero-crc.exe') | Where-Object { $dby.ContainsKey($_) -and $dby[$_].Encrypted -eq $true }).Count
+        T 'SFX: a decoy signature, or a real plain archive, in front of a password-protected RAR cannot clear it -- the most severe candidate is kept, and a zeroed header CRC does not hide the RAR' ($allEnc -eq 5) "$(($dby.Keys | Sort-Object | ForEach-Object { $_ + '=' + $dby[$_].Kind + '/' + $dby[$_].Encrypted }) -join ' ')"
+        Remove-Item -LiteralPath $decDir -Recurse -Force
+        # An installer that keeps a stored ZIP fragment early in its overlay
+        # (no end record) is not graded "may be password-protected".
+        $nsDir = NewDir 'sfxnsis'
+        $lh = Join-Bytes @((B @(0x50, 0x4B, 0x03, 0x04)), (U16 20), (U16 0), (U16 0), (U16 0), (U16 0), (U32 0), (U32 5), (U32 5), (U16 8), (U16 0), (Asc 'data.bin'), (Asc 'hello'))
+        Put 'setup.exe' (Join-Bytes @($stub, (Asc 'NullsoftInst'), (New-Object byte[] 200), $lh, (New-Object byte[] 300))) $nsDir | Out-Null
+        $nsC = @(); foreach ($it in @(Get-ChildItem -LiteralPath $nsDir -File)) { $nsC += @{ Item = $it; Folder = $nsDir; Role = 'public' } }
+        $rn = Invoke-ArchiveClassification -Candidates $nsC -ZoneReader { param($p) @{ Zone = -1; HostUrl = '' } } -SignatureReader { param($p) 'NotSigned' }
+        T 'SFX: an installer with a ZIP fragment and no end record in its overlay is not graded at all -- no "may be password-protected" in Public' (@($rn.Archives).Count -eq 0) "$(@($rn.Archives).Count) $(if (@($rn.Archives).Count) { $rn.Archives[0].Kind + '/' + $rn.Archives[0].Encrypted })"
+        Remove-Item -LiteralPath $nsDir -Recurse -Force
+        # A header that cannot be read is NOT a program with nothing appended:
+        # it is counted, named, and said.
+        $unDir = NewDir 'sfxunparsed'
+        $badStub = New-PeStub; [Array]::Copy([BitConverter]::GetBytes([int]0x7FFFFF00), 0, $badStub, 0x40 + 24 + 224 + 20, 4)
+        Put 'broken.exe' (Join-Bytes @($badStub, $arc)) $unDir | Out-Null
+        $unC = @(); foreach ($it in @(Get-ChildItem -LiteralPath $unDir -File)) { $unC += @{ Item = $it; Folder = $unDir; Role = 'public' } }
+        $ru = Invoke-ArchiveClassification -Candidates $unC -ZoneReader { param($p) @{ Zone = -1; HostUrl = '' } } -SignatureReader { param($p) 'NotSigned' }
+        $ruRep = (Get-ArchiveStagingReport -Archives $ru.Archives -Folders @(@{ Path = $unDir; Role = 'public'; State = 'searched'; Files = 1; Skipped = 0; Capped = $false; Denied = 0; Locked = 0; LockedNames = @() }) -Probes $ru.Probes).Lines -join "`n"
+        T 'SFX: a program whose header cannot be read is counted as NOT checked and named, never as checked' ($ru.Probes.SfxUnparsed -eq 1 -and $ru.Probes.SfxScanned -eq 0 -and $ruRep -match '\[INFO\] 1 program file\(s\) were NOT checked for an appended archive -- their header could not be read: .*broken\.exe') $ruRep
+        Remove-Item -LiteralPath $unDir -Recurse -Force
+        # A window crowded with signature look-alikes is examined to a fixed
+        # count and declared crowded, never scanned for seconds, never clean.
+        $crowd = New-Object System.Collections.Generic.List[byte]
+        for ($i = 0; $i -lt 9000; $i++) { foreach ($b in @(0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x05)) { $crowd.Add([byte]$b) } }
+        $cw = $null
+        $secs = Timed { $script:cw = Find-SfxArchive -Window $crowd.ToArray() }
+        T 'SFX: an overlay crowded with nine thousand signature look-alikes is declared crowded within seconds, not searched to the end' ($script:cw.TooMany -and @($script:cw.Candidates).Count -eq 0 -and $secs -lt 5) "tooMany=$($script:cw.TooMany) secs=$secs"
+        # The 64 KiB window, both sides of its edge, and the readers that
+        # must use the base: a ZIP whose central flags were cleared (only its
+        # local headers, read at the base, show the password) and a CAB set.
+        $wDir = NewDir 'sfxwindow'
+        Put 'at30k.exe' (Join-Bytes @($stub, (New-Object byte[] 30000), $encRar)) $wDir | Out-Null
+        Put 'at65530.exe' (Join-Bytes @($stub, (New-Object byte[] 65530), $encRar)) $wDir | Out-Null
+        Put 'at65537.exe' (Join-Bytes @($stub, (New-Object byte[] 65537), $encRar)) $wDir | Out-Null
+        Put 'zip-cleared.exe' (Join-Bytes @($stub, (New-ZipBytes -Entries @(@{ Name = 'a.txt'; Flags = 1; Data = 'x' }) -ClearCentralFlags))) $wDir | Out-Null
+        $cab = New-Object byte[] 0x40; $cab[0] = 0x4D; $cab[1] = 0x53; $cab[2] = 0x43; $cab[3] = 0x46
+        [Array]::Copy([BitConverter]::GetBytes([int]0x40), 0, $cab, 8, 4); [Array]::Copy([BitConverter]::GetBytes([int]0x2C), 0, $cab, 16, 4); $cab[24] = 3; $cab[25] = 1; $cab[0x1E] = 0x02
+        Put 'cabset.exe' (Join-Bytes @($stub, $cab)) $wDir | Out-Null
+        $wC = @(); foreach ($it in @(Get-ChildItem -LiteralPath $wDir -File)) { $wC += @{ Item = $it; Folder = $wDir; Role = 'public' } }
+        $rw = Invoke-ArchiveClassification -Candidates $wC -ZoneReader { param($p) @{ Zone = -1; HostUrl = '' } } -SignatureReader { param($p) 'NotSigned' }
+        $wby = @{}; foreach ($a in @($rw.Archives)) { $wby[$a.Name] = $a }
+        T 'SFX: an archive 30 KB and 65530 bytes past the code is found; one 65537 bytes past is the declared limit' ($wby.ContainsKey('at30k.exe') -and $wby.ContainsKey('at65530.exe') -and -not $wby.ContainsKey('at65537.exe')) "$(($wby.Keys | Sort-Object) -join ',')"
+        T 'SFX: a ZIP whose central flags were cleared shows its password through its local headers, read at the base' ($wby.ContainsKey('zip-cleared.exe') -and $wby['zip-cleared.exe'].Encrypted -eq $true) "$(if ($wby['zip-cleared.exe']) { [string]$wby['zip-cleared.exe'].Encrypted })"
+        T 'SFX: a cabinet behind a program is read at its base -- its next-cabinet flag makes it a volume of a set' ($wby.ContainsKey('cabset.exe') -and $wby['cabset.exe'].MultiVolume) "$(if ($wby['cabset.exe']) { [string]$wby['cabset.exe'].MultiVolume })"
+        Remove-Item -LiteralPath $wDir -Recurse -Force
+        $rep = Get-ArchiveStagingReport -Archives $res.Archives -Folders @(@{ Path = $sfxDir; Role = 'public'; State = 'searched'; Files = 8; Skipped = 0; Capped = $false; Denied = 0; Locked = 0; LockedNames = @() }) -Probes $res.Probes
+        $rt = $rep.Lines -join "`n"
+        T 'SFX report: the finding says where the archive starts, and the program count is stated' ($rt -match '\[WARNING\] An archive made on this machine is password-protected, in a staging folder: .*collected\.exe' -and $rt -match 'format: RAR 5\.0 inside a self-extracting program \(the archive starts at byte 1024\)' -and $rt -match '\[INFO\] 8 program file\(s\) were checked for an archive appended after their code \(a self-extracting archive\); 6 held one\.') $rt
+        $pr = Put 'renamed.exe' (New-Rar5Bytes -Crypt $true)
+        $f = Facts $pr
+        T 'a RAR at byte 0 named .exe is graded as a RAR, as before -- not as a program' ($f.Kind -eq 'rar5' -and $f.Encrypted -eq $true) "$($f.Kind)/$($f.Encrypted)"
+        Remove-Item -LiteralPath $sfxDir -Recurse -Force
+
         # ---- hostile headers: every one must finish at once and never be
         # read as clean. Each was a hang before the bounds came from the
         # buffer.
@@ -2463,7 +2932,7 @@ if ($SelfTest) {
           ($r.Sev -eq 'OK' -and (& $j $r) -match '\[INFO\] 1 plain archive\(s\) made or copied here' -and (& $j $r) -match '\[OK\] 1 archive\(s\) examined across 2 staging folder\(s\) to a depth of 2 \(C:\\Users\\k\\Downloads; C:\\Users\\Public\): none password-protected or split into volumes was made on this machine, and none packs a credential file\.' -and (& $j $r) -match '\[INFO\] The newest archive examined is C:\\Users\\k\\AppData\\Local\\Temp\\pip-unpack-1\\x\.zip \(ZIP, written') (& $j $r)
         $r = Get-ArchiveStagingReport -Archives @() -Folders $fo -Probes @{}
         T 'no archives at all is an all-clear that names the folders it read' ((& $j $r) -match '\[OK\] No archives in the 2 staging folder\(s\) examined to a depth of 2 \(C:\\Users\\k\\Downloads; C:\\Users\\Public\)\.') (& $j $r)
-        T 'and it says what is not examined by design' ((& $j $r) -match '\[INFO\] Not examined by design: archives inside other archives, self-extracting \.exe archives') (& $j $r)
+        T 'and it says what is not examined by design' ((& $j $r) -match '\[INFO\] Not examined by design: archives inside other archives, a self-extracting program whose archive starts more than 64 KiB past its code') (& $j $r)
         $r = Get-ArchiveStagingReport -Archives @((NewArc 'C:\Users\k\Downloads\backup.zip' -Kind 'zip' -Encrypted $false -Entries @('Outlook Files/archive.pst', 'notes.txt') -Role 'downloads')) -Folders $fo -Probes @{}
         T 'a plain local archive packing a mail store is WARNING and names the entry' `
           ($r.Sev -eq 'WARNING' -and (& $j $r) -match '\[WARNING\] An archive made on this machine packs credential files, in a staging folder' -and (& $j $r) -match 'packs: a mail store, a password database, a wallet or a private key \| +Outlook Files/archive\.pst') (& $j $r)

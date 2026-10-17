@@ -1039,6 +1039,24 @@ jobs:
             || { echo 'decoys could exhaust the decode time silently'; exit 1; }
           echo "$out" | grep -q 'a set part whose header cannot be read is NOT cleared by a sibling' \
             || { echo 'a decoy volume could clear a set'; exit 1; }
+          echo "$out" | grep -q 'SFX: a RAR 5.0 -hp archive behind a program is found, read at its own offset, and password-protected' \
+            || { echo 'a password-protected self-extracting archive could go unseen again'; exit 1; }
+          echo "$out" | grep -q 'SFX: a program validly signed by its publisher is left out and counted' \
+            || { echo 'every signed installer in Temp could be graded as an archive packed here'; exit 1; }
+          echo "$out" | grep -q 'SFX: a signature that cannot be checked counts as unsigned' \
+            || { echo 'an unverifiable signature could clear a self-extracting archive'; exit 1; }
+          echo "$out" | grep -q "SFX: a ZIP behind a program is read whether its offsets count from its own start or from the file's" \
+            || { echo 'a ZIP SFX could read as not determinable'; exit 1; }
+          echo "$out" | grep -q 'PE overlay: an e_lfanew past the head, 1000 sections, or no PE header at all is NOT parsed, and nothing throws' \
+            || { echo 'a crafted program header could crash or mislead the overlay reader'; exit 1; }
+          echo "$out" | grep -q 'SFX: a decoy signature, or a real plain archive, in front of a password-protected RAR cannot clear it' \
+            || { echo 'a decoy in front of a self-extracting archive could clear it again'; exit 1; }
+          echo "$out" | grep -q 'SFX: an archive padded into a valid certificate table, or in a table that is no certificate, is found and graded even with a Valid signature' \
+            || { echo 'an archive hidden in a signature padding could be excused by the signature'; exit 1; }
+          echo "$out" | grep -q 'SFX: a program whose header cannot be read is counted as NOT checked and named, never as checked' \
+            || { echo 'an unreadable program could be counted as checked'; exit 1; }
+          echo "$out" | grep -q 'SFX: a signature that no longer matches the file (an archive appended after signing) is graded, never left out' \
+            || { echo 'a broken signature could excuse an appended archive'; exit 1; }
           echo "$out" | grep -q 'a 7z EncodedHeader coded with 7zAES (-mhe) is password-protected with names hidden' \
             || { echo 'the 7z header-encryption shape could go unrecognised'; exit 1; }
           echo "$out" | grep -q 'a 7z volume set read across its volumes yields the header from the last one' \
@@ -1096,7 +1114,7 @@ jobs:
           echo "$out" | grep -q "one folder is one folder: %TEMP% in 8.3 form beside the profile's own Temp is listed ONCE" \
             || { echo 'a short %TEMP% could make one folder read as two again'; exit 1; }
           n=$(echo "$out" | grep -c '^\[OK\]')
-          [ "$n" -ge 157 ] || { echo "self-test ran only $n case(s) -- it is not exercising the rule"; exit 1; }
+          [ "$n" -ge 180 ] || { echo "self-test ran only $n case(s) -- it is not exercising the rule"; exit 1; }
 
   console-log-wrapper:
     name: "Console-log wrapper: a leftover from an interrupted run is cleared, and no run reuses another's timestamp"

@@ -479,9 +479,12 @@ that tactic as empty. Three neighbours are open, in this order of value:
    PowerShell LZMA decoder in `tools/archive_staging.ps1`, checked against
    liblzma-made vectors and a real 7-Zip `-p` archive in CI), so the `-p`
    without `-mhe` case reads WARNING with its names, and a plain 7z in Public
-   no longer reads "may be password-protected". STILL OPEN here: self-extracting `.exe` archives (the RAR or 7z
-   signature sits after a PE stub) and other users' redirected Downloads
-   folders are not examined, and the report says so; and
+   no longer reads "may be password-protected". DONE (2026-10-17):
+   self-extracting programs -- the archive in the PE overlay (first 64 KiB
+   past the code) is read at its own offset and graded like any archive; a
+   validly signed one is left out as an installer (CHANGELOG). STILL OPEN
+   here: other users' redirected Downloads folders are not examined, and the
+   report says so; and
    the harness plants only the hand-built shape, while the real-archiver
    plants (`7z a -p -mhe -v`) run in the helpers job when the image carries
    7-Zip and are declared `[ SKIP ]` otherwise -- whether windows-latest

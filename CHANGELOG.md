@@ -6,6 +6,92 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### A self-extracting archive is graded like any other archive
+Section 14 read an archive only when its signature sat at byte 0, and its
+coverage line said self-extracting `.exe` archives were not examined. A
+self-extracting archive (SFX) is a Windows program with the archive appended
+after its code (the PE overlay): WinRAR's SFX, 7-Zip's `-sfx`, a ZIP SFX. Any
+archiver opens it, and a double-click unpacks it, so a password-protected SFX
+made on the machine is the same staging shape as a password-protected `.rar`.
+It was invisible.
+
+`tools/archive_staging.ps1` now reads the program's own header, following
+Microsoft's PE format specification:
+- the PE header that `e_lfanew` points to;
+- the section table, whose furthest section marks where the code ends;
+- the certificate table in data directory 4.
+
+It then looks for archive signatures in the first 64 KiB of what follows.
+That window allows for 7-Zip's installer SFX, which puts a configuration
+block before the archive. Each signature is a candidate, checked by its own
+format:
+- 7z's StartHeaderCRC;
+- RAR 5.0's block CRC32, or RAR 4.x's HEAD_CRC;
+- a cabinet's size, file-table offset and version;
+- for a ZIP, an end record that resolves.
+
+A cabinet or ZIP that fails is dropped. A 7z or RAR that fails is still
+graded, because an archiver may open an archive whose header CRC is wrong,
+and a zeroed CRC must not hide one; the check only breaks ties. Every
+candidate is graded and the most severe kept: a password beats "not
+determinable" beats "no password". A decoy in front of the real archive
+therefore cannot clear it. Each archive is read at its own offset, since the
+RAR, 7z (including the compressed-header decode), ZIP and CAB readers all
+take a base offset now. A ZIP whose offsets count from its own start rather
+than the file's is read the way archivers read one: the central directory
+ends where the end record begins.
+
+Installers are the benign twin at scale, since `%TEMP%` is full of them. A
+publisher signs the whole file, archive included, and appending an archive
+afterwards breaks the signature. So a program with a VALID Authenticode
+signature is left out and counted, and a signature that cannot be checked
+counts as unsigned. A program with no certificate table is never asked,
+because hashing a large unsigned file would spend the run's time for
+nothing. The exception is the certificate table itself: Authenticode does
+not hash it, so bytes padded into it keep a signature Valid (CVE-2013-3900).
+Padding past the WIN_CERTIFICATE's own signature blob is scanned, as is a
+table that is not a WIN_CERTIFICATE at all, and an archive found there is
+graded whatever the signature says.
+
+Everything else is graded by the existing table: no password and one volume
+is context, a password made here is WARNING, and credential-class names
+escalate. The format line says where the archive starts. A program whose
+header cannot be read is counted and named as NOT checked, never as checked.
+
+Each offset in the program header is checked against the 4 KiB read. An
+`e_lfanew` past it, 1000 sections, or no PE header at all is not parsed and
+never throws. The stated limits: an archive further than 64 KiB past the
+code, or inside the program's resources (as IExpress packages keep theirs),
+is not examined, and the report says so.
+
+The self-test builds minimal PE32 and PE32+ programs with RAR, 7z, ZIP, CAB
+and plain payloads behind them. It covers:
+- both ZIP offset conventions;
+- a certificate-only overlay;
+- both edges of the 64 KiB window;
+- four decoys;
+- an archive padded into a valid certificate;
+- an unreadable header;
+- the Valid, HashMismatch, unverifiable and never-asked signature cases.
+
+**The read-only review before the push found that the first version was
+defeatable.** Its findings:
+- The earliest signature won, so `MSCF` and sixty zero bytes in front of a
+  password-protected RAR made it read as a plain cabinet.
+- The certificate table was never scanned.
+- Programs whose header could not be read were counted as checked.
+- The window edge dropped archives starting in the last few bytes.
+- A ZIP fragment inside an unsigned installer raised "may be
+  password-protected" in Public.
+- Seven mutations survived the self-test.
+
+All of these are fixed and pinned, and each mutation now fails a case. The
+Windows helpers job makes real 7-Zip `-sfx` programs with and without a
+password, beside a copy of a signed Windows program with nothing appended
+and a copy of an embedded-signed program with a password-protected archive
+appended after signing. Both counts are asserted exactly, and what
+Authenticode says about the appended copy is measured.
+
 ### An interrupted run's ChangeLog and Undo file are never overwritten by the next run
 The console-log wrapper runs in the person's own Command Prompt. It sets
 `DOZE_TEED`, `DOZE_LOG_TS`, `DOZE_CONSOLE_LOG` and `DOZE_EXIT_FILE` there and
