@@ -281,8 +281,10 @@ function Get-MasqueradeReport {
 # Manager and explorer itself all start it), conhost, rundll32, werfault and
 # ctfmon (their parents vary by design). And a dropper that starts
 # taskhostw.exe or sihost.exe and exits leaves only a counted line --
-# THREAT_MODEL names it, with parent PID spoofing and process-isolated
-# Windows containers (their own smss, csrss and services trees on the host).
+# THREAT_MODEL names it, with parent PID spoofing. Process-isolated Windows
+# containers run their own smss, csrss, wininit, services and lsass on the
+# host; they are graded per container (Get-ContainerSilos, below) where the
+# kernel reports their server silo, and as host processes where it cannot.
 #
 #   Parents     the names Windows starts it from
 #   Show/Until  how the finding names them, and why they cannot have exited
@@ -482,10 +484,9 @@ function Test-ClockMovedBackward {
 # PURE: the tree (`PID|PPID|CreatedUtcTicks|SessionId|Path|Name`, written by
 # proc_snapshot.ps1 from the same query as the path rule's dump) to report
 # lines + marker.
-function Get-ParentReport {
+function ConvertTo-TreeRecords {
     param([string[]]$Tree)
-    $out = New-Object System.Collections.ArrayList
-    $byPid = @{}
+    $seen = @{}
     $records = New-Object System.Collections.ArrayList
     foreach ($ln in @($Tree)) {
         if (-not $ln) { continue }
@@ -494,13 +495,132 @@ function Get-ParentReport {
         $m = [regex]::Match($ln, '^(\d{1,9})\|(\d{1,9})\|(\d{0,19})\|(\d{0,10})\|([^|]*)\|(.+)$')
         if (-not $m.Success) { continue }
         $procId = [int]$m.Groups[1].Value
-        if ($byPid.ContainsKey($procId)) { continue }   # one snapshot holds a PID once
+        if ($seen.ContainsKey($procId)) { continue }   # one snapshot holds a PID once
+        $seen[$procId] = $true
         $t = $null; if ($m.Groups[3].Value) { $t = [long]$m.Groups[3].Value }
         $sid = $null; if ($m.Groups[4].Value) { $sid = [long]$m.Groups[4].Value }
-        $rec = @{ Pid = $procId; PPid = [int]$m.Groups[2].Value; Ticks = $t; Session = $sid; Path = $m.Groups[5].Value; Name = $m.Groups[6].Value.Trim() }
-        $byPid[$procId] = $rec
-        [void]$records.Add($rec)
+        [void]$records.Add(@{ Pid = $procId; PPid = [int]$m.Groups[2].Value; Ticks = $t; Session = $sid; Path = $m.Groups[5].Value; Name = $m.Groups[6].Value.Trim() })
     }
+    return ,$records
+}
+
+# A PROCESS-ISOLATED WINDOWS CONTAINER runs its own smss, csrss, wininit,
+# services and lsass on the host -- the container's own system processes, in
+# a session of their own -- so one-of-each and session 0 cannot hold across
+# the whole machine there. Measured on a windows-latest runner (build 26100,
+# Docker, nanoserver, --isolation=process): the container's smss.exe runs in
+# host session 0 under the host's smss; its csrss and wininit (parent exited)
+# and wininit's services, lsass, svchosts, CExecSvc and the payload sit in
+# session 1; the image paths read C:\Windows\system32\..., the container's own
+# view, so the PATH CANNOT TELL A CONTAINER FROM THE HOST. The kernel can:
+# every one of those processes carries a non-zero server silo ID, read with
+# NtQueryInformationProcess(ProcessMembershipInformation, class 109) through a
+# PROCESS_QUERY_LIMITED_INFORMATION handle (documented PROCESS_MEMBERSHIP_
+# INFORMATION; Windows 11 22H2+ / Server 2025), while host processes read 0.
+# The silo is the kernel's record, not a name a process chooses -- but an
+# administrator can run a container, and SYSTEM can create a silo, so this
+# is a guard against reporting a real container as an intrusion, not a
+# barrier against an administrator (THREAT_MODEL names what it leaves). So a
+# session is credited to a container only when it looks like one:
+#   * the kernel reports the same silo > 0 for every system-named process in
+#     it (smss, csrss, wininit, services, lsass, LsaIso, winlogon), with the
+#     creation time read through the same handle equal to the snapshot's (a
+#     reused PID is never credited); a process of another name that could not
+#     be read does not matter -- a busy container starts and ends processes
+#     between the snapshot and the read -- but a HOST process (silo 0) of any
+#     name in the session voids it;
+#   * it has a container's shape: one csrss.exe and one wininit.exe of that
+#     silo, every services/lsass started by that wininit, and a smss.exe of
+#     that silo in session 0 started by the host's System-started smss -- so
+#     one process alone in a silo is not a container;
+#   * a container runtime is running: vmcompute.exe (the Host Compute
+#     Service), in session 0, silo 0, from System32 (a false-positive guard
+#     too: an administrator can place such a file).
+# A credited process is graded within its container: one wininit, services
+# and lsass PER CONTAINER, and its container's session in place of session 0.
+# LsaIso.exe is never credited: it is a virtualization-based-security
+# trustlet, and a container runs none. Parents are graded as before (the
+# measured tree passes). Named in an [INFO] line, never dropped silently; an
+# impostor in the host's own sessions is graded exactly as without containers.
+$script:ContainerSystemName = @('smss.exe', 'csrss.exe', 'wininit.exe', 'services.exe', 'lsass.exe', 'lsaiso.exe', 'winlogon.exe')
+
+# PURE: the kernel's readings (pid -> @{ Silo; Ticks }) against the tree.
+# Returns @{ Silos = pid -> silo id credited; Runtime; Containers; Voided }.
+function Get-ContainerSilos {
+    param($Records, $Readings, [string]$SystemRoot = 'C:\Windows')
+    if ($null -eq $Readings) { $Readings = @{} }
+    $verified = @{}
+    foreach ($r in @($Records)) {
+        if (-not $Readings.ContainsKey($r.Pid)) { continue }
+        $rd = $Readings[$r.Pid]
+        # The snapshot's time comes from WMI (microseconds); the reading from
+        # GetProcessTimes on the same handle (100 ns): 10 ms apart is the
+        # same process, anything more is a later one at the same number.
+        if ($null -eq $r.Ticks -or $null -eq $rd.Ticks -or [math]::Abs([long]$rd.Ticks - [long]$r.Ticks) -gt 100000) { continue }
+        $verified[$r.Pid] = [long]$rd.Silo
+    }
+    function Show-Few($list) { return ((@($list | Select-Object -First 3) | ForEach-Object { (ConvertTo-PrintableText $_.Name) + ' PID ' + $_.Pid }) -join ', ') }
+    $runtime = $null; $vmSeen = $null
+    $vmPath = (([string]$SystemRoot).TrimEnd('\') + '\System32\vmcompute.exe')
+    foreach ($r in @($Records)) {
+        if ([string]$r.Name -ine 'vmcompute.exe' -or $r.Session -ne 0) { continue }
+        $p = ([string]$r.Path).Trim()
+        if ($p -and $p -ine $vmPath) { continue }
+        if ($null -eq $vmSeen) { $vmSeen = $r }
+        if ($verified.ContainsKey($r.Pid) -and $verified[$r.Pid] -eq 0) { $runtime = $r; break }
+    }
+    $rtWhy = 'no container runtime is running (no vmcompute.exe from System32 in session 0)'
+    if ($null -ne $vmSeen) { $rtWhy = ('vmcompute.exe (PID ' + $vmSeen.Pid + ') is listed, but the kernel did not confirm it as the host''s (its membership could not be read, its creation time did not match, or it is itself in a silo)') }
+    $hostSmss = @($Records | Where-Object { [string]$_.Name -ieq 'smss.exe' -and $_.PPid -eq 4 }) | Select-Object -First 1
+    $bySession = @{}
+    foreach ($r in @($Records)) {
+        if ($null -eq $r.Session -or [long]$r.Session -eq 0) { continue }
+        $s = [long]$r.Session
+        if (-not $bySession.ContainsKey($s)) { $bySession[$s] = New-Object System.Collections.ArrayList }
+        [void]$bySession[$s].Add($r)
+    }
+    $silos = @{}
+    $containers = New-Object System.Collections.ArrayList
+    $voided = New-Object System.Collections.ArrayList
+    foreach ($s in @($bySession.Keys | Sort-Object)) {
+        $g = @($bySession[$s])
+        $ids = @($g | Where-Object { $verified.ContainsKey($_.Pid) -and $verified[$_.Pid] -gt 0 } | ForEach-Object { $verified[$_.Pid] } | Sort-Object -Unique)
+        if ($ids.Count -eq 0) { continue }   # a host session: nothing to credit
+        $id = [long]$ids[0]
+        $why = $null
+        $hostProcs = @($g | Where-Object { $verified.ContainsKey($_.Pid) -and $verified[$_.Pid] -eq 0 })
+        $sysUnread = @($g | Where-Object { $script:ContainerSystemName -contains ([string]$_.Name).ToLowerInvariant() -and -not $verified.ContainsKey($_.Pid) })
+        $cs = @($g | Where-Object { [string]$_.Name -ieq 'csrss.exe' })
+        $wi = @($g | Where-Object { [string]$_.Name -ieq 'wininit.exe' })
+        if ($ids.Count -gt 1) { $why = ('it holds processes of ' + $ids.Count + ' different server silos (' + ($ids -join ', ') + ')') }
+        elseif ($hostProcs.Count -gt 0) { $why = ('it also holds ' + $hostProcs.Count + ' host process(es) (' + (Show-Few $hostProcs) + ')') }
+        elseif ($sysUnread.Count -gt 0) { $why = ('the container membership of ' + $sysUnread.Count + ' of its system process(es) could not be read or their creation time did not match (' + (Show-Few $sysUnread) + ')') }
+        elseif ($cs.Count -ne 1 -or $wi.Count -ne 1) { $why = ('it does not have a container''s shape: ' + $cs.Count + ' csrss.exe and ' + $wi.Count + ' wininit.exe of that silo, where a container runs one of each') }
+        if (-not $why) {
+            $strays = @($g | Where-Object { ([string]$_.Name -ieq 'services.exe' -or [string]$_.Name -ieq 'lsass.exe') -and $_.PPid -ne $wi[0].Pid })
+            if ($strays.Count -gt 0) { $why = ('it does not have a container''s shape: ' + (Show-Few $strays) + ' not started by the container''s own wininit.exe (PID ' + $wi[0].Pid + ')') }
+        }
+        if (-not $why) {
+            $own = @($Records | Where-Object { [string]$_.Name -ieq 'smss.exe' -and $_.Session -eq 0 -and $verified.ContainsKey($_.Pid) -and $verified[$_.Pid] -eq $id -and $null -ne $hostSmss -and $_.PPid -eq $hostSmss.Pid })
+            if ($own.Count -eq 0) { $why = ('it does not have a container''s shape: no smss.exe of server silo ' + $id + ' in session 0 started by the host''s smss.exe') }
+        }
+        if (-not $why -and $null -eq $runtime) { $why = $rtWhy }
+        if ($why) { [void]$voided.Add(@{ Silo = $id; Session = $s; Why = $why }); continue }
+        # LsaIso.exe is never credited: a container runs no trustlet.
+        $credited = @($g | Where-Object { $verified.ContainsKey($_.Pid) -and [string]$_.Name -ine 'lsaiso.exe' })
+        foreach ($r in $credited) { $silos[$r.Pid] = $id }
+        [void]$containers.Add(@{ Silo = $id; Session = $s; Records = $credited })
+    }
+    return @{ Silos = $silos; Runtime = $runtime; Containers = @($containers.ToArray()); Voided = @($voided.ToArray()) }
+}
+
+function Get-ParentReport {
+    param([string[]]$Tree, $Containers = $null, [string]$SiloNote = '')
+    $out = New-Object System.Collections.ArrayList
+    $byPid = @{}
+    $records = ConvertTo-TreeRecords -Tree $Tree
+    foreach ($rec in $records) { $byPid[$rec.Pid] = $rec }
+    $siloOf = @{}; if ($null -ne $Containers -and $null -ne $Containers.Silos) { $siloOf = $Containers.Silos }
     if ($records.Count -eq 0) {
         [void]$out.Add('[SKIPPED] the process tree snapshot held no parseable lines -- masquerading by parent NOT verified.')
         return @{ Lines = @($out.ToArray()); Marker = $null }
@@ -600,28 +720,28 @@ function Get-ParentReport {
             }
         }
     }
-    # One of each, in its session.
-    $groups = @{}
+    # One of each, in its session -- and, for a container's own processes,
+    # one of each per container.
+    $groups = @{}; $groupSay = @{}
     foreach ($rec in $records) {
         $n = ([string]$rec.Name).ToLowerInvariant()
         if ($copyPids.ContainsKey($rec.Pid)) { continue }
-        if ($script:OnlyOne -contains $n) { $k = $n } elseif ($script:OnePerSession -contains $n -and $null -ne $rec.Session) { $k = $n + '|' + $rec.Session } elseif ($n -eq 'smss.exe' -and $rec.PPid -eq 4) { $k = 'smss.exe|system' } else { continue }
-        if (-not $groups.ContainsKey($k)) { $groups[$k] = New-Object System.Collections.ArrayList }
+        $inCtr = $siloOf.ContainsKey($rec.Pid)
+        if ($script:OnlyOne -contains $n) {
+            if ($inCtr) { $k = $n + '|silo' + $siloOf[$rec.Pid]; $say = ('Windows runs one ' + $n + ' in each container; server silo ' + $siloOf[$rec.Pid] + ' holds') }
+            else { $k = $n; $say = ('Windows runs one ' + $n + '; this snapshot holds') }
+        } elseif ($script:OnePerSession -contains $n -and $null -ne $rec.Session) {
+            $k = $n + '|' + $rec.Session; $say = ('Windows runs one ' + $n + ' per session; session ' + $rec.Session + ' has')
+            if ($inCtr) { $k += '|silo' + $siloOf[$rec.Pid] }
+        } elseif ($n -eq 'smss.exe' -and $rec.PPid -eq 4) { $k = 'smss.exe|system'; $say = 'Windows runs one smss.exe started by System; this snapshot holds' } else { continue }
+        if (-not $groups.ContainsKey($k)) { $groups[$k] = New-Object System.Collections.ArrayList; $groupSay[$k] = $say }
         [void]$groups[$k].Add($rec)
     }
     foreach ($k in @($groups.Keys | Sort-Object)) {
         $g = @($groups[$k])
         if ($g.Count -lt 2) { continue }
         $hits++; $countHits++
-        $parts = $k.Split('|')
-        $where = 'one ' + $parts[0]
-        if ($parts.Count -gt 1 -and $parts[1] -eq 'system') { $where = 'one smss.exe started by System' }
-        elseif ($parts.Count -gt 1) { $where = 'one ' + $parts[0] + ' per session; session ' + $parts[1] + ' has' }
-        if ($parts.Count -gt 1 -and $parts[1] -ne 'system') {
-            [void]$out.Add(('[WARNING] Windows runs ' + $where + ' ' + $g.Count + ' -- all but one are impostors (T1036 masquerading by parent)'))
-        } else {
-            [void]$out.Add(('[WARNING] Windows runs ' + $where + '; this snapshot holds ' + $g.Count + ' -- all but one are impostors (T1036 masquerading by parent)'))
-        }
+        [void]$out.Add(('[WARNING] ' + $groupSay[$k] + ' ' + $g.Count + ' -- all but one are impostors (T1036 masquerading by parent)'))
         foreach ($r in $g) {
             $pn = 'PID ' + $r.PPid + ' (no longer running)'
             if ($byPid.ContainsKey($r.PPid) -and $r.PPid -ne $r.Pid) { $pn = (ConvertTo-PrintableText $byPid[$r.PPid].Name) + ' (PID ' + $r.PPid + ')' }
@@ -632,6 +752,9 @@ function Get-ParentReport {
         $n = ([string]$rec.Name).ToLowerInvariant()
         $bad = $false
         if ($null -eq $rec.Session -or $copyPids.ContainsKey($rec.Pid)) { continue }
+        # A container's own system processes run in the container's session,
+        # which Get-ContainerSilos credited only when that silo owns it.
+        if ($siloOf.ContainsKey($rec.Pid)) { continue }
         if ($script:Session0Only -contains $n -and $rec.Session -ne 0) { $bad = $true; $want = 'only in session 0' }
         if ($n -eq 'winlogon.exe' -and $rec.Session -eq 0) { $bad = $true; $want = 'never in session 0' }
         if (-not $bad) { continue }
@@ -641,6 +764,20 @@ function Get-ParentReport {
     }
     if ($clockMoved) {
         [void]$out.Add('[INFO] The clock moved backward since this boot (a process is recorded as starting before the smss.exe System started, before the wininit.exe or services.exe that started it, or a service host''s child before the first service host), so creation times do not order processes here: a service-host parent and a parent that can exit are not graded by time.')
+    }
+    if ($null -ne $Containers) {
+        foreach ($c in @($Containers.Containers)) {
+            $sys = @($c.Records | ForEach-Object { ([string]$_.Name).ToLowerInvariant() } | Where-Object { $script:OnlyOne -contains $_ -or $script:OnePerSession -contains $_ } | Sort-Object -Unique)
+            $own = ''; if ($sys.Count -gt 0) { $own = ', its own ' + ($sys -join ', ') + ' among them' }
+            $rt = $Containers.Runtime
+            [void]$out.Add(('[INFO] A process-isolated Windows container (server silo ' + $c.Silo + ') runs ' + @($c.Records).Count + ' process(es) in session ' + $c.Session + $own + ' -- graded within that container (one of each per container, in its own session), not against the host''s. The kernel records the silo on each process, and the Host Compute Service (vmcompute.exe, PID ' + $rt.Pid + ') is running.'))
+        }
+        foreach ($v in @($Containers.Voided)) {
+            [void]$out.Add(('[INFO] Session ' + $v.Session + ' holds processes of server silo ' + $v.Silo + ' (a Windows container), but they were graded as host processes: ' + $v.Why + '.'))
+        }
+    }
+    if ($SiloNote) {
+        [void]$out.Add(('[INFO] Container membership could not be read (' + (ConvertTo-PrintableText $SiloNote) + ') -- if this machine runs process-isolated Windows containers, a container''s own system processes may be among the lines above (docker ps, or Get-ComputeProcess, lists them).'))
     }
     if ($exited -gt 0) {
         [void]$out.Add(('[INFO] ' + $exited + ' system-process name(s) whose parent is no longer running, as it may be by design (a session''s smss.exe exits once it has started csrss, wininit and winlogon; the service host that starts taskhostw or sihost can restart; a session that is ending loses its winlogon.exe first) -- not graded by parent.'))
@@ -670,6 +807,87 @@ function Get-ParentReport {
     $lm = $null; if ($lsassCopies -gt 0) { $lm = 'CRITICAL' }
     $om = $null; if ($otherCopies -gt 0) { $om = 'WARNING' }
     return @{ Lines = @($out.ToArray()); Marker = $pm; CountMarker = $cm; LsassCopyMarker = $lm; CopyMarker = $om }
+}
+
+# The report, asking the kernel about containers ONLY when it would raise a
+# one-of-each or session line: a machine with no such line never compiles or
+# opens anything. -SiloReader takes the PIDs to read and returns
+# @{ Readings = pid -> @{ Silo; Ticks }; Error = '' } (Error: nothing could
+# be read, and why). A reader that cannot answer leaves the lines as they
+# are and says so -- never a quieter report.
+function Get-ParentReportWithContainers {
+    param([string[]]$Tree, [scriptblock]$SiloReader, [string]$SystemRoot = 'C:\Windows')
+    $first = Get-ParentReport -Tree $Tree
+    # Nothing to raise, nothing to ask. (Implied by the session-0 test below,
+    # since a one-of-each name outside session 0 always raises its session
+    # line; kept so the intent does not hang on that.)
+    if (-not $first.CountMarker -or $null -eq $SiloReader) { return @{ Report = $first; ReaderCalled = $false } }
+    $records = ConvertTo-TreeRecords -Tree $Tree
+    # A container's wininit, services and lsass never run in session 0: when
+    # every one of those names does, there is no container to ask about, and
+    # a "could not be read" note would only cast doubt on a real finding.
+    $outside = @($records | Where-Object { $null -ne $_.Session -and [long]$_.Session -ne 0 -and $script:OnlyOne -contains ([string]$_.Name).ToLowerInvariant() })
+    if ($outside.Count -eq 0) { return @{ Report = $first; ReaderCalled = $false } }
+    # Every process outside session 0, the runtime, and the session-0 smss.exe
+    # a container starts under the host's.
+    $ids = @($records | Where-Object { ($null -ne $_.Session -and [long]$_.Session -ne 0) -or [string]$_.Name -ieq 'vmcompute.exe' -or ([string]$_.Name -ieq 'smss.exe' -and $_.Session -eq 0) } | ForEach-Object { $_.Pid })
+    $res = $null
+    try { $res = & $SiloReader $ids } catch { $res = @{ Readings = @{}; Error = $_.Exception.Message } }
+    if ($null -eq $res -or $null -eq $res.Readings) { $res = @{ Readings = @{}; Error = 'the reader returned nothing' } }
+    if (-not $res.Error -and $res.Readings.Count -eq 0) { $res.Error = 'no process could be read' }
+    if ($res.Error) { return @{ Report = (Get-ParentReport -Tree $Tree -SiloNote ([string]$res.Error)); ReaderCalled = $true } }
+    $ct = Get-ContainerSilos -Records $records -Readings $res.Readings -SystemRoot $SystemRoot
+    if (@($ct.Containers).Count -eq 0 -and @($ct.Voided).Count -eq 0) {
+        # No server silo seen. That says nothing about a flagged system
+        # process the kernel was never able to answer for (a standard-user
+        # token cannot open a container's processes): say so, by PID.
+        $unasked = @($records | Where-Object { $null -ne $_.Session -and [long]$_.Session -ne 0 -and $script:OnlyOne -contains ([string]$_.Name).ToLowerInvariant() -and -not $res.Readings.ContainsKey($_.Pid) })
+        if ($unasked.Count -gt 0) {
+            $note = ('the kernel could not be asked about ' + $unasked.Count + ' of the processes named above: ' + ((@($unasked | Select-Object -First 4) | ForEach-Object { (ConvertTo-PrintableText $_.Name) + ' PID ' + $_.Pid }) -join ', '))
+            return @{ Report = (Get-ParentReport -Tree $Tree -SiloNote $note); ReaderCalled = $true }
+        }
+        return @{ Report = $first; ReaderCalled = $true }
+    }
+    return @{ Report = (Get-ParentReport -Tree $Tree -Containers $ct); ReaderCalled = $true }
+}
+
+# The live reader: OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION), then the
+# server silo ID (NtQueryInformationProcess, ProcessMembershipInformation =
+# 109) and the creation time (GetProcessTimes) through the SAME handle, so
+# the silo is known to belong to the process the snapshot listed.
+$script:LiveSiloReader = {
+    param($Ids)
+    if (-not ('DzSiloProbe' -as [type])) {
+        Add-Type -ErrorAction Stop -TypeDefinition @'
+using System; using System.Runtime.InteropServices;
+public static class DzSiloProbe {
+  [DllImport("kernel32.dll", SetLastError=true)] public static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
+  [DllImport("kernel32.dll", SetLastError=true)] public static extern bool CloseHandle(IntPtr h);
+  [DllImport("kernel32.dll", SetLastError=true)] public static extern bool GetProcessTimes(IntPtr h, out long created, out long exited, out long kernel, out long user);
+  [DllImport("ntdll.dll")] public static extern int NtQueryInformationProcess(IntPtr h, int infoClass, ref uint info, int length, out int returned);
+}
+'@
+    }
+    $map = @{}; $statuses = @{}; $openFail = 0
+    foreach ($id in @($Ids)) {
+        $h = [DzSiloProbe]::OpenProcess(0x1000, $false, [int]$id)
+        if ($h -eq [IntPtr]::Zero) { $openFail++; continue }
+        try {
+            $silo = [uint32]0; $ret = 0
+            $st = [DzSiloProbe]::NtQueryInformationProcess($h, 109, [ref]$silo, 4, [ref]$ret)
+            if ($st -ne 0) { $statuses[('0x{0:X8}' -f $st)] = $true; continue }
+            $c = [long]0; $e = [long]0; $k = [long]0; $u = [long]0
+            if (-not [DzSiloProbe]::GetProcessTimes($h, [ref]$c, [ref]$e, [ref]$k, [ref]$u)) { continue }
+            $map[[int]$id] = @{ Silo = [long]$silo; Ticks = [DateTime]::FromFileTimeUtc($c).Ticks }
+        } finally { $null = [DzSiloProbe]::CloseHandle($h) }
+    }
+    $err = ''
+    if ($map.Count -eq 0) {
+        if ($statuses.Count -gt 0) { $err = ('NtQueryInformationProcess(ProcessMembershipInformation) returned ' + (@($statuses.Keys | Sort-Object) -join ', ') + '; Windows reports it from Windows 11 22H2 and Server 2025') }
+        elseif ($openFail -gt 0) { $err = ('no process could be opened (' + $openFail + ' refused)') }
+        else { $err = 'no process to read' }
+    }
+    return @{ Readings = $map; Error = $err }
 }
 
 if ($SelfTest) {
@@ -961,8 +1179,137 @@ if ($SelfTest) {
     $pr = Get-ParentReport -Tree @('900|780|1020|0||services.exe', '780|612|1011|0||wininit.exe', '1000|900|1030|0||svchost.exe', '1000|3000|1030|0||svchost.exe')
     T 'a PID listed twice keeps its first record (no later line can overwrite it)' ($null -eq $pr.Marker) ($pr.Lines -join ' | ')
 
+    # A process-isolated Windows container, as MEASURED on a windows-latest
+    # runner (build 26100, Docker, nanoserver ltsc2025): PIDs, parents,
+    # sessions, image paths and creation times verbatim. The runner's own
+    # desktop is session 2, so the base tree's session 1 moves there.
+    function UT { param([string]$iso) [datetimeoffset]::Parse($iso, [Globalization.CultureInfo]::InvariantCulture).UtcTicks }
+    $hostTree = @($tree | ForEach-Object { $_ -replace '^(\d+\|\d+\|\d*\|)1\|', '${1}2|' })
+    $s32 = 'C:\Windows\system32\'
+    $ctr = @(
+        ('3284|520|' + (UT '2026-10-17T12:35:58.6705910+00:00') + '|0||smss.exe'),
+        ('4608|1976|' + (UT '2026-10-17T12:35:58.6979370+00:00') + '|1||csrss.exe'),
+        ('9020|1976|' + (UT '2026-10-17T12:35:58.7379060+00:00') + '|1||wininit.exe'),
+        ('8776|9020|' + (UT '2026-10-17T12:35:58.8011530+00:00') + '|1||services.exe'),
+        ('8036|9020|' + (UT '2026-10-17T12:35:58.8048540+00:00') + '|1|' + $s32 + 'lsass.exe|lsass.exe'),
+        ('7852|8776|' + (UT '2026-10-17T12:35:59.3135690+00:00') + '|1|' + $s32 + 'svchost.exe|svchost.exe'),
+        ('5616|8776|' + (UT '2026-10-17T12:35:59.3225550+00:00') + '|1|' + $s32 + 'svchost.exe|svchost.exe'),
+        ('6812|8776|' + (UT '2026-10-17T12:35:59.3886080+00:00') + '|1|' + $s32 + 'svchost.exe|svchost.exe'),
+        ('6528|8776|' + (UT '2026-10-17T12:35:59.4482230+00:00') + '|1|' + $s32 + 'svchost.exe|svchost.exe'),
+        ('1772|8776|' + (UT '2026-10-17T12:35:59.4663230+00:00') + '|1|' + $s32 + 'cexecsvc.exe|CExecSvc.exe'),
+        ('8576|8776|' + (UT '2026-10-17T12:35:59.5148990+00:00') + '|1|C:\Windows\System32\svchost.exe|svchost.exe'),
+        ('2220|8776|' + (UT '2026-10-17T12:35:59.5502570+00:00') + '|1|' + $s32 + 'svchost.exe|svchost.exe'),
+        ('2056|8776|' + (UT '2026-10-17T12:35:59.5667470+00:00') + '|1|' + $s32 + 'svchost.exe|svchost.exe'),
+        ('9100|8776|' + (UT '2026-10-17T12:35:59.5854530+00:00') + '|1|' + $s32 + 'svchost.exe|svchost.exe'),
+        ('7752|8776|' + (UT '2026-10-17T12:35:59.5856270+00:00') + '|1|C:\Windows\System32\svchost.exe|svchost.exe'),
+        ('7056|8776|' + (UT '2026-10-17T12:35:59.5856270+00:00') + '|1|' + $s32 + 'svchost.exe|svchost.exe'),
+        ('7644|1772|' + (UT '2026-10-17T12:35:59.5905200+00:00') + '|1|' + $s32 + 'ping.exe|PING.EXE'),
+        ('6012|8776|' + (UT '2026-10-17T12:36:00.6393590+00:00') + '|1|' + $s32 + 'svchost.exe|svchost.exe')
+    )
+    $vmc = '4592|900|1070|0|C:\Windows\system32\vmcompute.exe|vmcompute.exe'
+    $hostNew = ('3732|900|' + (UT '2026-10-17T12:35:58.4827910+00:00') + '|0|C:\Windows\System32\svchost.exe|svchost.exe')
+    $ctrTree = @($hostTree + $ctr + @($vmc, $hostNew))
+    $ctrPid = @{}; foreach ($l in $ctr) { $ctrPid[[int]($l.Split('|')[0])] = $true }
+    # The kernel's answer, as measured: silo 484 for every container process,
+    # 0 for the host's; the creation time is the snapshot's own.
+    function Set-FakeSilos { param([string[]]$T, [hashtable]$Override = @{})
+        $script:FakeSilo = @{}
+        foreach ($r in (ConvertTo-TreeRecords -Tree $T)) {
+            $sv = 0; if ($ctrPid.ContainsKey($r.Pid)) { $sv = 484 }
+            $script:FakeSilo[$r.Pid] = @{ Silo = $sv; Ticks = $r.Ticks }
+        }
+        foreach ($k in $Override.Keys) { if ($null -eq $Override[$k]) { $script:FakeSilo.Remove($k) } else { $script:FakeSilo[$k] = $Override[$k] } }
+    }
+    $script:FakeErr = ''; $script:ReaderCalls = 0
+    $fakeReader = { param($Ids) $script:ReaderCalls++; $m = @{}; foreach ($i in @($Ids)) { if ($script:FakeSilo.ContainsKey([int]$i)) { $m[[int]$i] = $script:FakeSilo[[int]$i] } }; return @{ Readings = $m; Error = $script:FakeErr } }
+    function CR { param([string[]]$T) (Get-ParentReportWithContainers -Tree $T -SiloReader $fakeReader -SystemRoot 'C:\WINDOWS') }
+
+    $pr = Get-ParentReport -Tree $ctrTree; $pt = $pr.Lines -join "`n"
+    T 'the measured container tree, read without silos, raises what the runner showed (one lsass/services/wininit, three session lines)' ($pr.CountMarker -eq 'WARNING' -and $pt -match 'Windows runs one lsass\.exe; this snapshot holds 2' -and $pt -match 'Windows runs one services\.exe; this snapshot holds 2' -and $pt -match 'Windows runs one wininit\.exe; this snapshot holds 2' -and @([regex]::Matches($pt, 'runs in session 1 -- Windows runs')).Count -eq 3) $pt
+    Set-FakeSilos $ctrTree; $script:ReaderCalls = 0
+    $cr = CR $ctrTree; $pt = $cr.Report.Lines -join "`n"
+    T 'the measured container, with the kernel reporting silo 484 and vmcompute.exe running, raises nothing' ($cr.ReaderCalled -and $null -eq $cr.Report.CountMarker -and $null -eq $cr.Report.Marker -and $pt -notmatch '\[WARNING\]' -and $pt -match '\[OK\] \d+ system-process name') $pt
+    T 'the container is named, by silo, session and process count, with the runtime''s PID' ($pt -match '(?m)^\[INFO\] A process-isolated Windows container \(server silo 484\) runs 17 process\(es\) in session 1, its own csrss\.exe, lsass\.exe, services\.exe, wininit\.exe among them -- graded within that container .*vmcompute\.exe, PID 4592\) is running\.') $pt
+    Set-FakeSilos $ctrTree
+    $cr = CR @($hostTree + $ctr + @($hostNew)); $pt = $cr.Report.Lines -join "`n"
+    T 'the same container with no container runtime running is graded as host processes, and the report says why' ($cr.Report.CountMarker -eq 'WARNING' -and $pt -match 'Windows runs one lsass\.exe; this snapshot holds 2' -and $pt -match '\[INFO\] Session 1 holds processes of server silo 484 \(a Windows container\), but they were graded as host processes: no container runtime is running') $pt
+    $cr = CR @($hostTree + $ctr + @($hostNew, '4592|900|1070|0|C:\Users\Public\vmcompute.exe|vmcompute.exe')); $pt = $cr.Report.Lines -join "`n"
+    T 'a vmcompute.exe outside System32 is not a container runtime' ($cr.Report.CountMarker -eq 'WARNING' -and $pt -match 'no container runtime is running') $pt
+    Set-FakeSilos $ctrTree @{ 4592 = @{ Silo = 484; Ticks = 1070 } }
+    $cr = CR $ctrTree
+    T 'a vmcompute.exe inside a server silo is not the host''s container runtime, and the report says it is listed but not confirmed' ($cr.Report.CountMarker -eq 'WARNING' -and ($cr.Report.Lines -join "`n") -match 'vmcompute\.exe \(PID 4592\) is listed, but the kernel did not confirm it') ($cr.Report.Lines -join ' | ')
+    Set-FakeSilos $ctrTree @{ 4592 = $null }
+    $cr = CR $ctrTree
+    T 'a vmcompute.exe the kernel could not be asked about is named as unconfirmed, never as no runtime' ($cr.Report.CountMarker -eq 'WARNING' -and ($cr.Report.Lines -join "`n") -match 'vmcompute\.exe \(PID 4592\) is listed, but the kernel did not confirm it' -and ($cr.Report.Lines -join "`n") -notmatch 'no container runtime is running') ($cr.Report.Lines -join ' | ')
+    Set-FakeSilos $ctrTree; $script:FakeErr = 'NtQueryInformationProcess(ProcessMembershipInformation) returned 0xC0000003'
+    $cr = CR $ctrTree; $pt = $cr.Report.Lines -join "`n"; $script:FakeErr = ''
+    T 'a reader that cannot answer leaves every line in place and says container membership could not be read' ($cr.Report.CountMarker -eq 'WARNING' -and @([regex]::Matches($pt, 'runs in session 1 -- Windows runs')).Count -eq 3 -and $pt -match '(?m)^\[INFO\] Container membership could not be read \(NtQueryInformationProcess\(ProcessMembershipInformation\) returned 0xC0000003\)') $pt
+    $script:FakeSilo = @{}
+    $cr = CR $ctrTree; $pt = $cr.Report.Lines -join "`n"
+    T 'a reader that read nothing at all is the same: lines kept, could-not-read stated' ($cr.Report.CountMarker -eq 'WARNING' -and $pt -match '\[INFO\] Container membership could not be read \(no process could be read\)') $pt
+    $script:FakeReaderThrow = { param($Ids) throw 'Add-Type refused' }
+    $cr = Get-ParentReportWithContainers -Tree $ctrTree -SiloReader $script:FakeReaderThrow -SystemRoot 'C:\WINDOWS'
+    T 'a reader that throws is a could-not-read line, not a crash and not a clean report' ($cr.Report.CountMarker -eq 'WARNING' -and ($cr.Report.Lines -join "`n") -match 'Container membership could not be read \(Add-Type refused\)') ($cr.Report.Lines -join ' | ')
+    # The impostor beside a real container: a fake lsass.exe in the runner's
+    # own session (silo 0) is graded exactly as without containers.
+    $imp = ('9500|3000|' + (UT '2026-10-17T12:37:00.0000000+00:00') + '|2|C:\dz_ci_ctr_impostor\lsass.exe|lsass.exe')
+    Set-FakeSilos ($ctrTree + @($imp))
+    $cr = CR ($ctrTree + @($imp)); $pt = $cr.Report.Lines -join "`n"
+    T 'an impostor lsass.exe in the host''s own session, beside a real container, is still flagged -- and only it' ($cr.Report.CountMarker -eq 'WARNING' -and $pt -match 'Windows runs one lsass\.exe; this snapshot holds 2' -and $pt -match '\(PID 9500\) runs in session 2 -- Windows runs lsass\.exe only in session 0' -and $pt -notmatch 'PID 8036\)? runs in session' -and $pt -notmatch 'instance: PID 8036' -and $pt -notmatch 'instance: PID 8776' -and $pt -notmatch 'instance: PID 9020' -and $pt -match 'server silo 484\) runs 17 process') $pt
+    $two = ('9600|9020|' + (UT '2026-10-17T12:37:00.0000000+00:00') + '|1|' + $s32 + 'lsass.exe|lsass.exe')
+    $ctrPid[9600] = $true; Set-FakeSilos ($ctrTree + @($two))
+    $cr = CR ($ctrTree + @($two)); $pt = $cr.Report.Lines -join "`n"; $ctrPid.Remove(9600)
+    T 'a second lsass.exe INSIDE the container is one-of-each for that container' ($cr.Report.CountMarker -eq 'WARNING' -and $pt -match '(?m)^\[WARNING\] Windows runs one lsass\.exe in each container; server silo 484 holds 2 -- all but one are impostors' -and $pt -match 'instance: PID 9600' -and $pt -notmatch 'instance: PID 920,') $pt
+    $hp = ('9700|3000|' + (UT '2026-10-17T12:37:00.0000000+00:00') + '|1|C:\x\evil.exe|evil.exe')
+    Set-FakeSilos ($ctrTree + @($hp))
+    $cr = CR ($ctrTree + @($hp)); $pt = $cr.Report.Lines -join "`n"
+    T 'a host process in the container''s session voids the container credit for that whole session' ($cr.Report.CountMarker -eq 'WARNING' -and $pt -match 'Windows runs one lsass\.exe; this snapshot holds 2' -and $pt -match 'graded as host processes: it also holds 1 host process\(es\) \(evil\.exe PID 9700\)') $pt
+    Set-FakeSilos $ctrTree @{ 8036 = @{ Silo = 484; Ticks = (UT '2026-10-17T12:40:00.0000000+00:00') } }
+    $cr = CR $ctrTree; $pt = $cr.Report.Lines -join "`n"
+    T 'a PID the kernel reports with another creation time (a reused number) is never credited, and the session with it' ($cr.Report.CountMarker -eq 'WARNING' -and $pt -match 'creation time did not match \(lsass\.exe PID 8036\)') $pt
+    Set-FakeSilos $ctrTree @{ 8776 = $null }
+    $cr = CR $ctrTree; $pt = $cr.Report.Lines -join "`n"
+    T 'one container SYSTEM process the kernel could not be asked about voids the session (fail closed)' ($cr.Report.CountMarker -eq 'WARNING' -and $pt -match 'could not be read or their creation time did not match \(services\.exe PID 8776\)') $pt
+    Set-FakeSilos $ctrTree @{ 7644 = $null; 6012 = $null }
+    $cr = CR $ctrTree; $pt = $cr.Report.Lines -join "`n"
+    T 'a busy container: processes of other names that ended before the read do not void it' ($null -eq $cr.Report.CountMarker -and $pt -match 'server silo 484\) runs 15 process\(es\) in session 1') $pt
+    # Not a container's shape: one process alone in a silo is not a container
+    # (the reviewer's H1/H3), nor a silo session whose lsass the host started.
+    $lone = ('9900|780|' + (UT '2026-10-17T12:37:00.0000000+00:00') + '|7|C:\Windows\system32\lsass.exe|lsass.exe')
+    Set-FakeSilos ($ctrTree + @($lone)) @{ 9900 = @{ Silo = 99; Ticks = (UT '2026-10-17T12:37:00.0000000+00:00') } }
+    $cr = CR ($ctrTree + @($lone)); $pt = $cr.Report.Lines -join "`n"
+    T 'one lsass.exe alone in a silo, started by the host''s wininit, is not a container: still flagged' ($cr.Report.CountMarker -eq 'WARNING' -and $pt -match '\(PID 9900\) runs in session 7 -- Windows runs lsass\.exe only in session 0' -and $pt -match 'instance: PID 9900,' -and $pt -match 'Session 7 holds processes of server silo 99 .*it does not have a container''s shape: 0 csrss\.exe and 0 wininit\.exe') $pt
+    $pair = @(('9901|780|' + (UT '2026-10-17T12:37:00.0000000+00:00') + '|7||services.exe'), ('9902|780|' + (UT '2026-10-17T12:37:00.0000000+00:00') + '|7||lsass.exe'), ('9903|1976|' + (UT '2026-10-17T12:36:59.0000000+00:00') + '|7||csrss.exe'), ('9904|1976|' + (UT '2026-10-17T12:36:59.0000000+00:00') + '|7||wininit.exe'))
+    $ov = @{}; foreach ($l in $pair) { $ov[[int]$l.Split('|')[0]] = @{ Silo = 99; Ticks = [long]$l.Split('|')[2] } }
+    Set-FakeSilos ($ctrTree + $pair) $ov
+    $cr = CR ($ctrTree + $pair); $pt = $cr.Report.Lines -join "`n"
+    T 'a silo session whose services and lsass the HOST''s wininit started is not a container: still flagged' ($cr.Report.CountMarker -eq 'WARNING' -and $pt -match 'instance: PID 9902,' -and $pt -match 'not started by the container''s own wininit\.exe \(PID 9904\)') $pt
+    Set-FakeSilos $ctrTree
+    $cr = CR @($ctrTree | Where-Object { $_ -notlike '3284|*' }); $pt = $cr.Report.Lines -join "`n"
+    T 'a silo session with no smss.exe of that silo in session 0 is not a container: still flagged' ($cr.Report.CountMarker -eq 'WARNING' -and $pt -match 'no smss\.exe of server silo 484 in session 0 started by the host''s smss\.exe') $pt
+    $iso = ('9910|9020|' + (UT '2026-10-17T12:37:00.0000000+00:00') + '|1|' + $s32 + 'LsaIso.exe|LsaIso.exe')
+    $ctrPid[9910] = $true; Set-FakeSilos ($ctrTree + @($iso))
+    $cr = CR ($ctrTree + @($iso)); $pt = $cr.Report.Lines -join "`n"; $ctrPid.Remove(9910)
+    T 'an LsaIso.exe inside a container is never credited (a container runs no trustlet): flagged, the rest of the container still graded within it' ($cr.Report.CountMarker -eq 'WARNING' -and $pt -match 'Windows runs one lsaiso\.exe; this snapshot holds 2' -and $pt -match '\(PID 9910\) runs in session 1 -- Windows runs lsaiso\.exe only in session 0' -and $pt -match 'server silo 484\) runs 17 process' -and $pt -notmatch 'instance: PID 8036,') $pt
+    Set-FakeSilos $ctrTree @{ 6012 = @{ Silo = 485; Ticks = (@($ctrTree | Where-Object { $_ -like '6012|*' })[0].Split('|')[2] -as [long]) } }
+    $cr = CR $ctrTree
+    T 'a session holding two different server silos is not credited' ($cr.Report.CountMarker -eq 'WARNING' -and ($cr.Report.Lines -join "`n") -match '2 different server silos \(484, 485\)') ($cr.Report.Lines -join ' | ')
+    $ov = @{}; foreach ($k in $ctrPid.Keys) { $ov[$k] = $null }
+    Set-FakeSilos $ctrTree $ov
+    $cr = CR $ctrTree; $pt = $cr.Report.Lines -join "`n"
+    T 'a token that can read only the host''s own processes keeps the container''s lines and names the ones it could not ask about' ($cr.Report.CountMarker -eq 'WARNING' -and $pt -match '\[INFO\] Container membership could not be read \(the kernel could not be asked about 3 of the processes named above: wininit\.exe PID 9020, services\.exe PID 8776, lsass\.exe PID 8036\)') $pt
+    $script:ReaderCalls = 0; Set-FakeSilos $tree
+    $cr = CR $tree
+    T 'a tree with nothing to raise never asks the kernel anything' (-not $cr.ReaderCalled -and $script:ReaderCalls -eq 0 -and $null -eq $cr.Report.CountMarker) ''
+    Set-FakeSilos ($tree + @('9800|612|6000|3||wininit.exe'))
+    $cr = CR ($tree + @('9800|612|6000|3||wininit.exe'))
+    T 'a second wininit.exe outside session 0 with no silo anywhere is reported exactly as before, with no container line' ($cr.ReaderCalled -and $cr.Report.CountMarker -eq 'WARNING' -and ($cr.Report.Lines -join "`n") -notmatch 'container') ($cr.Report.Lines -join ' | ')
+    $script:ReaderCalls = 0; $script:FakeErr = 'NtQueryInformationProcess(ProcessMembershipInformation) returned 0xC0000003'
+    $cr = CR ($tree + @('9810|780|6000|0||lsass.exe')); $script:FakeErr = ''
+    T 'a second lsass.exe in session 0 never asks the kernel, and no container note casts doubt on it (a container''s lsass never runs in session 0)' (-not $cr.ReaderCalled -and $script:ReaderCalls -eq 0 -and $cr.Report.CountMarker -eq 'WARNING' -and ($cr.Report.Lines -join "`n") -notmatch 'container') ($cr.Report.Lines -join ' | ')
+
     if ($fails) { Write-Output "[FAIL] $fails masquerade_check self-test expectation(s) unmet"; exit 1 }
-    Write-Output '[OK] masquerade_check self-test: canonical directories in any casing are clean, a system name anywhere else is a WARNING, and a name with no path is stated as unverified; by parent, a parent that is one process (System at PID 4, smss, wininit, services) or the winlogon of the child''s own session is clean whatever the clock did, a service host counts only when it is older than the child, anything else at a parent that cannot exit is a WARNING, a session that is ending is counted not flagged, csrss/wininit/winlogon are graded by one per session and never by the clock, a snapshot missing a core process is SKIPPED, never OK, and a system process that is a copy of its parent is named as one (an LSASS copy CRITICAL), while browsers, explorer and the per-session smss are not.'
+    Write-Output '[OK] masquerade_check self-test: canonical directories in any casing are clean, a system name anywhere else is a WARNING, and a name with no path is stated as unverified; by parent, a parent that is one process (System at PID 4, smss, wininit, services) or the winlogon of the child''s own session is clean whatever the clock did, a service host counts only when it is older than the child, anything else at a parent that cannot exit is a WARNING, a session that is ending is counted not flagged, csrss/wininit/winlogon are graded by one per session and never by the clock, a snapshot missing a core process is SKIPPED, never OK, and a system process that is a copy of its parent is named as one (an LSASS copy CRITICAL), while browsers, explorer and the per-session smss are not; a process-isolated container is graded inside its own server silo only when the kernel confirms the silo and the session has a container''s shape, and an impostor beside it is not.'
     exit 0
 }
 
@@ -998,7 +1345,7 @@ try { $tree = @(Get-Content -LiteralPath $TreePath -EA Stop) } catch {
     "[SKIPPED] masquerade_check: process tree unreadable ($($_.Exception.Message)) -- masquerading by parent NOT verified."
     exit 0
 }
-$parentReport = Get-ParentReport -Tree $tree
+$parentReport = (Get-ParentReportWithContainers -Tree $tree -SiloReader $script:LiveSiloReader -SystemRoot $SystemRoot).Report
 foreach ($l in $parentReport.Lines) { $l }
 if ($parentReport.Marker) { Write-MarkerFile -Path $ParentMarkerFile -Value $parentReport.Marker }
 if ($parentReport.CountMarker) { Write-MarkerFile -Path $CountMarkerFile -Value $parentReport.CountMarker }

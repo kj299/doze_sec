@@ -524,7 +524,7 @@ query-only masks), and grade the accessor by signature rather than by path --
 plus a benign-accessor list, which is the part with no first-party source and
 the reason this is not a half-day's work.
 
-## The container false positive, planted (open, 2026-10-13)
+## The container false positive, planted -- DONE 2026-10-17 (measured on a runner, then graded by the kernel's server-silo ID; see CHANGELOG)
 
 `[system-process-parent-in-a-container]` in the corpus is `field:` only. A
 process-isolated Windows container shows its own smss, csrss, wininit,

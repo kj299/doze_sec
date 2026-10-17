@@ -6,6 +6,62 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### A process-isolated Windows container is graded inside its own container
+A process-isolated Windows container (the default on Windows Server) runs its
+own smss, csrss, wininit, services and lsass on the host. Section 4's parent
+rules -- one wininit, services and lsass, all in session 0 -- flagged every
+one of them: on a container host, six WARNINGs and a ledger row for a
+healthy machine. The corpus entry for it had no proof.
+
+Measured first, on a windows-latest runner (build 26100, Docker 29.7.2,
+Nano Server ltsc2025, `--isolation=process`). Misses first: I predicted the
+container's processes would report a `\\?\Volume{...}` image path the host
+could tell apart. They report the container's own view,
+`C:\Windows\system32\lsass.exe`, so **the path cannot tell a container from
+the host**. And the container did not get a new session number above the
+desktop's: it got session 1, with its smss.exe in host session 0 under the
+host's smss. What does separate them is the kernel: every container process
+carries a non-zero server silo ID (484 on that run), read with
+`NtQueryInformationProcess(ProcessMembershipInformation)` through a
+limited-information handle, while every host process reads 0. The silo is
+the kernel's record, not a name a process picks -- but an administrator can
+run a container and SYSTEM can create a silo, so it is a guard against
+reporting a real container as an intrusion, not a barrier against an
+administrator (THREAT_MODEL says what that leaves).
+
+`tools/masquerade_check.ps1` now credits a process to a container only when
+the kernel reports its silo, the creation time read through the same handle
+matches the snapshot (a reused PID is never credited), every system-named
+process in its session belongs to that same silo (one host process there, or
+a system process that could not be read, and the session is not credited at
+all), the session has a container's shape (one csrss and one wininit of that
+silo, services and lsass started by that wininit, and a smss of that silo in
+session 0 under the host's smss -- one process alone in a silo is not a
+container), and the Host Compute Service (vmcompute.exe, session 0,
+System32) is running. LsaIso.exe is never credited: a container runs no
+virtualization-based-security trustlet. A credited process
+is graded within its container: one of each per container, in the
+container's own session. The report names each container in an `[INFO]`
+line. The kernel is asked only when a one-of-each name runs outside session
+0 (a container's never run in session 0), so a machine without one compiles
+and opens nothing, and a session-0 impostor never gets a container note. Where the kernel cannot answer (builds before Windows 11 22H2
+and Server 2025, or a token that cannot open the processes), every line
+stays and the report says container membership could not be read.
+
+Proven in both directions: 25 self-test cases built from the measured tree
+verbatim (no runtime, a runtime the kernel would not confirm, unreadable
+reader, a host process in the container's session, a reused PID, two silos
+in one session, a second lsass or an LsaIso inside the container, one lsass
+alone in a silo, a silo session the host's wininit started, no container
+smss, a busy container whose other processes ended, the reader never called
+on a clean tree or for a session-0 impostor). A read-only review before the
+push found the shape gap (a lone silo process was cleared) and the LsaIso
+case; both are closed and pinned. And a helpers step that
+runs a real container and, beside it, a copy of PING.EXE named lsass.exe in
+the runner's own session: the container raises nothing and is named, the
+impostor is flagged by path and as a second lsass.exe, and no container PID
+appears in a finding line.
+
 ### A self-extracting archive is graded like any other archive
 Section 14 read an archive only when its signature sat at byte 0, and its
 coverage line said self-extracting `.exe` archives were not examined. A
