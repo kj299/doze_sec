@@ -610,9 +610,9 @@ note      = The real tree: services.exe and lsass.exe (and LsaIso.exe under Cred
 [system-process-parent-in-a-container]
 class     = ADVISE
 maxsev    = WARNING
-proof     = field:a machine running process-isolated Windows containers shows each container's own smss.exe, csrss.exe, services.exe and svchost.exe tree on the host, started from the container runtime rather than from the host's own boot chain; the windows-latest runner has Docker, but a process-isolated container needs a Windows base image matching the host build pulled on every run, which this suite does not pay for (docs/design/backlog.md)
+proof     = ci:A process-isolated Windows container is graded inside its own container; field:where the kernel cannot report a process's server silo (Windows builds before Windows 11 22H2 and Server 2025, or a token that cannot open the container's processes) the container's own smss, csrss, wininit, services and lsass are graded as host processes, and the report says container membership could not be read; the CI runner is Server 2025, so that older path is proven only by the self-test's reader-failure cases
 signature = (has the wrong parent: |Windows runs one \S+|runs in session \d+ -- Windows runs ).*\(T1036 masquerading by parent\)
-note      = If the machine runs Docker or Windows containers in process isolation, check whether the flagged process's parent chain leads to the container runtime (vmcompute.exe, or a container's own smss.exe) before treating it as an impostor. On a home PC with no containers, a wrong parent is a finding.
+note      = On Windows 11 22H2+ and Server 2025 a process-isolated container is recognised by the server silo ID the kernel records on each of its processes, and graded inside its own container ("[INFO] A process-isolated Windows container (server silo N) ..."): such a container raises none of these lines. If one of them appears beside "[INFO] Container membership could not be read" or "graded as host processes", run docker ps (or Get-ComputeProcess) and check whether the flagged PIDs are a container's (docker top <name> lists them by host PID) before treating them as impostors. On a home PC with no containers, these lines are findings.
 
 [system-process-parent-in-sandboxie]
 class     = ADVISE

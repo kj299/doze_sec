@@ -418,10 +418,23 @@ jobs:
                    'lsass.exe under lsass.exe from ANOTHER path is not a copy (the other rules grade an impostor)' \
                    'browsers and explorer start children from their own image: chrome.exe, msedge.exe or explorer.exe under itself is no copy' \
                    'smss.exe under smss.exe is no copy: the first smss starts one for each session by design' \
-                   'a parent PID now held by a NEWER process of the same name is a reused number, not a copy'; do
+                   'a parent PID now held by a NEWER process of the same name is a reused number, not a copy' \
+                   'the measured container, with the kernel reporting silo 484 and vmcompute.exe running, raises nothing' \
+                   'the same container with no container runtime running is graded as host processes, and the report says why' \
+                   'a reader that cannot answer leaves every line in place and says container membership could not be read' \
+                   "an impostor lsass.exe in the host's own session, beside a real container, is still flagged -- and only it" \
+                   'a second lsass.exe INSIDE the container is one-of-each for that container' \
+                   "a host process in the container's session voids the container credit for that whole session" \
+                   'a PID the kernel reports with another creation time (a reused number) is never credited, and the session with it' \
+                   'a tree with nothing to raise never asks the kernel anything' \
+                   "one lsass.exe alone in a silo, started by the host's wininit, is not a container: still flagged" \
+                   "a silo session whose services and lsass the HOST's wininit started is not a container: still flagged" \
+                   'a silo session with no smss.exe of that silo in session 0 is not a container: still flagged' \
+                   'an LsaIso.exe inside a container is never credited (a container runs no trustlet): flagged, the rest of the container still graded within it' \
+                   "a second lsass.exe in session 0 never asks the kernel, and no container note casts doubt on it (a container's lsass never runs in session 0)"; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 125 ] || { echo "only $n case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 158 ] || { echo "only $n case(s)"; exit 1; }
       - name: lsass_copy_events -- an LSASS copy in the Security log is CRITICAL in any spelling; the boot start and a log with no 4688 are not
         run: |
           out=$(pwsh -NoProfile -File tools/lsass_copy_events.ps1 -SelfTest); echo "$out"

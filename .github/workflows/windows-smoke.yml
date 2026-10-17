@@ -3596,7 +3596,7 @@ jobs:
           $st = (.\tools\masquerade_check.ps1 -SelfTest) -join "`n"
           if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'masquerade_check.ps1 -SelfTest failed' }
           $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($nst -lt 125) { throw "masquerade_check self-test ran only $nst case(s)" }
+          if ($nst -lt 158) { throw "masquerade_check self-test ran only $nst case(s)" }
           Write-Host "masquerade_check -SelfTest OK ($nst cases)"
           $sp = (.\tools\proc_snapshot.ps1 -SelfTest) -join "`n"
           if ($LASTEXITCODE -ne 0) { Write-Host $sp; throw 'proc_snapshot.ps1 -SelfTest failed' }
@@ -3757,94 +3757,117 @@ jobs:
           Write-Host 'masquerade_check live OK (by parent: the real tree is clean, the impostors are named, exited-by-design parents are quiet, a copy of LSASS is CRITICAL)'
           exit 0
 
-      - name: MEASURE a process-isolated Windows container as the host sees it (no assertion -- the shape the container rule will be built on)
+      - name: A process-isolated Windows container is graded inside its own container (server silo); an impostor lsass.exe beside it is still flagged
         shell: powershell
         timeout-minutes: 12
         run: |
-          # MEASUREMENT ONLY. A process-isolated Windows container (the default
-          # on Windows Server) runs its own system-process tree on the host,
-          # which the masquerade rules (one wininit/services/lsass, all in
-          # session 0) would flag. Microsoft documents that a container process
-          # IS a host process and that each container has its own session; it
-          # does not document the container smss's parent, the image path the
-          # host reports, or a marker a host tool can read. This step prints
-          # all of it, for the rule built next. It fails only on an
-          # unexpected script error; a missing docker or image is declared.
-          # Touches: container:dz_ci_measure (removed in finally); the base
-          # image stays in the runner's image store (discarded with the runner).
+          # A process-isolated Windows container runs its own smss, csrss,
+          # wininit, services and lsass on the host. Measured on this image
+          # (PR #258, build 26100): they sit in a session of their own (the
+          # runner's desktop is another), their image paths read the
+          # container's own view (C:\Windows\system32\...), and the kernel
+          # reports a non-zero server silo ID for every one of them.
+          # masquerade_check credits a process to a container only by that
+          # silo ID, a matching creation time, a session the silo owns and a
+          # running vmcompute.exe. Both directions: the real container raises
+          # nothing and is named; a copy of PING.EXE named lsass.exe, started
+          # in the runner's own session beside it, is still flagged, and the
+          # container's processes appear in no finding line.
+          # Touches: container:dz_ci_ctr (removed in finally),
+          # file:C:\dz_ci_ctr_impostor\ (its process stopped and the folder
+          # removed in finally). The base image stays in the runner's image
+          # store, discarded with the runner. Every check is an explicit throw;
+          # the preference stays Continue so docker's stderr is not an error.
           $ErrorActionPreference = 'Continue'
-          function Section { param([string]$t) Write-Host ''; Write-Host ('==== ' + $t + ' ====') }
           $build = [Environment]::OSVersion.Version.Build
-          Section ("host build {0}" -f $build)
-          $docker = Get-Command docker -EA SilentlyContinue
-          if (-not $docker) { Write-Host '[ SKIP ] no docker on this image; nothing measured'; exit 0 }
-          & docker version --format '{{.Server.Os}} {{.Server.Version}}' 2>&1 | Write-Host
-          & docker info --format 'isolation={{.Isolation}} ostype={{.OSType}}' 2>&1 | Write-Host
-          $img = 'mcr.microsoft.com/windows/nanoserver:ltsc2022'
-          if ($build -ge 26100) { $img = 'mcr.microsoft.com/windows/nanoserver:ltsc2025' }
-          Section ("image {0}" -f $img)
-          $t0 = Get-Date
-          & docker pull $img 2>&1 | Select-Object -Last 3 | Write-Host
-          Write-Host ("measured: pull took {0:N0} s" -f ((Get-Date) - $t0).TotalSeconds)
-          $before = @{}; foreach ($p in @(Get-CimInstance Win32_Process)) { $before[[int]$p.ProcessId] = $true }
-          try {
-            & docker rm -f dz_ci_measure 2>&1 | Out-Null
-            $cid = (& docker run -d --isolation=process --name dz_ci_measure $img ping -t localhost 2>&1) -join ' '
-            Write-Host ("docker run: {0}" -f $cid)
-            Start-Sleep -Seconds 15
-            Section 'docker inspect / top'
-            & docker inspect -f 'state={{.State.Status}} pid={{.State.Pid}} isolation={{.HostConfig.Isolation}}' dz_ci_measure 2>&1 | Write-Host
-            & docker top dz_ci_measure 2>&1 | Write-Host
-            Section 'Get-ComputeProcess (HCS)'
-            try { Get-ComputeProcess -EA Stop | Format-List * | Out-String -Width 250 | Write-Host } catch { Write-Host ("Get-ComputeProcess: " + $_.Exception.Message) }
-            Section 'NEW processes since the container started (host view)'
-            $all = @(Get-CimInstance Win32_Process)
-            $byPid = @{}; foreach ($p in $all) { $byPid[[int]$p.ProcessId] = $p }
-            $new = @($all | Where-Object { -not $before.ContainsKey([int]$_.ProcessId) })
-            foreach ($p in ($new | Sort-Object CreationDate)) {
-              $par = $byPid[[int]$p.ParentProcessId]
-              $pn = '(not running)'; if ($par) { $pn = $par.Name + ' s' + $par.SessionId }
-              Write-Host ("pid={0} ppid={1} [{2}] session={3} name={4} created={5:o}" -f $p.ProcessId, $p.ParentProcessId, $pn, $p.SessionId, $p.Name, $p.CreationDate)
-              Write-Host ("    exe={0}" -f $p.ExecutablePath)
-              Write-Host ("    cmd={0}" -f $p.CommandLine)
-            }
-            Section 'every process by session, host-wide (name counts)'
-            foreach ($g in ($all | Group-Object SessionId | Sort-Object { [int]$_.Name })) { Write-Host ("session {0}: {1}" -f $g.Name, (($g.Group | Group-Object Name | Sort-Object Name | ForEach-Object { $_.Name + 'x' + $_.Count }) -join ', ')) }
-            Section 'host system processes (for comparison)'
-            foreach ($n in @('smss.exe', 'csrss.exe', 'wininit.exe', 'services.exe', 'lsass.exe', 'vmcompute.exe', 'CExecSvc.exe')) {
-              foreach ($p in @($all | Where-Object { $_.Name -ieq $n })) { Write-Host ("{0} pid={1} ppid={2} session={3} exe={4}" -f $n, $p.ProcessId, $p.ParentProcessId, $p.SessionId, $p.ExecutablePath) }
-            }
-            Section 'job / silo membership of each new process'
-            Add-Type -TypeDefinition @"
-          using System; using System.Runtime.InteropServices;
-          public static class DzJob {
-            [DllImport("kernel32.dll", SetLastError=true)] public static extern IntPtr OpenProcess(uint a, bool i, int p);
-            [DllImport("kernel32.dll", SetLastError=true)] public static extern bool IsProcessInJob(IntPtr p, IntPtr j, out bool r);
-            [DllImport("kernel32.dll", SetLastError=true)] public static extern bool CloseHandle(IntPtr h);
-            [DllImport("ntdll.dll")] public static extern int NtQueryInformationProcess(IntPtr p, int c, ref uint info, int len, out int ret);
-          }
-          "@ -EA SilentlyContinue
-            foreach ($p in $new) {
-              $h = [DzJob]::OpenProcess(0x1000, $false, [int]$p.ProcessId)
-              if ($h -eq [IntPtr]::Zero) { Write-Host ("pid={0} {1}: OpenProcess failed ({2})" -f $p.ProcessId, $p.Name, [Runtime.InteropServices.Marshal]::GetLastWin32Error()); continue }
-              $inJob = $false; $null = [DzJob]::IsProcessInJob($h, [IntPtr]::Zero, [ref]$inJob)
-              $silo = [uint32]0; $ret = 0; $st = [DzJob]::NtQueryInformationProcess($h, 109, [ref]$silo, 4, [ref]$ret)
-              Write-Host ("pid={0} {1}: inJob={2} ProcessMembershipInformation status=0x{3:X8} serverSiloId={4}" -f $p.ProcessId, $p.Name, $inJob, $st, $silo)
-              $null = [DzJob]::CloseHandle($h)
-            }
-            Section 'what masquerade_check says about this tree TODAY'
-            $d = Join-Path $env:TEMP 'dz_ci_ctr_dump.tmp'; $t = Join-Path $env:TEMP 'dz_ci_ctr_tree.tmp'
+          if ($build -lt 22621) { throw "host build $build predates ProcessMembershipInformation; this proof needs Windows Server 2025 (windows-latest)" }
+          if (-not (Get-Command docker -EA SilentlyContinue)) { throw 'no docker on this image: the container proof did not run' }
+          $img = 'mcr.microsoft.com/windows/nanoserver:ltsc2025'
+          $impDir = 'C:\dz_ci_ctr_impostor'
+          $imp = $null
+          $md = Join-Path $env:TEMP 'dz_ci_ctr'
+          function Invoke-MasqCheck {
+            Remove-Item $md -Recurse -Force -EA SilentlyContinue
+            New-Item -ItemType Directory -Path $md | Out-Null
+            $d = Join-Path $md 'dump.tmp'; $t = Join-Path $md 'tree.tmp'
             & powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\tools\proc_snapshot.ps1 -TreePath $t > $d 2>$null
-            $o = (.\tools\masquerade_check.ps1 -Path $d -MarkerFile (Join-Path $env:TEMP 'dz_ci_ctr_m1.txt') -TreePath $t -ParentMarkerFile (Join-Path $env:TEMP 'dz_ci_ctr_m2.txt') -CountMarkerFile (Join-Path $env:TEMP 'dz_ci_ctr_m3.txt') -LsassCopyMarkerFile (Join-Path $env:TEMP 'dz_ci_ctr_m4.txt') -CopyMarkerFile (Join-Path $env:TEMP 'dz_ci_ctr_m5.txt')) -join "`n"
-            Write-Host $o
-            foreach ($m in 1..5) { $f = Join-Path $env:TEMP ("dz_ci_ctr_m{0}.txt" -f $m); if (Test-Path $f) { Write-Host ("marker {0}: {1}" -f $m, (Get-Content $f -Raw).Trim()) } }
-          } catch {
-            Write-Host ("measurement error: " + $_.Exception.Message)
-          } finally {
-            & docker rm -f dz_ci_measure 2>&1 | Out-Null
-            Remove-Item (Join-Path $env:TEMP 'dz_ci_ctr_*') -Force -EA SilentlyContinue
+            $global:LASTEXITCODE = 0
+            return ((.\tools\masquerade_check.ps1 -Path $d -MarkerFile (Join-Path $md 'm1.txt') -TreePath $t -ParentMarkerFile (Join-Path $md 'm2.txt') -CountMarkerFile (Join-Path $md 'm3.txt') -LsassCopyMarkerFile (Join-Path $md 'm4.txt') -CopyMarkerFile (Join-Path $md 'm5.txt')) -join "`n")
           }
-          $global:LASTEXITCODE = 0
+          try {
+            & docker pull $img 2>&1 | Select-Object -Last 2 | Write-Host
+            & docker rm -f dz_ci_ctr 2>&1 | Out-Null
+            $cid = (& docker run -d --isolation=process --name dz_ci_ctr $img ping -t localhost 2>&1) -join ' '
+            $global:LASTEXITCODE = 0
+            Write-Host "docker run: $cid"
+            # The container's lsass.exe is the one outside session 0.
+            $ctrLsass = $null
+            for ($i = 0; $i -lt 30 -and -not $ctrLsass; $i++) {
+              Start-Sleep -Seconds 2
+              $ctrLsass = @(Get-CimInstance Win32_Process -Filter "Name='lsass.exe'" | Where-Object { $_.SessionId -ne 0 }) | Select-Object -First 1
+            }
+            if (-not $ctrLsass) { throw "the container's lsass.exe never appeared on the host: $cid" }
+            Start-Sleep -Seconds 10   # its services finish starting
+            $ctrSession = [int]$ctrLsass.SessionId
+            $ctrPids = @(Get-CimInstance Win32_Process | Where-Object { $_.SessionId -eq $ctrSession } | ForEach-Object { [int]$_.ProcessId })
+            Write-Host ("container session {0}: {1} process(es), its lsass.exe is PID {2}" -f $ctrSession, $ctrPids.Count, $ctrLsass.ProcessId)
+            $named = '(?m)^\[INFO\] A process-isolated Windows container \(server silo [1-9]\d*\) runs \d+ process\(es\) in session ' + $ctrSession + ', its own .*lsass\.exe'
+            # 1. The real container alone: named, and nothing raised. A process
+            # the container starts or ends between the snapshot and the
+            # kernel read voids the credit for that run (fail closed), so a
+            # run that reads "graded as host processes" is retried, twice.
+            $o1 = ''
+            for ($try = 1; $try -le 3; $try++) {
+              $o1 = Invoke-MasqCheck
+              if ($o1 -match $named) { break }
+              Write-Host ("attempt {0}: the container was not credited; retrying in 5 s" -f $try)
+              Start-Sleep -Seconds 5
+            }
+            Write-Host $o1
+            if ($o1 -match 'Exception|is not recognized|CategoryInfo') { throw "PowerShell error text in the output: $o1" }
+            if ($o1 -notmatch $named) { throw "the container was not named by its server silo: $o1" }
+            if ($o1 -match 'Container membership could not be read|graded as host processes') { throw "the container's membership was not credited: $o1" }
+            foreach ($m in 1..5) { if (Test-Path (Join-Path $md ("m{0}.txt" -f $m))) { throw ("a process-isolated container on a clean runner wrote marker m{0}: {1}" -f $m, $o1) } }
+            # 2. The impostor beside it, in the runner's own session.
+            New-Item -ItemType Directory -Path $impDir -Force | Out-Null
+            Copy-Item (Join-Path $env:SystemRoot 'System32\PING.EXE') (Join-Path $impDir 'lsass.exe') -Force
+            $imp = Start-Process -FilePath (Join-Path $impDir 'lsass.exe') -ArgumentList '-t', 'localhost' -WindowStyle Hidden -PassThru
+            Start-Sleep -Seconds 3
+            # A process named lsass.exe outside System32 may be stopped by
+            # Defender; a dead impostor would read as session 0 and fail
+            # for the wrong reason.
+            $impProc = Get-CimInstance Win32_Process -Filter ("ProcessId=" + $imp.Id)
+            if (-not $impProc) { throw "the impostor lsass.exe (PID $($imp.Id)) is no longer running -- stopped before it could be checked (Defender?)" }
+            $impSession = [int]$impProc.SessionId
+            Write-Host ("impostor lsass.exe: PID {0}, session {1}" -f $imp.Id, $impSession)
+            if ($impSession -eq $ctrSession) { throw "the impostor started in the container's session $ctrSession; the proof needs it in the runner's own" }
+            $o2 = ''
+            for ($try = 1; $try -le 3; $try++) {
+              $o2 = Invoke-MasqCheck
+              if ($o2 -match $named) { break }
+              Write-Host ("attempt {0}: the container was not credited; retrying in 5 s" -f $try)
+              Start-Sleep -Seconds 5
+            }
+            Write-Host $o2
+            if (-not (Get-Process -Id $imp.Id -EA SilentlyContinue)) { throw "the impostor lsass.exe (PID $($imp.Id)) stopped during the check (Defender?); the result does not test it" }
+            if ($o2 -notmatch '(?m)^\[WARNING\] Windows runs one lsass\.exe; this snapshot holds 2 -- all but one are impostors') { throw "the impostor beside a container was not counted as a second lsass.exe: $o2" }
+            if ($o2 -notmatch ('(?m)^    instance: PID ' + $imp.Id + ',')) { throw "the impostor's PID is not named: $o2" }
+            if ($impSession -ne 0 -and $o2 -notmatch ('(?m)^\[WARNING\] Process lsass\.exe \(PID ' + $imp.Id + '\) runs in session ' + $impSession + ' -- Windows runs lsass\.exe only in session 0')) { throw "the impostor's session line is missing: $o2" }
+            if (-not (Test-Path (Join-Path $md 'm3.txt')) -or (Get-Content (Join-Path $md 'm3.txt') -Raw).Trim() -ne 'WARNING') { throw 'no WARNING one-of-each marker for the impostor' }
+            if (-not (Test-Path (Join-Path $md 'm1.txt'))) { throw "the impostor outside System32 was not flagged by path: $o2" }
+            if ($o2 -notmatch $named) { throw "the container lost its credit beside the impostor: $o2" }
+            foreach ($cp in $ctrPids) {
+              if ($o2 -match ('\(PID ' + $cp + '\)') -or $o2 -match ('(?m)^    instance: PID ' + $cp + ',')) { throw "container process PID $cp is named in a finding: $o2" }
+            }
+            Write-Host 'container rule OK: the real container is graded inside its own server silo and named; an impostor lsass.exe beside it is flagged, by path and as a second lsass.exe'
+          } finally {
+            if ($imp) { Stop-Process -Id $imp.Id -Force -EA SilentlyContinue; Start-Sleep -Seconds 1 }
+            Remove-Item $impDir -Recurse -Force -EA SilentlyContinue
+            & docker rm -f dz_ci_ctr 2>&1 | Out-Null
+            Remove-Item $md -Recurse -Force -EA SilentlyContinue
+            $global:LASTEXITCODE = 0
+          }
+          if (Test-Path $impDir) { throw "the impostor folder $impDir was left behind" }
           exit 0
 
       - name: lsass_copy_events.ps1 -SelfTest + a real Event 4688 pair (cmd.exe started by cmd.exe) read by the same code

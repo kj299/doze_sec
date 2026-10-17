@@ -204,10 +204,19 @@ and 13 verify exactly that.
   - a dropper that starts taskhostw.exe or sihost.exe and exits leaves only
     a counted "parent is no longer running" line, because the service host
     that rightly starts those can restart;
-  - process-isolated Windows containers run their own smss, csrss and
-    services trees on the host, and Sandboxie-Plus starts a sandbox's COM
-    servers from its own DCOM launcher; the rule can flag either (both
-    catalogued in `tests\benign_corpus.txt`). A child of a service host on
+  - process-isolated Windows containers run their own smss, csrss,
+    wininit, services and lsass on the host. Where the kernel reports each
+    process's server silo (Windows 11 22H2+ and Server 2025) they are graded
+    inside their own container, and named in an `[INFO]` line; on older
+    builds, or a token that cannot open them, they are graded as host
+    processes and the rule can flag them (the report says the membership
+    could not be read). The silo is a false-positive guard, not a barrier:
+    an administrator can run a container, so a system-named process inside
+    a process-isolated container is graded within it (one of each per
+    container) and named, not flagged -- the path rule still applies to it,
+    and LsaIso.exe is never credited. Sandboxie-Plus starts a
+    sandbox's COM servers from its own DCOM launcher and the rule can flag
+    those (both catalogued in `tests\benign_corpus.txt`). A child of a service host on
     a machine whose clock stepped backward after boot is counted as not
     graded rather than flagged.
 
