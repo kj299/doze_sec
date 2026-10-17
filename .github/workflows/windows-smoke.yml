@@ -1254,7 +1254,7 @@ jobs:
           # to; its speed there is measured, not assumed.
           Write-Host ('measured: archive_staging -SelfTest took {0:N1} s on Windows PowerShell 5.1' -f $stSw.Elapsed.TotalSeconds)
           $n = @($out -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($n -lt 157) { throw "archive_staging self-test ran only $n case(s)" }
+          if ($n -lt 180) { throw "archive_staging self-test ran only $n case(s)" }
           if ($out -notmatch 'LZMA: a stream another encoder made decodes byte for byte') { throw 'the LZMA decoder case did not run on 5.1' }
           if ($out -match '\[SKIP\]') { throw 'the real Compress-Archive case was skipped on Windows, where it must run' }
 
@@ -1321,7 +1321,7 @@ jobs:
             $sz = $null
             foreach ($cand in @('C:\Program Files\7-Zip\7z.exe', 'C:\Program Files (x86)\7-Zip\7z.exe')) { if (Test-Path $cand) { $sz = $cand; break } }
             if (-not $sz) { try { $sz = (Get-Command 7z.exe -EA Stop).Source } catch { $sz = $null } }
-            $real = $false
+            $real = $false; $realSfx = $false
             if ($sz) {
               $payload = "$dir\payload.bin"
               $rnd = New-Object byte[] 40000; (New-Object Random).NextBytes($rnd); [IO.File]::WriteAllBytes($payload, $rnd)
@@ -1356,6 +1356,35 @@ jobs:
                 Write-Host ("measured: {0} next header byte 0x{1:X2} ({2})" -f $nm, $kindByte, $(if ($kindByte -eq 0x17) { 'EncodedHeader: compressed' } else { 'not compressed' }))
                 if ($kindByte -ne 0x17) { throw "$nm was written with an uncompressed header, so it does not exercise the decoder" }
               }
+              # (7d) SELF-EXTRACTING: 7-Zip's own SFX module in front of a -p
+              #      archive (WARNING, the archive found past the program's
+              #      code) and of a plain one (context). TWIN: a copy of a
+              #      signed Windows program, which has no archive in it.
+              $sfxMod = Join-Path (Split-Path -Parent $sz) '7z.sfx'
+              if (Test-Path -LiteralPath $sfxMod) {
+                & $sz a -t7z -sfx '-pdz-ci-pass' "$dir\real-sfx-p.exe" "$dir\notes.txt" "$dir\todo.txt" | Out-Null
+                if ($LASTEXITCODE -ne 0) { throw "7z could not make the -p SFX (exit $LASTEXITCODE)" }
+                & $sz a -t7z -sfx "$dir\real-sfx-plain.exe" "$dir\notes.txt" "$dir\todo.txt" | Out-Null
+                if ($LASTEXITCODE -ne 0) { throw "7z could not make the plain SFX (exit $LASTEXITCODE)" }
+                Copy-Item -LiteralPath (Join-Path $env:WINDIR 'System32\notepad.exe') -Destination "$dir\signed-tool.exe"
+                # REAL Authenticode: a copy of an embedded-signed program with a
+                # -p archive appended after signing. The rule leaves out only a
+                # Valid signature; what Windows says about this file is measured.
+                $signedApp = $null
+                foreach ($cand in @((Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe'), (Join-Path $env:ProgramFiles 'Git\cmd\git.exe'))) { if (Test-Path -LiteralPath $cand) { $signedApp = $cand; break } }
+                if ($signedApp -and ((Get-AuthenticodeSignature -LiteralPath $signedApp).Status -eq 'Valid')) {
+                  & $sz a -t7z '-pdz-ci-pass' "$dir\appended.7z.part" "$dir\notes.txt" "$dir\todo.txt" | Out-Null
+                  if ($LASTEXITCODE -ne 0) { throw "7z could not make the appended archive (exit $LASTEXITCODE)" }
+                  $joined = [byte[]]([IO.File]::ReadAllBytes($signedApp) + [IO.File]::ReadAllBytes("$dir\appended.7z.part"))
+                  [IO.File]::WriteAllBytes("$dir\signed-appended.exe", $joined)
+                  Remove-Item -LiteralPath "$dir\appended.7z.part" -Force
+                  Write-Host ("measured: {0} carries a Valid signature; with an archive appended, Windows reports {1}" -f $signedApp, (Get-AuthenticodeSignature -LiteralPath "$dir\signed-appended.exe").Status)
+                } else { $signedApp = $null; Write-Host '[ SKIP ] no embedded-signed program on this image to append an archive to; the injected signature reader in the self-test covers the rule' }
+                $realSfx = $true
+                Write-Host ("real 7-Zip SFX plants made with {0}" -f $sfxMod)
+              } else {
+                Write-Host ("[ SKIP ] {0} is not on this image, so the real self-extracting plants did not run; the hand-built ones in the self-test prove the reader" -f $sfxMod)
+              }
               Remove-Item $payload -Force
               $vols = @(Get-ChildItem -LiteralPath $dir -Filter 'real-set.7z.*' | Sort-Object Name)
               if ($vols.Count -lt 2) { throw ('7z made {0} volume(s), not a set' -f $vols.Count) }
@@ -1378,7 +1407,7 @@ jobs:
             if ($after -match '\[(WARNING|CRITICAL)\][^\r\n]*dz_ci_arch\\downloaded\.zip') { throw 'a DOWNLOADED password-protected zip was reported as packed to leave -- the mark was not honoured' }
             if ($after -notmatch '\[INFO\] 1 archive\(s\) carry the Mark of the Web -- downloaded by a browser, not packed here') { throw 'the downloaded twin was not counted as context' }
             if ($after -match '\[(WARNING|CRITICAL)\][^\r\n]*dz_ci_arch\\holiday_photos\.zip') { throw 'a plain Compress-Archive zip was reported' }
-            $plainWant = 1; if ($real) { $plainWant = 2 }
+            $plainWant = 1; if ($real) { $plainWant = 2 }; if ($realSfx) { $plainWant = 3 }
             if ($after -notmatch ('\[INFO\] {0} plain archive\(s\) made or copied here' -f $plainWant)) { throw "the plain twins were not counted as context ($plainWant expected)" }
             if ($after -match 'renamed-package\.zip') { throw 'an Office-shaped package renamed .zip was graded' }
             if ($after -notmatch '\[INFO\] 1 package\(s\) that are ZIP by signature') { throw 'the package twin was not counted as left out' }
@@ -1403,6 +1432,20 @@ jobs:
               if ($after -match '\[(WARNING|CRITICAL)\][^\r\n]*dz_ci_arch\\real-plain\.7z') { throw 'a plain 7-Zip archive was reported -- the decompressed header was misread' }
               if ($after -match 'real-plain\.7z[^\r\n]*password could not|password could not be determined[^\r\n]*real-plain\.7z') { throw 'a plain 7-Zip archive still reads as not determinable' }
               Write-Host 'PROVEN on a real archiver: a 7-Zip -p -mhe -v set reads CRITICAL as one row, a 7-Zip password-protected zip reads WARNING, a 7-Zip -p 7z without -mhe that packs vault.kdbx reads CRITICAL from its decompressed header, and a plain 7-Zip 7z is plain'
+              if ($realSfx) {
+              if ($after -notmatch '\[WARNING\] An archive made on this machine is password-protected, in a staging folder: C:\\Users\\Public\\dz_ci_arch\\real-sfx-p\.exe') { throw 'the REAL 7-Zip -sfx -p program was not WARNING -- the archive behind its code was not found or not read' }
+              if ($after -notmatch 'format: 7z inside a self-extracting program \(the archive starts at byte (\d+)\)') { throw 'the SFX format line does not say where the archive starts' }
+              Write-Host ("measured: 7-Zip's SFX module puts the archive at byte {0}" -f $Matches[1])
+              if ($after -match '\[(WARNING|CRITICAL)\][^\r\n]*real-sfx-plain\.exe') { throw 'a plain 7-Zip SFX was reported' }
+              if ($after -match 'signed-tool\.exe') { throw 'a signed Windows program with no archive in it appeared in the report' }
+              # Exact: the two 7-Zip SFX programs, notepad's copy (nothing
+              # appended), and the signed program with an archive appended.
+              $wantScan = 3; $wantHeld = 2; if ($signedApp) { $wantScan = 4; $wantHeld = 3 }
+              if ($after -notmatch ('\[INFO\] {0} program file\(s\) were checked for an archive appended after their code \(a self-extracting archive\); {1} held one\.' -f $wantScan, $wantHeld)) { throw ("the self-extracting count line does not read {0} checked / {1} held one" -f $wantScan, $wantHeld) }
+              if ($after -match 'were NOT checked for an appended archive') { throw 'a real program on the runner had a header the reader could not parse' }
+              if ($signedApp -and $after -notmatch '\[WARNING\] An archive made on this machine is password-protected, in a staging folder: C:\\Users\\Public\\dz_ci_arch\\signed-appended\.exe') { throw 'a -p archive appended to a signed program after signing was not WARNING -- a broken signature must not excuse it' }
+              Write-Host 'PROVEN on a real archiver: a 7-Zip -sfx -p program reads WARNING with the archive found past its code, a plain 7-Zip SFX is plain, and a signed program with nothing appended stays out'
+              }
 
               # (8) MEASURED on 5.1: a real header the size a large non-solid
               #     archive writes (3000 files, -ms=off, ~200 KB of header),

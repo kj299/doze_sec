@@ -205,6 +205,13 @@ proof     = ci:archive_staging.ps1 -SelfTest + the runner's real staging folders
 signature = archive\(s\) carry the Mark of the Web -- downloaded by a browser, not packed here
 note      = A password-protected or multi-volume archive that a browser DOWNLOADED (software distributed as a protected zip, a sample sent for analysis, a split download) carries the Zone.Identifier stream with ZoneId=3, which Microsoft documents Edge, Chrome and the Attachment Execution Service writing for Internet-zone downloads. It came IN; it was not packed here to go out, so whatever it holds it is context, counted and named, never a finding. The stream is read the way exec_probe reads it. A mark whose zone is local (0, 1, 2) is not a download and does not clear the file. Verify: Get-Item -LiteralPath '<path>' -Stream Zone.Identifier; Get-Content -LiteralPath '<path>' -Stream Zone.Identifier shows the zone and, for Chrome and Edge, the HostUrl it came from.
 
+[archive-sfx-signed-installer]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:archive_staging.ps1 -SelfTest + the runner's real staging folders and planted archives
+signature = program file\(s\) were checked for an archive appended after their code
+note      = Installers are self-extracting programs: a vendor packs its files as an archive behind a program stub, and %TEMP% holds many of them. A program whose archive was appended by its publisher BEFORE signing carries a valid Authenticode signature over the whole file, and is left out and counted -- an installer is not an archive packed here. Appending an archive to a signed program afterwards breaks the signature (and one padded INTO the certificate table, which Authenticode does not hash, is graded whatever the signature says), and a signature that cannot be checked counts as unsigned, so that shape is graded like any archive: no password and one volume is context, a password made here is WARNING. Verify: Get-AuthenticodeSignature on the file, then open it with an archiver.
+
 [archive-plain-local-zip]
 class     = QUIET
 maxsev    = INFO
