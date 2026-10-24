@@ -913,7 +913,7 @@ jobs:
             bare_lf < "$d/$f" || { echo "$f in git archive has a bare LF"; exit 1; }
           done
           for b in doze_sec.bat doze_sec_noAdmin.bat; do
-            first_goto=$(grep -n -m1 -iE '(^|[^a-z])(goto|call)[[:space:]]+:?[a-z_]' "$b" | cut -d: -f1)
+            first_goto=$(grep -n -iE '(^|[^a-z])(goto|call)[[:space:]]+:?[a-z_]' "$b" | grep -viE '^[0-9]+:[[:space:]]*(::|rem[[:space:]])' | head -1 | cut -d: -f1)
             guard=$(grep -n -m1 -F 'IndexOf([char]10) -ge 0) { exit 9 }' "$b" | cut -d: -f1)
             [ -n "$first_goto" ] || { echo "$b: no goto found -- the position check would test nothing"; exit 1; }
             [ -n "$guard" ] || { echo "$b: the LF guard is missing"; exit 1; }
@@ -1189,7 +1189,12 @@ jobs:
             $skipAt = [array]::FindIndex($l, [Predicate[string]]{ param($x) $x -eq 'if defined DOZE_TEED goto :_console_log_done' })
             $doneAt = [array]::FindIndex($l, [Predicate[string]]{ param($x) $x -eq ':_console_log_done' })
             if ($gAt -lt 0 -or $skipAt -lt 0 -or $doneAt -lt 0 -or $gAt -gt $skipAt) { throw "${b}: the child guard is missing or comes after the DOZE_TEED skip" }
-            $firstCode = [array]::FindIndex($l, [Predicate[string]]{ param($x) $x -notmatch '^\s*(@echo off|::|$)' })
+            # The line-ending guard comes first on purpose (an LF-only copy
+            # loses goto labels, so it must run before any goto); it reads only
+            # the bat itself, uses no DOZE_* variable and writes nothing. Its
+            # exact lines are skipped here, and nothing else may precede the guard.
+            $lfGuard = @('set "DZ_SELF=%~f0"', 'set "DZ_EOLRC=%errorlevel%"', 'set "DZ_SELF="', 'set "DZ_EOLRC="')
+            $firstCode = [array]::FindIndex($l, [Predicate[string]]{ param($x) $x -notmatch '^\s*(@echo off|::|$)' -and $lfGuard -notcontains $x -and $x -notmatch '^powershell -NoProfile -NonInteractive -Command "\$t = \[IO\.File\]::ReadAllText\(\$env:DZ_SELF\); ' -and $x -notmatch '^if "%DZ_EOLRC%"=="9" (echo \[FATAL\] |exit /b 1$)' })
             if ($firstCode -lt $gAt) { throw ("{0}: line {1} runs before the child guard: {2}" -f $b, ($firstCode + 1), $l[$firstCode]) }
             $guard = $l[$gAt..($skipAt - 1)] -join "`n"
             $guards[$b] = $guard
