@@ -34,7 +34,15 @@ with the current date an owner's rename plus a routine upgrade would have
 turned an intruder's earlier clear into image preparation. The tool now takes
 the oldest of that value and each `Source OS (Updated on ...)` key's
 InstallDate, and a real Security-log clear on the CI runner is pinned
-CRITICAL. It is then a WARNING that names both names and the install date,
+CRITICAL.
+
+Measured on CI, unprompted: GitHub's own runner image is the same shape.
+Packer cleared every log at 21:17:38 under the build name `pkrvm7m03zjoygf`,
+and the clone's install date is 21:45:34, 28 minutes later; the runner
+grades `sec=prep`. On main that clear was CRITICAL and took a TOP FINDINGS
+slot, so moving it down surfaced a finding with no analyst note (Process-
+creation command-line logging DISABLED), which the full-run job caught; it
+now has one. It is then a WARNING that names both names and the install date,
 asks whether the PC was ever called the old name while in use (if so: a
 compromise), and says to treat it as one if the reader did not build the
 image or get it from a trusted source -- still counted, never silenced. An
