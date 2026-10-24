@@ -5222,7 +5222,16 @@ jobs:
             $probe = Get-Item -LiteralPath (Join-Path $isoStick 'ThreatLists\ioc_hashes.txt')
             Write-Host ("MEASURED: a file on the mounted image: ReadOnly={0}, attributes={1}" -f $probe.IsReadOnly, $probe.Attributes)
             if (-not $probe.IsReadOnly) { throw 'a file on the mounted image is not ReadOnly -- the seed fix this step proves would be untested' }
-            $mk2 = @(Get-ChildItem -LiteralPath $isoStick -Recurse -File | Where-Object { Get-Item -LiteralPath $_.FullName -Stream 'Zone.Identifier' -EA SilentlyContinue })
+            # Measured on the first run: the image's file system has no
+            # alternate data streams at all -- asking for one throws "The
+            # parameter is incorrect" (a terminating Win32Exception, whatever
+            # -ErrorAction says) -- so no Mark of the Web can sit on its files.
+            $mk2 = @(); $noStreams = 0
+            foreach ($f in (Get-ChildItem -LiteralPath $isoStick -Recurse -File)) {
+              try { if (Get-Item -LiteralPath $f.FullName -Stream 'Zone.Identifier' -EA Stop) { $mk2 += $f.FullName } }
+              catch { if ($_.Exception -is [System.ComponentModel.Win32Exception]) { $noStreams++ } }
+            }
+            Write-Host ("MEASURED: {0} file(s) on the mounted image refuse a stream query (no alternate data streams on that file system); {1} carry Mark of the Web" -f $noStreams, $mk2.Count)
             if ($mk2.Count) { throw ("Mark of the Web reached the files on the image: {0}" -f (($mk2 | Select-Object -First 3) -join ', ')) }
             $wrote = $true
             try { [IO.File]::WriteAllText((Join-Path $isoStick 'dz_ci_write_probe.txt'), 'x') } catch { $wrote = $false }
