@@ -6,6 +6,43 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### The tool can travel as a read-only ISO image
+`tools/make_usb_stick.ps1 -Iso <file.iso>` builds the same copy the stick
+gets -- the harness and the checker left off, text files CRLF, no Mark of the
+Web, every file read back -- into an ISO image with Windows' own IMAPI2 (ISO
+9660 + Joliet + UDF; nothing to install). On the PC, right-click > Mount
+mounts it read-only, so nothing there can change the tool while it runs, and back home
+`-Iso <file> -Verify` checks the image's one SHA-256 against the manifest
+kept on the laptop (`[OK]`; `[WARNING]` changed, exit 1; `[UNVERIFIED]`, exit
+2). The owner asked for a bootable image too and chose to have it later, with
+the offline audit mode that would make booting useful: today a booted image
+would audit itself, and booting other media can push a BitLocker PC into
+recovery. So the image is never bootable, and that is enforced by reading the
+volume descriptors of the image just written -- a boot record fails the build
+-- and by a self-test that finds no boot-image name in the script.
+
+Found while planning it: files on a mounted image are marked ReadOnly (the CI
+step measures and prints it), and
+`Copy-Item` copies it, so the IOC lists `threat_list_seed` copies into the
+runtime folder would have come out read-only and `-updateTTP` could never
+have refreshed them. The seed now clears the attribute on its own copies.
+
+A read-only review before the push found that `-Iso -Refresh` would have
+deleted any file at the path -- someone's other `.iso`, or a changed image
+that is evidence -- so it now replaces only an image this laptop made that is
+still exactly what it made. It also found a rollback (an older image put back
+read `[OK]`): making an image now retires every earlier manifest for that
+path, and `-Verify` calls an older image older. The image's file count is
+checked against what was staged, IMAPI2's objects are released before the
+staging folder is removed, and the stream copy cannot run past the size IMAPI2
+reported. The bats' fallback copy of the lists (used only when
+`threat_list_seed.ps1` is missing) clears ReadOnly too.
+
+CI runs the read-only field test from the mounted image, built from the
+LF-only, marked download it already used for the stick: writes to the image
+are refused, the audit passes every proof line from it, the runtime lists come
+out writable, and a one-byte change to the image reads changed or UNVERIFIED.
+
 ### A process-isolated Windows container is graded inside its own container
 A process-isolated Windows container (the default on Windows Server) runs its
 own smss, csrss, wininit, services and lsass on the host. Section 4's parent

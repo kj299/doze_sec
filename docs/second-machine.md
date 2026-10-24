@@ -89,6 +89,27 @@ stick holding files you need.** Without the script,
 checkout also works, but it carries the harness, and there is no manifest to
 check the stick against afterwards.
 
+**Or make a read-only ISO image instead** (on your laptop, same checkout):
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1 -Iso C:\Users\<name>\doze_sec.iso
+```
+
+It is the same copy, built into an `.iso` with Windows' own IMAPI2. Copy the
+`.iso` onto any stick. On the second machine, right-click it and choose
+**Mount** (a double-click does the same unless a program such as 7-Zip owns
+`.iso` files -- do not extract it; if the PC will not mount images, use a
+stick instead): Windows mounts it **read-only** as a new drive letter (say
+`X:`), so nothing on that PC can
+change the tool while it runs. Use `X:\doze_sec\...` wherever the steps below
+say `E:\doze_sec\...`, bring the results back on the stick (not inside the
+image -- it cannot be written), and right-click the drive and choose Eject when
+done. Make the image on your laptop, never from a download: Windows can pass
+a downloaded `.iso`'s Mark of the Web to the files inside it. The image is not
+bootable, on purpose (below). Back home, check it with
+`tools\make_usb_stick.ps1 -Iso <the .iso> -Verify` before mounting it anywhere
+again.
+
 ## Step 2: decide how to run it on the second machine
 
 - **A. Straight from the stick (the default).** Nothing of the tool is copied
@@ -258,7 +279,10 @@ the audit could not start there anyway. **Do not boot the PC from the stick,
 change its boot settings, or leave the stick in while it restarts:** on a PC
 with BitLocker or device encryption that can make it ask for the 48-digit
 recovery key at the next start, and without the key you cannot get to any
-file on that PC again.
+file on that PC again. The `-Iso` image is not bootable either: the script
+reads the image it built and fails if a boot record is there. A bootable image
+belongs with an offline audit mode (reading the PC's registry and event logs
+from its disk), which does not exist yet.
 
 ---
 

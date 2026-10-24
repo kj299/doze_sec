@@ -142,6 +142,15 @@ function Get-SeedVerdict {
 # script order, and a self-test that reached this function first got a
 # CommandNotFoundException that terminated its try block -- five directory-pass
 # cases never ran and the summary still read [OK]. CI's by-name grep caught it.
+function Clear-ReadOnly {
+    # A list copied from a mounted ISO image (make_usb_stick.ps1 -Iso) carries
+    # the image's ReadOnly attribute, and Copy-Item copies it: the runtime copy
+    # could then never be refreshed by -updateTTP. The runtime copy is ours.
+    param([string]$Path)
+    $i = Get-Item -LiteralPath $Path -EA SilentlyContinue
+    if ($i -and $i.IsReadOnly) { $i.IsReadOnly = $false }
+}
+
 function Invoke-Seed {
     param([string]$Shipped, [string]$Runtime, [switch]$SkipGenerated)
     $lines = @()
@@ -156,9 +165,9 @@ function Invoke-Seed {
         if (Test-Path -LiteralPath $dst) { $runtimeLines = @(Get-Content -LiteralPath $dst -EA SilentlyContinue) }
         $v = Get-SeedVerdict -ShippedLines $shippedLines -RuntimeLines $runtimeLines
         switch ($v.Action) {
-            'Seed'    { Copy-Item -LiteralPath $src -Destination $dst -Force; $seeded++;   $lines += ('[INFO] ThreatLists\' + $f + ': seeded from the release baseline.') }
-            'Replace' { Copy-Item -LiteralPath $src -Destination $dst -Force; $replaced++; $lines += ('[INFO] ThreatLists\' + $f + ': runtime copy replaced by the release baseline (' + $v.Why + ').') }
-            default   { $kept++ }
+            'Seed'    { Copy-Item -LiteralPath $src -Destination $dst -Force; Clear-ReadOnly $dst; $seeded++;   $lines += ('[INFO] ThreatLists\' + $f + ': seeded from the release baseline.') }
+            'Replace' { Copy-Item -LiteralPath $src -Destination $dst -Force; Clear-ReadOnly $dst; $replaced++; $lines += ('[INFO] ThreatLists\' + $f + ': runtime copy replaced by the release baseline (' + $v.Why + ').') }
+            default   { Clear-ReadOnly $dst; $kept++ }
         }
     }
     $lines += ('[INFO] ThreatLists: ' + $seeded + ' seeded, ' + $replaced + ' replaced from the release baseline, ' + $kept + ' kept.')
@@ -215,7 +224,10 @@ if ($SelfTest) {
         Set-Content -LiteralPath (Join-Path $sd 'ioc_domains.txt') -Value $shipped -Encoding ASCII
         Set-Content -LiteralPath (Join-Path $rd 'ioc_domains.txt') -Value $updated -Encoding ASCII
         Set-Content -LiteralPath (Join-Path $sd 'ioc_hashes.txt') -Value $shipped -Encoding ASCII
+        # The release files as a mounted ISO image presents them: ReadOnly.
+        foreach ($ro in 'ioc_hashes.txt', 'ioc_registry.txt') { (Get-Item -LiteralPath (Join-Path $sd $ro)).IsReadOnly = $true }
         $out = @(Invoke-Seed -Shipped $sd -Runtime $rd)
+        T 'directory pass: lists seeded or replaced from a read-only source (a mounted ISO) come out writable' ((-not (Get-Item -LiteralPath (Join-Path $rd 'ioc_hashes.txt')).IsReadOnly) -and (-not (Get-Item -LiteralPath (Join-Path $rd 'ioc_registry.txt')).IsReadOnly)) ''
         T 'directory pass: the stale registry list is replaced and the line names the file and both dates' (($out -join "`n") -match '\[INFO\] ThreatLists\\ioc_registry\.txt: runtime copy replaced by the release baseline \(runtime copy verified 2026-05-01, release 2026-06-06') ($out -join ' | ')
         T 'directory pass: the updated domains list is kept and NOT mentioned as replaced' (($out -join "`n") -notmatch 'ioc_domains\.txt: runtime copy replaced') ($out -join ' | ')
         T 'directory pass: the missing hashes list is seeded' ((Test-Path (Join-Path $rd 'ioc_hashes.txt')) -and (($out -join "`n") -match 'ioc_hashes\.txt: seeded from the release baseline')) ($out -join ' | ')

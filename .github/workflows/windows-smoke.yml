@@ -1620,12 +1620,17 @@ jobs:
                             'a refused drive is listed with its reason and has no number', 'confirming with a different letter cancels',
                             'a window that cannot ask chooses nothing and names the -Drive form',
                             'a rolled-back copy (the old files and the old manifest copy, put back) is never matched under a new ID',
-                            'a rewritten manifest copy on the stick is a difference') {
+                            'a rewritten manifest copy on the stick is a difference',
+                            'IMAPI2 builds a real image here, with no boot record',
+                            'the image keeps the doze_sec folder and its long and dot-prefixed names (Joliet/UDF)',
+                            'the ISO code names no boot image and no IMAPI2 boot option',
+                            'an El Torito boot record (a type-0 descriptor) is found',
+                            'IMAPI2 reports every staged file in the image') {
             if ($out -notmatch [regex]::Escape($must)) { throw ("make_usb_stick case missing on Windows: {0}" -f $must) }
           }
-          if ($out -match '\[SKIP\] (Mark of the Web|links on the stick)') { throw 'the stream or link cases skipped on Windows -- they must run here (the runner is elevated, so symbolic links can be created)' }
+          if ($out -match '\[SKIP\] (Mark of the Web|links on the stick|IMAPI2)') { throw 'the stream or link cases skipped on Windows -- they must run here (the runner is elevated, so symbolic links can be created)' }
           $n = @($out -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($n -lt 110) { throw "make_usb_stick self-test ran only $n case(s)" }
+          if ($n -lt 126) { throw "make_usb_stick self-test ran only $n case(s)" }
           Write-Host "make_usb_stick -SelfTest OK ($n cases)"
           # Live, on real Storage cmdlets. -ListCandidates must refuse this
           # runner's Windows drive and say why. With no drive named the script
@@ -5174,11 +5179,99 @@ jobs:
           foreach ($h in 'tests\manual_ci.ps1', 'tests\detection_selftest.ps1', 'tests\cleanup_selftest.ps1', 'tests\noadmin_smoke.ps1', '.git', '.github') {
             if (Test-Path -LiteralPath (Join-Path $stick $h)) { throw ("the stick copy carries {0} -- the harness must stay off it" -f $h) }
           }
-          $out = (& (Join-Path $stick 'tests\field_test.ps1') -BatPath (Join-Path $stick 'doze_sec.bat') -NoConsoleLog *>&1 | ForEach-Object { "$_" }) -join "`n"
-          $rc = $LASTEXITCODE
+          # The same download made into a READ-ONLY ISO image (make_usb_stick
+          # -Iso, Windows' own IMAPI2), and the audit runs FROM THE MOUNTED
+          # IMAGE: strictly harder than a folder or a write-protected stick --
+          # nothing can be written there -- and the path -Iso tells a person to
+          # take. Touches: disk-image:RUNNER_TEMP\dz_ci.iso (mounted read-only,
+          # dismounted in finally).
+          $iso = Join-Path $env:RUNNER_TEMP 'dz_ci.iso'
+          $mi = (& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $src 'tools\make_usb_stick.ps1') -Iso $iso -ManifestStore $store 2>&1 | ForEach-Object { "$_" }) -join "`n"
+          Write-Host $mi
+          if ($LASTEXITCODE -ne 0) { throw 'make_usb_stick -Iso failed' }
+          if ($mi -notmatch 'no boot record' -or $mi -notmatch '\[OK\] SHA-256 of the image: [0-9a-f]{64}') { throw 'the image was not reported as built without a boot record' }
+          $leftStage = @(Get-ChildItem -LiteralPath ([IO.Path]::GetTempPath()) -Directory -Filter 'dz_iso_stage_*' -EA SilentlyContinue)
+          if ($leftStage.Count) { throw ("the staging folder was left behind: {0}" -f ($leftStage.FullName -join ', ')) }
+          $head = New-Object byte[] 131072
+          $fs = [IO.File]::OpenRead($iso); try { [void]$fs.Read($head, 0, $head.Length) } finally { $fs.Dispose() }
+          for ($sec = 16; $sec -lt 64; $sec++) {
+            $o = $sec * 2048
+            if ([Text.Encoding]::ASCII.GetString($head, $o + 1, 5) -cne 'CD001') { throw ("sector {0} of the image is not a volume descriptor" -f $sec) }
+            if ($head[$o] -eq 0) { throw 'the image holds an El Torito boot record -- it must never be bootable' }
+            if ($head[$o] -eq 255) { break }
+          }
+          $iv = (& .\tools\make_usb_stick.ps1 -Iso $iso -ManifestStore $store -Verify *>&1 | ForEach-Object { "$_" }) -join "`n"
+          if ($LASTEXITCODE -ne 0 -or $iv -notmatch '\[OK\] .* is exactly the image this laptop made') { throw ("a fresh image did not verify: {0}" -f $iv) }
+          $img = Mount-DiskImage -ImagePath $iso -Access ReadOnly -PassThru
+          try {
+            $letter = $null
+            for ($t = 0; $t -lt 10 -and -not $letter; $t++) { $letter = (Get-DiskImage -ImagePath $iso | Get-Volume).DriveLetter; if (-not $letter) { Start-Sleep -Seconds 1 } }
+            if (-not $letter) { throw 'the mounted image has no drive letter after 10 s' }
+            $isoStick = $letter + ':\doze_sec'
+            # The image holds exactly the files its manifest lists, byte for byte.
+            $man = @{}
+            foreach ($ln in [IO.File]::ReadAllLines((Join-Path $isoStick 'STICK_MANIFEST.sha256'))) { if ($ln -match '^([0-9a-f]{64})  (.+)$') { $man[$matches[2]] = $matches[1] } }
+            $onImg = @(Get-ChildItem -LiteralPath $isoStick -Recurse -File | Where-Object { $_.Name -ne 'STICK_MANIFEST.sha256' })
+            if ($man.Count -lt 90 -or $onImg.Count -ne $man.Count) { throw ("the image holds {0} file(s), its manifest lists {1}" -f $onImg.Count, $man.Count) }
+            foreach ($f in $onImg) {
+              $rel = $f.FullName.Substring($isoStick.Length + 1)
+              if (-not $man.ContainsKey($rel)) { throw ("a file on the image is not in its manifest: {0}" -f $rel) }
+              if ((Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLower() -ne $man[$rel]) { throw ("a file on the image differs from its manifest: {0}" -f $rel) }
+            }
+            Write-Host ("the mounted image holds exactly the {0} files its manifest lists, byte for byte" -f $man.Count)
+            $probe = Get-Item -LiteralPath (Join-Path $isoStick 'ThreatLists\ioc_hashes.txt')
+            Write-Host ("MEASURED: a file on the mounted image: ReadOnly={0}, attributes={1}" -f $probe.IsReadOnly, $probe.Attributes)
+            if (-not $probe.IsReadOnly) { throw 'a file on the mounted image is not ReadOnly -- the seed fix this step proves would be untested' }
+            $mk2 = @(Get-ChildItem -LiteralPath $isoStick -Recurse -File | Where-Object { Get-Item -LiteralPath $_.FullName -Stream 'Zone.Identifier' -EA SilentlyContinue })
+            if ($mk2.Count) { throw ("Mark of the Web reached the files on the image: {0}" -f (($mk2 | Select-Object -First 3) -join ', ')) }
+            $wrote = $true
+            try { [IO.File]::WriteAllText((Join-Path $isoStick 'dz_ci_write_probe.txt'), 'x') } catch { $wrote = $false }
+            if ($wrote) { throw 'the mounted image accepted a write -- it is not read-only' }
+            $out = (& (Join-Path $isoStick 'tests\field_test.ps1') -BatPath (Join-Path $isoStick 'doze_sec.bat') -NoConsoleLog *>&1 | ForEach-Object { "$_" }) -join "`n"
+            $rc = $LASTEXITCODE
+          } finally {
+            Dismount-DiskImage -ImagePath $iso | Out-Null
+          }
           Write-Host $out
-          Write-Host ("field_test.ps1 exit code: {0}" -f $rc)
+          Write-Host ("field_test.ps1 (from the mounted read-only image) exit code: {0}" -f $rc)
           if ($rc -ne 0) { throw "field_test.ps1 failed (see above)" }
+          $rep1 = Get-ChildItem 'C:\SecurityAudit\SecurityReport_*.txt' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if ([IO.File]::ReadAllText($rep1.FullName) -notmatch 'ThreatLists: (\d+) seeded, (\d+) replaced' -or ([int]$matches[1] + [int]$matches[2]) -lt 1) { throw 'this run seeded or replaced no list from the image, so it does not test that the copies come out writable' }
+          $roLists = @(Get-ChildItem 'C:\SecurityAudit\ThreatLists' -File -EA SilentlyContinue | Where-Object { $_.IsReadOnly })
+          if ($roLists.Count) { throw ("runtime IOC list(s) seeded from the read-only image came out ReadOnly, so -updateTTP could never refresh them: {0}" -f (($roLists | ForEach-Object Name) -join ', ')) }
+          $iv2 = (& .\tools\make_usb_stick.ps1 -Iso $iso -ManifestStore $store -Verify *>&1 | ForEach-Object { "$_" }) -join "`n"
+          if ($LASTEXITCODE -ne 0) { throw ("the image no longer verifies after the run: {0}" -f $iv2) }
+          $isoT = Join-Path $env:RUNNER_TEMP 'dz_ci_changed.iso'
+          $ib = [IO.File]::ReadAllBytes($iso); $ib[$ib.Length - 1] = [byte](($ib[$ib.Length - 1] + 1) % 256); [IO.File]::WriteAllBytes($isoT, $ib)
+          $iv3 = (& .\tools\make_usb_stick.ps1 -Iso $isoT -ManifestStore $store -Verify *>&1 | ForEach-Object { "$_" }) -join "`n"
+          $ivrc = $LASTEXITCODE
+          Write-Host $iv3
+          if ($ivrc -ne 2 -or $iv3 -notmatch '\[UNVERIFIED\]') { throw ("an image with one changed byte must read UNVERIFIED, exit 2 (got {0})" -f $ivrc) }
+          Remove-Item -LiteralPath $isoT -Force
+          # The same change made to the image this laptop made, in place: CHANGED, exit 1.
+          [IO.File]::WriteAllBytes($iso, $ib)
+          $iv4 = (& .\tools\make_usb_stick.ps1 -Iso $iso -ManifestStore $store -Verify *>&1 | ForEach-Object { "$_" }) -join "`n"
+          $ivrc = $LASTEXITCODE
+          Write-Host $iv4
+          if ($ivrc -ne 1 -or $iv4 -notmatch '\[WARNING\] .* changed after this laptop made it') { throw ("the laptop's own image, changed in place, must read changed, exit 1 (got {0})" -f $ivrc) }
+          Remove-Item -LiteralPath $iso -Force
+          # MEASURED, declared either way: does Windows pass a downloaded image's
+          # Mark of the Web to the files inside it, and can a stream read on the
+          # mounted file system see it? (The docs say only "can": this prints
+          # what this build does.)
+          $isoM = Join-Path $env:RUNNER_TEMP 'dz_ci_marked.iso'
+          $mm = (& powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\make_usb_stick.ps1 -Iso $isoM -ManifestStore (Join-Path $env:RUNNER_TEMP 'dz_iso_m_store') 2>&1 | ForEach-Object { "$_" }) -join "`n"
+          if ($LASTEXITCODE -ne 0) { throw ("could not build the image for the Mark of the Web measurement: {0}" -f $mm) }
+          Set-Content -LiteralPath $isoM -Stream 'Zone.Identifier' -Value "[ZoneTransfer]`r`nZoneId=3"
+          $imgM = Mount-DiskImage -ImagePath $isoM -Access ReadOnly -PassThru
+          try {
+            $lm = $null
+            for ($t = 0; $t -lt 10 -and -not $lm; $t++) { $lm = (Get-DiskImage -ImagePath $isoM | Get-Volume).DriveLetter; if (-not $lm) { Start-Sleep -Seconds 1 } }
+            $inner = $lm + ':\doze_sec\tools\exec_probe.ps1'
+            $zs = $null; try { $zs = (Get-Content -LiteralPath $inner -Stream 'Zone.Identifier' -Raw -EA Stop) } catch { $zs = '(no stream readable: ' + $_.Exception.GetType().Name + ')' }
+            Write-Host ("MEASURED: a marked image mounted; a file inside it reads Zone.Identifier as: {0}" -f (($zs -replace "`r?`n", ' ') ))
+          } finally { Dismount-DiskImage -ImagePath $isoM | Out-Null; Remove-Item -LiteralPath $isoM -Force -EA SilentlyContinue }
+          Write-Host 'ISO: built with no boot record, mounted read-only (writes refused), the audit ran from it, the runtime lists came out writable, and a one-byte change reads UNVERIFIED.'
           # The proof lines must have actually executed -- not skipped -- on this elevated runner.
           foreach ($must in @('RunOnce resume key: absent after the run', 'boot configuration (bcdedit /enum {bootmgr}): unchanged',
                               'report carries the READ-ONLY banner', 'report carries no TEST RUN banner',
@@ -5197,9 +5290,9 @@ jobs:
           # prints, so a rename fails loudly instead of passing vacuously.
           $ro = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce' -EA SilentlyContinue
           if ($ro -and ($ro.PSObject.Properties.Name -contains '*WIN11_SecurityAudit_resume')) { throw 'RunOnce resume value exists after a -readonly run' }
-          # The audit wrote nothing into its own folder: the stick copy is exactly
-          # what make_usb_stick put there, so a write-protected stick works and
-          # the reduced file set was enough.
+          # The stick copy is exactly what make_usb_stick put there (the audit
+          # ran from the read-only image above, which proves the stronger claim:
+          # it writes nothing into its own folder).
           # (-Verify runs from the CHECKOUT's copy of the script, not the one in
           # the download: a different copy of the checker must find the manifest
           # the first one kept on this machine.)
@@ -5221,7 +5314,7 @@ jobs:
           $vrc = $LASTEXITCODE
           Write-Host $vt
           if ($vrc -ne 2 -or $vt -notmatch '\[UNVERIFIED\]' -or $vt -notmatch ': 1 difference\(s\) from this copy' -or $vt -match '\[OK\] The tool') { throw ("a copy in a new place that was ALSO changed must read UNVERIFIED with the difference count, exit 2 (got {0})" -f $vrc) }
-          Write-Host 'read-only field test: proven on this runner, run from a stick made from an LF-only marked download, which it left unchanged; a copy in a new place is matched by content, and one that also changed is UNVERIFIED.'
+          Write-Host 'read-only field test: proven on this runner, run from a read-only ISO image made from an LF-only marked download; the stick folder from the same download is CRLF with no mark; a copy in a new place is matched by content, and one that also changed is UNVERIFIED.'
           # The last call above is the deliberately UNVERIFIED -Verify (exit 2).
           # This step's verdict is its throws; the runner's PowerShell wrapper
           # would otherwise report that exit code as the step's (the #237 lesson).

@@ -450,6 +450,29 @@ console output says which policy; send it.
 - **Never run anything from the stick on your own laptop.** That includes the
   `Remediation_*.ps1` scripts, which are for the audited PC, after review.
 
+### Or: a read-only ISO image instead of a stick
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1 -Iso C:\Users\<name>\doze_sec.iso
+```
+
+The same copy -- the same files left off, the same line endings, no Mark of
+the Web -- built into an `.iso` file with Windows' own IMAPI2, so nothing is
+installed. Carry the `.iso` on any stick (or burn it). On the other PC,
+right-click it and choose **Mount** (a double-click does the same unless a
+program such as 7-Zip owns `.iso` files -- do not extract it): Windows mounts
+it **read-only** as a new drive, say `X:`, and
+you run `X:\doze_sec\tests\field_test.ps1` from there exactly as from a stick;
+right-click the drive and choose Eject when done. A CD file system cannot be
+written, so nothing on that PC can change the tool while it runs, and back
+home `-Iso <file> -Verify` checks the image's one SHA-256 against the manifest
+kept on your laptop. Make the image on your laptop: Windows can pass a
+downloaded `.iso`'s Mark of the Web to the files inside it, and a work PC's
+script policy can then refuse the audit's helpers. If that PC will not mount
+images (a policy can block it), carry a stick instead. **The image is not
+bootable, on purpose** -- the script reads its own
+output and fails if a boot record is there; see below.
+
 ### Why the stick is not bootable
 
 - **It would audit the wrong Windows.** Booting from the stick starts a
@@ -457,7 +480,8 @@ console output says which policy; send it.
   would describe the stick, not the PC. Windows' own bootable stick, a recovery
   drive, does not include PowerShell, so the audit could not even start there.
   Auditing a PC's disk while that PC's Windows is not running would need a
-  separate offline mode; it is on the backlog.
+  separate offline mode; it is on the backlog, and a bootable image will come
+  with it, not before. The same holds for `-Iso`: its image has no boot record.
 - **Do not boot the PC from the stick or change its boot settings, and take
   the stick out before the PC restarts.** On a PC with BitLocker or device
   encryption (on by default on many Windows 11 PCs), boot changes -- or bootable
