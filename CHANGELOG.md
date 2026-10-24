@@ -6,6 +6,39 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### A log cleared while a Windows image was being prepared is not graded as an intrusion
+The second-machine run on WIN11-02 completed this time and raised one
+CRITICAL: "Security event log was CLEARED ... Treat as active compromise",
+with the dashboard telling the owner to isolate the machine and image its
+drive. The records said otherwise. The 1102 and three 104 records (System,
+Application and Setup cleared within 20 ms) were written by the built-in
+Administrator under the computer name WIN-EIH5CPD9P56 -- Setup's random name
+-- before cloudbase-init renamed the VM WIN11-02. The owner confirmed it is
+their own image. An image build clears every log before capture; an intruder
+covering tracks does not rename the computer afterwards.
+
+`tools/log_clear_check.ps1` now grades both events and reads the name of the
+computer each record was written under. A clear under this PC's own name
+(NetBIOS or DNS host name, any case) stays CRITICAL. When every clear record
+names another computer, it is a WARNING that names both and says to treat it
+as a compromise if the reader did not build the image or get it from a trusted
+source -- still counted, never silenced. Found while reading: the dashboard
+tile re-read the Security log itself, and on the standard-user path, where
+Section 16 skips the Security log, its failed read printed PASS "Security
+event log has not been cleared" having checked nothing. The tiles now read
+the section's state (a standard user sees NOT graded), the standard-user path
+runs the check too (the System log is readable there), and an unreadable log
+is a gap or a deferral.
+
+Misses first, against the predictions written before the results: exit 8 and
+10 rows, not 0-2 and 3-6 (the image-prep clear, and the cloud image's own
+agents); LSA Protection read ON, not off; the unknown lines came from the
+cloud image (cloudbase-init's hidden account, unsigned QEMU-GA and
+cloudbase-init services, the build-time clear), not from the preview build.
+Held: the run completed from a fresh ZIP (the CRLF fix works on a real
+download), PowerShell v2 disabled, Defender on with 6-day-old signatures. The
+three cloud-image lines are catalogued in `tests/benign_corpus.txt`.
+
 ### A downloaded ZIP runs; an LF-only bat refuses instead of dying at a goto
 The owner's first second-machine run stopped at INIT 8: `The system cannot
 find the batch label specified - runonce_done`. The label is there. The copy

@@ -1480,7 +1480,10 @@ try {
     $ev1102 = $null
     try { $ev1102 = Get-WinEvent -FilterHashtable @{LogName='Security';Id=1102} -MaxEvents 1 -EA Stop } catch {}
     $cleared = [bool]$ev1102
-    $rptCleared = [bool]([regex]::IsMatch($text, '\[CRITICAL\] Security event log was CLEARED'))
+    # A clear under this runner's own name is CRITICAL; one made before the
+    # image took its current name is the image-preparation WARNING. Either
+    # is the report saying "this log was cleared".
+    $rptCleared = [bool]([regex]::IsMatch($text, '\[CRITICAL\] Security event log was CLEARED|\[WARNING\] Security event log was cleared at [^\r\n]*before this PC took its current name'))
     if ($cleared -eq $rptCleared) { Write-Host ("  [ OK       ] Section 16 log-cleared verdict matches live Security 1102 state (cleared: {0})" -f $cleared) }
     else { Write-Host ("  [ REGRESS  ] Section 16 log-cleared verdict disagrees with live 1102 state (cleared: {0}; report flags: {1})" -f $cleared, $rptCleared); $requiredFail++ }
 

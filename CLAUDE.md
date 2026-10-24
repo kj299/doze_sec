@@ -571,7 +571,10 @@ twice. `tools/lsa_protection_check.ps1` decides on WinInit Event 12 since this
 boot first (proof), the registry second (intent: PENDING when set but not in
 effect), and only calls it OFF on evidence; it measures once, in Section 4,
 for both consumers. When a check reads a setting, ask whether Windows records
-the setting taking EFFECT, and grade on that.
+the setting taking EFFECT, and grade on that. And a record's own Computer
+field says WHEN in the machine's life it was written: WIN11-02's log clear
+was recorded under Setup's random name, before the image was renamed, and
+was graded CRITICAL as an intrusion until `log_clear_check` compared the two.
 
 **A managed machine is a different machine too.** Every helper runs as
 `powershell -ExecutionPolicy Bypass -File`, and an execution policy set by

@@ -201,6 +201,7 @@ set "DEFEXCL_PATHS=0"
 set "DEFEXCL_PROCS=0"
 set "DEFEXCL_EXTS=0"
 set "PPL_STATE=ungraded"
+set "LOGCLEAR_STATE=sec=ungraded,sys=ungraded"
 set "REBOOT_AGE=unknown"
 set "BITLOCKER_STATE=ungraded"
 set "EXEC_BLOCKED=0"
@@ -3309,6 +3310,7 @@ if exist "%TEMP%\dz_lsadump_deferred.txt" (
 :: boot event first, the registry second) and read by module_inspect there;
 :: this is its last consumer, so the state file is deleted here.
 set "PPL_STATE=ungraded"
+set "LOGCLEAR_STATE=sec=ungraded,sys=ungraded"
 set "LSA_LINE="
 if exist "%TEMP%\dz_lsa_state.txt" set /p LSA_LINE=<"%TEMP%\dz_lsa_state.txt"
 if defined LSA_LINE for /f "tokens=1 delims=|" %%a in ("%LSA_LINE%") do set "PPL_STATE=%%a"
@@ -3946,13 +3948,24 @@ if exist "%TEMP%\dz_loggap_deferred.txt" (
 )
 
 echo --- Log Tampering and Account Changes (evaluated) --->> "%REPORT%"
-del "%TEMP%\dz_ev1102_hit.txt" 2>nul
-del "%TEMP%\dz_ev104_hit.txt" 2>nul
 del "%TEMP%\dz_ev4720_hit.txt" 2>nul
 del "%TEMP%\dz_ev4732_hit.txt" 2>nul
-echo $e=Get-WinEvent -FilterHashtable @{LogName='Security';Id=1102;ProviderName='Microsoft-Windows-Eventlog'} -MaxEvents 1 -EA SilentlyContinue;if($e){'[CRITICAL] Security event log was CLEARED at '+$e.TimeCreated+' -- attacker erased evidence (T1070.001). Treat as active compromise.';Set-Content -LiteralPath "$env:TEMP\dz_ev1102_hit.txt" -Value hit}else{'[OK] Security event log has not been cleared.'} > "%PSRUN%"
-echo $e=Get-WinEvent -FilterHashtable @{LogName='System';Id=104;ProviderName='Microsoft-Windows-Eventlog'} -MaxEvents 1 -EA SilentlyContinue;if($e){'[WARNING] System event log was cleared at '+$e.TimeCreated+' -- often benign (updates/driver installs/disk cleanup); the Security 1102 check above is the attacker cover-up signal.';Set-Content -LiteralPath "$env:TEMP\dz_ev104_hit.txt" -Value hit}else{'[OK] System event log has not been cleared.'} >> "%PSRUN%"
-echo $e=@(Get-WinEvent -FilterHashtable @{LogName='Security';Id=4720} -MaxEvents 5 -EA SilentlyContinue);if($e.Count -gt 0){'[WARNING] New local account(s) created: '+$e.Count+' event(s) (T1136.001) -- review the names listed above.';Set-Content -LiteralPath "$env:TEMP\dz_ev4720_hit.txt" -Value hit}else{'[OK] No new local account creation events (4720).'} >> "%PSRUN%"
+:: Security 1102 / System 104: graded by tools\log_clear_check.ps1, which
+:: reads the computer name each record was written under -- a clear made
+:: before the PC took its current name is image preparation, not this
+:: machine's own history (WIN11-02, 2026-10-24).
+del "%TEMP%\dz_logclear.txt" 2>nul
+del "%TEMP%\dz_logclear104.txt" 2>nul
+del "%TEMP%\dz_logclear_gap.txt" 2>nul
+del "%TEMP%\dz_logclear_deferred.txt" 2>nul
+del "%TEMP%\dz_logclear_state.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\log_clear_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\log_clear_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\log_clear_check.ps1 not found -- event-log clear check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 16 T1070.001 "Event-log clear check NOT performed - tool missing"
+)
+echo $e=@(Get-WinEvent -FilterHashtable @{LogName='Security';Id=4720} -MaxEvents 5 -EA SilentlyContinue);if($e.Count -gt 0){'[WARNING] New local account(s) created: '+$e.Count+' event(s) (T1136.001) -- review the names listed above.';Set-Content -LiteralPath "$env:TEMP\dz_ev4720_hit.txt" -Value hit}else{'[OK] No new local account creation events (4720).'} > "%PSRUN%"
 echo $e=@(Get-WinEvent -FilterHashtable @{LogName='Security';Id=4732} -MaxEvents 5 -EA SilentlyContinue);if($e.Count -gt 0){'[WARNING] Account(s) added to a privileged group: '+$e.Count+' event(s) (T1098) -- review the names listed above.';Set-Content -LiteralPath "$env:TEMP\dz_ev4732_hit.txt" -Value hit}else{'[OK] No unexpected additions to Administrators (4732).'} >> "%PSRUN%"
 "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 echo.>> "%REPORT%"
@@ -3981,14 +3994,7 @@ if exist "%TEMP%\dz_auditpol_gap.txt" (
     call :dz_finding !_GAPSEV! 16 T1562.002 "Audit-policy state NOT determined - auditpol unreadable or localized"
     del "%TEMP%\dz_auditpol_gap.txt" 2>nul
 )
-if exist "%TEMP%\dz_ev1102_hit.txt" (
-    call :dz_finding CRITICAL 16 T1070.001 "Security event log was cleared - evidence destruction"
-    del "%TEMP%\dz_ev1102_hit.txt" 2>nul
-)
-if exist "%TEMP%\dz_ev104_hit.txt" (
-    call :dz_finding WARNING 16 T1070.001 "System event log was cleared"
-    del "%TEMP%\dz_ev104_hit.txt" 2>nul
-)
+call :dz_logclear_read
 if exist "%TEMP%\dz_ev4720_hit.txt" (
     call :dz_finding WARNING 16 T1136.001 "New local account(s) created"
     del "%TEMP%\dz_ev4720_hit.txt" 2>nul
@@ -4047,6 +4053,23 @@ goto :sec16_admin_done
 echo  [DEFERRED - ADMIN REQUIRED] Security event log queries require admin.>> "%REPORT%"
 echo  Affected: Events 1102, 4720, 4732, 4672, 4625, 4624, 4698, 4702, 4688, 4769, 4776.>> "%REPORT%"
 set /a DEFERRED_COUNT+=1
+:: The log-clear check still runs here: a standard-user token can read the
+:: System log (Event 104), and the tool states the Security log as deferred,
+:: so the dashboard tile reads NOT graded instead of a PASS that checked
+:: nothing. Its deferral is already counted in the line above.
+del "%TEMP%\dz_logclear.txt" 2>nul
+del "%TEMP%\dz_logclear104.txt" 2>nul
+del "%TEMP%\dz_logclear_gap.txt" 2>nul
+del "%TEMP%\dz_logclear_deferred.txt" 2>nul
+del "%TEMP%\dz_logclear_state.txt" 2>nul
+echo --- Log Cleared ^(1102=Security cleared, 104=System cleared^) --->> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\log_clear_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\log_clear_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\log_clear_check.ps1 not found -- event-log clear check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 16 T1070.001 "Event-log clear check NOT performed - tool missing"
+)
+call :dz_logclear_read
 :: The gap check reads the System, Application and PowerShell logs without
 :: elevation and states the Security log as unreadable; the audit-policy check
 :: needs auditpol, which needs admin. Both were skipped SILENTLY here until the
@@ -5331,8 +5354,8 @@ echo. >> "%PSRUN%"
 :: ===== ACTIVE COMPROMISE =============================================
 echo sec 'ACTIVE COMPROMISE INDICATORS' >> "%PSRUN%"
 echo if($isAdmin -eq '1'){ >> "%PSRUN%"
-echo $ev=Get-WinEvent -FilterHashtable @{LogName='Security';Id=1102;ProviderName='Microsoft-Windows-Eventlog'} -MaxEvents 1 -EA SilentlyContinue;if($ev){ck 'CRIT' 'Security event log was CLEARED' ('At '+$ev.TimeCreated+' -- attacker erased evidence. Treat as active compromise.')}else{ck 'PASS' 'Security event log has not been cleared'} >> "%PSRUN%"
-echo $ev=Get-WinEvent -FilterHashtable @{LogName='System';Id=104;ProviderName='Microsoft-Windows-Eventlog'} -MaxEvents 1 -EA SilentlyContinue;if($ev){ck 'WARN' 'System event log was cleared' ('At '+$ev.TimeCreated+' -- often benign: Windows updates, driver installs and disk cleanup clear the System log. The Security log 1102 is the attacker cover-up target and is checked separately above.')}else{ck 'PASS' 'System event log has not been cleared'} >> "%PSRUN%"
+echo $lc='%LOGCLEAR_STATE%';if($lc -match 'sec=critical'){ck 'CRIT' 'Security event log was CLEARED (Section 16)' 'Cleared under this PC''s own name -- attacker erased evidence. Treat as active compromise.'}elseif($lc -match 'sec=prep'){ck 'WARN' 'Security event log was cleared before this PC took its current name (Section 16)' 'Section 16 names both computer names: the shape of a Windows image being prepared. If you did not build this image or get it from a source you trust, treat it as a compromise.'}elseif($lc -match 'sec=none'){ck 'PASS' 'Security event log has not been cleared (Section 16)'}else{ck 'INFO' 'Security event log clears: NOT graded -- Section 16 could not read the Security log'} >> "%PSRUN%"
+echo if($lc -match 'sys=cleared'){ck 'WARN' 'System event log was cleared (Section 16)' 'Often benign: Windows updates, driver installs and disk cleanup clear the System log. The Security log 1102 is the attacker cover-up target and is graded separately above.'}elseif($lc -match 'sys=none'){ck 'PASS' 'System event log has not been cleared (Section 16)'}else{ck 'INFO' 'System event log clears: NOT graded -- Section 16 could not read the System log'} >> "%PSRUN%"
 echo $ev=Get-WinEvent -FilterHashtable @{LogName='Security';Id=4720} -MaxEvents 5 -EA SilentlyContinue;if($ev){ck 'WARN' "New local accounts created: $(@($ev).Count) events" 'Review account names in Section 16'}else{ck 'PASS' 'No new local account creation events - 4720'} >> "%PSRUN%"
 echo $ev=Get-WinEvent -FilterHashtable @{LogName='Security';Id=4732} -MaxEvents 5 -EA SilentlyContinue;if($ev){ck 'WARN' "Users added to Administrators: $(@($ev).Count) events" 'Review account names in Section 16'}else{ck 'PASS' 'No unexpected additions to Administrators group - 4732'} >> "%PSRUN%"
 echo $pp=(netsh interface portproxy show all 2^>$null)^|Out-String;if($pp -match '\d+\.\d+'){ck 'CRIT' 'netsh portproxy tunnel rules are ACTIVE' 'Volt Typhoon C2 IOC. Remove: netsh interface portproxy reset. See Section 17.'}else{ck 'PASS' 'No netsh portproxy tunnel rules (Volt Typhoon check)'} >> "%PSRUN%"
@@ -6006,6 +6029,31 @@ echo if(-not (New-Object Security.Principal.WindowsPrincipal($__id^)^).IsInRole(
 echo $ErrorActionPreference='Continue'; $__errBefore=$Error.Count >> "%~1"
 echo Write-Host '*** %~2 -- press Ctrl+C now to abort. ***'; Start-Sleep -Seconds 3 >> "%~1"
 echo. >> "%~1"
+goto :eof
+
+:: Read log_clear_check.ps1's markers and state (both Section 16 paths).
+:dz_logclear_read
+if exist "%TEMP%\dz_logclear.txt" (
+    set "_LCSEV="
+    set /p _LCSEV=<"%TEMP%\dz_logclear.txt"
+    if "!_LCSEV!"=="CRITICAL" call :dz_finding CRITICAL 16 T1070.001 "Security event log was cleared - evidence destruction"
+    if "!_LCSEV!"=="WARNING" call :dz_finding WARNING 16 T1070.001 "Security event log cleared before the PC took its current name - image preparation shape"
+    del "%TEMP%\dz_logclear.txt" 2>nul
+)
+if exist "%TEMP%\dz_logclear104.txt" (
+    call :dz_finding WARNING 16 T1070.001 "System event log was cleared"
+    del "%TEMP%\dz_logclear104.txt" 2>nul
+)
+if exist "%TEMP%\dz_logclear_gap.txt" (
+    rem A gap is its own row: a log could not be read.
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_logclear_gap.txt"
+    call :dz_finding !_GAPSEV! 16 T1070.001 "Event-log clear check NOT performed - the Security or System log could not be read"
+    del "%TEMP%\dz_logclear_gap.txt" 2>nul
+)
+del "%TEMP%\dz_logclear_deferred.txt" 2>nul
+if exist "%TEMP%\dz_logclear_state.txt" set /p LOGCLEAR_STATE=<"%TEMP%\dz_logclear_state.txt"
+del "%TEMP%\dz_logclear_state.txt" 2>nul
 goto :eof
 
 :dz_finding

@@ -54,7 +54,7 @@ break untested nor drift out of sync with its test.
 | Execution | Yes | S4 (processes, LOLBins: T1218.005 mshta, T1218.010 regsvr32), S11 (PowerShell), S16 (4688), S18g |
 | Persistence | Strong | S5 (Run/Winlogon/IFEO/AppInit/Active Setup), S6 (tasks), S7 (services), S17 (WMI subscriptions), S18 (COM hijack, registry IOCs) |
 | Privilege Escalation | Yes | S13 (UAC, accessibility binaries T1546.008), S16 (4672/4732) |
-| Defense Evasion | Strong | S4 (system-process name masquerading, T1036: by directory, and by parent -- svchost.exe not started by services.exe, lsass.exe not by wininit.exe), S9 (Defender tamper/exclusions, ASR rule state), S18 (AMSI bypass, BYOVD drivers), S16 (1102 log clear) |
+| Defense Evasion | Strong | S4 (system-process name masquerading, T1036: by directory, and by parent -- svchost.exe not started by services.exe, lsass.exe not by wininit.exe), S9 (Defender tamper/exclusions, ASR rule state), S18 (AMSI bypass, BYOVD drivers), S16 (1102 log clear: CRITICAL when written under this PC's own name, a WARNING naming both names when written before the PC took its current name -- the shape of image preparation; an attacker who cleared the log and then renamed the PC reads WARNING, still a counted finding) |
 | Credential Access | Strong | S12 (LSASS PPL, WDigest, NTLM, Credential Guard; a copy of LSASS recorded in the Security log as Event 4688, lsass.exe created by lsass.exe), S4 (a copy of LSASS running now), S16 (4769 Kerberoast, 4776), S18 (browser/cloud cred stores) |
 | Discovery | Yes | S17 (4688 discovery commands: nltest, dsquery, ntdsutil) |
 | Lateral Movement | Yes | S10 (SMBv1, RDP/NLA, WinRM, sshd), S17/S18 (PsExec pipes, portproxy) |

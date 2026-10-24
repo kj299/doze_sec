@@ -507,6 +507,18 @@ jobs:
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
           n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 16 ] || { echo "only $n case(s)"; exit 1; }
+      - name: log_clear_check -- a log cleared under this PC's own name is CRITICAL; one cleared before it took its name is image preparation
+        run: |
+          out=$(pwsh -NoProfile -File tools/log_clear_check.ps1 -SelfTest); echo "$out"
+          for n in 'the WIN11-02 clear (made before the PC took its name) is a WARNING, not CRITICAL' \
+                   "the same clear under THIS computer's name stays CRITICAL" \
+                   "one clear under an old name and one under the current name: CRITICAL (a clear in this machine's own life)" \
+                   'a record naming the DNS host name of this same computer is CRITICAL (first label, any case)' \
+                   'an administrator who cannot read the Security log gets a raised gap, never "has not been cleared"' \
+                   'a standard-user token is a deferral, never a gap row and never an all-clear'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 14 ] || { echo "only $n case(s)"; exit 1; }
       - name: defender_exclusions_check -- every exclusion is WARNING and named; none is OK; unqueryable is SKIPPED, never OK
         run: |
           out=$(pwsh -NoProfile -File tools/defender_exclusions_check.ps1 -SelfTest); echo "$out"
