@@ -913,8 +913,10 @@ jobs:
             bare_lf < "$d/$f" || { echo "$f in git archive has a bare LF"; exit 1; }
           done
           for b in doze_sec.bat doze_sec_noAdmin.bat; do
-            first_goto=$(grep -n -iE '(^|[^a-z])(goto|call)[[:space:]]+:?[a-z_]' "$b" | grep -viE '^[0-9]+:[[:space:]]*(::|rem[[:space:]])' | head -1 | cut -d: -f1)
-            guard=$(grep -n -m1 -F 'IndexOf([char]10) -ge 0) { exit 9 }' "$b" | cut -d: -f1)
+            # awk, not grep | head: under pipefail head's early exit kills the
+            # grep with SIGPIPE and the step dies with no message.
+            first_goto=$(awk 'BEGIN{IGNORECASE=1} !/^[ \t]*(::|rem[ \t])/ && tolower($0) ~ /(^|[^a-z])(goto|call)[ \t]+:?[a-z_]/ {print NR; exit}' "$b")
+            guard=$(awk 'index($0, "IndexOf([char]10) -ge 0) { exit 9 }") {print NR; exit}' "$b")
             [ -n "$first_goto" ] || { echo "$b: no goto found -- the position check would test nothing"; exit 1; }
             [ -n "$guard" ] || { echo "$b: the LF guard is missing"; exit 1; }
             [ "$guard" -lt "$first_goto" ] || { echo "$b: the LF guard (line $guard) must come before the first goto/call (line $first_goto)"; exit 1; }
