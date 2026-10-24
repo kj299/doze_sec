@@ -517,6 +517,10 @@ jobs:
                    'a System log that cannot be read is a raised gap on a standard-user token too (users can read it)' \
                    'a cleared security-tool log is named by its channel' \
                    'under a de-DE culture the dates print as 2026-10-17 23:00:23' \
+                   "an intruder's clear, then an owner's rename and a feature update: still CRITICAL" \
+                   'the oldest install date is taken across the current OS and every Source OS key' \
+                   'the image-shaped clear on a PC renamed months after its install is CRITICAL, and says why' \
+                   'an Event 104 under another name made after the install date is not called image preparation' \
                    "the same clear under THIS computer's name stays CRITICAL" \
                    "one clear under an old name and one under the current name: CRITICAL (a clear in this machine's own life)" \
                    'a record naming the DNS host name of this same computer is CRITICAL (first label, any case)' \
@@ -524,7 +528,7 @@ jobs:
                    'a standard-user token is a deferral, never a gap row and never an all-clear'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 25 ] || { echo "only $n case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 31 ] || { echo "only $n case(s)"; exit 1; }
       - name: log_clear_check -- both bats raise a gap when the tool ran but wrote no verdict, and read both gap markers
         run: |
           for b in doze_sec.bat doze_sec_noAdmin.bat; do

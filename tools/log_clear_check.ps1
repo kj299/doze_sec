@@ -19,16 +19,23 @@
 #     first label of its DNS host name, case-insensitive) is CRITICAL, as
 #     before: the log was cleared during this machine's own life;
 #   * a 1102 written under ANOTHER name is image preparation only when it
-#     was ALSO made no later than 24 hours after Windows' install date here
-#     (Win32_OperatingSystem.InstallDate): an image is cleared before the
-#     clone's first boot sets that date. A name alone is not enough -- an owner
-#     who renames DESKTOP-XXXX months later moves the name, not the install
-#     date, so a real clear before that rename stays CRITICAL. Image
-#     preparation is a WARNING that names both names and the install date,
-#     asks whether the PC was ever called the old name while in use, and says
-#     what to do if the image is not one the reader built or trusts. Still a
-#     counted finding, never silenced. An unknown install date, an empty
-#     record name, or no name of our own keeps it CRITICAL.
+#     was ALSO made no later than 24 hours after the OLDEST install date this
+#     PC records, and the PC was not renamed more than 24 hours after that
+#     date. An image is cleared before the clone's first boot sets the install
+#     date, and the first-boot rename follows within minutes. A name alone is
+#     not enough -- an owner who renames DESKTOP-XXXX months later moves the
+#     name, not the history, so a real clear before that rename stays
+#     CRITICAL. And the CURRENT install date is not enough either: a feature
+#     update resets Win32_OperatingSystem.InstallDate to the upgrade's date
+#     while the Security log carries over, so every older clear would look
+#     "before the install". The date used is the oldest of that value and
+#     each HKLM\SYSTEM\Setup\Source OS (Updated on ...) InstallDate, which
+#     Windows writes for the OS an upgrade replaced. Image preparation is a
+#     WARNING that names both names and the install date, asks whether the
+#     PC was ever called the old name while in use, and says what to do if
+#     the image is not one the reader built or trusts. Still a counted
+#     finding, never silenced. An unknown install date, an empty record
+#     name, or no name of our own keeps it CRITICAL.
 #   * a Security log that cannot be read is a raised gap for an administrator
 #     and a DEFERRAL on a standard-user token (which can never read it) --
 #     never "has not been cleared". A System log that cannot be read is a
@@ -101,19 +108,31 @@ function Format-When {
     return ([datetime]$Time).ToString('yyyy-MM-dd HH:mm:ss', [Globalization.CultureInfo]::InvariantCulture)
 }
 
+function Get-OldestDate {
+    # PURE. The earliest of the dates given, ignoring nulls; $null when none.
+    param([object[]]$Dates = @())
+    $d = @($Dates | Where-Object { $null -ne $_ } | ForEach-Object { [datetime]$_ } | Sort-Object)
+    if ($d.Count -eq 0) { return $null }
+    return $d[0]
+}
+
+function ConvertFrom-UnixSeconds {
+    # PURE. A Source OS key's InstallDate is a DWORD of seconds since 1970 UTC.
+    param([double]$Seconds)
+    return ([DateTime]::SpecifyKind([datetime]'1970-01-01', [DateTimeKind]::Utc)).AddSeconds($Seconds).ToLocalTime()
+}
+
 # PURE. Records are plain objects: @{ Time; Machine; Account; Channel }.
 #   CurrentNames  this computer's names (NetBIOS, DNS host name)
-#   InstallDate   Win32_OperatingSystem.InstallDate, or $null when unknown
+#   InstallDate   the OLDEST install date this PC records (Get-OldestDate), or $null
 #   RenameTime    the newest System Event 6011 (computer renamed), or $null
 #   SecError      '' when the Security log was read, else why it could not be
 #   SysError      the same for the System log
 #   IsElevated    the token this ran under
 # A Security clear is image preparation ONLY when every record names another
-# computer AND it was made no later than 24 hours after Windows' install date
-# (an image is cleared before the clone's first boot sets that date). An owner
-# who renames DESKTOP-XXXX months later moves the name, not the install date,
-# so a real clear before that rename stays CRITICAL. Unknown or missing data
-# keeps CRITICAL.
+# computer AND it was made no later than 24 hours after the oldest install
+# date AND the PC was not renamed more than 24 hours after that date (see the
+# header). Unknown or missing data keeps CRITICAL.
 # Returns @{ Lines; SecSev; SysSev; SecGap; SysGap; Deferred; State }.
 function Get-LogClearVerdict {
     param($Sec1102 = @(), $Sys104 = @(), [string[]]$CurrentNames = @(), $InstallDate = $null, $RenameTime = $null, [string]$SecError = '', [string]$SysError = '', [bool]$IsElevated = $true)
@@ -126,6 +145,11 @@ function Get-LogClearVerdict {
     # A record is THIS computer's unless it names, clearly, another one: an
     # empty name, or no name of our own to compare with, keeps it ours.
     $isOwn = { param($m) (-not ([string]$m).Trim()) -or ($mine.Count -eq 0) -or $mine.ContainsKey((Get-HostLabel $m)) }
+    $limit = $null; if ($null -ne $InstallDate) { $limit = ([datetime]$InstallDate).AddHours(24) }
+    # A first-boot rename follows the install within minutes; one more than a
+    # day later is an owner's or an intruder's, not the shape this rule reads.
+    $lateRename = ($null -ne $RenameTime -and $null -ne $limit -and ([datetime]$RenameTime) -gt $limit)
+    $isLate = { param($r) ($null -eq $r.Time) -or ($null -eq $limit) -or (([datetime]$r.Time) -gt $limit) }
     if ($SecError) {
         if ($IsElevated) {
             $secGap = 'WARNING'; $secState = 'gap'
@@ -141,18 +165,18 @@ function Get-LogClearVerdict {
         } else {
             $own = @($sec | Where-Object { & $isOwn $_.Machine })
             $e = $sec[0]
-            $limit = $null; if ($null -ne $InstallDate) { $limit = ([datetime]$InstallDate).AddHours(24) }
-            $late = @($sec | Where-Object { $null -eq $_.Time -or $null -eq $limit -or ([datetime]$_.Time) -gt $limit })
-            if ($own.Count -gt 0 -or $late.Count -gt 0) {
+            $late = @($sec | Where-Object { & $isLate $_ })
+            if ($own.Count -gt 0 -or $late.Count -gt 0 -or $lateRename) {
                 if ($own.Count -gt 0) { $e = $own[0] }
                 $secSev = 'CRITICAL'; $secState = 'critical'
                 [void]$out.Add(('[CRITICAL] Security event log was CLEARED at ' + (Format-When $e.Time) + ' by ' + (ConvertTo-PrintableText $e.Account) + ' -- attacker erased evidence (T1070.001). Treat as active compromise.'))
                 if ($own.Count -eq 0) {
-                    # Recorded under another name, but not near this Windows'
-                    # install: a rename after the clear, not image preparation.
-                    $why = 'Windows'' install date could not be read'
-                    if ($null -ne $InstallDate) { $why = 'it was made after Windows was installed here (' + (Format-When $InstallDate) + ')' }
-                    [void]$out.Add(('[INFO] The clear record names ' + (ConvertTo-PrintableText $e.Machine) + ', not ' + (ConvertTo-PrintableText $cur) + ', but ' + $why + ', so it is not read as image preparation: the PC was renamed after the clear.'))
+                    # Recorded under another name, but not the image shape:
+                    # say which test it failed.
+                    if ($null -eq $InstallDate) { $why = 'Windows'' install date could not be read' }
+                    elseif ($late.Count -gt 0) { $e = $late[0]; $why = 'it was made more than 24 hours after Windows was installed here (' + (Format-When $InstallDate) + ')' }
+                    else { $why = 'the computer was renamed at ' + (Format-When $RenameTime) + ' (System Event 6011), more than 24 hours after Windows was installed here (' + (Format-When $InstallDate) + ') -- not a first-boot rename' }
+                    [void]$out.Add(('[INFO] The clear record names ' + (ConvertTo-PrintableText $e.Machine) + ', not ' + (ConvertTo-PrintableText $cur) + ', but ' + $why + ', so it is not read as image preparation.'))
                 }
                 if ($sec.Count -gt 1) { [void]$out.Add(('[INFO] ' + $sec.Count + ' Security-log clear record(s) found.')) }
             } else {
@@ -184,7 +208,12 @@ function Get-LogClearVerdict {
             $e = $sys[0]
             $sysSev = 'WARNING'; $sysState = 'cleared'
             $why = ''
-            if (-not (& $isOwn $e.Machine)) { $why = ' It was recorded under ' + (ConvertTo-PrintableText $e.Machine) + ', before this PC took its current name.' }
+            if (-not (& $isOwn $e.Machine)) {
+                # The same test as the Security clear: a name alone does not
+                # place a record before this PC's own life.
+                if (-not (& $isLate $e) -and -not $lateRename) { $why = ' It was recorded under ' + (ConvertTo-PrintableText $e.Machine) + ', before this PC took its current name and before Windows'' install date here.' }
+                else { $why = ' It was recorded under ' + (ConvertTo-PrintableText $e.Machine) + ', another name, but not in the shape of image preparation (made after Windows was installed here, renamed later, or no install date to compare): read it as this PC''s own history.' }
+            }
             $ch = ([string]$e.Channel).Trim()
             if (-not $ch -or $ch -eq 'System') {
                 [void]$out.Add(('[WARNING] System event log was cleared at ' + (Format-When $e.Time) + ' -- often benign (updates/driver installs/disk cleanup); the Security 1102 check above is the attacker cover-up signal.' + $why))
@@ -250,7 +279,7 @@ if ($SelfTest) {
     T '...and the newest Event 104 names its channel' ($v.SysSev -eq 'WARNING' -and $t -match '(?m)^\[WARNING\] Event log ''Setup'' was cleared at 2026-10-17 23:00:23 \(Event 104 in the System log\)') $t
     $v = Get-LogClearVerdict -Sec1102 $w1102 -Sys104 $w104 -CurrentNames @('WIN11-02') -InstallDate ([datetime]'2025-01-01')
     $t = $v.Lines -join "`n"
-    T 'the same clear on a PC installed long BEFORE it (a retail PC renamed later) is CRITICAL' ($v.SecSev -eq 'CRITICAL' -and $v.State -match '^sec=critical' -and $t -match '(?m)^\[INFO\] The clear record names WIN-EIH5CPD9P56, not WIN11-02, but it was made after Windows was installed here \(2025-01-01 00:00:00\)') $t
+    T 'the same clear on a PC installed long BEFORE it (a retail PC renamed later) is CRITICAL' ($v.SecSev -eq 'CRITICAL' -and $v.State -match '^sec=critical' -and $t -match '(?m)^\[INFO\] The clear record names WIN-EIH5CPD9P56, not WIN11-02, but it was made more than 24 hours after Windows was installed here \(2025-01-01 00:00:00\)') $t
     $v = Get-LogClearVerdict -Sec1102 $w1102 -CurrentNames @('WIN11-02') -InstallDate $null
     T 'an install date that could not be read keeps it CRITICAL, and says why' ($v.SecSev -eq 'CRITICAL' -and ($v.Lines -join "`n") -match 'install date could not be read') ($v.Lines -join ' | ')
     $v = Get-LogClearVerdict -Sec1102 @(Rec '2026-10-19T23:00:23' 'WIN-EIH5CPD9P56') -CurrentNames @('WIN11-02') -InstallDate $wInstall
@@ -279,8 +308,23 @@ if ($SelfTest) {
     T 'a System log that cannot be read is a raised gap on a standard-user token too (users can read it)' ($v.SysGap -eq 'WARNING' -and $v.SysSev -eq 'OK' -and $v.State -eq 'sec=deferred,sys=gap' -and ($v.Lines -join "`n") -match '(?m)^\[WARNING\] System-log clear check NOT performed' -and ($v.Lines -join "`n") -notmatch 'No event log has been cleared') ($v.Lines -join ' | ')
     $v = Get-LogClearVerdict -Sec1102 @(Rec '2026-10-17T23:00:23' ('EVIL' + [char]10 + '[OK] fine')) -CurrentNames @('WIN11-02') -InstallDate $wInstall
     T 'a control character in a recorded computer name cannot start a report line' (@($v.Lines | Where-Object { $_ -match '^\[OK\] fine' }).Count -eq 0) ($v.Lines -join ' | ')
-    $v = Get-LogClearVerdict -Sys104 @(Rec '2026-10-17T23:00:23' 'WIN-EIH5CPD9P56' 'x' 'System') -CurrentNames @('WIN11-02')
-    T 'a System-log clear stays a WARNING, and says when it predates the current name' ($v.SysSev -eq 'WARNING' -and ($v.Lines -join "`n") -match '(?m)^\[WARNING\] System event log was cleared at 2026-10-17 23:00:23 .* recorded under WIN-EIH5CPD9P56, before this PC took its current name') ($v.Lines -join ' | ')
+    $v = Get-LogClearVerdict -Sys104 @(Rec '2026-10-17T23:00:23' 'WIN-EIH5CPD9P56' 'x' 'System') -CurrentNames @('WIN11-02') -InstallDate $wInstall
+    T 'a System-log clear stays a WARNING, and says when it predates the current name' ($v.SysSev -eq 'WARNING' -and ($v.Lines -join "`n") -match '(?m)^\[WARNING\] System event log was cleared at 2026-10-17 23:00:23 .* recorded under WIN-EIH5CPD9P56, before this PC took its current name and before Windows'' install date here\.') ($v.Lines -join ' | ')
+    $v = Get-LogClearVerdict -Sys104 @(Rec '2026-10-17T23:00:23' 'WIN-EIH5CPD9P56' 'x' 'Microsoft-Windows-Sysmon/Operational') -CurrentNames @('WIN11-02') -InstallDate ([datetime]'2025-01-01')
+    T 'an Event 104 under another name made after the install date is not called image preparation' ($v.SysSev -eq 'WARNING' -and ($v.Lines -join "`n") -notmatch 'before this PC took its current name' -and ($v.Lines -join "`n") -match 'read it as this PC''s own history') ($v.Lines -join ' | ')
+    # A feature update resets the CIM install date and keeps the Security log:
+    # the oldest recorded install date decides. DESKTOP-AB12CD was installed
+    # in January, cleared by an intruder in March, renamed MYPC by its owner
+    # in June, and upgraded in October.
+    $oldest = Get-OldestDate @([datetime]'2026-10-08T03:00:00', $null, [datetime]'2026-01-10T12:00:00')
+    T 'the oldest install date is taken across the current OS and every Source OS key' ($null -ne $oldest -and $oldest -eq [datetime]'2026-01-10T12:00:00') ([string]$oldest)
+    $v = Get-LogClearVerdict -Sec1102 @(Rec '2026-03-14T02:10:00' 'DESKTOP-AB12CD' 'DESKTOP-AB12CD\owner') -CurrentNames @('MYPC') -InstallDate $oldest
+    T 'an intruder''s clear, then an owner''s rename and a feature update: still CRITICAL' ($v.SecSev -eq 'CRITICAL' -and $v.State -match '^sec=critical') ($v.Lines -join ' | ')
+    T 'Get-OldestDate of nothing is unknown, never a date' ($null -eq (Get-OldestDate @($null))) ''
+    $u = (ConvertFrom-UnixSeconds 1729000000).ToUniversalTime()
+    T 'a Source OS InstallDate DWORD converts from Unix seconds (UTC)' ($u.ToString('yyyy-MM-dd HH:mm:ss', [Globalization.CultureInfo]::InvariantCulture) -eq '2024-10-15 13:46:40') ([string]$u)
+    $v = Get-LogClearVerdict -Sec1102 $w1102 -Sys104 $w104 -CurrentNames @('WIN11-02') -InstallDate $wInstall -RenameTime ([datetime]'2027-01-05T10:00:00')
+    T 'the image-shaped clear on a PC renamed months after its install is CRITICAL, and says why' ($v.SecSev -eq 'CRITICAL' -and ($v.Lines -join "`n") -match 'the computer was renamed at 2027-01-05 10:00:00 \(System Event 6011\), more than 24 hours after') ($v.Lines -join ' | ')
     $v = Get-LogClearVerdict -Sys104 @(Rec '2026-10-20T10:00:00' 'WIN11-02' 'x' 'Microsoft-Windows-Sysmon/Operational') -CurrentNames @('WIN11-02')
     T 'a cleared security-tool log is named by its channel' ($v.SysSev -eq 'WARNING' -and $v.State -eq 'sec=none,sys=cleared' -and ($v.Lines -join "`n") -match '(?m)^\[WARNING\] Event log ''Microsoft-Windows-Sysmon/Operational'' was cleared at 2026-10-20 10:00:00') ($v.Lines -join ' | ')
     # Dates are the same text on every culture (de-DE printed 10.17.2026).
@@ -302,14 +346,30 @@ if ($Elevated -lt 0) {
 }
 $names = @($env:COMPUTERNAME)
 try { $names += [System.Net.Dns]::GetHostName() } catch {}
+# The OLDEST install date: a feature update resets the CIM value, and each
+# Source OS key records the install date of the OS an upgrade replaced.
 # Unknown stays $null: the verdict then keeps any clear CRITICAL.
-$install = $null
-try { $install = (Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop).InstallDate } catch {}
+$dates = @()
+try { $dates += (Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop).InstallDate } catch {}
+try {
+    foreach ($k in @(Get-ChildItem -LiteralPath 'HKLM:\SYSTEM\Setup' -ErrorAction Stop | Where-Object { $_.PSChildName -like 'Source OS*' })) {
+        $d = (Get-ItemProperty -LiteralPath $k.PSPath -Name InstallDate -ErrorAction SilentlyContinue).InstallDate
+        if ($d) { $dates += (ConvertFrom-UnixSeconds ([double]$d)) }
+    }
+} catch {}
+$install = Get-OldestDate $dates
 $rename = $null
 try { $rename = (Get-WinEvent -FilterHashtable @{ LogName = 'System'; Id = 6011 } -MaxEvents 1 -ErrorAction Stop).TimeCreated } catch {}
 $s = Read-ClearRecords -Log 'Security' -Id 1102
 $y = Read-ClearRecords -Log 'System' -Id 104
-$v = Get-LogClearVerdict -Sec1102 $s.Records -Sys104 $y.Records -CurrentNames $names -InstallDate $install -RenameTime $rename -SecError $s.Error -SysError $y.Error -IsElevated ($Elevated -eq 1)
+$v = $null
+try { $v = Get-LogClearVerdict -Sec1102 $s.Records -Sys104 $y.Records -CurrentNames $names -InstallDate $install -RenameTime $rename -SecError $s.Error -SysError $y.Error -IsElevated ($Elevated -eq 1) } catch { $v = $null }
+if ($null -eq $v -or [string]$v.State -notmatch '^sec=(critical|prep|none|gap|deferred),sys=(cleared|none|gap)$') {
+    # No verdict is never a verdict: write no state, and the bat raises the
+    # gap for a tool that ran without one.
+    'log_clear_check: the grading step failed; no verdict was written.'
+    exit 1
+}
 foreach ($l in $v.Lines) { $l }
 Write-Marker -Name 'logclear' -Sev $v.SecSev
 Write-Marker -Name 'logclear104' -Sev $v.SysSev

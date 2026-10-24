@@ -2251,7 +2251,7 @@ jobs:
           $st = (.\tools\log_clear_check.ps1 -SelfTest) -join "`n"
           if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'log_clear_check.ps1 -SelfTest failed' }
           $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($nst -lt 25) { throw "log_clear_check self-test ran only $nst case(s)" }
+          if ($nst -lt 31) { throw "log_clear_check self-test ran only $nst case(s)" }
           Write-Host "log_clear_check -SelfTest OK ($nst cases)"
           # Live, read-only: the runner's own logs, graded by the same rule. A
           # runner image is itself a prepared image, so an 1102/104 written
@@ -5874,7 +5874,7 @@ jobs:
       # SHIPPED fragment extracted from doze_sec.bat -- not a copy that can
       # drift. Runs after the main harness because direction (b) clears this
       # ephemeral runner's System log.
-      - name: "Event 104 provider filter: benign 104 stays quiet, a real clear fires"
+      - name: "Event 104 provider filter: benign 104 stays quiet, a real clear fires; a real Security-log clear is CRITICAL"
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -5923,8 +5923,26 @@ jobs:
           if ($out2 -match 'System event log was cleared at [^\r\n]*before this PC took its current name') { throw 'a clear made under this runner''s own name was called image preparation' }
           if (-not (Test-Path (Join-Path $md 'dz_logclear104.txt'))) { throw 'cleared-log WARNING wrote no marker -- the finding would never reach the ledger' }
           if ((Get-Content (Join-Path $md 'dz_logclear_state.txt')) -notmatch 'sys=cleared') { throw 'the state line does not say the System log was cleared' }
+
+          # (c) PINNED, not branched on: clear this ephemeral runner's SECURITY
+          # log (the last step of this job; nothing after it reads that log).
+          # The 1102 is written under the runner's own name, after its install
+          # date, so the verdict must be CRITICAL -- whatever the image held
+          # before. A run that reads it as image preparation is the false
+          # reassurance this rule exists to avoid.
+          # Touches: eventlog:System, eventlog:Security (both cleared; CI runner only).
+          Remove-Item (Join-Path $md 'dz_logclear*.txt') -Force -EA SilentlyContinue
+          wevtutil cl Security
+          Start-Sleep -Seconds 3
+          $out3 = (& .\tools\log_clear_check.ps1 -MarkerDir $md) -join "`n"
+          Write-Host $out3
+          if ($out3 -match 'Exception|is not recognized|CategoryInfo') { throw "PowerShell error text in the output: $out3" }
+          if ($out3 -notmatch '(?m)^\[CRITICAL\] Security event log was CLEARED at ') { throw 'a Security log cleared under the runner''s own name was NOT graded CRITICAL' }
+          if ($out3 -match 'before this PC took its current name') { throw 'a Security log cleared under the runner''s own name was called image preparation' }
+          if ((Get-Content (Join-Path $md 'dz_logclear.txt') -EA SilentlyContinue) -ne 'CRITICAL') { throw 'the CRITICAL clear wrote no CRITICAL marker -- it would never reach the ledger' }
+          if ((Get-Content (Join-Path $md 'dz_logclear_state.txt')) -notmatch '^sec=critical,') { throw 'the state line does not say sec=critical' }
           Remove-Item $md -Recurse -Force -EA SilentlyContinue
-          Write-Host 'ev104: benign-source discrimination PASS; genuine-clear detection PASS; a clear under the runner''s own name is not called image preparation'
+          Write-Host 'ev104: benign-source discrimination PASS; genuine-clear detection PASS; a clear under the runner''s own name is not called image preparation; a real Security-log clear is CRITICAL'
 
       - name: Upload the selftest audit artifacts
         if: always()

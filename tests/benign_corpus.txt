@@ -470,7 +470,7 @@ note      = cloudbase-init, the Windows port of cloud-init used by OpenStack and
 class     = ADVISE
 maxsev    = WARNING
 proof     = field:a KVM/QEMU VM with the QEMU guest agent and cloudbase-init (WIN11-02, 2026-10-24); a runner is not a KVM guest
-signature = ^(QEMU-GA|cloudbase-init)\s+(Running|Stopped)\s+\S+\s+unsigned\s
+signature = ^(QEMU-GA\s+(Running|Stopped)\s+\S+\s+unsigned\s+C:\\Program Files\\Qemu-ga\\qemu-ga\.exe|cloudbase-init\s+(Running|Stopped)\s+\S+\s+unsigned\s+C:\\Program Files\\Cloudbase Solutions\\Cloudbase-Init\\bin\\OpenStackService\.exe)\s*$
 note      = The QEMU guest agent (QEMU-GA, C:\Program Files\Qemu-ga\qemu-ga.exe) and cloudbase-init's OpenStackService.exe ship without an Authenticode signature, so on a KVM guest built from a cloud template they fail the service signature gate. The finding is correct -- an unsigned service is worth knowing about -- and on such a VM these two are expected. Verify the binaries' paths and hashes against the virtio-win / cloudbase-init release you installed; any other unsigned service in the list is still a finding.
 
 [module-not-visible-system-path]

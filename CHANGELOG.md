@@ -24,9 +24,17 @@ enough, though: an owner who renames DESKTOP-XXXX months after buying it
 moves the name, not the history, and a real clear made before that rename
 would have read as image preparation (found by the review, before the push).
 So a clear is graded as image preparation only when every record names
-another computer AND it was made no later than 24 hours after Windows'
-install date here (an image is cleared before the clone's first boot sets
-that date). It is then a WARNING that names both names and the install date,
+another computer AND it was made no later than 24 hours after the OLDEST
+install date the PC records AND the PC was not renamed more than 24 hours
+after that date (an image is cleared before the clone's first boot sets the
+install date, and the first-boot rename follows within minutes). The second
+review found why "oldest" matters: a feature update resets
+`Win32_OperatingSystem.InstallDate` while the Security log carries over, so
+with the current date an owner's rename plus a routine upgrade would have
+turned an intruder's earlier clear into image preparation. The tool now takes
+the oldest of that value and each `Source OS (Updated on ...)` key's
+InstallDate, and a real Security-log clear on the CI runner is pinned
+CRITICAL. It is then a WARNING that names both names and the install date,
 asks whether the PC was ever called the old name while in use (if so: a
 compromise), and says to treat it as one if the reader did not build the
 image or get it from a trusted source -- still counted, never silenced. An

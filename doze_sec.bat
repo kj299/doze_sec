@@ -5469,7 +5469,7 @@ echo. >> "%PSRUN%"
 
 :: ===== ACTIVE COMPROMISE =============================================
 echo sec 'ACTIVE COMPROMISE INDICATORS' >> "%PSRUN%"
-echo $lc='%LOGCLEAR_STATE%';if($lc -match 'sec=critical'){ck 'CRIT' 'Security event log was CLEARED (Section 16)' 'Cleared under this PC''s own name -- attacker erased evidence. Treat as active compromise.'}elseif($lc -match 'sec=prep'){ck 'WARN' 'Security event log was cleared before this PC took its current name (Section 16)' 'Section 16 names both computer names: the shape of a Windows image being prepared. If you did not build this image or get it from a source you trust, treat it as a compromise.'}elseif($lc -match 'sec=none'){ck 'PASS' 'Security event log has not been cleared (Section 16)'}elseif($lc -match 'sec=deferred'){ck 'INFO' 'Security event log clears: NOT graded -- deferred, needs admin (Section 16)'}else{ck 'INFO' 'Security event log clears: NOT graded -- Section 16 could not read the Security log'} >> "%PSRUN%"
+echo $lc='%LOGCLEAR_STATE%';if($lc -match 'sec=critical'){ck 'CRIT' 'Security event log was CLEARED (Section 16)' 'Cleared during this PC''s own life -- Section 16 says how that was decided. Attacker erased evidence: treat as active compromise.'}elseif($lc -match 'sec=prep'){ck 'WARN' 'Security event log was cleared before this PC took its current name (Section 16)' 'Section 16 names both computer names: the shape of a Windows image being prepared. If you did not build this image or get it from a source you trust, treat it as a compromise.'}elseif($lc -match 'sec=none'){ck 'PASS' 'Security event log has not been cleared (Section 16)'}elseif($lc -match 'sec=deferred'){ck 'INFO' 'Security event log clears: NOT graded -- deferred, needs admin (Section 16)'}else{ck 'INFO' 'Security event log clears: NOT graded -- Section 16 could not read the Security log'} >> "%PSRUN%"
 echo if($lc -match 'sys=cleared'){ck 'WARN' 'An event log was cleared - Event 104 (Section 16)' 'Section 16 names which log. A routine System-log clear is often benign: updates, driver installs, disk cleanup. A cleared Sysmon or PowerShell log is not. The Security log 1102 is graded separately above.'}elseif($lc -match 'sys=none'){ck 'PASS' 'No event log has been cleared - Event 104 (Section 16)'}else{ck 'INFO' 'Event 104 log clears: NOT graded -- Section 16 could not read the System log'} >> "%PSRUN%"
 echo $ev=Get-WinEvent -FilterHashtable @{LogName='Security';Id=4720} -MaxEvents 5 -EA SilentlyContinue;if($ev){ck 'WARN' "New local accounts created: $(@($ev).Count) events" 'Review account names in Section 16'}else{ck 'PASS' 'No new local account creation events - 4720'} >> "%PSRUN%"
 echo $ev=Get-WinEvent -FilterHashtable @{LogName='Security';Id=4732} -MaxEvents 5 -EA SilentlyContinue;if($ev){ck 'WARN' "Users added to Administrators: $(@($ev).Count) events" 'Review account names in Section 16'}else{ck 'PASS' 'No unexpected additions to Administrators group - 4732'} >> "%PSRUN%"
@@ -6118,13 +6118,19 @@ if exist "%TEMP%\dz_logclear104_gap.txt" (
     del "%TEMP%\dz_logclear104_gap.txt" 2>nul
 )
 del "%TEMP%\dz_logclear_deferred.txt" 2>nul
-if exist "%TEMP%\dz_logclear_state.txt" (
-    set /p LOGCLEAR_STATE=<"%TEMP%\dz_logclear_state.txt"
-    del "%TEMP%\dz_logclear_state.txt" 2>nul
-) else if exist "%SCRIPT_DIR%tools\log_clear_check.ps1" (
-    rem The tool ran but wrote no verdict: refused, killed or crashed. A
-    rem missing verdict is a raised gap, never the ungraded tile alone.
-    echo [WARNING] Event-log clear check produced no verdict -- NOT performed: tools\log_clear_check.ps1 ran but wrote no state file.>> "%REPORT%"
+set "_LCST="
+set "_LCOK="
+if exist "%TEMP%\dz_logclear_state.txt" set /p _LCST=<"%TEMP%\dz_logclear_state.txt"
+del "%TEMP%\dz_logclear_state.txt" 2>nul
+if defined _LCST if "!_LCST:~0,4!"=="sec=" (
+    set "LOGCLEAR_STATE=!_LCST!"
+    set "_LCOK=1"
+)
+if not defined _LCOK if exist "%SCRIPT_DIR%tools\log_clear_check.ps1" (
+    rem The tool ran but wrote no verdict, or an empty or unrecognised one:
+    rem refused, killed or crashed. No verdict is a raised gap, never the
+    rem ungraded tile alone.
+    echo [WARNING] Event-log clear check produced no verdict -- NOT performed: tools\log_clear_check.ps1 ran but wrote no usable verdict.>> "%REPORT%"
     call :dz_finding WARNING 16 T1070.001 "Event-log clear check produced no verdict - NOT performed"
 )
 goto :eof
