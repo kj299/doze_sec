@@ -3615,7 +3615,6 @@ if exist "%TEMP%\dz_lsadump_deferred.txt" (
 :: boot event first, the registry second) and read by module_inspect there;
 :: this is its last consumer, so the state file is deleted here.
 set "PPL_STATE=ungraded"
-set "LOGCLEAR_STATE=sec=ungraded,sys=ungraded"
 set "LSA_LINE="
 if exist "%TEMP%\dz_lsa_state.txt" set /p LSA_LINE=<"%TEMP%\dz_lsa_state.txt"
 if defined LSA_LINE for /f "tokens=1 delims=|" %%a in ("%LSA_LINE%") do set "PPL_STATE=%%a"
@@ -4130,7 +4129,8 @@ echo  THREAT: Log wiping, brute force, privilege escalation (T1070.001)>> "%REPO
 echo  MDDR 2023: 1102 = logs cleared (attacker cover-up). Russian actors>> "%REPORT%"
 echo       password-sprayed at scale (Event 4625 spikes). DPRK/Iran>> "%REPORT%"
 echo       cleared logs after destructive operations.>> "%REPORT%"
-echo  IF EVENT 1102 EXISTS AND YOU DID NOT CLEAR IT = ACTIVE BREACH>> "%REPORT%"
+echo  IF EVENT 1102 EXISTS AND YOU DID NOT CLEAR IT = ACTIVE BREACH, unless>> "%REPORT%"
+echo       the check below grades it as made while a Windows image was prepared.>> "%REPORT%"
 echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
@@ -4198,6 +4198,7 @@ del "%TEMP%\dz_ev4732_hit.txt" 2>nul
 del "%TEMP%\dz_logclear.txt" 2>nul
 del "%TEMP%\dz_logclear104.txt" 2>nul
 del "%TEMP%\dz_logclear_gap.txt" 2>nul
+del "%TEMP%\dz_logclear104_gap.txt" 2>nul
 del "%TEMP%\dz_logclear_deferred.txt" 2>nul
 del "%TEMP%\dz_logclear_state.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\log_clear_check.ps1" (
@@ -5468,8 +5469,8 @@ echo. >> "%PSRUN%"
 
 :: ===== ACTIVE COMPROMISE =============================================
 echo sec 'ACTIVE COMPROMISE INDICATORS' >> "%PSRUN%"
-echo $lc='%LOGCLEAR_STATE%';if($lc -match 'sec=critical'){ck 'CRIT' 'Security event log was CLEARED (Section 16)' 'Cleared under this PC''s own name -- attacker erased evidence. Treat as active compromise.'}elseif($lc -match 'sec=prep'){ck 'WARN' 'Security event log was cleared before this PC took its current name (Section 16)' 'Section 16 names both computer names: the shape of a Windows image being prepared. If you did not build this image or get it from a source you trust, treat it as a compromise.'}elseif($lc -match 'sec=none'){ck 'PASS' 'Security event log has not been cleared (Section 16)'}else{ck 'INFO' 'Security event log clears: NOT graded -- Section 16 could not read the Security log'} >> "%PSRUN%"
-echo if($lc -match 'sys=cleared'){ck 'WARN' 'System event log was cleared (Section 16)' 'Often benign: Windows updates, driver installs and disk cleanup clear the System log. The Security log 1102 is the attacker cover-up target and is graded separately above.'}elseif($lc -match 'sys=none'){ck 'PASS' 'System event log has not been cleared (Section 16)'}else{ck 'INFO' 'System event log clears: NOT graded -- Section 16 could not read the System log'} >> "%PSRUN%"
+echo $lc='%LOGCLEAR_STATE%';if($lc -match 'sec=critical'){ck 'CRIT' 'Security event log was CLEARED (Section 16)' 'Cleared under this PC''s own name -- attacker erased evidence. Treat as active compromise.'}elseif($lc -match 'sec=prep'){ck 'WARN' 'Security event log was cleared before this PC took its current name (Section 16)' 'Section 16 names both computer names: the shape of a Windows image being prepared. If you did not build this image or get it from a source you trust, treat it as a compromise.'}elseif($lc -match 'sec=none'){ck 'PASS' 'Security event log has not been cleared (Section 16)'}elseif($lc -match 'sec=deferred'){ck 'INFO' 'Security event log clears: NOT graded -- deferred, needs admin (Section 16)'}else{ck 'INFO' 'Security event log clears: NOT graded -- Section 16 could not read the Security log'} >> "%PSRUN%"
+echo if($lc -match 'sys=cleared'){ck 'WARN' 'An event log was cleared - Event 104 (Section 16)' 'Section 16 names which log. A routine System-log clear is often benign: updates, driver installs, disk cleanup. A cleared Sysmon or PowerShell log is not. The Security log 1102 is graded separately above.'}elseif($lc -match 'sys=none'){ck 'PASS' 'No event log has been cleared - Event 104 (Section 16)'}else{ck 'INFO' 'Event 104 log clears: NOT graded -- Section 16 could not read the System log'} >> "%PSRUN%"
 echo $ev=Get-WinEvent -FilterHashtable @{LogName='Security';Id=4720} -MaxEvents 5 -EA SilentlyContinue;if($ev){ck 'WARN' "New local accounts created: $(@($ev).Count) events" 'Review account names in Section 16'}else{ck 'PASS' 'No new local account creation events - 4720'} >> "%PSRUN%"
 echo $ev=Get-WinEvent -FilterHashtable @{LogName='Security';Id=4732} -MaxEvents 5 -EA SilentlyContinue;if($ev){ck 'WARN' "Users added to Administrators: $(@($ev).Count) events" 'Review account names in Section 16'}else{ck 'PASS' 'No unexpected additions to Administrators group - 4732'} >> "%PSRUN%"
 echo $pp=(netsh interface portproxy show all 2^>$null)^|Out-String;if($pp -match '\d+\.\d+'){ck 'CRIT' 'netsh portproxy tunnel rules are ACTIVE' 'Volt Typhoon C2 IOC. Remove: netsh interface portproxy reset. See Section 17.'}else{ck 'PASS' 'No netsh portproxy tunnel rules - Volt Typhoon check'} >> "%PSRUN%"
@@ -6100,19 +6101,32 @@ if exist "%TEMP%\dz_logclear.txt" (
     del "%TEMP%\dz_logclear.txt" 2>nul
 )
 if exist "%TEMP%\dz_logclear104.txt" (
-    call :dz_finding WARNING 16 T1070.001 "System event log was cleared"
+    call :dz_finding WARNING 16 T1070.001 "Event log cleared (Event 104)"
     del "%TEMP%\dz_logclear104.txt" 2>nul
 )
 if exist "%TEMP%\dz_logclear_gap.txt" (
-    rem A gap is its own row: a log could not be read.
+    rem A gap is its own row, one per log that could not be read.
     set "_GAPSEV="
     set /p _GAPSEV=<"%TEMP%\dz_logclear_gap.txt"
-    call :dz_finding !_GAPSEV! 16 T1070.001 "Event-log clear check NOT performed - the Security or System log could not be read"
+    if defined _GAPSEV call :dz_finding !_GAPSEV! 16 T1070.001 "Security-log clear check NOT performed - the Security log could not be read"
     del "%TEMP%\dz_logclear_gap.txt" 2>nul
 )
+if exist "%TEMP%\dz_logclear104_gap.txt" (
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_logclear104_gap.txt"
+    if defined _GAPSEV call :dz_finding !_GAPSEV! 16 T1070.001 "System-log clear check NOT performed - the System log could not be read"
+    del "%TEMP%\dz_logclear104_gap.txt" 2>nul
+)
 del "%TEMP%\dz_logclear_deferred.txt" 2>nul
-if exist "%TEMP%\dz_logclear_state.txt" set /p LOGCLEAR_STATE=<"%TEMP%\dz_logclear_state.txt"
-del "%TEMP%\dz_logclear_state.txt" 2>nul
+if exist "%TEMP%\dz_logclear_state.txt" (
+    set /p LOGCLEAR_STATE=<"%TEMP%\dz_logclear_state.txt"
+    del "%TEMP%\dz_logclear_state.txt" 2>nul
+) else if exist "%SCRIPT_DIR%tools\log_clear_check.ps1" (
+    rem The tool ran but wrote no verdict: refused, killed or crashed. A
+    rem missing verdict is a raised gap, never the ungraded tile alone.
+    echo [WARNING] Event-log clear check produced no verdict -- NOT performed: tools\log_clear_check.ps1 ran but wrote no state file.>> "%REPORT%"
+    call :dz_finding WARNING 16 T1070.001 "Event-log clear check produced no verdict - NOT performed"
+)
 goto :eof
 
 :dz_finding

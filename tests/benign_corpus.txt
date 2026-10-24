@@ -456,7 +456,7 @@ note      = CONFIRMED on the owner's machine 2026-09-05: CodexSandboxOffline and
 class     = ADVISE
 maxsev    = WARNING
 proof     = ci:log_clear_check.ps1 -SelfTest + live; field:the owner's own cloud VM template WIN11-02 (2026-10-24): an 1102 and three 104 records written by the built-in Administrator under Setup's name WIN-EIH5CPD9P56, before cloudbase-init renamed the machine -- a prepared image cannot be built on a runner, so the judgement is pinned in the pure function with those records verbatim
-signature = Security event log was cleared at .* before this PC took its current name
+signature = (Security event log|System event log|Event log '[^']+') was cleared at .* before this PC took its current name
 note      = A Windows image is often prepared by clearing every event log just before it is captured, and the machine then takes its real name on first boot (cloudbase-init, sysprep, a provider's template). The clear record keeps the name the computer had when it was written, so a record naming another computer predates this PC's current identity. The tool reads it as a WARNING with both names, not the CRITICAL a clear under this PC's own name gets. Verify: Get-WinEvent -FilterHashtable @{LogName='Security';Id=1102} | Format-List TimeCreated,MachineName,Message -- if you did not build this image or get it from a source you trust, treat it as a compromise: everything before the clear is gone.
 
 [cloud-init-hidden-account]
@@ -470,7 +470,7 @@ note      = cloudbase-init, the Windows port of cloud-init used by OpenStack and
 class     = ADVISE
 maxsev    = WARNING
 proof     = field:a KVM/QEMU VM with the QEMU guest agent and cloudbase-init (WIN11-02, 2026-10-24); a runner is not a KVM guest
-signature = service\(s\) failed Authenticode gating
+signature = ^(QEMU-GA|cloudbase-init)\s+(Running|Stopped)\s+\S+\s+unsigned\s
 note      = The QEMU guest agent (QEMU-GA, C:\Program Files\Qemu-ga\qemu-ga.exe) and cloudbase-init's OpenStackService.exe ship without an Authenticode signature, so on a KVM guest built from a cloud template they fail the service signature gate. The finding is correct -- an unsigned service is worth knowing about -- and on such a VM these two are expected. Verify the binaries' paths and hashes against the virtio-win / cloudbase-init release you installed; any other unsigned service in the list is still a finding.
 
 [module-not-visible-system-path]

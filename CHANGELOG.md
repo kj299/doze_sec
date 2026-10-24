@@ -19,16 +19,36 @@ covering tracks does not rename the computer afterwards.
 
 `tools/log_clear_check.ps1` now grades both events and reads the name of the
 computer each record was written under. A clear under this PC's own name
-(NetBIOS or DNS host name, any case) stays CRITICAL. When every clear record
-names another computer, it is a WARNING that names both and says to treat it
-as a compromise if the reader did not build the image or get it from a trusted
-source -- still counted, never silenced. Found while reading: the dashboard
-tile re-read the Security log itself, and on the standard-user path, where
-Section 16 skips the Security log, its failed read printed PASS "Security
-event log has not been cleared" having checked nothing. The tiles now read
-the section's state (a standard user sees NOT graded), the standard-user path
-runs the check too (the System log is readable there), and an unreadable log
-is a gap or a deferral.
+(NetBIOS or DNS host name, any case) stays CRITICAL. A name alone is not
+enough, though: an owner who renames DESKTOP-XXXX months after buying it
+moves the name, not the history, and a real clear made before that rename
+would have read as image preparation (found by the review, before the push).
+So a clear is graded as image preparation only when every record names
+another computer AND it was made no later than 24 hours after Windows'
+install date here (an image is cleared before the clone's first boot sets
+that date). It is then a WARNING that names both names and the install date,
+asks whether the PC was ever called the old name while in use (if so: a
+compromise), and says to treat it as one if the reader did not build the
+image or get it from a trusted source -- still counted, never silenced. An
+unreadable install date, a record with no computer name, or no name of our
+own to compare keeps it CRITICAL. Every Event 104 now names the log it
+cleared, since a cleared Sysmon or PowerShell log is not the routine
+System-log clear, and the ledger row reads "Event log cleared (Event 104)".
+Dates print as `yyyy-MM-dd HH:mm:ss` whatever the culture (the first draft
+printed `10.17.2026` on de-DE).
+
+Found while reading: the dashboard tile re-read the Security log itself with
+`-EA SilentlyContinue`, so an elevated run whose read failed printed PASS
+"Security event log has not been cleared" having checked nothing. (The first
+draft of this entry said a standard user saw that PASS; it did not -- on
+`doze_sec_noAdmin.bat` the tiles sat inside the dashboard's admin gate.) The
+tiles now read the section's state, outside that gate, so a standard user
+sees NOT graded (deferred) for the Security log and a real verdict for Event
+104; the standard-user path runs the check too (the System log is readable
+there). An unreadable Security log is a raised gap for an administrator and a
+deferral for a standard user; an unreadable System log is a raised gap on
+either token; and a tool that ran but wrote no verdict is a raised gap, not
+an ungraded tile.
 
 Misses first, against the predictions written before the results: exit 8 and
 10 rows, not 0-2 and 3-6 (the image-prep clear, and the cloud image's own

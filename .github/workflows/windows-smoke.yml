@@ -2251,7 +2251,7 @@ jobs:
           $st = (.\tools\log_clear_check.ps1 -SelfTest) -join "`n"
           if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'log_clear_check.ps1 -SelfTest failed' }
           $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($nst -lt 14) { throw "log_clear_check self-test ran only $nst case(s)" }
+          if ($nst -lt 25) { throw "log_clear_check self-test ran only $nst case(s)" }
           Write-Host "log_clear_check -SelfTest OK ($nst cases)"
           # Live, read-only: the runner's own logs, graded by the same rule. A
           # runner image is itself a prepared image, so an 1102/104 written
@@ -2262,10 +2262,13 @@ jobs:
           $out = (.\tools\log_clear_check.ps1 -MarkerDir $md) -join "`n"
           Write-Host $out
           if ($out -match 'Exception|is not recognized|CategoryInfo') { throw "PowerShell error text in the output: $out" }
-          if (Test-Path (Join-Path $md 'dz_logclear_gap.txt')) { throw "an administrator could not read the runner's Security or System log: $out" }
+          foreach ($g in 'dz_logclear_gap.txt', 'dz_logclear104_gap.txt') {
+            if (Test-Path (Join-Path $md $g)) { throw "an administrator could not read the runner's Security or System log ($g): $out" }
+          }
           $state = (Get-Content (Join-Path $md 'dz_logclear_state.txt') -Raw).Trim()
           if ($state -notmatch '^sec=(critical|prep|none),sys=(cleared|none)$') { throw "unexpected state line: $state" }
           Write-Host ("MEASURED: the runner's log-clear state is {0}" -f $state)
+          Write-Host ("MEASURED: the runner's Windows install date is {0}" -f (Get-CimInstance Win32_OperatingSystem).InstallDate.ToString('yyyy-MM-dd HH:mm:ss'))
           Remove-Item $md -Recurse -Force -EA SilentlyContinue
           exit 0
 
