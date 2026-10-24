@@ -659,6 +659,12 @@ offline mode, and a research pass (wf_a41f91ca-3fd) sized it.
   the RootkitRevealer principle.
 - Estimate: 3,000-5,000 new lines plus changes across about 21 tools, over
   several PRs.
+- 2026-10-24: the owner asked for "a usb stick or a bootable iso image" and
+  chose a READ-ONLY ISO now (`make_usb_stick.ps1 -Iso`, done) and the bootable
+  one later, with this mode. A bootable image needs WinPE with its PowerShell
+  components (the Windows ADK on the laptop that builds it) and is only useful
+  once the audit can read the PC's own disk. When it is built, the BitLocker
+  recovery-key warning comes first, in the imperative, before anything boots.
 
 ## exec_probe: partial Mark of the Web (found 2026-10-09, DONE 2026-10-10)
 

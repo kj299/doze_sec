@@ -19,6 +19,15 @@
 #                        file at the stick's root that could run.
 #   -ToFolder D:\x       the same copy into a plain folder (CI, or a copy you
 #                        will carry some other way). Verify works the same.
+#   -Iso D:\x\doze_sec.iso
+#                        the same copy, as a READ-ONLY ISO image (built with
+#                        Windows' own IMAPI2; nothing to install). Carry the
+#                        .iso on any stick; on the PC, right-click it > Mount
+#                        (read-only) and run the audit from there. A CD file
+#                        system cannot be written, so the visited machine
+#                        cannot rewrite the tool while it runs, and the image's
+#                        one SHA-256 says whether it came back unchanged:
+#                        -Iso <file> -Verify. Never bootable (see below).
 #   -ListCandidates      read-only: every lettered volume and whether this
 #                        script would accept it.
 #   -Refresh             with -Drive/-ToFolder: replace an earlier copy. It
@@ -43,7 +52,10 @@
 #   drive) has no PowerShell, so the audit could not start there anyway. And
 #   booting other media can make a BitLocker PC demand its 48-digit recovery
 #   key at the next start -- without it, every file on that PC is out of reach.
-#   See README.md.
+#   The same holds for -Iso: the image has no boot record, and the make run
+#   reads its own output and fails if one is there. A bootable image belongs
+#   with an offline audit mode (reading the PC's registry hives and event logs
+#   from its disk), which does not exist yet. See README.md.
 #
 # WHAT GOES ON THE STICK
 #   Everything the audit needs, and nothing that changes a machine. Left off,
@@ -79,6 +91,7 @@
 param(
     [string]$Drive = '',
     [string]$ToFolder = '',
+    [string]$Iso = '',
     [switch]$Verify,
     [switch]$Refresh,
     [switch]$ListCandidates,
@@ -550,7 +563,7 @@ function Invoke-StickCopy {
 }
 
 function New-ManifestText {
-    param([System.Collections.IDictionary]$Entries, [string]$TargetId, [string]$SourcePath, [string]$Created, [System.Collections.IDictionary]$Root)
+    param([System.Collections.IDictionary]$Entries, [string]$TargetId, [string]$SourcePath, [string]$Created, [System.Collections.IDictionary]$Root, [string]$IsoHash = '')
     $lines = New-Object System.Collections.Generic.List[string]
     $lines.Add('# doze_sec stick manifest -- SHA-256 of every file this script put on the stick')
     $lines.Add('# made-by: ' + $script:Version)
@@ -559,6 +572,7 @@ function New-ManifestText {
     $lines.Add('# source: ' + $SourcePath)
     $lines.Add('# files: ' + $Entries.Count)
     $lines.Add('# root-scan: v1')
+    if ($IsoHash) { $lines.Add('# iso-sha256: ' + $IsoHash) }
     if ($Root) { foreach ($k in $Root.Keys) { $lines.Add('# root: ' + $Root[$k] + ' ' + $k) } }
     foreach ($k in $Entries.Keys) { $lines.Add($Entries[$k] + '  ' + $k) }
     return ($lines -join "`r`n") + "`r`n"
@@ -572,7 +586,7 @@ function Read-Manifest {
     $root = @{}
     foreach ($ln in [IO.File]::ReadAllLines($Path)) {
         if ($ln -match '^#\s*root:\s*(\S+)\s+(.+)$') { $root[$matches[2]] = $matches[1]; continue }
-        if ($ln -match '^#\s*([a-z-]+):\s*(.*)$') { $hdr[$matches[1]] = $matches[2].Trim(); continue }
+        if ($ln -match '^#\s*([a-z0-9-]+):\s*(.*)$') { $hdr[$matches[1]] = $matches[2].Trim(); continue }
         if ($ln -match '^#' -or -not $ln.Trim()) { continue }
         if ($ln -match '^([0-9a-f]{64})  (.+)$') { $ent[$matches[2]] = $matches[1]; continue }
         throw ('unreadable manifest line in ' + $Path + ': ' + $ln)
@@ -797,6 +811,141 @@ function Resolve-TrustedManifest {
     return @{ Path = $null; Manifest = $null; How = ''; Candidates = $cands.ToArray() }
 }
 
+# --- the ISO image (-Iso) -----------------------------------------------------
+
+function Test-IsoBootRecord {
+    # PURE. An ISO 9660 image's volume descriptors start at sector 16 (2048-byte
+    # sectors): a type byte, 'CD001', a version byte; type 255 ends the set.
+    # A type-0 descriptor is a boot record (El Torito) -- what makes an image
+    # bootable. Returns @{ Ok; Boot; Why }; Ok is false when the bytes are not
+    # a readable ISO 9660 image at all.
+    param([byte[]]$Bytes)
+    for ($sec = 16; $sec -lt 64; $sec++) {
+        $o = $sec * 2048
+        if ($o + 7 -gt $Bytes.Length) { return @{ Ok = $false; Boot = $false; Why = 'the image ends before its volume descriptor set does' } }
+        $id = [Text.Encoding]::ASCII.GetString($Bytes, $o + 1, 5)
+        if ($id -cne 'CD001') {
+            if ($sec -eq 16) { return @{ Ok = $false; Boot = $false; Why = 'no ISO 9660 volume descriptor at sector 16' } }
+            return @{ Ok = $false; Boot = $false; Why = ('sector ' + $sec + ' is not a volume descriptor and the set has not ended') }
+        }
+        if ($Bytes[$o] -eq 0) { return @{ Ok = $true; Boot = $true; Why = ('a boot record at sector ' + $sec) } }
+        if ($Bytes[$o] -eq 255) { return @{ Ok = $true; Boot = $false; Why = '' } }
+    }
+    return @{ Ok = $false; Boot = $false; Why = 'no volume descriptor set terminator in the first 64 sectors' }
+}
+
+function Resolve-IsoManifest {
+    # PURE. Which manifest kept on this laptop vouches for an image whose
+    # SHA-256 is <Hash>. The image is one file: it is either exactly what a
+    # manifest recorded (Verdict ok, wherever the file now is), or a file this
+    # laptop made at that path that has changed since (changed), or neither
+    # (unverified). Returns @{ Verdict; Path; Manifest }.
+    # <Manifests> is newest first (Get-StoreManifests). An image matching a
+    # manifest that a NEWER image for the same target has since replaced is
+    # 'older': a visited machine that kept an earlier image and put it back
+    # must not read OK.
+    param([object[]]$Manifests, [string]$TargetId, [string]$Hash)
+    for ($i = 0; $i -lt @($Manifests).Count; $i++) {
+        $e = $Manifests[$i]
+        if ($e.Manifest -and $e.Manifest.Header['iso-sha256'] -and $e.Manifest.Header['iso-sha256'] -ceq $Hash) {
+            $t = $e.Manifest.Header['target']
+            for ($j = 0; $j -lt $i; $j++) {
+                $n = $Manifests[$j]
+                if ($n.Manifest -and $n.Manifest.Header['iso-sha256'] -and $n.Manifest.Header['iso-sha256'] -cne $Hash -and $n.Manifest.Header['target'] -ceq $t) { return @{ Verdict = 'older'; Path = $e.Path; Manifest = $e.Manifest; Newer = $n.Manifest } }
+            }
+            return @{ Verdict = 'ok'; Path = $e.Path; Manifest = $e.Manifest }
+        }
+    }
+    foreach ($e in $Manifests) {
+        if ($e.Manifest -and $e.Manifest.Header['target'] -ceq $TargetId) { return @{ Verdict = 'changed'; Path = $e.Path; Manifest = $e.Manifest } }
+    }
+    return @{ Verdict = 'unverified'; Path = $null; Manifest = $null }
+}
+
+function New-IsoImage {
+    # Builds <IsoPath> (which must not exist) from the folder <Dir>, kept as
+    # its own top-level folder, with Windows' IMAPI2 file-system image (built
+    # in since Vista: nothing to install). ISO 9660 + Joliet + UDF, so long
+    # names survive. No boot image is ever set.
+    param([string]$Dir, [string]$IsoPath)
+    if (-not ('DzIsoStreamWriter' -as [type])) {
+        Add-Type -ErrorAction Stop -TypeDefinition @'
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
+public static class DzIsoStreamWriter {
+  public static long Write(object stream, string path, long limit) {
+    IStream s = (IStream)stream;
+    byte[] buf = new byte[1048576];
+    long total = 0;
+    IntPtr pRead = Marshal.AllocHGlobal(4);
+    try {
+      using (FileStream fs = new FileStream(path, FileMode.CreateNew, FileAccess.Write)) {
+        while (true) {
+          Marshal.WriteInt32(pRead, 0);
+          s.Read(buf, buf.Length, pRead);
+          int n = Marshal.ReadInt32(pRead);
+          if (n <= 0) break;
+          if (total + n > limit) throw new IOException("the image stream is longer than the image IMAPI2 described");
+          fs.Write(buf, 0, n);
+          total += n;
+        }
+      }
+    } finally { Marshal.FreeHGlobal(pRead); }
+    return total;
+  }
+}
+'@
+    }
+    # Returns @{ Bytes; Files } -- Files is how many files IMAPI2 put in the
+    # image, so the caller can compare it with what it staged.
+    $fsi = $null; $result = $null; $stream = $null
+    try {
+        $fsi = New-Object -ComObject IMAPI2FS.MsftFileSystemImage
+        $fsi.FileSystemsToCreate = 7
+        $fsi.VolumeName = 'DOZE_SEC'
+        $fsi.Root.AddTree($Dir, $true)
+        $files = [int]$fsi.FileCount
+        $result = $fsi.CreateResultImage()
+        $stream = $result.ImageStream
+        $limit = [long]$result.TotalBlocks * [long]$result.BlockSize
+        $bytes = [DzIsoStreamWriter]::Write($stream, $IsoPath, $limit)
+        return @{ Bytes = $bytes; Files = $files }
+    } finally {
+        # IMAPI2 holds the staged files open until its objects are released;
+        # the staging folder cannot be removed before that.
+        foreach ($o in @($stream, $result, $fsi)) { if ($null -ne $o) { try { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($o) } catch {} } }
+        [GC]::Collect(); [GC]::WaitForPendingFinalizers()
+    }
+}
+
+function Read-FileHead {
+    param([string]$Path, [int]$Count)
+    $fs = [IO.File]::OpenRead($Path)
+    try {
+        $buf = New-Object byte[] $Count
+        $got = 0
+        while ($got -lt $Count) { $n = $fs.Read($buf, $got, $Count - $got); if ($n -le 0) { break }; $got += $n }
+        if ($got -lt $Count) { $short = New-Object byte[] $got; [Array]::Copy($buf, $short, $got); return ,$short }
+        return ,$buf
+    } finally { $fs.Dispose() }
+}
+
+function Remove-StagingTree {
+    # The staging folder this script made in the temp folder: its files, then
+    # its folders deepest first. Never a recursive delete (it would follow a
+    # junction on 5.1), and a link found there is left alone and named.
+    param([string]$Dir)
+    if ((Get-EntryState $Dir) -ne 'dir') { return '' }
+    $t = Get-TreeEntries $Dir -Strict
+    if (@($t.Reparse).Count -gt 0) { return ('left ' + $Dir + ' in place: it holds a link (' + (@($t.Reparse) -join ', ') + ')') }
+    foreach ($f in $t.Files) { [IO.File]::Delete($f.FullName) }
+    foreach ($d in @($t.Dirs | Sort-Object { $_.FullName.Length } -Descending)) { [IO.Directory]::Delete($d.FullName) }
+    [IO.Directory]::Delete($Dir)
+    return ''
+}
+
 function Get-IdTag {
     param([string]$TargetId)
     return (Get-Sha256Hex ([Text.Encoding]::UTF8.GetBytes($TargetId))).Substring(0, 8)
@@ -1000,8 +1149,48 @@ if ($SelfTest) {
     $tok = $null; $err = $null
     $ast = [System.Management.Automation.Language.Parser]::ParseFile($PSCommandPath, [ref]$tok, [ref]$err)
     $cmds = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true) | ForEach-Object { $_.GetCommandName() } | Where-Object { $_ })
-    $bad = @($cmds | Where-Object { $_ -match '^(Format-Volume|Clear-Disk|Initialize-Disk|New-Partition|Set-Partition|Remove-Partition|Resize-Partition|diskpart(\.exe)?|bcdboot(\.exe)?|bcdedit(\.exe)?|format(\.com)?|Set-Disk)$' })
+    $bad = @($cmds | Where-Object { $_ -match '^(Format-Volume|Clear-Disk|Initialize-Disk|New-Partition|Set-Partition|Remove-Partition|Resize-Partition|diskpart(\.exe)?|bcdboot(\.exe)?|bcdedit(\.exe)?|format(\.com)?|Set-Disk|oscdimg(\.exe)?|MakeWinPEMedia(\.cmd)?|copype(\.cmd)?)$' })
     T 'the script calls no formatting, partitioning or boot command' ($bad.Count -eq 0) ($bad -join ', ')
+    # The ISO is never bootable: nothing in the script names a boot image or
+    # the IMAPI2 boot options (checked on the AST's member names and strings,
+    # outside comments). The words are built from pieces so this check does
+    # not find itself.
+    $bootWords = @(('Boot' + 'ImageOptions'), ('Boot' + 'Options'), ('etfs' + 'boot'), ('efi' + 'sys'), ('Boot' + 'Image'))
+    $bootRefs = @($ast.FindAll({ param($n) ($n -is [System.Management.Automation.Language.MemberExpressionAst]) -or ($n -is [System.Management.Automation.Language.StringConstantExpressionAst]) }, $true) | ForEach-Object { $_.Extent.Text } | Where-Object { $t = $_; @($bootWords | Where-Object { $t.IndexOf($_, [StringComparison]::OrdinalIgnoreCase) -ge 0 }).Count -gt 0 })
+    T 'the ISO code names no boot image and no IMAPI2 boot option' ($bootRefs.Count -eq 0) ($bootRefs -join ', ')
+
+    # --- the ISO image: boot record, manifest, verdicts (pure) ------------------
+    function New-IsoBytes { param([int[]]$Types)
+        $b = New-Object byte[] ((16 + $Types.Count + 1) * 2048)
+        $sig = [Text.Encoding]::ASCII.GetBytes('CD001')
+        for ($i = 0; $i -lt $Types.Count; $i++) { $o = (16 + $i) * 2048; $b[$o] = [byte]$Types[$i]; [Array]::Copy($sig, 0, $b, $o + 1, 5); $b[$o + 6] = 1 }
+        return ,$b
+    }
+    $bt = Test-IsoBootRecord (New-IsoBytes @(1, 2, 255))
+    T 'a plain ISO 9660 image (primary, Joliet, terminator) has no boot record' ($bt.Ok -and -not $bt.Boot) $bt.Why
+    $bt = Test-IsoBootRecord (New-IsoBytes @(1, 0, 255))
+    T 'an El Torito boot record (a type-0 descriptor) is found' ($bt.Ok -and $bt.Boot -and $bt.Why -match 'sector 17') $bt.Why
+    $bt = Test-IsoBootRecord (New-Object byte[] 40960)
+    T 'bytes that are not an ISO 9660 image are not read as a plain one' (-not $bt.Ok -and $bt.Why -match 'sector 16') $bt.Why
+    $bt = Test-IsoBootRecord ((New-IsoBytes @(1, 2))[0..(17 * 2048 + 100)])
+    T 'an image cut off before its terminator is not read as a plain one' (-not $bt.Ok) $bt.Why
+    function MM { param([string]$Target, [string]$H) @{ Path = ('C:\store\' + $Target + '.sha256'); Manifest = @{ Header = @{ target = $Target; 'iso-sha256' = $H; created = '2026-10-24T10:00:00' }; Entries = @{ 'a' = 'x' } } } }
+    $ms = @((MM 'iso=C:\x\a.iso' ('a' * 64)), (MM 'iso=C:\x\b.iso' ('b' * 64)))
+    $r = Resolve-IsoManifest -Manifests $ms -TargetId 'iso=E:\moved.iso' -Hash ('b' * 64)
+    T 'an image whose SHA-256 a laptop manifest recorded is OK, wherever it now is' ($r.Verdict -eq 'ok' -and $r.Path -like '*b.iso*') $r.Verdict
+    $r = Resolve-IsoManifest -Manifests $ms -TargetId 'iso=C:\x\a.iso' -Hash ('c' * 64)
+    T 'an image this laptop made at that path, with another SHA-256 now, is CHANGED' ($r.Verdict -eq 'changed' -and $r.Path -like '*a.iso*') $r.Verdict
+    $r = Resolve-IsoManifest -Manifests $ms -TargetId 'iso=C:\x\z.iso' -Hash ('c' * 64)
+    T 'an image no laptop manifest records is UNVERIFIED' ($r.Verdict -eq 'unverified') $r.Verdict
+    $r = Resolve-IsoManifest -Manifests @(@{ Path = 'p'; Manifest = @{ Header = @{ target = 'folder=C:\s' }; Entries = @{} } }) -TargetId 'iso=C:\x\a.iso' -Hash ''
+    T 'a stick manifest (no image hash) never vouches for an image, even with an empty hash' ($r.Verdict -eq 'unverified') $r.Verdict
+    # Newest first, as the store lists them: an image newer than the one being
+    # checked was made at the same path, so the old one is a rollback.
+    $ms2 = @((MM 'iso=C:\x\a.iso' ('n' * 64)), (MM 'iso=C:\x\a.iso' ('o' * 64)))
+    $r = Resolve-IsoManifest -Manifests $ms2 -TargetId 'iso=E:\copy.iso' -Hash ('o' * 64)
+    T 'an OLDER image this laptop made, put back after a newer one replaced it, is never OK' ($r.Verdict -eq 'older') $r.Verdict
+    $r = Resolve-IsoManifest -Manifests $ms2 -TargetId 'iso=E:\copy.iso' -Hash ('n' * 64)
+    T 'the newest image made at a path is OK' ($r.Verdict -eq 'ok') $r.Verdict
     $rm = @($cmds | Where-Object { $_ -eq 'Remove-Item' }).Count
     T 'only the self-test''s own temp cleanup uses Remove-Item' ($rm -eq 1) ("Remove-Item calls: " + $rm)
 
@@ -1226,6 +1415,35 @@ if ($SelfTest) {
             Write-Output '[SKIP] Mark of the Web and alternate data streams: NTFS streams exist only on Windows (windows-smoke runs these cases)'
         }
 
+        $mtxt = New-ManifestText -Entries ([ordered]@{ 'x.txt' = ('d' * 64) }) -TargetId 'iso=C:\a.iso' -SourcePath 'C:\s' -Created '2026-10-24T10:00:00' -Root ([ordered]@{}) -IsoHash ('e' * 64)
+        $mpath = Join-Path $tmp 'iso_manifest.sha256'
+        [IO.File]::WriteAllText($mpath, $mtxt)
+        $mr = Read-Manifest $mpath
+        T 'an image manifest records the image SHA-256 and reads back' ($mr.Header['iso-sha256'] -eq ('e' * 64) -and $mr.Entries['x.txt'] -eq ('d' * 64) -and $mr.Header['target'] -eq 'iso=C:\a.iso') ($mr.Header.Keys -join ',')
+        $st = Join-Path $tmp 'stage_rm'
+        New-Tree $st @('doze_sec\a.txt', 'doze_sec\sub\deep\b.txt')
+        $left = Remove-StagingTree $st
+        T 'the staging folder is removed file by file, folder by folder (no recursive delete)' ((-not $left) -and -not (Test-Path -LiteralPath $st)) $left
+        if ($script:OnWindows) {
+            $isrc = Join-Path $tmp 'iso_src\doze_sec'
+            New-Tree $isrc @('doze_sec.bat', 'tools\a_rather_long_file_name_that_iso9660_alone_could_not_hold_x.ps1', '.hidden_dot_name.txt')
+            $ipath = Join-Path $tmp 'self.iso'
+            $n = New-IsoImage -Dir $isrc -IsoPath $ipath
+            $bt = Test-IsoBootRecord (Read-FileHead $ipath 131072)
+            T 'IMAPI2 builds a real image here, with no boot record' ($n.Bytes -gt 0 -and $bt.Ok -and -not $bt.Boot) ($bt.Why + ' bytes=' + $n.Bytes)
+            T 'IMAPI2 reports every staged file in the image' ($n.Files -eq 3) ('files=' + $n.Files)
+            # Joliet and UDF store names as 16-bit characters at an odd or even
+            # byte offset depending on the record, and UDF can also use 8-bit
+            # CS0: look for each name in every encoding and both alignments.
+            $hb = Read-FileHead $ipath 1048576
+            $views = @([Text.Encoding]::ASCII.GetString($hb), [Text.Encoding]::BigEndianUnicode.GetString($hb), [Text.Encoding]::BigEndianUnicode.GetString($hb, 1, $hb.Length - 1), [Text.Encoding]::Unicode.GetString($hb), [Text.Encoding]::Unicode.GetString($hb, 1, $hb.Length - 1))
+            $miss = @('doze_sec', 'a_rather_long_file_name_that_iso9660_alone_could_not_hold_x.ps1', '.hidden_dot_name.txt' | Where-Object { $nm = $_; -not @($views | Where-Object { $_.IndexOf($nm, [StringComparison]::Ordinal) -ge 0 }).Count })
+            T 'the image keeps the doze_sec folder and its long and dot-prefixed names (Joliet/UDF)' ($miss.Count -eq 0) ('not found: ' + ($miss -join ', '))
+            [IO.File]::Delete($ipath)
+        } else {
+            Write-Output '[SKIP] IMAPI2 image build: Windows only (windows-smoke runs these cases)'
+        }
+
         # The real repo: the stick carries what the audit needs, no harness, not this script.
         $real = Join-Path $tmp 'real'
         $rres = Invoke-StickCopy -Source $Source -Dest $real
@@ -1238,13 +1456,18 @@ if ($SelfTest) {
         if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force -EA SilentlyContinue }
     }
     if ($fails -gt 0) { Write-Output "FAILED: $fails"; exit 1 }
-    Write-Output '[OK] make_usb_stick self-test: only a USB stick is accepted, nothing is formatted, the harness and this script stay off, and a returned stick is checked against the laptop copy of its manifest.'
+    Write-Output '[OK] make_usb_stick self-test: only a USB stick is accepted, nothing is formatted, the harness and this script stay off, and a returned stick is checked against the laptop copy of its manifest; an ISO image is never bootable and is checked by its one SHA-256.'
     exit 0
 }
 
 # ---------------------------------------------------------------------------
 # Live modes
 # ---------------------------------------------------------------------------
+
+if ($Iso -and ($Drive -or $ToFolder -or $ListCandidates -or $Manifest -or ($Verify -and $Refresh))) {
+    Write-Output '[FAIL] -Iso makes (-Refresh: replaces) or checks (-Verify) one image file; it cannot be combined with -Drive, -ToFolder, -ListCandidates, -Manifest, or -Verify with -Refresh.'
+    exit 1
+}
 
 if ($ListCandidates) {
     if (-not $script:OnWindows) { Write-Output '[FAIL] -ListCandidates needs Windows.'; exit 1 }
@@ -1261,8 +1484,141 @@ if ($ListCandidates) {
     exit 0
 }
 
+function Write-CopyNotes {
+    param($Res)
+    foreach ($x in $Res.Excluded) { Write-Output ('[INFO] Left off the stick: ' + $x) }
+    if ($Res.Normalized -gt 0) { Write-Output ('[INFO] ' + $Res.Normalized + ' text file(s) had LF line endings and were written with CRLF, as a Windows checkout has them (cmd.exe needs CRLF in a batch file, findstr in the lists).') }
+    if ($Res.Motw -gt 0) { Write-Output ('[INFO] ' + $Res.Motw + ' source file(s) carried Mark of the Web (downloaded). The stick holds file contents only, so the mark did not travel. The manifest records these bytes as copied: it proves later that the stick still holds them, not where the download came from.') }
+}
+
+if ($Iso) {
+    $isoFull = [IO.Path]::GetFullPath($Iso)
+    if (-not $isoFull.EndsWith('.iso', [StringComparison]::OrdinalIgnoreCase)) { Write-Output ('[FAIL] ' + $isoFull + ' -- the image file name must end in .iso.'); exit 1 }
+    $isoId = 'iso=' + $isoFull
+    $store = Get-ManifestStore
+    $isoState = Get-EntryState $isoFull
+    if ($Verify) {
+        if ($isoState -ne 'file') { Write-Output ('[FAIL] ' + $isoFull + ' is ' + $isoState + ', not an image file.'); exit 1 }
+        $h = Get-FileSha256 $isoFull
+        $r = Resolve-IsoManifest -Manifests (Get-StoreManifests $store) -TargetId $isoId -Hash $h
+        if ($r.Verdict -eq 'ok') {
+            Write-Output ('[OK] ' + $isoFull + ' is exactly the image this laptop made (' + $r.Manifest.Header['created'] + ', ' + $r.Manifest.Entries.Count + ' files; SHA-256 ' + $h + '). This check is only as trustworthy as this laptop.')
+            exit 0
+        }
+        if ($r.Verdict -eq 'changed') {
+            Write-Output ('[WARNING] ' + $isoFull + ' changed after this laptop made it: SHA-256 ' + $h + ', made as ' + $r.Manifest.Header['iso-sha256'] + ' (' + $r.Path + ').')
+            Write-Output '  Do not mount it again. Keep it exactly as it is -- it is evidence -- and make a new image for the next machine.'
+            exit 1
+        }
+        if ($r.Verdict -eq 'older') {
+            Write-Output ('[WARNING] ' + $isoFull + ' is an OLDER image this laptop made (' + $r.Manifest.Header['created'] + '); a newer one (' + $r.Newer.Header['created'] + ') replaced it.')
+            Write-Output '  An old image coming back is how a visited machine would roll the tool back. Do not mount it; keep it as it is and use the newest image.'
+            exit 1
+        }
+        Write-Output ('[UNVERIFIED] No manifest on this laptop (' + $store + ') records an image with SHA-256 ' + $h + '.')
+        Write-Output '  This laptop did not make it, or it changed after it was made (a copy on a stick that a visited machine rewrote reads'
+        Write-Output '  exactly like this). Do not mount it. Keep it as it is -- it may be evidence -- and make a new image from your checkout.'
+        exit 2
+    }
+    $srcFull = [IO.Path]::GetFullPath($Source)
+    if (Test-SelfOnTarget $isoFull $srcFull) { Write-Output ('[FAIL] ' + $isoFull + ' is inside the source tree ' + $srcFull + '; put the image somewhere else.'); exit 1 }
+    if ($isoState -ne 'missing') {
+        if (-not $Refresh) { Write-Output ('[FAIL] ' + $isoFull + ' already exists. Use -Refresh to replace it, or choose another name.'); exit 1 }
+        if ($isoState -ne 'file') { Write-Output ('[FAIL] ' + $isoFull + ' is ' + $isoState + ', not an image file; refused.'); exit 1 }
+    }
+    if (-not $script:OnWindows) { Write-Output '[FAIL] -Iso builds the image with Windows'' IMAPI2, so it needs Windows.'; exit 1 }
+    $prev = $null
+    if ($isoState -eq 'file') {
+        # -Refresh replaces only an image this laptop made and that is still
+        # exactly what it made: never someone's other .iso, never an image
+        # that changed (it is evidence), never an older one put back.
+        $prev = Resolve-IsoManifest -Manifests (Get-StoreManifests $store) -TargetId $isoId -Hash (Get-FileSha256 $isoFull)
+        if ($prev.Verdict -ne 'ok') {
+            if ($prev.Verdict -eq 'unverified') { Write-Output ('[FAIL] ' + $isoFull + ' is not an image this laptop made (no manifest records it); nothing was deleted. Choose another name.') }
+            else { Write-Output ('[FAIL] ' + $isoFull + ' is not what this laptop made there (' + $prev.Verdict + '); nothing was deleted. Keep it as it is -- it may be evidence -- and choose another name. -Verify says more.') }
+            exit 1
+        }
+    }
+    $stage = Join-Path ([IO.Path]::GetTempPath()) ('dz_iso_stage_' + $PID + '_' + (Get-Random))
+    $part = $isoFull + '.part'
+    $rc = 0
+    try {
+        $inner = Join-Path $stage $script:StickFolder
+        Write-Output ('Copying ' + $Source + ' -> ' + $inner + ' (staging for the image)')
+        $res = Invoke-StickCopy -Source $Source -Dest $inner
+        Write-CopyNotes $res
+        $created = Get-Date -Format 's'
+        $inText = New-ManifestText -Entries $res.Entries -TargetId $isoId -SourcePath $srcFull -Created $created -Root ([ordered]@{})
+        [IO.File]::WriteAllText((Join-Path $inner $script:StickManifestName), $inText)
+        if ((Get-EntryState $part) -eq 'file') { [IO.File]::Delete($part) }
+        [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($isoFull))
+        $built = New-IsoImage -Dir $inner -IsoPath $part
+        $written = $built.Bytes
+        $wantFiles = $res.Entries.Count + 1
+        # The image must not be bootable: read what was written, not what was asked for.
+        $bt = Test-IsoBootRecord (Read-FileHead $part 131072)
+        if ($built.Files -ne $wantFiles) {
+            [IO.File]::Delete($part)
+            Write-Output ('[FAIL] IMAPI2 put ' + $built.Files + ' file(s) in the image, not the ' + $wantFiles + ' staged; it was deleted.')
+            $rc = 1
+        } elseif (-not $bt.Ok -or $bt.Boot) {
+            [IO.File]::Delete($part)
+            $why = $bt.Why; if ($bt.Boot) { $why = 'it holds ' + $bt.Why }
+            Write-Output ('[FAIL] The image that was built is not a plain, non-bootable ISO 9660 image (' + $why + '); it was deleted.')
+            $rc = 1
+        } else {
+            # The manifest is written before the image takes its place, so an
+            # image at that path always has one; a failed swap removes it.
+            $h = Get-FileSha256 $part
+            $text = New-ManifestText -Entries $res.Entries -TargetId $isoId -SourcePath $srcFull -Created $created -Root ([ordered]@{}) -IsoHash $h
+            [void][IO.Directory]::CreateDirectory($store)
+            $earlier = @(Get-StoreManifests $store | Where-Object { $_.Manifest -and $_.Manifest.Header['iso-sha256'] -and $_.Manifest.Header['target'] -ceq $isoId })
+            $keep = Join-Path $store ('iso_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '_' + (Get-IdTag $isoId) + '.sha256')
+            [IO.File]::WriteAllText($keep, $text)
+            try {
+                if ($isoState -eq 'file') { [IO.File]::Delete($isoFull) }
+                [IO.File]::Move($part, $isoFull)
+            } catch { [IO.File]::Delete($keep); throw }
+            Write-Output ('[OK] ' + $res.Entries.Count + ' files staged and read back; image ' + $isoFull + ' written (' + $written + ' bytes, no boot record).')
+            Write-Output ('[OK] SHA-256 of the image: ' + $h)
+            Write-Output ('[OK] Manifest kept on this laptop: ' + $keep)
+            # Every earlier image made at this path stops vouching: an old one
+            # put back must never read OK (-Verify also calls it older).
+            foreach ($e in $earlier) {
+                $sup = Set-ManifestSuperseded $e.Path
+                Write-Output ('[INFO] The manifest of an earlier image made at this path no longer vouches for anything (kept as ' + $sup + ').')
+            }
+            $again = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + $PSCommandPath + '" -Iso "' + $isoFull + '" -Verify'
+            if ($ManifestStore) { $again += ' -ManifestStore "' + $ManifestStore + '"' }
+            Write-Output ''
+            Write-Output 'Next:'
+            Write-Output '  1. Copy the .iso to any stick (or burn it to a CD/DVD). Copying it from THIS laptop adds no Mark of the Web.'
+            Write-Output '     Do not carry an image you DOWNLOADED: Windows can pass a download''s mark to the files inside it when it is'
+            Write-Output '     mounted, and a work PC''s script policy can then refuse the audit''s helpers.'
+            Write-Output '  2. On the other machine, right-click the .iso and choose Mount (a double-click does the same unless another'
+            Write-Output '     program such as 7-Zip owns .iso files -- do not extract it). Windows mounts it read-only as a new drive (say X:). Follow'
+            Write-Output '     X:\doze_sec\docs\second-machine.md and run X:\doze_sec\tests\field_test.ps1 from it. The image cannot be written,'
+            Write-Output '     so nothing there can change the tool while it runs. Results go to that PC''s SecurityAudit folder as always;'
+            Write-Output '     bring them back on a stick, OUTSIDE the image. When done, right-click the drive and choose Eject.'
+            Write-Output '     The image is not bootable, on purpose: never start the PC from it or change its boot settings.'
+            Write-Output '     If that PC will not mount images (a work PC''s policy can block it), carry a stick made with -Drive instead.'
+            Write-Output '  3. When the image comes back, run this on THIS laptop before you mount it anywhere again:'
+            Write-Output ('       ' + $again)
+        }
+    } catch {
+        Write-Output ('[FAIL] ' + $_.Exception.Message)
+        if ((Get-EntryState $part) -eq 'file') { try { [IO.File]::Delete($part) } catch {} }
+        $rc = 1
+    } finally {
+        $left = ''
+        try { $left = Remove-StagingTree $stage } catch { $left = 'could not remove the staging folder ' + $stage + ' (' + $_.Exception.Message + ')' }
+        if ($left) { Write-Output ('[INFO] ' + $left + '. It is in the temp folder; delete it yourself.') }
+    }
+    exit $rc
+}
+
 if (($Drive -and $ToFolder) -or ((-not $Drive) -and (-not $ToFolder) -and (-not $script:OnWindows))) {
-    Write-Output 'Usage: make_usb_stick.ps1 [-Drive E:] [-Verify | -Refresh]   or   -ToFolder <dir> [-Verify | -Refresh]   or   -ListCandidates   or   -SelfTest'
+    Write-Output 'Usage: make_usb_stick.ps1 [-Drive E:] [-Verify | -Refresh]   or   -ToFolder <dir> [-Verify | -Refresh]   or   -Iso <file.iso> [-Verify | -Refresh]   or   -ListCandidates   or   -SelfTest'
     Write-Output '  With no -Drive it lists the drives, numbers the USB sticks it accepts, and asks which one.'
     exit 1
 }
@@ -1458,9 +1814,7 @@ foreach ($x in $scan.Other) { Write-Output ('[INFO] ' + $outer + $x + '\ is on t
 Write-Output ('Copying ' + $Source + ' -> ' + $dest)
 try { $res = Invoke-StickCopy -Source $Source -Dest $dest }
 catch { Write-Output ('[FAIL] ' + $_.Exception.Message); Write-Output ('  If ' + $dest + ' was partly written, delete it before trying again.'); exit 1 }
-foreach ($x in $res.Excluded) { Write-Output ('[INFO] Left off the stick: ' + $x) }
-if ($res.Normalized -gt 0) { Write-Output ('[INFO] ' + $res.Normalized + ' text file(s) had LF line endings and were written with CRLF, as a Windows checkout has them (cmd.exe needs CRLF in a batch file, findstr in the lists).') }
-if ($res.Motw -gt 0) { Write-Output ('[INFO] ' + $res.Motw + ' source file(s) carried Mark of the Web (downloaded). The stick holds file contents only, so the mark did not travel. The manifest records these bytes as copied: it proves later that the stick still holds them, not where the download came from.') }
+Write-CopyNotes $res
 $created = Get-Date -Format 's'
 $text = New-ManifestText -Entries $res.Entries -TargetId $targetId -SourcePath $srcRoot -Created $created -Root $scan.Watch
 [void][IO.Directory]::CreateDirectory($store)

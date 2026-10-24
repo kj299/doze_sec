@@ -611,7 +611,13 @@ reparse point (check the ROOT itself before Test-Path, which follows links),
 and `-Refresh` deletes only files the laptop manifest lists, and only when the
 copy is unchanged -- a returned stick can hold the owner's results or evidence. Booting is out on purpose: the audit checks the running
 Windows, so a booted stick would audit itself; Windows' own bootable stick has
-no PowerShell; and boot changes can push a BitLocker PC into recovery. And
+no PowerShell; and boot changes can push a BitLocker PC into recovery. The
+same script's `-Iso` mode builds a READ-ONLY image through the same copy rule
+(IMAPI2, built in) and is never bootable -- enforced by reading the volume
+descriptors of the image it wrote, not by trusting what it asked for; a
+bootable image waits for offline audit mode. Files on a mounted image carry
+ReadOnly, and `Copy-Item` copies it, so anything seeded from the tool folder
+must clear it (threat_list_seed does). And
 OneDrive Files On-Demand marks ordinary synced files as reparse points, so a
 walk that refuses "any reparse point" refuses the owner's checkout -- refuse
 LINKS (`LinkType` SymbolicLink/Junction) in the source, every reparse point on

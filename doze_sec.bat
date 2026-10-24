@@ -636,6 +636,7 @@ if exist "%SCRIPT_DIR%tools\threat_list_seed.ps1" (
 ) else (
     for %%f in (ioc_processes.txt ioc_named_pipes.txt ioc_services.txt ioc_registry.txt ioc_file_paths.txt ioc_scheduled_tasks.txt ioc_domains.txt ioc_hashes.txt ioc_lolbins.txt ttp_manifest.txt) do (
         if not exist "%OUTDIR%\ThreatLists\%%f" if exist "%SCRIPT_DIR%ThreatLists\%%f" copy /y "%SCRIPT_DIR%ThreatLists\%%f" "%OUTDIR%\ThreatLists\" >nul 2>&1
+        if exist "%OUTDIR%\ThreatLists\%%f" attrib -r "%OUTDIR%\ThreatLists\%%f" >nul 2>&1
     )
 )
 :: Compute today's date as locale-independent yyyyMMdd via PowerShell.
@@ -1026,6 +1027,7 @@ if exist "%SCRIPT_DIR%tools\threat_list_seed.ps1" (
 ) else (
     for %%f in (ioc_processes.txt ioc_named_pipes.txt ioc_services.txt ioc_registry.txt ioc_file_paths.txt ioc_scheduled_tasks.txt ioc_domains.txt ioc_hashes.txt ioc_lolbins.txt ttp_manifest.txt) do (
         if not exist "%OUTDIR%\ThreatLists\%%f" if exist "%SCRIPT_DIR%ThreatLists\%%f" copy /y "%SCRIPT_DIR%ThreatLists\%%f" "%OUTDIR%\ThreatLists\" >nul 2>&1
+        if exist "%OUTDIR%\ThreatLists\%%f" attrib -r "%OUTDIR%\ThreatLists\%%f" >nul 2>&1
     )
 )
 

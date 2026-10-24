@@ -576,7 +576,8 @@ jobs:
           for n in 'a runtime copy OLDER than the release, different content: Replace' \
                    'a runtime copy -updateTTP wrote AFTER the release (newer date, more rows): Keep' \
                    'same date, different content (a fork nobody chose): Replace' \
-                   'directory pass: the stale registry list is replaced'; do
+                   'directory pass: the stale registry list is replaced' \
+                   'directory pass: lists seeded or replaced from a read-only source (a mounted ISO) come out writable'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
           n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 14 ] || { echo "only $n case(s)"; exit 1; }
@@ -897,7 +898,21 @@ jobs:
       # only the manifest kept on the laptop. The NTFS stream cases run in
       # windows-smoke.
       - name: Run tools/make_usb_stick.ps1 -SelfTest
-        run: pwsh -NoProfile -File tools/make_usb_stick.ps1 -SelfTest
+        run: |
+          out=$(pwsh -NoProfile -File tools/make_usb_stick.ps1 -SelfTest); rc=$?; echo "$out"; [ $rc -eq 0 ] || exit 1
+          # -Iso: the image is never bootable and is checked by its one SHA-256.
+          for n in 'the ISO code names no boot image and no IMAPI2 boot option' \
+                   'an El Torito boot record (a type-0 descriptor) is found' \
+                   'a plain ISO 9660 image (primary, Joliet, terminator) has no boot record' \
+                   'bytes that are not an ISO 9660 image are not read as a plain one' \
+                   'an image this laptop made at that path, with another SHA-256 now, is CHANGED' \
+                   'an image no laptop manifest records is UNVERIFIED' \
+                   'a stick manifest (no image hash) never vouches for an image, even with an empty hash' \
+                   'the staging folder is removed file by file, folder by folder (no recursive delete)' \
+                   'an OLDER image this laptop made, put back after a newer one replaced it, is never OK'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 122 ] || { echo "only $n case(s)"; exit 1; }
       # A run that ends after INIT 8 created the RunOnce resume entry must
       # remove it. :end_script does; an early `goto :final_exit` skips that, so
       # each one needs its own delete. The VirusTotal self-check abort (exit 7)

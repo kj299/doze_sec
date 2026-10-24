@@ -315,6 +315,19 @@ RUNNING FROM A USB STICK
      a new volume ID (another USB port) AND a change: run it again with
      -Manifest "<the path it lists>" to see what changed.
 
+  OR A READ-ONLY ISO IMAGE: the same copy as an .iso file, built with
+  Windows' own IMAPI2 (nothing installed):
+
+       powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_usb_stick.ps1 -Iso C:\Users\<name>\doze_sec.iso
+
+     Carry the .iso on any stick. On the other PC right-click it > Mount
+     (do not extract it): it mounts READ-ONLY as a new drive (say X:); run
+     X:\doze_sec\tests\field_test.ps1 from it, then right-click the drive
+     and Eject. Nothing on that PC can change the tool while it runs. Back
+     home check it with -Iso <file> -Verify. Make it on your laptop: a
+     downloaded .iso can pass its Mark of the Web to the files inside it. If
+     the PC will not mount images, use a stick. It is NOT bootable, on purpose.
+
   WHY THE STICK IS NOT BOOTABLE: booting from it would start a different
   Windows, and the audit checks the Windows that is running -- it would
   describe the stick, not the PC. Windows' own bootable stick (a recovery
