@@ -1,0 +1,10 @@
+# The batch files and the threat lists are STORED with Windows line endings
+# (-text: git never converts them), so every route a person can take hands
+# them over byte for byte with CRLF -- a clone, GitHub's Download ZIP, and the
+# raw.githubusercontent.com link the self-update check prints. cmd.exe loses
+# goto labels in an LF-only batch file ("The system cannot find the batch
+# label specified"), and findstr's $ anchor needs the CR in the lists.
+# lint.yml fails on a bare LF in any of them.
+*.bat -text
+*.cmd -text
+ThreatLists/*.txt -text

@@ -1,4 +1,15 @@
 @echo off
+:: A copy of this file with Unix line endings (an older GitHub "Download ZIP",
+:: or one edited by hand) loses goto labels in cmd.exe -- the 2026-10-24
+:: second-machine run died at INIT 8 with "cannot find the batch label".
+:: So stop here, before the first goto, and say why. Nothing is written.
+set "DZ_SELF=%~f0"
+powershell -NoProfile -NonInteractive -Command "$t = [IO.File]::ReadAllText($env:DZ_SELF); if ($t.Replace([string][char]13 + [char]10, '').IndexOf([char]10) -ge 0) { exit 9 }" >nul 2>&1
+set "DZ_EOLRC=%errorlevel%"
+set "DZ_SELF="
+if "%DZ_EOLRC%"=="9" echo [FATAL] This copy of %~nx0 has Unix ^(LF-only^) line endings; cmd.exe cannot run it reliably -- it stops with "The system cannot find the batch label specified". Nothing was audited and nothing was changed. Get a fresh copy ^(the repository now stores Windows line endings^), or carry the tool on a stick made by tools\make_usb_stick.ps1.
+if "%DZ_EOLRC%"=="9" exit /b 1
+set "DZ_EOLRC="
 :: -------------------- Console-output capture (closes #92) --------------------
 :: Self-re-exec via PowerShell Tee-Object so the script's full stdout/stderr
 :: lands in C:\SecurityAudit\AuditConsole_<TS>.log alongside the report. When

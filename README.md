@@ -342,7 +342,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File $t
 ```
 
 The stick is the same either way: the script writes every text file with
-Windows line endings, which a download does not have.
+Windows line endings. The repository now stores the batch files and the
+threat lists that way (`.gitattributes`), so a downloaded ZIP or a raw
+download carries them too and the audit runs straight from an extracted ZIP on
+an unmanaged PC (on a managed one, use the stick: an extracted ZIP marks every
+file as downloaded). A copy from an older ZIP has Unix line endings, which
+cmd.exe cannot run reliably, and the bat stops at once and says so.
 
 Whichever way you pick the stick, the script:
 

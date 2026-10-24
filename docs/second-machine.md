@@ -77,7 +77,13 @@ Test-Path $t
 powershell -NoProfile -ExecutionPolicy Bypass -File $t
 ```
 
-`Test-Path` must print `True` first. The script writes every text file with
+`Test-Path` must print `True` first. (On a PC with no IT-set script policy,
+running `doze_sec.bat` or field_test straight from the extracted ZIP also works
+now: the repository stores the batch files with Windows line endings. On a
+managed PC use the stick: every file of an extracted ZIP carries the Mark of
+the Web, which a RemoteSigned policy refuses. An older ZIP has Unix line
+endings; the bat then stops at once with `[FATAL] ... LF-only line endings` --
+get a fresh copy.) The script writes every text file with
 Windows line endings, which a download lacks, so the stick is the same as one
 made from a checkout.
 

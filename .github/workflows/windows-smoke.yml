@@ -5133,8 +5133,9 @@ jobs:
           # extra run.
           #
           # And make that copy from the HARDER source, the one the GitHub
-          # "Download ZIP" route hands a person: every file LF-only (the repo
-          # has no .gitattributes; this runner's checkout is CRLF, so a stick
+          # "Download ZIP" route hands a person: every file LF-only except the
+          # bats and the threat lists, which the repo stores CRLF
+          # (.gitattributes -text; this runner's checkout is CRLF, so a stick
           # made from it never exercised the conversion), every file carrying
           # Mark of the Web (Explorer's Extract All copies the ZIP's onto each
           # file), inside a nested folder that is not named doze_sec. The stick
@@ -5145,14 +5146,42 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'git archive failed' }
           Expand-Archive -LiteralPath $zip -DestinationPath $zipRoot
           $src = Join-Path $zipRoot 'doze_sec-ci-branch'
-          foreach ($probe in 'doze_sec.bat', 'tests\field_test.ps1', 'ThreatLists\ttp_manifest.txt') {
+          foreach ($probe in 'tests\field_test.ps1', 'tools\exec_probe.ps1', 'README.md') {
             if ([Array]::IndexOf([IO.File]::ReadAllBytes((Join-Path $src $probe)), [byte]13) -ge 0) {
               throw ("{0} in the archive holds a CR -- the source is not LF-only, so this step would test nothing it means to" -f $probe)
             }
           }
+          # .gitattributes: the archive -- what GitHub's Download ZIP serves --
+          # carries the bats and the lists with CRLF, so a person running the
+          # bat straight from a downloaded ZIP gets one cmd.exe can run. The
+          # owner's 2026-10-24 second-machine run, from an LF-only ZIP, died at
+          # INIT 8 with "The system cannot find the batch label specified".
+          foreach ($probe in 'doze_sec.bat', 'doze_sec_noAdmin.bat', 'ThreatLists\ttp_manifest.txt') {
+            $pb = [IO.File]::ReadAllBytes((Join-Path $src $probe))
+            for ($i = 0; $i -lt $pb.Length; $i++) { if ($pb[$i] -eq 10 -and ($i -eq 0 -or $pb[$i - 1] -ne 13)) { throw ("{0} in the archive has a bare LF -- a downloaded ZIP would hand cmd.exe a file it cannot run" -f $probe) } }
+          }
+          # And an LF-only copy of either bat (an old ZIP) refuses at once,
+          # before any goto, with the reason -- and writes nothing.
+          $lfDir = Join-Path $env:RUNNER_TEMP 'dz_lf_bat'
+          New-Item -ItemType Directory -Path $lfDir -Force | Out-Null
+          $before = @(Get-ChildItem 'C:\SecurityAudit' -Filter 'SecurityReport_*' -EA SilentlyContinue).Count
+          foreach ($bn in 'doze_sec.bat', 'doze_sec_noAdmin.bat') {
+            $lfPath = Join-Path $lfDir $bn
+            [IO.File]::WriteAllText($lfPath, ([IO.File]::ReadAllText((Join-Path $PWD $bn)) -replace "`r`n", "`n"))
+            # Unquoted: cmd /c strips the outer quotes of a line that starts
+            # with one, and RUNNER_TEMP has no space.
+            if ($lfPath -match ' ') { throw "the LF-only test path holds a space: $lfPath" }
+            $lo = (& cmd.exe /d /c $lfPath -dev -readonly -noConsoleLog 2>&1 | ForEach-Object { "$_" }) -join "`n"
+            $lrc = $LASTEXITCODE
+            if ($lrc -ne 1 -or $lo -notmatch [regex]::Escape('[FATAL] This copy of ' + $bn + ' has Unix (LF-only) line endings')) { throw ("an LF-only {0} was not refused with the FATAL line (exit {1}): {2}" -f $bn, $lrc, $lo) }
+          }
+          $global:LASTEXITCODE = 0
+          if (@(Get-ChildItem 'C:\SecurityAudit' -Filter 'SecurityReport_*' -EA SilentlyContinue).Count -ne $before) { throw 'a refused LF-only bat still wrote a report' }
+          Remove-Item -LiteralPath $lfDir -Recurse -Force
+          Write-Host 'the archive bats and lists are CRLF; an LF-only copy of either bat is refused before it does anything'
           $srcFiles = @(Get-ChildItem -LiteralPath $src -Recurse -File)
           foreach ($f in $srcFiles) { Set-Content -LiteralPath $f.FullName -Stream 'Zone.Identifier' -Value "[ZoneTransfer]`r`nZoneId=3" }
-          Write-Host ("source: {0} file(s), LF-only, each marked with Mark of the Web" -f $srcFiles.Count)
+          Write-Host ("source: {0} file(s), LF-only but for the bats and lists, each marked with Mark of the Web" -f $srcFiles.Count)
           $stickRoot = Join-Path $env:RUNNER_TEMP 'dz_stick'
           $store = Join-Path $env:RUNNER_TEMP 'dz_stick_manifests'
           # Started the way a person starts it -- powershell -ExecutionPolicy
