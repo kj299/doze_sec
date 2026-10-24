@@ -5133,8 +5133,9 @@ jobs:
           # extra run.
           #
           # And make that copy from the HARDER source, the one the GitHub
-          # "Download ZIP" route hands a person: every file LF-only (the repo
-          # has no .gitattributes; this runner's checkout is CRLF, so a stick
+          # "Download ZIP" route hands a person: every file LF-only except the
+          # bats and the threat lists, which the repo stores CRLF
+          # (.gitattributes -text; this runner's checkout is CRLF, so a stick
           # made from it never exercised the conversion), every file carrying
           # Mark of the Web (Explorer's Extract All copies the ZIP's onto each
           # file), inside a nested folder that is not named doze_sec. The stick
@@ -5180,7 +5181,7 @@ jobs:
           Write-Host 'the archive bats and lists are CRLF; an LF-only copy of either bat is refused before it does anything'
           $srcFiles = @(Get-ChildItem -LiteralPath $src -Recurse -File)
           foreach ($f in $srcFiles) { Set-Content -LiteralPath $f.FullName -Stream 'Zone.Identifier' -Value "[ZoneTransfer]`r`nZoneId=3" }
-          Write-Host ("source: {0} file(s), LF-only, each marked with Mark of the Web" -f $srcFiles.Count)
+          Write-Host ("source: {0} file(s), LF-only but for the bats and lists, each marked with Mark of the Web" -f $srcFiles.Count)
           $stickRoot = Join-Path $env:RUNNER_TEMP 'dz_stick'
           $store = Join-Path $env:RUNNER_TEMP 'dz_stick_manifests'
           # Started the way a person starts it -- powershell -ExecutionPolicy

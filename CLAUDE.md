@@ -990,11 +990,13 @@ added, extend the helpers-ps51 job to execute it.
   system cannot find the batch label specified" for a label that exists: the
   repo had no `.gitattributes`, so the ZIP served LF-only bats, and cmd.exe's
   label search is unreliable on them. CI never saw it -- the stick script
-  converts line endings, and no job ran a bat from an archive. `.gitattributes`
-  now forces CRLF for `*.bat`, `*.cmd` and `ThreatLists/*.txt` (checkouts and
-  `git archive` alike), and both bats refuse an LF-only copy of themselves
-  before their first `goto`, writing nothing. lint.yml checks the archive and
-  the guard's position; the readonly job runs an LF-only copy of each bat.
+  converts line endings, and no job ran a bat from an archive. `*.bat`, `*.cmd`
+  and `ThreatLists/*.txt` are now STORED with CRLF (`.gitattributes` `-text`),
+  so a clone, the ZIP and the raw link the self-update check prints all carry
+  them -- converting only on checkout would still have served LF from the raw
+  link. Both bats refuse a copy with a bare LF before their first `goto`,
+  writing nothing. lint.yml fails on a bare LF in any stored or archived bat
+  or list and checks the guard's position; the readonly job runs an LF copy.
 - Inside blocks use delayed expansion (`!var!`); `%var%` expands at
   block-parse time (see comments near the `errorlevel` checks).
 - `endlocal` and `exit /b %EXIT_CODE%` must stay on one line so the value

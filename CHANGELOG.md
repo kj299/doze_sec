@@ -18,12 +18,15 @@ script converts line endings, and the readonly job asserted the archive's
 bat was LF-only only to prove that conversion. The path CI exercised was not
 the path a person takes.
 
-`.gitattributes` now writes the bats and the threat lists with CRLF in every
-checkout and in `git archive`, which is what the Download ZIP serves. Both
-bats check their own line endings before their first `goto` and, if LF-only,
-print `[FATAL] ... LF-only line endings ...`, name the fix and exit 1,
-having written nothing. CI asserts the archive's bats and lists are CRLF and
-that an LF-only copy of each bat is refused at once.
+The bats and the threat lists are now STORED with CRLF (`.gitattributes`
+`-text`), so every route hands them over that way byte for byte: a clone,
+the Download ZIP, and the raw.githubusercontent.com link the self-update check
+prints (a review before the push found that link would still have served an
+LF-only bat had the repo only converted on checkout). Both bats check their
+own line endings before their first `goto` and, on any bare LF, print
+`[FATAL] ... LF-only line endings ...`, name the fix and exit 1, having
+written nothing. CI fails on a bare LF in any stored or archived bat or list,
+and runs an LF-only copy of each bat to see it refused.
 
 ### The tool can travel as a read-only ISO image
 `tools/make_usb_stick.ps1 -Iso <file.iso>` builds the same copy the stick

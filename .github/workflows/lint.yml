@@ -897,25 +897,30 @@ jobs:
       # Windows drive; the copy leaves the plant harness off; -Verify trusts
       # only the manifest kept on the laptop. The NTFS stream cases run in
       # windows-smoke.
-      # A downloaded ZIP (git archive) must hand cmd.exe CRLF bats: an LF-only
-      # bat loses goto labels. .gitattributes carries the rule, and each bat
-      # refuses an LF-only copy of itself before its first goto.
-      - name: The bats reach a downloaded ZIP with CRLF, and refuse to run LF-only
+      # The bats and the lists are STORED with CRLF (.gitattributes -text), so
+      # a clone, the Download ZIP and the raw link the self-update check
+      # prints all hand cmd.exe CRLF: an LF-only bat loses goto labels. And
+      # each bat refuses a copy with a bare LF before its first goto.
+      - name: The bats and lists are stored CRLF, reach a ZIP that way, and refuse to run with a bare LF
         run: |
-          for r in '*.bat text eol=crlf' '*.cmd text eol=crlf' 'ThreatLists/*.txt text eol=crlf'; do
+          for r in '*.bat -text' '*.cmd -text' 'ThreatLists/*.txt -text'; do
             grep -qxF "$r" .gitattributes || { echo ".gitattributes lacks: $r"; exit 1; }
           done
+          bare_lf() { python3 -c "import sys;b=sys.stdin.buffer.read();sys.exit(1 if b.replace(b'\r\n',b'').find(b'\n')>=0 else 0)"; }
           d=$(mktemp -d); git -c core.autocrlf=false archive --format=tar HEAD | tar -x -C "$d"
-          for f in doze_sec.bat doze_sec_noAdmin.bat ThreatLists/ttp_manifest.txt; do
-            if python3 -c "import sys;b=open(sys.argv[1],'rb').read();sys.exit(0 if b.replace(b'\r\n',b'').find(b'\n')<0 else 1)" "$d/$f"; then :; else echo "$f in git archive has a bare LF"; exit 1; fi
+          for f in doze_sec.bat doze_sec_noAdmin.bat $(git ls-files 'ThreatLists/*.txt' '*.cmd'); do
+            git show "HEAD:$f" | bare_lf || { echo "$f is stored with a bare LF (a raw download would hand cmd.exe an LF line)"; exit 1; }
+            bare_lf < "$d/$f" || { echo "$f in git archive has a bare LF"; exit 1; }
           done
           for b in doze_sec.bat doze_sec_noAdmin.bat; do
-            first_goto=$(grep -n -m1 -iE '(^|[^a-z])(goto|call) +:' "$b" | cut -d: -f1)
-            guard=$(grep -n -m1 'IndexOf(\[char\]13) -lt 0) { exit 9 }' "$b" | cut -d: -f1)
-            [ -n "$guard" ] && [ "$guard" -lt "$first_goto" ] || { echo "$b: the LF-only guard (line $guard) must come before the first goto (line $first_goto)"; exit 1; }
-            grep -q 'if "%DZ_EOLRC%"=="9" exit /b 1' "$b" || { echo "$b: the guard does not stop on an LF-only copy"; exit 1; }
+            first_goto=$(grep -n -m1 -iE '(^|[^a-z])(goto|call)[[:space:]]+:?[a-z_]' "$b" | cut -d: -f1)
+            guard=$(grep -n -m1 -F 'IndexOf([char]10) -ge 0) { exit 9 }' "$b" | cut -d: -f1)
+            [ -n "$first_goto" ] || { echo "$b: no goto found -- the position check would test nothing"; exit 1; }
+            [ -n "$guard" ] || { echo "$b: the LF guard is missing"; exit 1; }
+            [ "$guard" -lt "$first_goto" ] || { echo "$b: the LF guard (line $guard) must come before the first goto/call (line $first_goto)"; exit 1; }
+            grep -q 'if "%DZ_EOLRC%"=="9" exit /b 1' "$b" || { echo "$b: the guard does not stop on an LF copy"; exit 1; }
           done
-          echo 'OK: the archive bats are CRLF and both bats refuse an LF-only copy before the first goto'
+          echo 'OK: bats and lists stored CRLF and archived CRLF; both bats refuse a bare-LF copy before the first goto'
       - name: Run tools/make_usb_stick.ps1 -SelfTest
         run: |
           out=$(pwsh -NoProfile -File tools/make_usb_stick.ps1 -SelfTest); rc=$?; echo "$out"; [ $rc -eq 0 ] || exit 1
