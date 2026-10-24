@@ -1,4 +1,15 @@
 @echo off
+:: An LF-only copy of this file (a GitHub "Download ZIP" made before the repo
+:: carried .gitattributes) loses goto labels in cmd.exe -- the 2026-10-24
+:: second-machine run died at INIT 8 with "cannot find the batch label".
+:: So stop here, before the first goto, and say why. Nothing is written.
+set "DZ_SELF=%~f0"
+powershell -NoProfile -NonInteractive -Command "if ([IO.File]::ReadAllText($env:DZ_SELF).IndexOf([char]13) -lt 0) { exit 9 }" >nul 2>&1
+set "DZ_EOLRC=%errorlevel%"
+set "DZ_SELF="
+if "%DZ_EOLRC%"=="9" echo [FATAL] This copy of %~nx0 has Unix ^(LF-only^) line endings; cmd.exe cannot run it reliably -- it stops with "The system cannot find the batch label specified". Nothing was audited and nothing was changed. Download the ZIP again ^(it now has Windows line endings^), or carry the tool on a stick made by tools\make_usb_stick.ps1.
+if "%DZ_EOLRC%"=="9" exit /b 1
+set "DZ_EOLRC="
 :: -------------------- Console-output capture (closes #92) --------------------
 :: Self-re-exec via PowerShell Tee-Object so the script's full stdout/stderr
 :: lands in C:\SecurityAudit\AuditConsole_<TS>.log alongside the report. When

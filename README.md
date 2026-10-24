@@ -342,7 +342,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File $t
 ```
 
 The stick is the same either way: the script writes every text file with
-Windows line endings, which a download does not have.
+Windows line endings. A downloaded ZIP now carries them for the batch files
+and the threat lists too (`.gitattributes`), so the audit also runs straight
+from an extracted ZIP; a copy from an older ZIP has Unix line endings, which
+cmd.exe cannot run reliably, and the bat stops at once and says so.
 
 Whichever way you pick the stick, the script:
 

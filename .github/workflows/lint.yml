@@ -897,6 +897,25 @@ jobs:
       # Windows drive; the copy leaves the plant harness off; -Verify trusts
       # only the manifest kept on the laptop. The NTFS stream cases run in
       # windows-smoke.
+      # A downloaded ZIP (git archive) must hand cmd.exe CRLF bats: an LF-only
+      # bat loses goto labels. .gitattributes carries the rule, and each bat
+      # refuses an LF-only copy of itself before its first goto.
+      - name: The bats reach a downloaded ZIP with CRLF, and refuse to run LF-only
+        run: |
+          for r in '*.bat text eol=crlf' '*.cmd text eol=crlf' 'ThreatLists/*.txt text eol=crlf'; do
+            grep -qxF "$r" .gitattributes || { echo ".gitattributes lacks: $r"; exit 1; }
+          done
+          d=$(mktemp -d); git -c core.autocrlf=false archive --format=tar HEAD | tar -x -C "$d"
+          for f in doze_sec.bat doze_sec_noAdmin.bat ThreatLists/ttp_manifest.txt; do
+            if python3 -c "import sys;b=open(sys.argv[1],'rb').read();sys.exit(0 if b.replace(b'\r\n',b'').find(b'\n')<0 else 1)" "$d/$f"; then :; else echo "$f in git archive has a bare LF"; exit 1; fi
+          done
+          for b in doze_sec.bat doze_sec_noAdmin.bat; do
+            first_goto=$(grep -n -m1 -iE '(^|[^a-z])(goto|call) +:' "$b" | cut -d: -f1)
+            guard=$(grep -n -m1 'IndexOf(\[char\]13) -lt 0) { exit 9 }' "$b" | cut -d: -f1)
+            [ -n "$guard" ] && [ "$guard" -lt "$first_goto" ] || { echo "$b: the LF-only guard (line $guard) must come before the first goto (line $first_goto)"; exit 1; }
+            grep -q 'if "%DZ_EOLRC%"=="9" exit /b 1' "$b" || { echo "$b: the guard does not stop on an LF-only copy"; exit 1; }
+          done
+          echo 'OK: the archive bats are CRLF and both bats refuse an LF-only copy before the first goto'
       - name: Run tools/make_usb_stick.ps1 -SelfTest
         run: |
           out=$(pwsh -NoProfile -File tools/make_usb_stick.ps1 -SelfTest); rc=$?; echo "$out"; [ $rc -eq 0 ] || exit 1

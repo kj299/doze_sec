@@ -77,7 +77,11 @@ Test-Path $t
 powershell -NoProfile -ExecutionPolicy Bypass -File $t
 ```
 
-`Test-Path` must print `True` first. The script writes every text file with
+`Test-Path` must print `True` first. (Running `doze_sec.bat` or field_test
+straight from the extracted ZIP also works now: the ZIP carries the batch files
+with Windows line endings. A copy from a ZIP downloaded before 2026-10-24 has
+Unix ones; the bat stops at once with `[FATAL] ... LF-only line endings` --
+download it again.) The script writes every text file with
 Windows line endings, which a download lacks, so the stick is the same as one
 made from a checkout.
 

@@ -985,6 +985,16 @@ added, extend the helpers-ps51 job to execute it.
   delete on every exit that reaches the handler; the entry must outlive only
   a run that never got there. CI plants `PendingFileRenameOperations` so a
   runner takes the exit-4 path a person's machine takes.
+- **An LF-only batch file loses its `goto` labels.** The owner's first
+  second-machine run, from GitHub's Download ZIP, died at INIT 8 with "The
+  system cannot find the batch label specified" for a label that exists: the
+  repo had no `.gitattributes`, so the ZIP served LF-only bats, and cmd.exe's
+  label search is unreliable on them. CI never saw it -- the stick script
+  converts line endings, and no job ran a bat from an archive. `.gitattributes`
+  now forces CRLF for `*.bat`, `*.cmd` and `ThreatLists/*.txt` (checkouts and
+  `git archive` alike), and both bats refuse an LF-only copy of themselves
+  before their first `goto`, writing nothing. lint.yml checks the archive and
+  the guard's position; the readonly job runs an LF-only copy of each bat.
 - Inside blocks use delayed expansion (`!var!`); `%var%` expands at
   block-parse time (see comments near the `errorlevel` checks).
 - `endlocal` and `exit /b %EXIT_CODE%` must stay on one line so the value

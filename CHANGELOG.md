@@ -6,6 +6,25 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### A downloaded ZIP runs; an LF-only bat refuses instead of dying at a goto
+The owner's first second-machine run stopped at INIT 8: `The system cannot
+find the batch label specified - runonce_done`. The label is there. The copy
+came from GitHub's Download ZIP, and the repository stored every file with
+Unix (LF-only) line endings and had no `.gitattributes`, so the ZIP's batch
+files were LF-only -- and cmd.exe cannot find `goto` labels reliably in such
+a file. Nothing on that machine changed (a read-only run that stopped in
+INIT), but no audit ran either. CI had never run a bat from a ZIP: the stick
+script converts line endings, and the readonly job asserted the archive's
+bat was LF-only only to prove that conversion. The path CI exercised was not
+the path a person takes.
+
+`.gitattributes` now writes the bats and the threat lists with CRLF in every
+checkout and in `git archive`, which is what the Download ZIP serves. Both
+bats check their own line endings before their first `goto` and, if LF-only,
+print `[FATAL] ... LF-only line endings ...`, name the fix and exit 1,
+having written nothing. CI asserts the archive's bats and lists are CRLF and
+that an LF-only copy of each bat is refused at once.
+
 ### The tool can travel as a read-only ISO image
 `tools/make_usb_stick.ps1 -Iso <file.iso>` builds the same copy the stick
 gets -- the harness and the checker left off, text files CRLF, no Mark of the
