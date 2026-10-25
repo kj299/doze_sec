@@ -224,31 +224,42 @@ function Get-CbsVerdict {
 # per-iteration cost, not the disk, set the speed (a 150 MB log took 11 s
 # under pwsh 7 and longer on 5.1). The budget is checked once per chunk
 # through -OutOfTime, so a test can drive the cut-short path with a fake clock.
-# Returns @{ Lines; FirstStamp; Complete; Chars }.
-# Unanchored on purpose: an anchored '^[^\r\n]*(?:...)' backtracks across
-# every noise line and was barely faster than the loop it replaced. The
-# phrases are found first, then each hit is widened to its line.
-$script:CbsHitRx = New-Object System.Text.RegularExpressions.Regex('Corrupt file|Repaired file|Cannot repair member file', ([System.Text.RegularExpressions.RegexOptions]::IgnoreCase -bor [System.Text.RegularExpressions.RegexOptions]::Compiled))
+# Hits go straight into -Into as each chunk is scanned, so a read that fails
+# part-way (a bad sector -- the very thing this check reports on) keeps the
+# corrupt-file lines it had already found. Returns @{ FirstStamp; Complete;
+# Bytes }.
+# The three phrases the old per-line filter used, matched the same way
+# (ordinal, ignoring case). Each is found with String.IndexOf -- native and
+# fast on 5.1's .NET Framework, where a case-insensitive regex walks the text
+# one character at a time -- and each hit is then widened to its line. An
+# anchored '^[^\r\n]*(?:...)' regex was tried first: it backtracked across
+# every noise line and was barely faster than the loop it replaced.
+$script:CbsPhrases = @('Corrupt file', 'Repaired file', 'Cannot repair member file')
 function Get-CbsHitLines {
-    # PURE. Every line of $Text holding one of the phrases, once each, without
-    # its line ending.
-    param([string]$Text)
-    $res = New-Object System.Collections.Generic.List[string]
-    $lastEnd = -1
-    foreach ($m in $script:CbsHitRx.Matches($Text)) {
-        if ($m.Index -le $lastEnd) { continue }
-        $start = $Text.LastIndexOf([char]10, $m.Index) + 1
-        $end = $Text.IndexOf([char]10, $m.Index)
-        if ($end -lt 0) { $end = $Text.Length }
-        $lastEnd = $end
-        $res.Add($Text.Substring($start, $end - $start).TrimEnd([char]13))
+    # PURE. Every line of $Text holding one of the phrases, once each and in
+    # file order, without its line ending. A line ends at CR or LF, as
+    # ReadLine splits it.
+    param([string]$Text, [System.Collections.Generic.List[string]]$Into)
+    $eol = [char[]]@([char]13, [char]10)
+    $starts = New-Object 'System.Collections.Generic.SortedDictionary[int,int]'
+    foreach ($ph in $script:CbsPhrases) {
+        $at = 0
+        while ($at -lt $Text.Length) {
+            $k = $Text.IndexOf($ph, $at, [System.StringComparison]::OrdinalIgnoreCase)
+            if ($k -lt 0) { break }
+            $start = $Text.LastIndexOfAny($eol, $k) + 1
+            $end = $Text.IndexOfAny($eol, $k)
+            if ($end -lt 0) { $end = $Text.Length }
+            $starts[$start] = $end
+            $at = $end + 1
+        }
     }
-    return ,$res
+    foreach ($kv in $starts.GetEnumerator()) { $Into.Add($Text.Substring($kv.Key, $kv.Value - $kv.Key)) }
 }
 function Read-CbsLog {
-    param([string]$Path, [int]$ChunkChars = 4194304, [scriptblock]$OutOfTime = { $false })
-    $out = New-Object System.Collections.Generic.List[string]
-    $first = $null; $complete = $false; $chars = [long]0
+    param([string]$Path, [System.Collections.Generic.List[string]]$Into, [int]$ChunkChars = 4194304, [scriptblock]$OutOfTime = { $false })
+    $first = $null; $complete = $false; $bytes = [long]0
+    $eol = [char[]]@([char]13, [char]10)
     $reader = $null
     try {
         # Share ReadWrite: TrustedInstaller holds CBS.log open while servicing.
@@ -260,13 +271,13 @@ function Read-CbsLog {
         while ($true) {
             $n = $reader.ReadBlock($buf, 0, $ChunkChars)
             if ($n -le 0) { break }
-            $chars += $n
+            $bytes = $fs.Position
             $text = $carry + (New-Object string($buf, 0, $n))
             if (-not $firstDone) {
                 # The first line's timestamp is the start of the window this
                 # file covers. A typed [ref]: with an untyped one TryParse threw
                 # and sent a readable log into the catch.
-                $nl = $text.IndexOf([char]10)
+                $nl = $text.IndexOfAny($eol)
                 if ($nl -ge 0 -or $reader.EndOfStream) {
                     $firstLine = if ($nl -ge 0) { $text.Substring(0, $nl) } else { $text }
                     $m = [regex]::Match($firstLine, '^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})')
@@ -277,23 +288,30 @@ function Read-CbsLog {
                     $firstDone = $true
                 }
             }
-            $cut = $text.LastIndexOf([char]10)
-            if ($cut -lt 0) { $carry = $text; continue }
-            $whole = $text.Substring(0, $cut + 1)
+            $cut = $text.LastIndexOfAny($eol)
+            if ($cut -lt 0 -and $text.Length -lt (4 * $ChunkChars)) {
+                # No line end yet: carry it -- but a file with no line ends at
+                # all (a crash's NUL run) must not grow without bound, and the
+                # budget is checked either way.
+                $carry = $text
+                if (& $OutOfTime) { break }
+                continue
+            }
+            if ($cut -lt 0) { $cut = $text.Length - 1 }
+            Get-CbsHitLines -Text $text.Substring(0, $cut + 1) -Into $Into
             $carry = $text.Substring($cut + 1)
-            $out.AddRange((Get-CbsHitLines $whole))
             if (& $OutOfTime) { break }
         }
         # Reaching EOF is the only thing that counts as fully read; then the
         # last line, with or without a newline, is scanned too.
         if ($reader.EndOfStream) {
-            if ($carry) { $out.AddRange((Get-CbsHitLines $carry)) }
+            if ($carry) { Get-CbsHitLines -Text $carry -Into $Into }
             $complete = $true
         }
     } finally {
         if ($reader) { $reader.Dispose() }
     }
-    return @{ Lines = $out; FirstStamp = $first; Complete = $complete; Chars = $chars }
+    return @{ FirstStamp = $first; Complete = $complete; Bytes = $bytes }
 }
 
 if ($SelfTest) {
@@ -404,8 +422,9 @@ if ($SelfTest) {
         $body = @('2026-10-18 05:21:00, Info                  CBS    Starting TrustedInstaller initialization.') + (@($noise) * 40) + @($hitA) + (@($noise) * 7) + @($hitB.ToUpper()) + @($noise) + @($hitC)
         $fCrlf = Join-Path $tdir 'crlf.log'; [IO.File]::WriteAllText($fCrlf, (($body -join "`r`n") + "`r`n"))
         $fLf = Join-Path $tdir 'lf.log'; [IO.File]::WriteAllText($fLf, ($body -join "`n"))
-        $r1 = Read-CbsLog -Path $fCrlf -ChunkChars 64
-        $r2 = Read-CbsLog -Path $fLf -ChunkChars 64
+        function RL { param($p, [int]$c = 64, $ot = { $false }) $l = New-Object System.Collections.Generic.List[string]; $x = Read-CbsLog -Path $p -Into $l -ChunkChars $c -OutOfTime $ot; $x.Lines = $l; $x }
+        $r1 = RL $fCrlf
+        $r2 = RL $fLf
         T 'the chunked reader finds all three phrases once each, across chunk edges, in any case' `
           ($r1.Complete -and $r1.Lines.Count -eq 3 -and $r1.Lines[0] -eq $hitA -and $r1.Lines[1] -eq $hitB.ToUpper() -and $r1.Lines[2] -eq $hitC) `
           ("complete=$($r1.Complete) n=$($r1.Lines.Count) :: $($r1.Lines -join ' || ')")
@@ -415,11 +434,27 @@ if ($SelfTest) {
         T 'the reader takes the window start from the first line' `
           ($null -ne $r1.FirstStamp -and $r1.FirstStamp -eq [datetime]'2026-10-18 05:21:00') ([string]$r1.FirstStamp)
         $script:dzTicks = 0
-        $r3 = Read-CbsLog -Path $fCrlf -ChunkChars 64 -OutOfTime { $script:dzTicks++; $script:dzTicks -ge 2 }
+        $r3 = RL $fCrlf 64 { $script:dzTicks++; $script:dzTicks -ge 2 }
         T 'a budget that expires mid-file leaves the file NOT complete (the cut-short path)' `
-          ((-not $r3.Complete) -and $r3.Chars -lt (Get-Item -LiteralPath $fCrlf).Length) ("complete=$($r3.Complete) chars=$($r3.Chars)")
+          ((-not $r3.Complete) -and $r3.Bytes -lt (Get-Item -LiteralPath $fCrlf).Length) ("complete=$($r3.Complete) bytes=$($r3.Bytes)")
+        # A read that FAILS part-way keeps what it already found: a bad sector
+        # is the very thing this check reports on, and dropping the hits
+        # before it would turn a corruption finding into a gap.
+        $kept = New-Object System.Collections.Generic.List[string]
+        $script:dzTicks = 0
+        $threw = $false
+        try { $null = Read-CbsLog -Path $fCrlf -Into $kept -ChunkChars 65536 -OutOfTime { $script:dzTicks++; if ($script:dzTicks -ge 1) { throw 'simulated read failure' }; $false } } catch { $threw = $true }
+        T 'hits found before a read failure are kept, not thrown away with it' ($threw -and $kept.Count -eq 3) ("threw=$threw kept=$($kept.Count)")
+        # CR-only line ends split like ReadLine splits them.
+        $fCr = Join-Path $tdir 'cr.log'; [IO.File]::WriteAllText($fCr, ($body -join "`r"))
+        $r5 = RL $fCr
+        T 'a CR-only log splits into lines as ReadLine did, each hit its own line' ($r5.Complete -and $r5.Lines.Count -eq 3 -and $r5.Lines[0] -eq $hitA) ("n=$($r5.Lines.Count) :: $($r5.Lines -join ' || ')")
+        # A file with no line ends at all is still read to the end, bounded.
+        $fNl = Join-Path $tdir 'noeol.log'; [IO.File]::WriteAllText($fNl, ('x' * 2000) + 'Corrupt file: C:\a.sys')
+        $r6 = RL $fNl 64
+        T 'a log with no line ends at all is still read to the end and its hit found' ($r6.Complete -and $r6.Lines.Count -ge 1) ("complete=$($r6.Complete) n=$($r6.Lines.Count)")
         $fClean = Join-Path $tdir 'clean.log'; [IO.File]::WriteAllText($fClean, ((@($noise) * 10) -join "`r`n"))
-        $r4 = Read-CbsLog -Path $fClean -ChunkChars 64
+        $r4 = RL $fClean
         T 'a clean log yields no lines and reads complete' ($r4.Complete -and $r4.Lines.Count -eq 0) ("complete=$($r4.Complete) n=$($r4.Lines.Count)")
     } finally { Remove-Item -LiteralPath $tdir -Recurse -Force -EA SilentlyContinue }
 
@@ -478,13 +513,12 @@ $failed  = 0   # any other read error
 # where records from 2026-09-07 had already aged out entirely. Without this the
 # all-clear below would claim more than it can possibly know.
 $oldest = $null
-$scanned = [long]0   # characters scanned, for the measured-speed line
+$scanned = [long]0   # bytes scanned, for the measured-speed line
 foreach ($lg in $logs) {
     if ($clock.Elapsed.TotalSeconds -gt $BudgetSeconds) { $skipped++; continue }
     try {
-        $r = Read-CbsLog -Path $lg -OutOfTime { $clock.Elapsed.TotalSeconds -gt $BudgetSeconds }
-        foreach ($x in $r.Lines) { [void]$lines.Add($x) }
-        $scanned += $r.Chars
+        $r = Read-CbsLog -Path $lg -Into $lines -OutOfTime { $clock.Elapsed.TotalSeconds -gt $BudgetSeconds }
+        $scanned += $r.Bytes
         if ($null -ne $r.FirstStamp -and ($null -eq $oldest -or $r.FirstStamp -lt $oldest)) { $oldest = $r.FirstStamp }
         if ($r.Complete) { $read++ } else { $partial++ }
     } catch [System.UnauthorizedAccessException] {
@@ -495,6 +529,8 @@ foreach ($lg in $logs) {
 }
 $clock.Stop()
 
+# MEASURED on every path, so a gap run carries the timing that explains it.
+$scanLine = "[INFO] Scanned {0:N1} MB of CBS log in {1:N1} s (budget {2} s)." -f ($scanned / 1MB), $clock.Elapsed.TotalSeconds, $BudgetSeconds
 if (($read + $partial) -eq 0) {
     if ($skipped -gt 0 -and ($denied + $failed) -eq 0) {
         "[WARNING] System-file integrity check NOT performed -- the ${BudgetSeconds}s wall-clock budget ran out before any of $skipped CBS log file(s) was opened. This is missing coverage, not a pass."
@@ -505,6 +541,7 @@ if (($read + $partial) -eq 0) {
     }
     if ($skipped -gt 0 -and ($denied + $failed) -gt 0) { "[INFO] $skipped further CBS log file(s) were never opened: the ${BudgetSeconds}s wall-clock budget ran out." }
     Write-Marker -Name 'cbs_gap' -Sev 'WARNING'
+    $scanLine
     return
 }
 
@@ -555,5 +592,5 @@ if ($v.Sev -eq 'OK' -and $v.Findings.Count -eq 0 -and $v.Context.Count -eq 0 -an
     "[INFO] $read CBS log file(s) read in full, covering $window. CBS logs rotate, so anything older is not visible here."
 }
 # MEASURED, so the next field run says whether the budget fits this machine.
-"[INFO] Scanned {0:N1} MB of CBS log in {1:N1} s (budget {2} s)." -f ($scanned / 1MB), $clock.Elapsed.TotalSeconds, $BudgetSeconds
+$scanLine
 Write-Marker -Name 'cbs' -Sev $v.Sev
