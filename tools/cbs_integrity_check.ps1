@@ -259,6 +259,7 @@ function Get-CbsHitLines {
 function Read-CbsLog {
     param([string]$Path, [System.Collections.Generic.List[string]]$Into, [int]$ChunkChars = 4194304, [scriptblock]$OutOfTime = { $false })
     $first = $null; $complete = $false; $bytes = [long]0
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $eol = [char[]]@([char]13, [char]10)
     $reader = $null
     try {
@@ -311,7 +312,7 @@ function Read-CbsLog {
     } finally {
         if ($reader) { $reader.Dispose() }
     }
-    return @{ FirstStamp = $first; Complete = $complete; Bytes = $bytes }
+    return @{ FirstStamp = $first; Complete = $complete; Bytes = $bytes; Seconds = $sw.Elapsed.TotalSeconds }
 }
 
 if ($SelfTest) {
@@ -431,6 +432,7 @@ if ($SelfTest) {
         T 'LF-only and CRLF files read the same, and a last line with no newline is still scanned' `
           ($r2.Complete -and $r2.Lines.Count -eq 3 -and $r2.Lines[2] -eq $hitC -and ($r2.Lines -join '|') -eq ($r1.Lines -join '|')) `
           ("n=$($r2.Lines.Count) :: $($r2.Lines -join ' || ')")
+        T 'the reader reports how long the file took (where a budget went)' ($null -ne $r1.Seconds -and $r1.Seconds -ge 0) ([string]$r1.Seconds)
         T 'the reader takes the window start from the first line' `
           ($null -ne $r1.FirstStamp -and $r1.FirstStamp -eq [datetime]'2026-10-18 05:21:00') ([string]$r1.FirstStamp)
         $script:dzTicks = 0
@@ -514,11 +516,13 @@ $failed  = 0   # any other read error
 # all-clear below would claim more than it can possibly know.
 $oldest = $null
 $scanned = [long]0   # bytes scanned, for the measured-speed line
+$slowest = $null    # the file that took longest: where a budget went
 foreach ($lg in $logs) {
     if ($clock.Elapsed.TotalSeconds -gt $BudgetSeconds) { $skipped++; continue }
     try {
         $r = Read-CbsLog -Path $lg -Into $lines -OutOfTime { $clock.Elapsed.TotalSeconds -gt $BudgetSeconds }
         $scanned += $r.Bytes
+        if ($null -eq $slowest -or $r.Seconds -gt $slowest.Seconds) { $slowest = @{ Name = [IO.Path]::GetFileName($lg); Bytes = $r.Bytes; Seconds = $r.Seconds } }
         if ($null -ne $r.FirstStamp -and ($null -eq $oldest -or $r.FirstStamp -lt $oldest)) { $oldest = $r.FirstStamp }
         if ($r.Complete) { $read++ } else { $partial++ }
     } catch [System.UnauthorizedAccessException] {
@@ -530,7 +534,9 @@ foreach ($lg in $logs) {
 $clock.Stop()
 
 # MEASURED on every path, so a gap run carries the timing that explains it.
-$scanLine = "[INFO] Scanned {0:N1} MB of CBS log in {1:N1} s (budget {2} s)." -f ($scanned / 1MB), $clock.Elapsed.TotalSeconds, $BudgetSeconds
+$slowTxt = ''
+if ($slowest) { $slowTxt = "; slowest: {0} {1:N1} MB in {2:N1} s" -f (([string]$slowest.Name) -replace '[\x00-\x1F\x7F]', '?'), ($slowest.Bytes / 1MB), $slowest.Seconds }
+$scanLine = "[INFO] Scanned {0:N1} MB of CBS log in {1:N1} s (budget {2} s){3}." -f ($scanned / 1MB), $clock.Elapsed.TotalSeconds, $BudgetSeconds, $slowTxt
 if (($read + $partial) -eq 0) {
     if ($skipped -gt 0 -and ($denied + $failed) -eq 0) {
         "[WARNING] System-file integrity check NOT performed -- the ${BudgetSeconds}s wall-clock budget ran out before any of $skipped CBS log file(s) was opened. This is missing coverage, not a pass."
