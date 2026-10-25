@@ -529,6 +529,31 @@ jobs:
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
           n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 31 ] || { echo "only $n case(s)"; exit 1; }
+      - name: account_events_check + wmi_subscription_check -- a read that failed is a raised gap or a deferral, never an all-clear
+        run: |
+          out=$(pwsh -NoProfile -File tools/account_events_check.ps1 -SelfTest); echo "$out"
+          for n in 'no events: both [OK], nothing raised, the old wording kept' \
+                   'an administrator who cannot read the Security log gets a raised gap, never "[OK] No new local account"' \
+                   'a standard-user token is a deferral, never a gap row and never an all-clear' \
+                   'one log readable and one not: the finding raised AND the gap raised, each under its own marker'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 7 ] || { echo "only $n account_events case(s)"; exit 1; }
+          out=$(pwsh -NoProfile -File tools/wmi_subscription_check.ps1 -SelfTest); echo "$out"
+          for n in 'only the default Microsoft filters: all [OK], nothing raised, the old wording kept' \
+                   "a filter NAMED like the SCM default but with another query is not allowlisted" \
+                   'a query that failed on an administrator token is a raised gap, never [OK] and never [SKIPPED]' \
+                   'a standard-user token that cannot query is a deferral, not a gap row'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 8 ] || { echo "only $n wmi_subscription case(s)"; exit 1; }
+          # The dashboard tiles read the sections' state, never the log or WMI again.
+          for b in doze_sec.bat doze_sec_noAdmin.bat; do
+            grep -q "Get-WinEvent -FilterHashtable @{LogName='Security';Id=47[23][02]}" "$b" && { echo "$b: a 4720/4732 query is back in the bat (a second measurement)"; exit 1; }
+            grep -q "Get-WMIObject -Namespace root.subscription" "$b" && { echo "$b: a WMI subscription query is back in the bat (a second measurement)"; exit 1; }
+            grep -qF "ACCTEV_STATE%'" "$b" && grep -qF "WMISUB_STATE%'" "$b" || { echo "$b: a tile does not read the section state"; exit 1; }
+          done
+          echo 'both tools: a failed read is a gap or a deferral; the tiles read the sections, not the machine'
       - name: log_clear_check -- both bats raise a gap when the tool ran but wrote no verdict, and read both gap markers
         run: |
           for b in doze_sec.bat doze_sec_noAdmin.bat; do

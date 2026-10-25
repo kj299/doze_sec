@@ -412,6 +412,29 @@ try {
             'the System-log clear row has its printed line' `
             'a System-log clear row was raised with no printed WARNING line'
     }
+    # WMI permanent subscriptions (Section 17) on this token: Authenticated
+    # Users can normally query root\subscription, so the check either RAN
+    # ([OK] or a finding) or -- only on access denied -- deferred. A failed
+    # query is a raised gap, never the old unraised [SKIPPED].
+    $wmiRan = $text1 -match '(?m)^\[OK\] No non-default WMI EventFilter subscriptions'
+    $wmiDef = $text1 -match '(?m)^\[DEFERRED - ADMIN REQUIRED\] WMI EventFilter check'
+    $wmiGap = $text1 -match '(?m)^\[WARNING\] WMI EventFilter check NOT performed'
+    Assert ($text1 -notmatch '\[SKIPPED\] WMI subscription query failed') `
+        'no unraised [SKIPPED] for a failed WMI subscription query' `
+        'the old unraised [SKIPPED] WMI line is back -- a failed query would reach no ledger row'
+    Assert ($wmiRan -or $wmiDef -or $wmiGap) `
+        ('the WMI subscription check stated what it did on a standard-user token (ran={0} deferred={1} gap={2})' -f $wmiRan, $wmiDef, $wmiGap) `
+        'the WMI subscription check printed neither a result, a deferral nor a gap'
+    if ($wmiGap) {
+        Assert (@($ledger1 | Where-Object { $_ -match '\|17\|T1546\.003\|WMI subscription checks NOT performed' }).Count -gt 0) `
+            'the WMI gap printed on a standard-user token has its ledger row' `
+            'a WMI NOT-performed line was printed with no ledger row'
+    }
+    if ($wmiDef) {
+        Assert (-not @($ledger1 | Where-Object { $_ -match '\|17\|T1546\.003\|WMI subscription checks NOT performed' }).Count) `
+            'a WMI deferral is not a ledger row' `
+            'a WMI deferral was raised as a ledger row'
+    }
     Assert ($text1 -match '\[DEFERRED - ADMIN REQUIRED\] Security log clears \(Event 1102\)') `
         'the Security-log clear check is stated as deferred on a standard-user token' `
         'the Security-log clear check was not stated as deferred'

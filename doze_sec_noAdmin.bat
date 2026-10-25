@@ -202,6 +202,8 @@ set "DEFEXCL_PROCS=0"
 set "DEFEXCL_EXTS=0"
 set "PPL_STATE=ungraded"
 set "LOGCLEAR_STATE=sec=ungraded,sys=ungraded"
+set "ACCTEV_STATE=ungraded"
+set "WMISUB_STATE=ungraded"
 set "REBOOT_AGE=unknown"
 set "BITLOCKER_STATE=ungraded"
 set "EXEC_BLOCKED=0"
@@ -3966,9 +3968,16 @@ if exist "%SCRIPT_DIR%tools\log_clear_check.ps1" (
     echo [WARNING] tools\log_clear_check.ps1 not found -- event-log clear check NOT performed.>> "%REPORT%"
     call :dz_finding WARNING 16 T1070.001 "Event-log clear check NOT performed - tool missing"
 )
-echo $e=@(Get-WinEvent -FilterHashtable @{LogName='Security';Id=4720} -MaxEvents 5 -EA SilentlyContinue);if($e.Count -gt 0){'[WARNING] New local account(s) created: '+$e.Count+' event(s) (T1136.001) -- review the names listed above.';Set-Content -LiteralPath "$env:TEMP\dz_ev4720_hit.txt" -Value hit}else{'[OK] No new local account creation events (4720).'} > "%PSRUN%"
-echo $e=@(Get-WinEvent -FilterHashtable @{LogName='Security';Id=4732} -MaxEvents 5 -EA SilentlyContinue);if($e.Count -gt 0){'[WARNING] Account(s) added to a privileged group: '+$e.Count+' event(s) (T1098) -- review the names listed above.';Set-Content -LiteralPath "$env:TEMP\dz_ev4732_hit.txt" -Value hit}else{'[OK] No unexpected additions to Administrators (4732).'} >> "%PSRUN%"
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+del "%TEMP%\dz_acctev4720_gap.txt" 2>nul
+del "%TEMP%\dz_acctev4732_gap.txt" 2>nul
+del "%TEMP%\dz_acctev_deferred.txt" 2>nul
+del "%TEMP%\dz_acctev_state.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\account_events_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\account_events_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\account_events_check.ps1 not found -- new-account and privileged-group checks NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 16 T1136.001 "Account-event checks NOT performed - tool missing"
+)
 echo.>> "%REPORT%"
 echo --- Audit-Policy Visibility ^(can these checks even see anything?^) --->> "%REPORT%"
 echo  Command: powershell -File tools\audit_policy_check.ps1>> "%REPORT%"
@@ -4003,6 +4012,29 @@ if exist "%TEMP%\dz_ev4720_hit.txt" (
 if exist "%TEMP%\dz_ev4732_hit.txt" (
     call :dz_finding WARNING 16 T1098 "Account(s) added to a privileged group"
     del "%TEMP%\dz_ev4732_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_acctev4720_gap.txt" (
+    rem A gap is its own row, one per check, under that check's technique.
+    call :dz_finding WARNING 16 T1136.001 "New-account check (4720) NOT performed - the Security log could not be read"
+    del "%TEMP%\dz_acctev4720_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_acctev4732_gap.txt" (
+    call :dz_finding WARNING 16 T1098 "Privileged-group check (4732) NOT performed - the Security log could not be read"
+    del "%TEMP%\dz_acctev4732_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_acctev_deferred.txt" (
+    set "_AEDEF=0"
+    set /p _AEDEF=<"%TEMP%\dz_acctev_deferred.txt"
+    set /a DEFERRED_COUNT+=!_AEDEF!
+    del "%TEMP%\dz_acctev_deferred.txt" 2>nul
+)
+set "_AEST="
+if exist "%TEMP%\dz_acctev_state.txt" set /p _AEST=<"%TEMP%\dz_acctev_state.txt"
+del "%TEMP%\dz_acctev_state.txt" 2>nul
+if defined _AEST if "!_AEST:~0,6!"=="e4720=" set "ACCTEV_STATE=!_AEST!"
+if not "!ACCTEV_STATE:~0,6!"=="e4720=" if exist "%SCRIPT_DIR%tools\account_events_check.ps1" (
+    echo [WARNING] Account-event checks produced no verdict -- NOT performed: tools\account_events_check.ps1 ran but wrote no usable verdict.>> "%REPORT%"
+    call :dz_finding WARNING 16 T1136.001 "Account-event checks produced no verdict - NOT performed"
 )
 
 echo.>> "%REPORT%"
@@ -4330,13 +4362,50 @@ call :dz_ps_scan 17 T1071 "Cobalt Strike default named pipe present"
 
 echo.>> "%REPORT%"
 echo --- [ALL ACTORS] WMI Permanent Subscriptions (stealthy persistence) --->> "%REPORT%"
-echo  Command: powershell -Command "Get-WMIObject -Namespace root\subscription -Class __EventFilter -EA SilentlyContinue">> "%REPORT%"
-echo $ok=$true; try{$subs=@(Get-WMIObject -Namespace root\subscription -Class __EventFilter -EA Stop ^| Where-Object { -not ( ($_.Name -eq 'SCM Event Log Filter' -and $_.Query -like '*MSFT_SCMEventLogEvent*') -or ($_.Name -in @('BVTConsumer','BVTFilter','RmAssistEventLog')) ) })}catch{$ok=$false}; if(-not $ok){'[SKIPPED] WMI subscription query failed -- EventFilter check NOT performed.'}elseif($subs.Count -gt 0){'[WARNING] Non-default WMI EventFilters found:'; $subs ^| Select-Object Name,Query ^| Format-Table -AutoSize}else{'[OK] No non-default WMI EventFilter subscriptions (default Microsoft filters allowlisted).'} > "%PSRUN%"
-call :dz_ps_scan 17 T1546.003 "Non-default WMI EventFilter - stealthy persistence"
-echo $ok=$true; try{$cons=Get-WMIObject -Namespace root\subscription -Class CommandLineEventConsumer -EA Stop}catch{$ok=$false}; if(-not $ok){'[SKIPPED] WMI subscription query failed -- CommandLineEventConsumer check NOT performed.'}elseif($cons){'[WARNING] WMI CommandLine Consumers found:'; $cons ^| Select-Object Name,CommandLineTemplate ^| Format-Table -AutoSize}else{'[OK] No WMI CommandLineEventConsumer.'} > "%PSRUN%"
-call :dz_ps_scan 17 T1546.003 "WMI CommandLineEventConsumer present - stealthy persistence"
-echo $ok=$true; try{$acons=Get-WMIObject -Namespace root\subscription -Class ActiveScriptEventConsumer -EA Stop}catch{$ok=$false}; if(-not $ok){'[SKIPPED] WMI subscription query failed -- ActiveScriptEventConsumer check NOT performed.'}elseif($acons){'[WARNING] WMI ActiveScript (VBScript/JScript) Consumers found:'; $acons ^| Select-Object Name,ScriptingEngine,@{n='ScriptText';e={if($_.ScriptText.Length -gt 200){$_.ScriptText.Substring(0,200)+'...[truncated]'}else{$_.ScriptText}}} ^| Format-List}else{'[OK] No WMI ActiveScriptEventConsumer.'} > "%PSRUN%"
-call :dz_ps_scan 17 T1546.003 "WMI ActiveScriptEventConsumer present - stealthy persistence"
+echo  Command: powershell -File tools\wmi_subscription_check.ps1>> "%REPORT%"
+del "%TEMP%\dz_wmi_filter_hit.txt" 2>nul
+del "%TEMP%\dz_wmi_cmd_hit.txt" 2>nul
+del "%TEMP%\dz_wmi_script_hit.txt" 2>nul
+del "%TEMP%\dz_wmisub_gap.txt" 2>nul
+del "%TEMP%\dz_wmisub_deferred.txt" 2>nul
+del "%TEMP%\dz_wmisub_state.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\wmi_subscription_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\wmi_subscription_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\wmi_subscription_check.ps1 not found -- WMI subscription checks NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 17 T1546.003 "WMI subscription checks NOT performed - tool missing"
+)
+if exist "%TEMP%\dz_wmi_filter_hit.txt" (
+    call :dz_finding WARNING 17 T1546.003 "Non-default WMI EventFilter - stealthy persistence"
+    del "%TEMP%\dz_wmi_filter_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_wmi_cmd_hit.txt" (
+    call :dz_finding WARNING 17 T1546.003 "WMI CommandLineEventConsumer present - stealthy persistence"
+    del "%TEMP%\dz_wmi_cmd_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_wmi_script_hit.txt" (
+    call :dz_finding WARNING 17 T1546.003 "WMI ActiveScriptEventConsumer present - stealthy persistence"
+    del "%TEMP%\dz_wmi_script_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_wmisub_gap.txt" (
+    rem A gap is its own row: root\subscription could not be queried.
+    call :dz_finding WARNING 17 T1546.003 "WMI subscription checks NOT performed - root\subscription could not be queried"
+    del "%TEMP%\dz_wmisub_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_wmisub_deferred.txt" (
+    set "_WSDEF=0"
+    set /p _WSDEF=<"%TEMP%\dz_wmisub_deferred.txt"
+    set /a DEFERRED_COUNT+=!_WSDEF!
+    del "%TEMP%\dz_wmisub_deferred.txt" 2>nul
+)
+set "_WSST="
+if exist "%TEMP%\dz_wmisub_state.txt" set /p _WSST=<"%TEMP%\dz_wmisub_state.txt"
+del "%TEMP%\dz_wmisub_state.txt" 2>nul
+if defined _WSST if "!_WSST:~0,7!"=="filter=" set "WMISUB_STATE=!_WSST!"
+if not "!WMISUB_STATE:~0,7!"=="filter=" if exist "%SCRIPT_DIR%tools\wmi_subscription_check.ps1" (
+    echo [WARNING] WMI subscription checks produced no verdict -- NOT performed: tools\wmi_subscription_check.ps1 ran but wrote no usable verdict.>> "%REPORT%"
+    call :dz_finding WARNING 17 T1546.003 "WMI subscription checks produced no verdict - NOT performed"
+)
 
 echo.>> "%REPORT%"
 echo --- [CHINA/VOLT TYPHOON] Kerberos RC4 Encryption Types --->> "%REPORT%"
@@ -5360,15 +5429,15 @@ echo sec 'ACTIVE COMPROMISE INDICATORS' >> "%PSRUN%"
 echo $lc='%LOGCLEAR_STATE%';if($lc -match 'sec=critical'){ck 'CRIT' 'Security event log was CLEARED (Section 16)' 'Cleared during this PC''s own life -- Section 16 says how that was decided. Attacker erased evidence: treat as active compromise.'}elseif($lc -match 'sec=prep'){ck 'WARN' 'Security event log was cleared before this PC took its current name (Section 16)' 'Section 16 names both computer names: the shape of a Windows image being prepared. If you did not build this image or get it from a source you trust, treat it as a compromise.'}elseif($lc -match 'sec=none'){ck 'PASS' 'Security event log has not been cleared (Section 16)'}elseif($lc -match 'sec=deferred'){ck 'INFO' 'Security event log clears: NOT graded -- deferred, needs admin (Section 16)'}else{ck 'INFO' 'Security event log clears: NOT graded -- Section 16 could not read the Security log'} >> "%PSRUN%"
 echo if($lc -match 'sys=cleared'){ck 'WARN' 'An event log was cleared - Event 104 (Section 16)' 'Section 16 names which log. A routine System-log clear is often benign: updates, driver installs, disk cleanup. A cleared Sysmon or PowerShell log is not. The Security log 1102 is graded separately above.'}elseif($lc -match 'sys=none'){ck 'PASS' 'No event log has been cleared - Event 104 (Section 16)'}else{ck 'INFO' 'Event 104 log clears: NOT graded -- Section 16 could not read the System log'} >> "%PSRUN%"
 echo if($isAdmin -eq '1'){ >> "%PSRUN%"
-echo $ev=Get-WinEvent -FilterHashtable @{LogName='Security';Id=4720} -MaxEvents 5 -EA SilentlyContinue;if($ev){ck 'WARN' "New local accounts created: $(@($ev).Count) events" 'Review account names in Section 16'}else{ck 'PASS' 'No new local account creation events - 4720'} >> "%PSRUN%"
-echo $ev=Get-WinEvent -FilterHashtable @{LogName='Security';Id=4732} -MaxEvents 5 -EA SilentlyContinue;if($ev){ck 'WARN' "Users added to Administrators: $(@($ev).Count) events" 'Review account names in Section 16'}else{ck 'PASS' 'No unexpected additions to Administrators group - 4732'} >> "%PSRUN%"
+echo $ae='%ACCTEV_STATE%';if($ae -match 'e4720=(\d+)'){if([int]$matches[1] -gt 0){ck 'WARN' ("New local accounts created: "+$matches[1]+" events (Section 16)") 'Review account names in Section 16'}else{ck 'PASS' 'No new local account creation events - 4720 (Section 16)'}}elseif($ae -match 'e4720=deferred'){ck 'INFO' 'New-account events (4720): NOT graded -- deferred, needs admin (Section 16)'}else{ck 'INFO' 'New-account events (4720): NOT graded -- Section 16 could not read the Security log'} >> "%PSRUN%"
+echo if($ae -match 'e4732=(\d+)'){if([int]$matches[1] -gt 0){ck 'WARN' ("Users added to Administrators: "+$matches[1]+" events (Section 16)") 'Review account names in Section 16'}else{ck 'PASS' 'No unexpected additions to Administrators group - 4732 (Section 16)'}}elseif($ae -match 'e4732=deferred'){ck 'INFO' 'Privileged-group events (4732): NOT graded -- deferred, needs admin (Section 16)'}else{ck 'INFO' 'Privileged-group events (4732): NOT graded -- Section 16 could not read the Security log'} >> "%PSRUN%"
 echo $pp=(netsh interface portproxy show all 2^>$null)^|Out-String;if($pp -match '\d+\.\d+'){ck 'CRIT' 'netsh portproxy tunnel rules are ACTIVE' 'Volt Typhoon C2 IOC. Remove: netsh interface portproxy reset. See Section 17.'}else{ck 'PASS' 'No netsh portproxy tunnel rules (Volt Typhoon check)'} >> "%PSRUN%"
 echo }else{ >> "%PSRUN%"
 echo ck 'INFO' 'Security event log analysis deferred (requires admin)' >> "%PSRUN%"
 echo ck 'INFO' 'netsh portproxy check deferred (requires admin)' >> "%PSRUN%"
 echo } >> "%PSRUN%"
 echo try{$pipes=Get-ChildItem \\.\pipe\ -EA Stop^|Where-Object{$_.Name -match 'postex_^|msagent_^|MSSE-^|metsvc'};if($pipes){ck 'CRIT' ('Cobalt Strike named pipes detected: '+@($pipes).Count) ('Pipes: '+($pipes.Name -join ', ')+'. Active C2. See Section 17.')}else{ck 'PASS' 'No Cobalt Strike default named pipes detected'}}catch{ck 'INFO' 'Named pipe check unavailable (non-fatal)'} >> "%PSRUN%"
-echo $subs=@(Get-WMIObject -Namespace root\subscription -Class __EventFilter -EA SilentlyContinue ^| Where-Object { -not ( ($_.Name -eq 'SCM Event Log Filter' -and $_.Query -like '*MSFT_SCMEventLogEvent*') -or ($_.Name -in @('BVTConsumer','BVTFilter','RmAssistEventLog')) ) });if($subs.Count -gt 0){ck 'CRIT' ('Non-default WMI EventFilter subscriptions present: '+$subs.Count) 'Stealthy reboot-persistent implant. See Section 17. Remove: Get-WMIObject -NS root\subscription -Class __EventFilter ^| Remove-WMIObject'}else{ck 'PASS' 'No non-default WMI permanent EventFilter subscriptions'} >> "%PSRUN%"
+echo $ws='%WMISUB_STATE%';if($ws -match 'filter=(\d+)'){if([int]$matches[1] -gt 0){ck 'WARN' ('Non-default WMI EventFilter subscriptions present: '+$matches[1]+' (Section 17)') 'Stealthy reboot-persistent implant. See Section 17 for the filters and their queries.'}else{ck 'PASS' 'No non-default WMI permanent EventFilter subscriptions (Section 17)'}}elseif($ws -match 'filter=deferred'){ck 'INFO' 'WMI EventFilter subscriptions: NOT graded -- deferred, needs admin (Section 17)'}else{ck 'INFO' 'WMI EventFilter subscriptions: NOT graded -- Section 17 could not query root\subscription'} >> "%PSRUN%"
 if "%PROCPATH_STATE%"=="warn" echo ck 'WARN' 'Suspicious process paths: %PROCPATH_BAD% of %PROCPATH_TOTAL% in the Section 4 process snapshot' 'Running from Temp, Downloads, Users\Public or $Recycle, or not validly signed: %PROCPATH_NAMES%. Full paths in Section 4. This tile reports the Section 4 grade itself -- it does not enumerate the process list a second time.' >> "%PSRUN%"
 if "%PROCPATH_STATE%"=="info" echo ck 'INFO' 'Processes from user-profile paths, all validly signed: %PROCPATH_TOTAL% in the Section 4 process snapshot' '%PROCPATH_NAMES%. Per-user installs (Brave, Chrome, Edge, Slack, Teams, VS Code) live under AppData by design. Context, not a finding.' >> "%PSRUN%"
 if "%PROCPATH_STATE%"=="ok" echo ck 'PASS' 'No processes from Temp / AppData / Downloads / Public in the Section 4 process snapshot' >> "%PSRUN%"
@@ -5581,7 +5650,7 @@ rem tests\assert_printed_findings_raised.ps1 fails the build while the ledger
 rem row is missing, so this cannot be quietly forgotten.
 echo if(led 'WARNING' '13' 'T1546.008' 'Sticky Keys'^){ addfix 'Disable the Shift-x5 Sticky Keys shortcut (this user AND the logon screen)' 'foreach ($h in @(''HKCU:\Control Panel\Accessibility\StickyKeys'',''Registry::HKEY_USERS\.DEFAULT\Control Panel\Accessibility\StickyKeys'')) { $cur = (Get-ItemProperty -LiteralPath $h -Name Flags -EA SilentlyContinue).Flags; if ($null -ne $cur) { Set-ItemProperty -LiteralPath $h -Name Flags -Value ([string]([int]$cur -band -bnot 0x04)) -Force } }; Write-Host ''Sticky Keys itself is unchanged; only the Shift-x5 shortcut is off. Re-enable: Settings ^> Accessibility ^> Keyboard.''' 'foreach ($h in @(''HKCU:\Control Panel\Accessibility\StickyKeys'',''Registry::HKEY_USERS\.DEFAULT\Control Panel\Accessibility\StickyKeys'')) { $cur = (Get-ItemProperty -LiteralPath $h -Name Flags -EA SilentlyContinue).Flags; if ($null -ne $cur) { Set-ItemProperty -LiteralPath $h -Name Flags -Value ([string]([int]$cur -bor 0x04)) -Force } }' } >> "%PSRUN%"
 echo if($joined -match 'portproxy tunnel rules are ACTIVE'){ addfix 'Review netsh portproxy rules (LISTS ONLY -- reset would delete WSL/dev forwards too)' 'netsh interface portproxy show all; Write-Host ''Delete ONLY the rule you do not recognise: netsh interface portproxy delete v4tov4 listenport=^<port^> listenaddress=^<addr^>. WSL2 and Hyper-V port forwarding look identical to this IOC.''' '' } >> "%PSRUN%"
-echo if($joined -match 'WMI EventFilter subscriptions present'){ addfix 'Review non-default WMI EventFilter subscriptions (LISTS ONLY -- deletion is manual on purpose)' 'Get-CimInstance -Namespace root/subscription -ClassName __EventFilter -EA SilentlyContinue ^| Where-Object { $_.Name -notin @(''SCM Event Log Filter'',''BVTFilter'') } ^| Format-List Name,Query; Write-Host ''Review each filter above. A permanent WMI subscription is normal for management agents (ConfigMgr, Dell/HP/Lenovo, EDR). Delete one only after you know what registered it: Get-CimInstance -Namespace root/subscription -ClassName __EventFilter ^| Where-Object Name -eq ^<name^> ^| Remove-CimInstance''' '' } >> "%PSRUN%"
+echo if(led 'WARNING' '17' 'T1546.003' 'Non-default WMI EventFilter'){ addfix 'Review non-default WMI EventFilter subscriptions (LISTS ONLY -- deletion is manual on purpose)' 'Get-CimInstance -Namespace root/subscription -ClassName __EventFilter -EA SilentlyContinue ^| Where-Object { -not (($_.Name -eq ''SCM Event Log Filter'' -and $_.Query -like ''*MSFT_SCMEventLogEvent*'') -or ($_.Name -in @(''BVTConsumer'',''BVTFilter'',''RmAssistEventLog''))) } ^| Format-List Name,Query; Write-Host ''Review each filter above. A permanent WMI subscription is normal for management agents (ConfigMgr, Dell/HP/Lenovo, EDR). Delete one only after you know what registered it: Get-CimInstance -Namespace root/subscription -ClassName __EventFilter ^| Where-Object Name -eq ^<name^> ^| Remove-CimInstance''' '' } >> "%PSRUN%"
 echo if($joined -match 'Accessibility binary signature INVALID'){ addfix 'Restore corrupted system binaries' "sfc /scannow; DISM /Online /Cleanup-Image /RestoreHealth" '' } >> "%PSRUN%"
 echo if(led 'CRITICAL' '9' 'T1562.001' 'Defender core protection disabled'){ addfix 'Re-enable Defender real-time protection' "Set-MpPreference -DisableRealtimeMonitoring `$false" '' } >> "%PSRUN%"
 echo if($dcSigOld -match 'yes'){ addfix 'Update Defender signatures' "Update-MpSignature" '' } >> "%PSRUN%"

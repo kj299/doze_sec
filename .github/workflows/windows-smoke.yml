@@ -2353,6 +2353,62 @@ jobs:
       # with injected status objects; the live run grades this runner's real
       # state, which ships with real-time protection OFF (every full-run report
       # since the image was built shows the CRITICAL).
+      - name: account_events_check.ps1 + wmi_subscription_check.ps1 -SelfTest + live (a read that failed is a raised gap, never an all-clear)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($t in @(@{ N = 'account_events_check'; Min = 7 }, @{ N = 'wmi_subscription_check'; Min = 8 })) {
+            $st = (& ".\tools\$($t.N).ps1" -SelfTest) -join "`n"
+            if ($LASTEXITCODE -ne 0) { Write-Host $st; throw "$($t.N) -SelfTest failed" }
+            $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+            if ($n -lt $t.Min) { throw "$($t.N) self-test ran only $n case(s)" }
+            Write-Host "$($t.N) -SelfTest OK ($n cases)"
+          }
+          # LIVE, read-only, on the elevated runner: both read cleanly, so no
+          # gap marker and a valid state line. The counts are the runner's own.
+          $md = Join-Path $env:TEMP ("dz_ci_acct_{0}" -f $PID); New-Item -ItemType Directory -Path $md -Force | Out-Null
+          try {
+            $o = (.\tools\account_events_check.ps1 -MarkerDir $md) -join "`n"; Write-Host $o
+            if ($o -match 'Exception|is not recognized|CategoryInfo') { throw "PowerShell error text: $o" }
+            if ((Test-Path (Join-Path $md 'dz_acctev4720_gap.txt')) -or (Test-Path (Join-Path $md 'dz_acctev4732_gap.txt'))) { throw "an administrator could not read the runner's Security log: $o" }
+            $st = (Get-Content (Join-Path $md 'dz_acctev_state.txt') -Raw).Trim()
+            if ($st -notmatch '^e4720=\d+,e4732=\d+$') { throw "unexpected state: $st" }
+            Write-Host "MEASURED: the runner's account-event state is $st"
+          } finally { Remove-Item $md -Recurse -Force -EA SilentlyContinue }
+          $md = Join-Path $env:TEMP ("dz_ci_wmi_{0}" -f $PID); New-Item -ItemType Directory -Path $md -Force | Out-Null
+          try {
+            $o = (.\tools\wmi_subscription_check.ps1 -MarkerDir $md) -join "`n"; Write-Host $o
+            if ($o -match 'Exception|is not recognized|CategoryInfo') { throw "PowerShell error text: $o" }
+            if (Test-Path (Join-Path $md 'dz_wmisub_gap.txt')) { throw "an administrator could not query root\subscription on the runner: $o" }
+            $st = (Get-Content (Join-Path $md 'dz_wmisub_state.txt') -Raw).Trim()
+            if ($st -notmatch '^filter=\d+,cmd=\d+,script=\d+$') { throw "unexpected state: $st" }
+            if ($st -ne 'filter=0,cmd=0,script=0') { throw "a clean runner reported a WMI subscription (false positive): $o" }
+            Write-Host "MEASURED: the runner's WMI subscription state is $st"
+          } finally { Remove-Item $md -Recurse -Force -EA SilentlyContinue }
+          # THE READ THAT FAILS, through the real readers: a log and a namespace
+          # that do not exist. Each must be a raised gap -- the gap marker, no
+          # hit marker, no [OK] -- and the state must say gap, not 0.
+          $md = Join-Path $env:TEMP ("dz_ci_acct_gap_{0}" -f $PID); New-Item -ItemType Directory -Path $md -Force | Out-Null
+          try {
+            $o = (.\tools\account_events_check.ps1 -MarkerDir $md -LogName 'dz-ci-no-such-log' -Elevated 1) -join "`n"; Write-Host $o
+            if ($o -notmatch '(?m)^\[WARNING\] New-account check \(Event 4720\) NOT performed') { throw 'an unreadable log was not declared a NOT-performed gap' }
+            if ($o -match '(?m)^\[OK\]') { throw 'an unreadable log printed an all-clear' }
+            if (-not ((Test-Path (Join-Path $md 'dz_acctev4720_gap.txt')) -and (Test-Path (Join-Path $md 'dz_acctev4732_gap.txt')))) { throw 'the gap wrote no gap marker for each check' }
+            if ((Test-Path (Join-Path $md 'dz_ev4720_hit.txt')) -or (Test-Path (Join-Path $md 'dz_ev4732_hit.txt'))) { throw 'the gap wrote a hit marker -- its row would claim an account was created' }
+            if ((Get-Content (Join-Path $md 'dz_acctev_state.txt') -Raw).Trim() -ne 'e4720=gap,e4732=gap') { throw 'the state does not say gap' }
+          } finally { Remove-Item $md -Recurse -Force -EA SilentlyContinue }
+          $md = Join-Path $env:TEMP ("dz_ci_wmi_gap_{0}" -f $PID); New-Item -ItemType Directory -Path $md -Force | Out-Null
+          try {
+            $o = (.\tools\wmi_subscription_check.ps1 -MarkerDir $md -Namespace 'root\dz_ci_no_such_namespace' -Elevated 1) -join "`n"; Write-Host $o
+            if ($o -notmatch '(?m)^\[WARNING\] WMI EventFilter check NOT performed') { throw 'a namespace that could not be queried was not declared a NOT-performed gap' }
+            if ($o -match '(?m)^\[(OK|SKIPPED)\]') { throw 'a failed WMI query printed [OK] or an unraised [SKIPPED]' }
+            if (-not (Test-Path (Join-Path $md 'dz_wmisub_gap.txt'))) { throw 'the gap wrote no gap marker' }
+            if (Test-Path (Join-Path $md 'dz_wmi_filter_hit.txt')) { throw 'the gap wrote a hit marker -- its row would claim a subscription' }
+            if ((Get-Content (Join-Path $md 'dz_wmisub_state.txt') -Raw).Trim() -ne 'filter=gap,cmd=gap,script=gap') { throw 'the state does not say gap' }
+          } finally { Remove-Item $md -Recurse -Force -EA SilentlyContinue }
+          Write-Host 'account events + WMI subscriptions: clean on the runner; a failed read is a raised gap through the real reader'
+          exit 0
+
       - name: log_clear_check.ps1 -SelfTest + live (a clear under this PC's own name is CRITICAL; one made before it took its name is image preparation)
         shell: powershell
         run: |
