@@ -2029,7 +2029,9 @@ jobs:
           $md = Join-Path $env:TEMP ("dz_cbs_ci_{0}" -f $PID)
           New-Item -ItemType Directory -Path $md -Force | Out-Null
           try {
-            $out = (.\tools\cbs_integrity_check.ps1 -MarkerDir $md) -join "`n"
+            # A generous budget for the live read, so a slow runner is not a
+            # gap; then ANY gap on an elevated runner is a failure, not a pass.
+            $out = (.\tools\cbs_integrity_check.ps1 -MarkerDir $md -BudgetSeconds 120) -join "`n"
             Write-Host $out
             if ($out -notmatch '\[(OK|INFO|WARNING|SKIPPED)\]') { throw 'the live run emitted no graded line at all' }
             if ($out -match '\[BUDGET\]') { throw 'the [BUDGET] tag is back -- a raised gap prints [WARNING] ... NOT performed' }
@@ -2108,11 +2110,26 @@ jobs:
                 } finally { Remove-Item $mdB -Recurse -Force -EA SilentlyContinue }
               }
             } finally { Remove-Item $fxB -Force -EA SilentlyContinue }
+            # ONE FILE READ, ONE NOT: the unread one is part of the window NOT
+            # examined, so it is a raised gap and withholds the all-clear (it
+            # used to print only an [INFO] line beneath an [OK]).
+            $fxM = Join-Path $env:TEMP ("dz_cbs_mixed_{0}.log" -f $PID)
+            Set-Content -LiteralPath $fxM -Encoding ASCII -Value '2026-09-01 08:00:00, Info                  CBS    Starting TrustedInstaller initialization.'
+            $mdM = Join-Path $env:TEMP ("dz_cbs_mixed_md_{0}" -f $PID)
+            New-Item -ItemType Directory -Path $mdM -Force | Out-Null
+            try {
+              $outM = (.\tools\cbs_integrity_check.ps1 -Path $fxM, (Join-Path $env:TEMP ("dz_no_such_cbs_m_{0}.log" -f $PID)) -MarkerDir $mdM) -join "`n"
+              Write-Host $outM
+              if ($outM -notmatch '(?m)^\[WARNING\] System-file integrity check NOT performed in full -- 0 CBS log file\(s\) denied and 1 unreadable') { throw 'a CBS log that could not be opened beside a readable one was not declared as a gap' }
+              if (-not (Test-Path (Join-Path $mdM 'dz_cbs_gap.txt'))) { throw 'the partly-unread window wrote no gap marker' }
+              if ($outM -match '(?m)^\[OK\]') { throw 'an all-clear printed over a window with an unread log' }
+            } finally { Remove-Item $fxM, $mdM -Recurse -Force -EA SilentlyContinue }
             # A CLEAN RUNNER WRITES NO FINDING MARKER. This used to accept a
             # WARNING "because the runner may run out of budget" -- the branch
             # that accepted the misworded row above. A budget or access gap
             # now writes only dz_cbs_gap.txt, so a finding marker here is a
             # false positive (measured: the runner reads its CBS logs in full).
+            if ((Test-Path (Join-Path $md 'dz_cbs_gap.txt')) -or $out -match 'NOT performed') { throw "cbs_integrity_check declared a gap on an elevated runner with a 120 s budget, where every CBS log is readable: $out" }
             $m = Join-Path $md 'dz_cbs.txt'
             if (Test-Path $m) { throw ("cbs_integrity_check wrote a {0} finding marker on a clean runner (false positive): {1}" -f (Get-Content $m).Trim(), $out) }
             # An unreadable log must never be graded OK, and budget exhaustion

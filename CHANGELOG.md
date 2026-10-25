@@ -21,7 +21,9 @@ budget" -- the branch that accepted the misworded row. Budget exhaustion now
 prints `[WARNING] System-file integrity check NOT performed in full ...`,
 raises through the gap marker, and never prints the all-clear; CI drives both
 budget paths through the real reader and a clean runner may write no finding
-marker at all.
+marker at all. The review found the same hole one branch over: a CBS log
+that could not be opened beside a readable one printed an `[INFO]` line
+under an `[OK]`; it is a raised gap now too.
 
 The same run showed an ADVISE explaining the wrong account: the OpenAI Codex
 sandbox entry matched every hidden-account line, so cloudbase-init's line

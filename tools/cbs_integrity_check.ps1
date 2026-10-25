@@ -47,7 +47,7 @@
 param(
     # Point at a fixture instead of the real log. The self-test needs no
     # filesystem at all, but a fixture path lets CI drive the real reader.
-    [string]$Path = '',
+    [string[]]$Path = @(),
     [string]$MarkerDir = $env:TEMP,
     [int]$MaxReport = 15,
     # A CBS.log can be tens of megabytes and there can be many rotated
@@ -424,6 +424,7 @@ if (($read + $partial) -eq 0) {
     } else {
         '[WARNING] CBS log(s) could not be read -- system-file integrity NOT checked.'
     }
+    if ($skipped -gt 0 -and ($denied + $failed) -gt 0) { "[INFO] $skipped further CBS log file(s) were never opened: the ${BudgetSeconds}s wall-clock budget ran out." }
     Write-Marker -Name 'cbs_gap' -Sev 'WARNING'
     return
 }
@@ -444,14 +445,14 @@ if ($v.Findings.Count -gt $shown) {
 }
 foreach ($c in $v.Context) { $c }
 
-if ($denied -gt 0) {
-    "[INFO] $denied CBS log file(s) could not be read (access denied); $read were read in full."
+if (($denied + $failed) -gt 0) {
+    # A file that could not be opened is part of the window NOT examined: a
+    # gap, raised, and it withholds the all-clear like a budget cut does.
+    "[WARNING] System-file integrity check NOT performed in full -- $denied CBS log file(s) denied and $failed unreadable for another reason were NOT examined; $read were read in full."
+    Write-Marker -Name 'cbs_gap' -Sev 'WARNING'
 }
-if ($failed -gt 0) {
-    "[INFO] $failed CBS log file(s) could not be read for another reason and were NOT examined."
-}
-$cutShort = (($partial + $skipped) -gt 0)
-if ($cutShort) {
+$cutShort = (($partial + $skipped + $denied + $failed) -gt 0)
+if (($partial + $skipped) -gt 0) {
     # Budget exhaustion is missing coverage, and is declared as such. A clean
     # verdict over a partially read log would be a claim this run cannot make.
     # It is a GAP, raised through the gap marker: it used to raise the
