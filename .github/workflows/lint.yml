@@ -537,8 +537,9 @@ jobs:
                    'a pipe list that could not be read is a raised gap, never [OK] and never an unraised [SKIPPED]'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 6 ] || { echo "only $n case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 8 ] || { echo "only $n case(s)"; exit 1; }
           for b in doze_sec.bat doze_sec_noAdmin.bat; do
+            grep -qF 'Sliver/Havoc/Brute Ratel named-pipe check produced no verdict' "$b" || { echo "$b: Section 18 lost its no-verdict backstop"; exit 1; }
             # The broken shape: a silenced listing inside a try, whose catch can
             # never run (18b's silenced listing is fine: an empty list is its gap).
             grep -qF 'try{$pipes=Get-ChildItem \\.\pipe\ -EA SilentlyContinue' "$b" && { echo "$b: a silenced pipe listing inside a try is back (a failed listing reads as no pipes)"; exit 1; }

@@ -5219,6 +5219,15 @@ if exist "%TEMP%\dz_pipes_c2_gap.txt" (
     call :dz_finding WARNING 18 T1071 "Sliver/Havoc/Brute Ratel named-pipe check NOT performed - the pipe list could not be read"
     del "%TEMP%\dz_pipes_c2_gap.txt" 2>nul
 )
+set "_PC2ST="
+if exist "%TEMP%\dz_pipes_c2_state.txt" set /p _PC2ST=<"%TEMP%\dz_pipes_c2_state.txt"
+del "%TEMP%\dz_pipes_c2_state.txt" 2>nul
+set "_PC2OK="
+if defined _PC2ST if "!_PC2ST:~0,3!"=="c2=" set "_PC2OK=1"
+if not defined _PC2OK if exist "%SCRIPT_DIR%tools\named_pipe_check.ps1" (
+    echo [WARNING] Sliver/Havoc/Brute Ratel named-pipe check produced no verdict -- NOT performed: tools\named_pipe_check.ps1 ran but wrote no usable verdict.>> "%REPORT%"
+    call :dz_finding WARNING 18 T1071 "Sliver/Havoc/Brute Ratel named-pipe check produced no verdict - NOT performed"
+)
 
 :: --- [CTI] DLL Search Order Hijacking (T1574.001) ---
 echo.>> "%REPORT%"
