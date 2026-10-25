@@ -2003,6 +2003,51 @@ jobs:
           Write-Host "log_gap_check.ps1 OK"
           exit 0
 
+      - name: "MEASURE: why the runner's real CBS logs read slower than a synthetic one (read-only, before any other CBS read)"
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # PR #264 measured 64.3 MB of REAL CBS log in 12.4 s while a fresh
+          # 150 MB synthetic log took 2.3 s on the same runner. Disk (a cold
+          # first read), per-file cost, NTFS compression or content shape each
+          # need a different fix, so this step measures instead of guessing.
+          # It runs BEFORE the cbs step below so the first touch is cold.
+          # Read-only: every file is opened for Read with ReadWrite sharing.
+          $dir = Join-Path $env:SystemRoot 'Logs\CBS'
+          $files = @(Get-ChildItem -LiteralPath $dir -Filter '*.log' -File -EA SilentlyContinue | Sort-Object LastWriteTimeUtc -Descending)
+          $buf = New-Object byte[] 1048576
+          function RawRead([string]$p) {
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            $fs = [IO.File]::Open($p, 'Open', 'Read', 'ReadWrite')
+            try { while ($fs.Read($buf, 0, $buf.Length) -gt 0) { } } finally { $fs.Dispose() }
+            return $sw.Elapsed.TotalSeconds
+          }
+          $tot = @{ Bytes = [long]0; Cold = 0.0; Warm = 0.0; Tool = 0.0 }
+          Write-Host ("{0} CBS log file(s) under {1}" -f $files.Count, $dir)
+          foreach ($f in $files) {
+            $comp = [bool]($f.Attributes -band [IO.FileAttributes]::Compressed)
+            $cold = RawRead $f.FullName
+            $warm = RawRead $f.FullName
+            $md = Join-Path $env:TEMP ("dz_cbs_meas_{0}" -f $PID)
+            New-Item -ItemType Directory -Path $md -Force | Out-Null
+            try { $o = (.\tools\cbs_integrity_check.ps1 -Path $f.FullName -MarkerDir $md -BudgetSeconds 600) -join "`n" } finally { Remove-Item $md -Recurse -Force -EA SilentlyContinue }
+            $t = [regex]::Match($o, 'Scanned [\d.,]+ MB of CBS log in ([\d.,]+) s')
+            $tool = if ($t.Success) { [double]::Parse($t.Groups[1].Value.Replace(',', '.'), [Globalization.CultureInfo]::InvariantCulture) } else { -1 }
+            $hits = ([regex]::Matches($o, '(?im)corrupt|repaired|cannot repair')).Count
+            $mb = $f.Length / 1MB
+            Write-Host ("  {0,-40} {1,8:N1} MB  compressed={2,-5}  cold {3,6:N2} s ({4,7:N1} MB/s)  warm {5,6:N2} s ({6,7:N1} MB/s)  tool(warm) {7,6:N2} s  finding-words-in-output {8}" -f $f.Name, $mb, $comp, $cold, ($mb / [math]::Max($cold, 0.001)), $warm, ($mb / [math]::Max($warm, 0.001)), $tool, $hits)
+            $tot.Bytes += $f.Length; $tot.Cold += $cold; $tot.Warm += $warm; if ($tool -ge 0) { $tot.Tool += $tool }
+          }
+          $mbT = $tot.Bytes / 1MB
+          Write-Host ("TOTAL {0:N1} MB in {1} file(s): cold raw {2:N2} s, warm raw {3:N2} s, tool on warm files {4:N2} s" -f $mbT, $files.Count, $tot.Cold, $tot.Warm, $tot.Tool)
+          # The disk's share is what a cold read costs over a warm one; the
+          # scan's share is the tool's time on files already in the cache.
+          $disk = [math]::Max($tot.Cold - $tot.Warm, 0)
+          $verdict = if ($disk -ge 0.7 * ($disk + $tot.Tool)) { 'I/O-bound (the cold disk read is most of the time)' } elseif ($tot.Tool -ge 0.7 * ($disk + $tot.Tool)) { 'CPU-bound (the scan, not the disk)' } else { 'mixed' }
+          Write-Host ("disk share {0:N2} s, scan share {1:N2} s" -f $disk, $tot.Tool)
+          Write-Host ("MEASURED VERDICT: {0}" -f $verdict)
+          exit 0
+
       - name: cbs_integrity_check.ps1 (Windows' own record of corrupt system binaries)
         shell: powershell
         run: |

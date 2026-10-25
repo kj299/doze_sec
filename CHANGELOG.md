@@ -29,6 +29,14 @@ real files: chunk edges, LF, CRLF and CR-only, a last line with no newline, a
 file with no line ends, a failure part-way that keeps its hits, and a fake
 clock for the cut-short path.
 
+CI then showed what I had not predicted: the runner's REAL CBS logs read at
+64.3 MB in 12.4 s, about 13 times slower per MB than the synthetic fixture on
+the same runner. Before deciding anything, a read-only CI step now measures
+each real log cold and warm, with its NTFS compression flag and the tool's own
+scan time, and prints whether the time is the disk or the scan; the tool's
+`Scanned` line also names the slowest file, so a field run says where its
+budget went.
+
 ### A time budget that ran out is a gap, never "a corrupt system binary"
 The re-run on a freshly built WIN11-02 (the owner's template, 2026-10-24)
 completed with no CRITICAL, and its ledger held a row the report did not
