@@ -14,11 +14,13 @@
 #                            (dz_ev4720_hit.txt / dz_ev4732_hit.txt);
 #   * no events           -> [OK], the same wording as before;
 #   * the log could not be read:
-#       - elevated token  -> a raised gap: "[WARNING] ... NOT performed",
-#                            marker dz_acctev_gap.txt (never the hit marker,
-#                            so the ledger row says what was observed);
-#       - standard user   -> [DEFERRED - ADMIN REQUIRED], counted through
-#                            dz_acctev_deferred.txt, never a ledger row.
+#       - access denied on a standard-user token -> [DEFERRED - ADMIN
+#                            REQUIRED], counted through dz_acctev_deferred.txt,
+#                            never a ledger row;
+#       - any other failure, or an administrator token -> a raised gap:
+#                            "[WARNING] ... NOT performed", one marker per
+#                            check (dz_acctev4720_gap / dz_acctev4732_gap),
+#                            never the hit marker.
 # One state line for the dashboard (a tile that re-measures is a second
 # opinion), a comma never a pipe (the bat pastes it into an echo):
 #   e4720=<count|gap|deferred>,e4732=<count|gap|deferred>
@@ -45,13 +47,13 @@ if (-not $MarkerDir) { $MarkerDir = [IO.Path]::GetTempPath() }
 if (-not $StateFile) { $StateFile = Join-Path $MarkerDir 'dz_acctev_state.txt' }
 
 function Write-Marker {
-    param([string]$Name, [string]$Value)
+    param([string]$Name, [string]$Sev)
     # An empty value is no verdict, never a marker.
-    if (-not $Value) { return }
+    if (-not $Sev) { return }
     if (-not (Test-Path -LiteralPath $MarkerDir)) {
         New-Item -ItemType Directory -Path $MarkerDir -Force -EA SilentlyContinue | Out-Null
     }
-    Set-Content -LiteralPath (Join-Path $MarkerDir ("dz_{0}.txt" -f $Name)) -Value $Value -Encoding ASCII
+    Set-Content -LiteralPath (Join-Path $MarkerDir ("dz_{0}.txt" -f $Name)) -Value $Sev -Encoding ASCII
 }
 
 function ConvertTo-PrintableText {
@@ -62,29 +64,35 @@ function ConvertTo-PrintableText {
 
 # The two checks, in the order the report prints them.
 $script:AcctChecks = @(
-    @{ Id = 4720; Key = 'e4720'; Hit = 'ev4720_hit'; What = 'New-account check (Event 4720)'
+    @{ Id = 4720; Key = 'e4720'; Hit = 'ev4720_hit'; Gap = 'acctev4720_gap'; What = 'New-account check (Event 4720)'
        Found = '[WARNING] New local account(s) created: {0} event(s) (T1136.001) -- review the names listed above.'
        None = '[OK] No new local account creation events (4720).' },
-    @{ Id = 4732; Key = 'e4732'; Hit = 'ev4732_hit'; What = 'Privileged-group check (Event 4732)'
+    @{ Id = 4732; Key = 'e4732'; Hit = 'ev4732_hit'; Gap = 'acctev4732_gap'; What = 'Privileged-group check (Event 4732)'
        Found = '[WARNING] Account(s) added to a privileged group: {0} event(s) (T1098) -- review the names listed above.'
        None = '[OK] No unexpected additions to Administrators (4732).' }
 )
 
-# PURE. $Results maps an event id to @{ Count; Error }: Error is '' when the
-# log was read, else why it could not be. Returns @{ Lines; Hits; Gap;
-# Deferred; State }, Hits being the hit-marker names to write.
+# PURE. $Results maps an event id to @{ Count; Error; Denied }: Error is ''
+# when the log was read, else why it could not be; Denied says the reason was
+# access denied. Only a DENIED read on a standard-user token is a deferral --
+# the token explains it. Any other failure (the EventLog service down, a
+# corrupt log) is a raised gap on either token: the token does not explain
+# it, and calling it a deferral would state a cause the tool never observed.
+# Returns @{ Lines; Hits; Gaps; Deferred; State }, Hits and Gaps being the
+# marker names to write (one gap marker per check, so each raises under its
+# own technique).
 function Get-AccountEventVerdict {
     param([hashtable]$Results, [bool]$IsElevated = $true)
     $out = New-Object System.Collections.ArrayList
     $hits = New-Object System.Collections.ArrayList
-    $gap = $false; $deferred = 0
+    $gaps = New-Object System.Collections.ArrayList; $deferred = 0
     $state = New-Object System.Collections.ArrayList
     foreach ($c in $script:AcctChecks) {
         $r = $Results[$c.Id]
         if ($null -eq $r) { $r = @{ Count = 0; Error = 'no result was produced' } }
         if ($r.Error) {
-            if ($IsElevated) {
-                $gap = $true
+            if ($IsElevated -or -not $r.Denied) {
+                [void]$gaps.Add($c.Gap)
                 [void]$state.Add($c.Key + '=gap')
                 [void]$out.Add(('[WARNING] ' + $c.What + ' NOT performed -- the Security log could not be read (' + (ConvertTo-PrintableText $r.Error) + '), so such an event would go unseen.'))
             } else {
@@ -101,24 +109,34 @@ function Get-AccountEventVerdict {
             [void]$out.Add($c.None)
         }
     }
-    return @{ Lines = @($out.ToArray()); Hits = @($hits.ToArray()); Gap = $gap; Deferred = $deferred; State = (@($state.ToArray()) -join ',') }
+    return @{ Lines = @($out.ToArray()); Hits = @($hits.ToArray()); Gaps = @($gaps.ToArray()); Gap = ($gaps.Count -gt 0); Deferred = $deferred; State = (@($state.ToArray()) -join ',') }
 }
 
 # Live: how many of one event the Security log holds (up to 5, as before), and
 # why it could not be read. The log is opened first by name: a log this token
 # may not read must be "could not be read", never "no matching events".
+function Test-Denied {
+    # Access denied anywhere in the exception chain.
+    param($Err)
+    $x = $Err.Exception
+    while ($x) {
+        if ($x -is [System.UnauthorizedAccessException]) { return $true }
+        $x = $x.InnerException
+    }
+    return $false
+}
 function Read-EventCount {
     param([int]$Id)
     try { $null = Get-WinEvent -LogName $LogName -MaxEvents 1 -ErrorAction Stop }
     catch {
-        if ($_.FullyQualifiedErrorId -notmatch 'NoMatchingEventsFound') { return @{ Count = 0; Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message) } }
+        if ($_.FullyQualifiedErrorId -notmatch 'NoMatchingEventsFound') { return @{ Count = 0; Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message); Denied = (Test-Denied $_) } }
     }
     try {
         $e = @(Get-WinEvent -FilterHashtable @{ LogName = $LogName; Id = $Id } -MaxEvents 5 -ErrorAction Stop)
-        return @{ Count = $e.Count; Error = '' }
+        return @{ Count = $e.Count; Error = ''; Denied = $false }
     } catch {
-        if ($_.FullyQualifiedErrorId -match 'NoMatchingEventsFound') { return @{ Count = 0; Error = '' } }
-        return @{ Count = 0; Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message) }
+        if ($_.FullyQualifiedErrorId -match 'NoMatchingEventsFound') { return @{ Count = 0; Error = ''; Denied = $false } }
+        return @{ Count = 0; Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message); Denied = (Test-Denied $_) }
     }
 }
 
@@ -136,11 +154,13 @@ if ($SelfTest) {
     $v = Get-AccountEventVerdict -Results @{ 4720 = @{ Count = 0; Error = 'EventLogException: access denied' }; 4732 = @{ Count = 0; Error = 'EventLogException: access denied' } } -IsElevated $true
     $t = $v.Lines -join "`n"
     T 'an administrator who cannot read the Security log gets a raised gap, never "[OK] No new local account"' ($v.Gap -and $v.Hits.Count -eq 0 -and $v.State -eq 'e4720=gap,e4732=gap' -and $t -match '(?m)^\[WARNING\] New-account check \(Event 4720\) NOT performed' -and $t -notmatch '\[OK\]') $t
-    $v = Get-AccountEventVerdict -Results @{ 4720 = @{ Count = 0; Error = 'UnauthorizedAccessException: denied' }; 4732 = @{ Count = 0; Error = 'UnauthorizedAccessException: denied' } } -IsElevated $false
+    $v = Get-AccountEventVerdict -Results @{ 4720 = @{ Count = 0; Error = 'UnauthorizedAccessException: denied'; Denied = $true }; 4732 = @{ Count = 0; Error = 'UnauthorizedAccessException: denied'; Denied = $true } } -IsElevated $false
     $t = $v.Lines -join "`n"
     T 'a standard-user token is a deferral, never a gap row and never an all-clear' ((-not $v.Gap) -and $v.Deferred -eq 2 -and $v.State -eq 'e4720=deferred,e4732=deferred' -and $t -match '\[DEFERRED - ADMIN REQUIRED\] New-account check' -and $t -notmatch '\[OK\]' -and $t -notmatch '\[WARNING\]') $t
+    $v = Get-AccountEventVerdict -Results @{ 4720 = @{ Count = 0; Error = 'EventLogException: The RPC server is unavailable'; Denied = $false }; 4732 = @{ Count = 0; Error = ''; Denied = $false } } -IsElevated $false
+    T 'on a standard-user token a failure that is NOT access denied is a raised gap, not a deferral (the token does not explain it)' ($v.Gap -and $v.Deferred -eq 0 -and (($v.Gaps -join ',') -eq 'acctev4720_gap') -and $v.State -eq 'e4720=gap,e4732=0') ($v.Lines -join ' | ')
     $v = Get-AccountEventVerdict -Results @{ 4720 = @{ Count = 3; Error = '' }; 4732 = @{ Count = 0; Error = 'x' } } -IsElevated $true
-    T 'one log readable and one not: the finding raised AND the gap raised, each under its own marker' (($v.Hits -join ',') -eq 'ev4720_hit' -and $v.Gap -and $v.State -eq 'e4720=3,e4732=gap') ($v.Lines -join ' | ')
+    T 'one log readable and one not: the finding raised AND the gap raised, each under its own marker' (($v.Hits -join ',') -eq 'ev4720_hit' -and (($v.Gaps -join ',') -eq 'acctev4732_gap') -and $v.State -eq 'e4720=3,e4732=gap') ($v.Lines -join ' | ')
     $v = Get-AccountEventVerdict -Results @{ 4720 = @{ Count = 0; Error = '' } } -IsElevated $true
     T 'a check that produced no result is a gap, never an [OK]' ($v.Gap -and $v.State -eq 'e4720=0,e4732=gap') ($v.Lines -join ' | ')
     $v = Get-AccountEventVerdict -Results @{ 4720 = @{ Count = 0; Error = ('bad' + [char]10 + '[OK] fine') }; 4732 = @{ Count = 0; Error = '' } } -IsElevated $true
@@ -166,8 +186,11 @@ if ($null -eq $v -or [string]$v.State -notmatch '^e4720=(\d+|gap|deferred),e4732
     exit 1
 }
 foreach ($l in $v.Lines) { $l }
-foreach ($h in $v.Hits) { Write-Marker -Name $h -Value 'hit' }
-if ($v.Gap) { Write-Marker -Name 'acctev_gap' -Value 'WARNING' }
-if ($v.Deferred -gt 0) { Write-Marker -Name 'acctev_deferred' -Value ([string]$v.Deferred) }
-try { Set-Content -LiteralPath $StateFile -Value $v.State -Encoding ASCII } catch {}
+foreach ($h in $v.Hits) { Write-Marker -Name $h -Sev 'hit' }
+# Named literally, one per check, so each raises under its own technique.
+if ($v.Gaps -contains 'acctev4720_gap') { Write-Marker -Name 'acctev4720_gap' -Sev 'WARNING' }
+if ($v.Gaps -contains 'acctev4732_gap') { Write-Marker -Name 'acctev4732_gap' -Sev 'WARNING' }
+if ($v.Deferred -gt 0) { Write-Marker -Name 'acctev_deferred' -Sev ([string]$v.Deferred) }
+try { Set-Content -LiteralPath $StateFile -Value $v.State -Encoding ASCII -ErrorAction Stop }
+catch { ('account_events_check: the verdict above could not be saved for the dashboard (' + (ConvertTo-PrintableText $_.Exception.Message) + ').'); exit 1 }
 exit 0

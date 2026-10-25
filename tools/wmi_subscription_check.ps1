@@ -21,8 +21,10 @@
 #                  marker per class (dz_wmi_filter_hit / _cmd_hit / _script_hit);
 #   * none      -> [OK], the same wording as before;
 #   * query failed:
-#       - elevated token -> "[WARNING] ... NOT performed", marker dz_wmisub_gap;
-#       - standard user  -> [DEFERRED - ADMIN REQUIRED], dz_wmisub_deferred.
+#       - access denied on a standard-user token -> [DEFERRED - ADMIN
+#         REQUIRED], dz_wmisub_deferred (the token explains it);
+#       - any other failure, or an administrator token -> "[WARNING] ... NOT
+#         performed", marker dz_wmisub_gap.
 # The default Microsoft filters stay allowlisted exactly as before. State line
 # for the dashboard (a comma, never a pipe):
 #   filter=<n|gap|deferred>,cmd=<n|gap|deferred>,script=<n|gap|deferred>
@@ -49,12 +51,12 @@ if (-not $MarkerDir) { $MarkerDir = [IO.Path]::GetTempPath() }
 if (-not $StateFile) { $StateFile = Join-Path $MarkerDir 'dz_wmisub_state.txt' }
 
 function Write-Marker {
-    param([string]$Name, [string]$Value)
-    if (-not $Value) { return }
+    param([string]$Name, [string]$Sev)
+    if (-not $Sev) { return }
     if (-not (Test-Path -LiteralPath $MarkerDir)) {
         New-Item -ItemType Directory -Path $MarkerDir -Force -EA SilentlyContinue | Out-Null
     }
-    Set-Content -LiteralPath (Join-Path $MarkerDir ("dz_{0}.txt" -f $Name)) -Value $Value -Encoding ASCII
+    Set-Content -LiteralPath (Join-Path $MarkerDir ("dz_{0}.txt" -f $Name)) -Value $Sev -Encoding ASCII
 }
 
 function ConvertTo-PrintableText {
@@ -79,8 +81,12 @@ function Format-Table200 {
     return @(($s -split "`r?`n") | ForEach-Object { $_.TrimEnd() } | Where-Object { $_ -ne '' } | ForEach-Object { ConvertTo-PrintableText $_ })
 }
 
-# PURE. $Q maps 'filter'/'cmd'/'script' to @{ Items; Error }: Items the WMI
-# instances (any objects with the properties), Error '' when the query ran.
+# PURE. $Q maps 'filter'/'cmd'/'script' to @{ Items; Error; Denied }: Items
+# the WMI instances (any objects with the properties), Error '' when the query
+# ran, Denied when the reason was access denied. Only a DENIED query on a
+# standard-user token is a deferral: Authenticated Users can normally query
+# root\subscription, so any other failure -- a broken repository above all --
+# is a raised gap on either token.
 # Returns @{ Lines; Hits; Gap; Deferred; State }.
 function Get-WmiSubscriptionVerdict {
     param([hashtable]$Q, [bool]$IsElevated = $true)
@@ -97,7 +103,7 @@ function Get-WmiSubscriptionVerdict {
         $r = $Q[$s.Key]
         if ($null -eq $r) { $r = @{ Items = @(); Error = 'no result was produced' } }
         if ($r.Error) {
-            if ($IsElevated) {
+            if ($IsElevated -or -not $r.Denied) {
                 $gap = $true
                 [void]$state.Add($s.Key + '=gap')
                 [void]$out.Add(('[WARNING] WMI ' + $s.Class + ' check NOT performed -- root\subscription could not be queried (' + (ConvertTo-PrintableText $r.Error) + '). A broken WMI repository is also a way to hide a subscription.'))
@@ -144,10 +150,25 @@ function Get-WmiSubscriptionVerdict {
 }
 
 # Live: one class from root\subscription, and why it could not be queried.
+function Test-Denied {
+    # Access denied anywhere in the exception chain: UnauthorizedAccessException,
+    # or WMI's own WBEM_E_ACCESS_DENIED (0x80041003).
+    param($Err)
+    $x = $Err.Exception
+    while ($x) {
+        if ($x -is [System.UnauthorizedAccessException]) { return $true }
+        # By name: a [System.Management...] type literal throws where that
+        # assembly is not loaded.
+        if ($x.GetType().FullName -eq 'System.Management.ManagementException' -and [string]$x.ErrorCode -eq 'AccessDenied') { return $true }
+        if ($x -is [System.Runtime.InteropServices.COMException] -and $x.ErrorCode -eq -2147217405) { return $true }
+        $x = $x.InnerException
+    }
+    return $false
+}
 function Read-WmiClass {
     param([string]$Class)
-    try { return @{ Items = @(Get-WmiObject -Namespace $Namespace -Class $Class -ErrorAction Stop); Error = '' } }
-    catch { return @{ Items = @(); Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message) } }
+    try { return @{ Items = @(Get-WmiObject -Namespace $Namespace -Class $Class -ErrorAction Stop); Error = ''; Denied = $false } }
+    catch { return @{ Items = @(); Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message); Denied = (Test-Denied $_) } }
 }
 
 if ($SelfTest) {
@@ -172,8 +193,10 @@ if ($SelfTest) {
     $v = Get-WmiSubscriptionVerdict -Q @{ filter = @{ Items = @(); Error = 'COMException: Invalid namespace' }; cmd = @{ Items = @(); Error = 'COMException: Invalid namespace' }; script = @{ Items = @(); Error = 'COMException: Invalid namespace' } } -IsElevated $true
     $t = $v.Lines -join "`n"
     T 'a query that failed on an administrator token is a raised gap, never [OK] and never [SKIPPED]' ($v.Gap -and $v.Hits.Count -eq 0 -and $v.State -eq 'filter=gap,cmd=gap,script=gap' -and $t -match '(?m)^\[WARNING\] WMI EventFilter check NOT performed' -and $t -notmatch '\[OK\]' -and $t -notmatch '\[SKIPPED\]') $t
-    $v = Get-WmiSubscriptionVerdict -Q @{ filter = @{ Items = @(); Error = 'UnauthorizedAccessException: denied' }; cmd = $none; script = $none } -IsElevated $false
+    $v = Get-WmiSubscriptionVerdict -Q @{ filter = @{ Items = @(); Error = 'UnauthorizedAccessException: denied'; Denied = $true }; cmd = $none; script = $none } -IsElevated $false
     T 'a standard-user token that cannot query is a deferral, not a gap row' ((-not $v.Gap) -and $v.Deferred -eq 1 -and $v.State -eq 'filter=deferred,cmd=0,script=0' -and ($v.Lines -join "`n") -match '\[DEFERRED - ADMIN REQUIRED\] WMI EventFilter check') ($v.Lines -join ' | ')
+    $v = Get-WmiSubscriptionVerdict -Q @{ filter = @{ Items = @(); Error = 'ManagementException: Invalid class'; Denied = $false }; cmd = $none; script = $none } -IsElevated $false
+    T 'on a standard-user token a broken repository (not access denied) is a raised gap, not a deferral' ($v.Gap -and $v.Deferred -eq 0 -and $v.State -eq 'filter=gap,cmd=0,script=0' -and ($v.Lines -join "`n") -match '(?m)^\[WARNING\] WMI EventFilter check NOT performed') ($v.Lines -join ' | ')
     $v = Get-WmiSubscriptionVerdict -Q @{ filter = @{ Items = @($evil); Error = '' }; cmd = @{ Items = @(); Error = 'x' }; script = $none } -IsElevated $true
     T 'a finding in one class and a failed query in another: both raised, each under its own marker' (($v.Hits -join ',') -eq 'wmi_filter_hit' -and $v.Gap -and $v.State -eq 'filter=1,cmd=gap,script=0') ($v.Lines -join ' | ')
     $v = Get-WmiSubscriptionVerdict -Q @{ filter = $none } -IsElevated $true
@@ -202,8 +225,9 @@ if ($null -eq $v -or [string]$v.State -notmatch '^filter=(\d+|gap|deferred),cmd=
     exit 1
 }
 foreach ($l in $v.Lines) { $l }
-foreach ($h in $v.Hits) { Write-Marker -Name $h -Value 'WARNING' }
-if ($v.Gap) { Write-Marker -Name 'wmisub_gap' -Value 'WARNING' }
-if ($v.Deferred -gt 0) { Write-Marker -Name 'wmisub_deferred' -Value ([string]$v.Deferred) }
-try { Set-Content -LiteralPath $StateFile -Value $v.State -Encoding ASCII } catch {}
+foreach ($h in $v.Hits) { Write-Marker -Name $h -Sev 'WARNING' }
+if ($v.Gap) { Write-Marker -Name 'wmisub_gap' -Sev 'WARNING' }
+if ($v.Deferred -gt 0) { Write-Marker -Name 'wmisub_deferred' -Sev ([string]$v.Deferred) }
+try { Set-Content -LiteralPath $StateFile -Value $v.State -Encoding ASCII -ErrorAction Stop }
+catch { ('wmi_subscription_check: the verdict above could not be saved for the dashboard (' + (ConvertTo-PrintableText $_.Exception.Message) + ').'); exit 1 }
 exit 0

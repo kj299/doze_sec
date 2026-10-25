@@ -4209,7 +4209,8 @@ if exist "%SCRIPT_DIR%tools\log_clear_check.ps1" (
     echo [WARNING] tools\log_clear_check.ps1 not found -- event-log clear check NOT performed.>> "%REPORT%"
     call :dz_finding WARNING 16 T1070.001 "Event-log clear check NOT performed - tool missing"
 )
-del "%TEMP%\dz_acctev_gap.txt" 2>nul
+del "%TEMP%\dz_acctev4720_gap.txt" 2>nul
+del "%TEMP%\dz_acctev4732_gap.txt" 2>nul
 del "%TEMP%\dz_acctev_deferred.txt" 2>nul
 del "%TEMP%\dz_acctev_state.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\account_events_check.ps1" (
@@ -4253,10 +4254,14 @@ if exist "%TEMP%\dz_ev4732_hit.txt" (
     call :dz_finding WARNING 16 T1098 "Account(s) added to a privileged group"
     del "%TEMP%\dz_ev4732_hit.txt" 2>nul
 )
-if exist "%TEMP%\dz_acctev_gap.txt" (
-    rem A gap is its own row: the Security log could not be read.
-    call :dz_finding WARNING 16 T1136.001 "Account-event checks NOT performed - the Security log could not be read"
-    del "%TEMP%\dz_acctev_gap.txt" 2>nul
+if exist "%TEMP%\dz_acctev4720_gap.txt" (
+    rem A gap is its own row, one per check, under that check's technique.
+    call :dz_finding WARNING 16 T1136.001 "New-account check (4720) NOT performed - the Security log could not be read"
+    del "%TEMP%\dz_acctev4720_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_acctev4732_gap.txt" (
+    call :dz_finding WARNING 16 T1098 "Privileged-group check (4732) NOT performed - the Security log could not be read"
+    del "%TEMP%\dz_acctev4732_gap.txt" 2>nul
 )
 if exist "%TEMP%\dz_acctev_deferred.txt" (
     set "_AEDEF=0"
@@ -5713,7 +5718,7 @@ rem tests\assert_printed_findings_raised.ps1 fails the build while the ledger
 rem row is missing, so this cannot be quietly forgotten.
 echo if(led 'WARNING' '13' 'T1546.008' 'Sticky Keys'^){ addfix 'Disable the Shift-x5 Sticky Keys shortcut (this user AND the logon screen)' 'foreach ($h in @(''HKCU:\Control Panel\Accessibility\StickyKeys'',''Registry::HKEY_USERS\.DEFAULT\Control Panel\Accessibility\StickyKeys'')) { $cur = (Get-ItemProperty -LiteralPath $h -Name Flags -EA SilentlyContinue).Flags; if ($null -ne $cur) { Set-ItemProperty -LiteralPath $h -Name Flags -Value ([string]([int]$cur -band -bnot 0x04)) -Force } }; Write-Host ''Sticky Keys itself is unchanged; only the Shift-x5 shortcut is off. Re-enable: Settings ^> Accessibility ^> Keyboard.''' 'foreach ($h in @(''HKCU:\Control Panel\Accessibility\StickyKeys'',''Registry::HKEY_USERS\.DEFAULT\Control Panel\Accessibility\StickyKeys'')) { $cur = (Get-ItemProperty -LiteralPath $h -Name Flags -EA SilentlyContinue).Flags; if ($null -ne $cur) { Set-ItemProperty -LiteralPath $h -Name Flags -Value ([string]([int]$cur -bor 0x04)) -Force } }' } >> "%PSRUN%"
 echo if($joined -match 'portproxy tunnel rules are ACTIVE'){ addfix 'Review netsh portproxy rules (LISTS ONLY -- reset would delete WSL/dev forwards too)' 'netsh interface portproxy show all; Write-Host ''Delete ONLY the rule you do not recognise: netsh interface portproxy delete v4tov4 listenport=^<port^> listenaddress=^<addr^>. WSL2 and Hyper-V port forwarding look identical to this IOC.''' '' } >> "%PSRUN%"
-echo if($joined -match 'WMI EventFilter subscriptions present'){ addfix 'Review non-default WMI EventFilter subscriptions (LISTS ONLY -- deletion is manual on purpose)' 'Get-CimInstance -Namespace root/subscription -ClassName __EventFilter -EA SilentlyContinue ^| Where-Object { $_.Name -notin @(''SCM Event Log Filter'',''BVTFilter'') } ^| Format-List Name,Query; Write-Host ''Review each filter above. A permanent WMI subscription is normal for management agents (ConfigMgr, Dell/HP/Lenovo, EDR). Delete one only after you know what registered it: Get-CimInstance -Namespace root/subscription -ClassName __EventFilter ^| Where-Object Name -eq ^<name^> ^| Remove-CimInstance''' '' } >> "%PSRUN%"
+echo if(led 'WARNING' '17' 'T1546.003' 'Non-default WMI EventFilter'){ addfix 'Review non-default WMI EventFilter subscriptions (LISTS ONLY -- deletion is manual on purpose)' 'Get-CimInstance -Namespace root/subscription -ClassName __EventFilter -EA SilentlyContinue ^| Where-Object { -not (($_.Name -eq ''SCM Event Log Filter'' -and $_.Query -like ''*MSFT_SCMEventLogEvent*'') -or ($_.Name -in @(''BVTConsumer'',''BVTFilter'',''RmAssistEventLog''))) } ^| Format-List Name,Query; Write-Host ''Review each filter above. A permanent WMI subscription is normal for management agents (ConfigMgr, Dell/HP/Lenovo, EDR). Delete one only after you know what registered it: Get-CimInstance -Namespace root/subscription -ClassName __EventFilter ^| Where-Object Name -eq ^<name^> ^| Remove-CimInstance''' '' } >> "%PSRUN%"
 echo if($joined -match 'Accessibility binary signature INVALID'){ addfix 'Restore corrupted system binaries' "sfc /scannow; DISM /Online /Cleanup-Image /RestoreHealth" '' } >> "%PSRUN%"
 echo if(led 'CRITICAL' '9' 'T1562.001' 'Defender core protection disabled'){ addfix 'Re-enable Defender real-time protection' "Set-MpPreference -DisableRealtimeMonitoring `$false" '' } >> "%PSRUN%"
 echo if($dcSigOld -match 'yes'){ addfix 'Update Defender signatures' "Update-MpSignature" '' } >> "%PSRUN%"

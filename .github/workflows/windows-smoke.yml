@@ -2370,7 +2370,7 @@ jobs:
           try {
             $o = (.\tools\account_events_check.ps1 -MarkerDir $md) -join "`n"; Write-Host $o
             if ($o -match 'Exception|is not recognized|CategoryInfo') { throw "PowerShell error text: $o" }
-            if (Test-Path (Join-Path $md 'dz_acctev_gap.txt')) { throw "an administrator could not read the runner's Security log: $o" }
+            if ((Test-Path (Join-Path $md 'dz_acctev4720_gap.txt')) -or (Test-Path (Join-Path $md 'dz_acctev4732_gap.txt'))) { throw "an administrator could not read the runner's Security log: $o" }
             $st = (Get-Content (Join-Path $md 'dz_acctev_state.txt') -Raw).Trim()
             if ($st -notmatch '^e4720=\d+,e4732=\d+$') { throw "unexpected state: $st" }
             Write-Host "MEASURED: the runner's account-event state is $st"
@@ -2393,7 +2393,7 @@ jobs:
             $o = (.\tools\account_events_check.ps1 -MarkerDir $md -LogName 'dz-ci-no-such-log' -Elevated 1) -join "`n"; Write-Host $o
             if ($o -notmatch '(?m)^\[WARNING\] New-account check \(Event 4720\) NOT performed') { throw 'an unreadable log was not declared a NOT-performed gap' }
             if ($o -match '(?m)^\[OK\]') { throw 'an unreadable log printed an all-clear' }
-            if (-not (Test-Path (Join-Path $md 'dz_acctev_gap.txt'))) { throw 'the gap wrote no gap marker' }
+            if (-not ((Test-Path (Join-Path $md 'dz_acctev4720_gap.txt')) -and (Test-Path (Join-Path $md 'dz_acctev4732_gap.txt')))) { throw 'the gap wrote no gap marker for each check' }
             if ((Test-Path (Join-Path $md 'dz_ev4720_hit.txt')) -or (Test-Path (Join-Path $md 'dz_ev4732_hit.txt'))) { throw 'the gap wrote a hit marker -- its row would claim an account was created' }
             if ((Get-Content (Join-Path $md 'dz_acctev_state.txt') -Raw).Trim() -ne 'e4720=gap,e4732=gap') { throw 'the state does not say gap' }
           } finally { Remove-Item $md -Recurse -Force -EA SilentlyContinue }
