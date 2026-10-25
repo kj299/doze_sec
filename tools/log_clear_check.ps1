@@ -105,7 +105,10 @@ function Format-When {
     # CULTURE's date separator, so MM/dd/yyyy printed 10.17.2026 on de-DE.
     param($Time)
     if ($null -eq $Time) { return 'an unknown time' }
-    return ([datetime]$Time).ToString('yyyy-MM-dd HH:mm:ss', [Globalization.CultureInfo]::InvariantCulture)
+    # With the UTC offset: the same record read 23:00 in one WIN11-02 report
+    # and 02:00 in the next once the VM's time zone changed, and nothing on
+    # the line said which clock it was on.
+    return ([DateTimeOffset]([datetime]$Time)).ToString('yyyy-MM-dd HH:mm:ss zzz', [Globalization.CultureInfo]::InvariantCulture)
 }
 
 function Get-OldestDate {
@@ -271,21 +274,21 @@ if ($SelfTest) {
     $v = Get-LogClearVerdict -Sec1102 $w1102 -Sys104 $w104 -CurrentNames @('WIN11-02', 'WIN11-02') -InstallDate $wInstall -RenameTime ([datetime]'2026-10-18T09:20:41')
     $t = $v.Lines -join "`n"
     T 'the WIN11-02 clear (before the PC took its name, before its install date) is a WARNING, not CRITICAL' ($v.SecSev -eq 'WARNING' -and $v.State -eq 'sec=prep,sys=cleared' -and $t -notmatch 'CRITICAL') $t
-    T '...and the line names both computer names, who cleared it and the install date' ($t -match '(?m)^\[WARNING\] Security event log was cleared at 2026-10-17 23:00:23 by WIN-EIH5CPD9P56\\Administrator, before this PC took its current name and before Windows'' install date here \(2026-10-18 09:12:00\): the record names WIN-EIH5CPD9P56, this PC is WIN11-02 -- the shape of a Windows image being prepared') $t
+    T '...and the line names both computer names, who cleared it and the install date' ($t -match '(?m)^\[WARNING\] Security event log was cleared at 2026-10-17 23:00:23 [+-]\d\d:\d\d by WIN-EIH5CPD9P56\\Administrator, before this PC took its current name and before Windows'' install date here \(2026-10-18 09:12:00 [+-]\d\d:\d\d\): the record names WIN-EIH5CPD9P56, this PC is WIN11-02 -- the shape of a Windows image being prepared') $t
     T '...and asks the question a retail-PC owner can answer' ($t -match 'If this PC was ever called WIN-EIH5CPD9P56 while you were using it, the clear happened in its own life: treat it as a compromise\.') $t
     T '...and tells a reader who did not build the image to treat it as a compromise too' ($t -match 'if you did not build this image or get it from a source you trust, treat it as one too') $t
-    T '...and prints when the computer was renamed' ($t -match '(?m)^\[INFO\] The computer was renamed at 2026-10-18 09:20:41 \(System Event 6011\)\.') $t
+    T '...and prints when the computer was renamed' ($t -match '(?m)^\[INFO\] The computer was renamed at 2026-10-18 09:20:41 [+-]\d\d:\d\d \(System Event 6011\)\.') $t
     T '...and names the other logs cleared in the same moment' ($t -match '(?m)^\[INFO\] Cleared within the same 2 seconds, under the same earlier name: Application, Setup, System \(Event 104\)') $t
-    T '...and the newest Event 104 names its channel' ($v.SysSev -eq 'WARNING' -and $t -match '(?m)^\[WARNING\] Event log ''Setup'' was cleared at 2026-10-17 23:00:23 \(Event 104 in the System log\)') $t
+    T '...and the newest Event 104 names its channel' ($v.SysSev -eq 'WARNING' -and $t -match '(?m)^\[WARNING\] Event log ''Setup'' was cleared at 2026-10-17 23:00:23 [+-]\d\d:\d\d \(Event 104 in the System log\)') $t
     $v = Get-LogClearVerdict -Sec1102 $w1102 -Sys104 $w104 -CurrentNames @('WIN11-02') -InstallDate ([datetime]'2025-01-01')
     $t = $v.Lines -join "`n"
-    T 'the same clear on a PC installed long BEFORE it (a retail PC renamed later) is CRITICAL' ($v.SecSev -eq 'CRITICAL' -and $v.State -match '^sec=critical' -and $t -match '(?m)^\[INFO\] The clear record names WIN-EIH5CPD9P56, not WIN11-02, but it was made more than 24 hours after Windows was installed here \(2025-01-01 00:00:00\)') $t
+    T 'the same clear on a PC installed long BEFORE it (a retail PC renamed later) is CRITICAL' ($v.SecSev -eq 'CRITICAL' -and $v.State -match '^sec=critical' -and $t -match '(?m)^\[INFO\] The clear record names WIN-EIH5CPD9P56, not WIN11-02, but it was made more than 24 hours after Windows was installed here \(2025-01-01 00:00:00 [+-]\d\d:\d\d\)') $t
     $v = Get-LogClearVerdict -Sec1102 $w1102 -CurrentNames @('WIN11-02') -InstallDate $null
     T 'an install date that could not be read keeps it CRITICAL, and says why' ($v.SecSev -eq 'CRITICAL' -and ($v.Lines -join "`n") -match 'install date could not be read') ($v.Lines -join ' | ')
     $v = Get-LogClearVerdict -Sec1102 @(Rec '2026-10-19T23:00:23' 'WIN-EIH5CPD9P56') -CurrentNames @('WIN11-02') -InstallDate $wInstall
     T 'a clear under another name more than 24 hours after the install date is CRITICAL' ($v.SecSev -eq 'CRITICAL') ($v.Lines -join ' | ')
     $v = Get-LogClearVerdict -Sec1102 @(Rec '2026-10-17T23:00:23.567' 'WIN11-02') -Sys104 @() -CurrentNames @('WIN11-02') -InstallDate $wInstall
-    T 'the same clear under THIS computer''s name stays CRITICAL' ($v.SecSev -eq 'CRITICAL' -and $v.State -eq 'sec=critical,sys=none' -and ($v.Lines -join "`n") -match '(?m)^\[CRITICAL\] Security event log was CLEARED at 2026-10-17 23:00:23 by .* Treat as active compromise\.') ($v.Lines -join ' | ')
+    T 'the same clear under THIS computer''s name stays CRITICAL' ($v.SecSev -eq 'CRITICAL' -and $v.State -eq 'sec=critical,sys=none' -and ($v.Lines -join "`n") -match '(?m)^\[CRITICAL\] Security event log was CLEARED at 2026-10-17 23:00:23 [+-]\d\d:\d\d by .* Treat as active compromise\.') ($v.Lines -join ' | ')
     $v = Get-LogClearVerdict -Sec1102 @(Rec '2026-10-17T23:00:23' '') -CurrentNames @('WIN11-02') -InstallDate $wInstall
     T 'a record with no computer name counts as this computer''s: CRITICAL' ($v.SecSev -eq 'CRITICAL') ($v.Lines -join ' | ')
     $v = Get-LogClearVerdict -Sec1102 $w1102 -CurrentNames @() -InstallDate $wInstall
@@ -309,7 +312,7 @@ if ($SelfTest) {
     $v = Get-LogClearVerdict -Sec1102 @(Rec '2026-10-17T23:00:23' ('EVIL' + [char]10 + '[OK] fine')) -CurrentNames @('WIN11-02') -InstallDate $wInstall
     T 'a control character in a recorded computer name cannot start a report line' (@($v.Lines | Where-Object { $_ -match '^\[OK\] fine' }).Count -eq 0) ($v.Lines -join ' | ')
     $v = Get-LogClearVerdict -Sys104 @(Rec '2026-10-17T23:00:23' 'WIN-EIH5CPD9P56' 'x' 'System') -CurrentNames @('WIN11-02') -InstallDate $wInstall
-    T 'a System-log clear stays a WARNING, and says when it predates the current name' ($v.SysSev -eq 'WARNING' -and ($v.Lines -join "`n") -match '(?m)^\[WARNING\] System event log was cleared at 2026-10-17 23:00:23 .* recorded under WIN-EIH5CPD9P56, before this PC took its current name and before Windows'' install date here\.') ($v.Lines -join ' | ')
+    T 'a System-log clear stays a WARNING, and says when it predates the current name' ($v.SysSev -eq 'WARNING' -and ($v.Lines -join "`n") -match '(?m)^\[WARNING\] System event log was cleared at 2026-10-17 23:00:23 [+-]\d\d:\d\d .* recorded under WIN-EIH5CPD9P56, before this PC took its current name and before Windows'' install date here\.') ($v.Lines -join ' | ')
     $v = Get-LogClearVerdict -Sys104 @(Rec '2026-10-17T23:00:23' 'WIN-EIH5CPD9P56' 'x' 'Microsoft-Windows-Sysmon/Operational') -CurrentNames @('WIN11-02') -InstallDate ([datetime]'2025-01-01')
     T 'an Event 104 under another name made after the install date is not called image preparation' ($v.SysSev -eq 'WARNING' -and ($v.Lines -join "`n") -notmatch 'before this PC took its current name' -and ($v.Lines -join "`n") -match 'read it as this PC''s own history') ($v.Lines -join ' | ')
     # A feature update resets the CIM install date and keeps the Security log:
@@ -324,16 +327,16 @@ if ($SelfTest) {
     $u = (ConvertFrom-UnixSeconds 1729000000).ToUniversalTime()
     T 'a Source OS InstallDate DWORD converts from Unix seconds (UTC)' ($u.ToString('yyyy-MM-dd HH:mm:ss', [Globalization.CultureInfo]::InvariantCulture) -eq '2024-10-15 13:46:40') ([string]$u)
     $v = Get-LogClearVerdict -Sec1102 $w1102 -Sys104 $w104 -CurrentNames @('WIN11-02') -InstallDate $wInstall -RenameTime ([datetime]'2027-01-05T10:00:00')
-    T 'the image-shaped clear on a PC renamed months after its install is CRITICAL, and says why' ($v.SecSev -eq 'CRITICAL' -and ($v.Lines -join "`n") -match 'the computer was renamed at 2027-01-05 10:00:00 \(System Event 6011\), more than 24 hours after') ($v.Lines -join ' | ')
+    T 'the image-shaped clear on a PC renamed months after its install is CRITICAL, and says why' ($v.SecSev -eq 'CRITICAL' -and ($v.Lines -join "`n") -match 'the computer was renamed at 2027-01-05 10:00:00 [+-]\d\d:\d\d \(System Event 6011\), more than 24 hours after') ($v.Lines -join ' | ')
     $v = Get-LogClearVerdict -Sys104 @(Rec '2026-10-20T10:00:00' 'WIN11-02' 'x' 'Microsoft-Windows-Sysmon/Operational') -CurrentNames @('WIN11-02')
-    T 'a cleared security-tool log is named by its channel' ($v.SysSev -eq 'WARNING' -and $v.State -eq 'sec=none,sys=cleared' -and ($v.Lines -join "`n") -match '(?m)^\[WARNING\] Event log ''Microsoft-Windows-Sysmon/Operational'' was cleared at 2026-10-20 10:00:00') ($v.Lines -join ' | ')
+    T 'a cleared security-tool log is named by its channel' ($v.SysSev -eq 'WARNING' -and $v.State -eq 'sec=none,sys=cleared' -and ($v.Lines -join "`n") -match '(?m)^\[WARNING\] Event log ''Microsoft-Windows-Sysmon/Operational'' was cleared at 2026-10-20 10:00:00 [+-]\d\d:\d\d ') ($v.Lines -join ' | ')
     # Dates are the same text on every culture (de-DE printed 10.17.2026).
     $saved = [Threading.Thread]::CurrentThread.CurrentCulture
     try {
         [Threading.Thread]::CurrentThread.CurrentCulture = [Globalization.CultureInfo]::GetCultureInfo('de-DE')
         $v = Get-LogClearVerdict -Sec1102 $w1102 -CurrentNames @('WIN11-02') -InstallDate $wInstall
     } finally { [Threading.Thread]::CurrentThread.CurrentCulture = $saved }
-    T 'under a de-DE culture the dates print as 2026-10-17 23:00:23' (($v.Lines -join "`n") -match 'cleared at 2026-10-17 23:00:23 by' -and ($v.Lines -join "`n") -match 'install date here \(2026-10-18 09:12:00\)') ($v.Lines -join ' | ')
+    T 'under a de-DE culture the dates print as 2026-10-17 23:00:23' (($v.Lines -join "`n") -match 'cleared at 2026-10-17 23:00:23 [+-]\d\d:\d\d by' -and ($v.Lines -join "`n") -match 'install date here \(2026-10-18 09:12:00 [+-]\d\d:\d\d\)') ($v.Lines -join ' | ')
     if ($fails) { Write-Output "[FAIL] $fails log_clear_check self-test expectation(s) unmet"; exit 1 }
     Write-Output '[OK] log_clear_check self-test: a log cleared under this computer''s name, or after Windows was installed here, is CRITICAL; one cleared before the PC took its current name and before its install date is a WARNING that names both; an unreadable log is a gap or a deferral, never an all-clear.'
     exit 0
