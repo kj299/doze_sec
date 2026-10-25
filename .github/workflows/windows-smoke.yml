@@ -2029,9 +2029,12 @@ jobs:
           $md = Join-Path $env:TEMP ("dz_cbs_ci_{0}" -f $PID)
           New-Item -ItemType Directory -Path $md -Force | Out-Null
           try {
-            $out = (.\tools\cbs_integrity_check.ps1 -MarkerDir $md) -join "`n"
+            # A generous budget for the live read, so a slow runner is not a
+            # gap; then ANY gap on an elevated runner is a failure, not a pass.
+            $out = (.\tools\cbs_integrity_check.ps1 -MarkerDir $md -BudgetSeconds 120) -join "`n"
             Write-Host $out
-            if ($out -notmatch '\[(OK|INFO|WARNING|SKIPPED|BUDGET)\]') { throw 'the live run emitted no graded line at all' }
+            if ($out -notmatch '\[(OK|INFO|WARNING|SKIPPED)\]') { throw 'the live run emitted no graded line at all' }
+            if ($out -match '\[BUDGET\]') { throw 'the [BUDGET] tag is back -- a raised gap prints [WARNING] ... NOT performed' }
             # A [SKIPPED] here is a FAILURE, not an acceptable outcome. This job
             # runs elevated on a Windows runner, so %WINDIR%\Logs\CBS IS
             # readable and the tool's state is knowable -- the same reason
@@ -2080,15 +2083,55 @@ jobs:
               if (Test-Path (Join-Path $mdG 'dz_cbs.txt')) { throw 'the unreadable-CBS gap wrote the FINDING marker -- its ledger row would claim a corrupt binary' }
               if ($outG -match '(?m)^\[OK\]') { throw 'a gap-only run printed an all-clear line' }
             } finally { Remove-Item $mdG -Recurse -Force -EA SilentlyContinue }
+            # A TIME BUDGET THAT RAN OUT IS A GAP, never the finding. WIN11-02
+            # (2026-10-24) printed only "[BUDGET] 1 CBS log file(s) cut short"
+            # and its ledger read "Windows servicing recorded a corrupt system
+            # binary that was never repaired": the tool raised its FINDING
+            # severity for missing coverage. Both budget paths, through the
+            # real reader: never opened (budget 0) and cut short mid-file (a
+            # fixture too long for a 1 s budget).
+            $fxB = Join-Path $env:TEMP ("dz_cbs_budget_{0}.log" -f $PID)
+            $big = New-Object System.Text.StringBuilder
+            [void]$big.Append("2026-09-01 08:00:00, Info                  CBS    Starting TrustedInstaller initialization.`r`n")
+            for ($i = 0; $i -lt 2000000; $i++) { [void]$big.Append("x`r`n") }
+            [IO.File]::WriteAllText($fxB, $big.ToString())
+            $big = $null
+            try {
+              foreach ($case in @(@{ B = 0; Rx = 'NOT performed -- the 0s wall-clock budget ran out before any of 1 CBS log file' }, @{ B = 1; Rx = 'NOT performed in full -- 1 CBS log file\(s\) cut short and 0 never opened' })) {
+                $mdB = Join-Path $env:TEMP ("dz_cbs_budget_md_{0}_{1}" -f $PID, $case.B)
+                New-Item -ItemType Directory -Path $mdB -Force | Out-Null
+                try {
+                  $outB = (.\tools\cbs_integrity_check.ps1 -Path $fxB -MarkerDir $mdB -BudgetSeconds $case.B) -join "`n"
+                  Write-Host $outB
+                  if ($outB -notmatch ('(?m)^\[WARNING\] System-file integrity check ' + $case.Rx)) { throw ("budget {0}: the exhausted budget was not declared as a NOT-performed gap" -f $case.B) }
+                  if (-not (Test-Path (Join-Path $mdB 'dz_cbs_gap.txt'))) { throw ("budget {0}: no gap marker -- the gap would vanish from the ledger" -f $case.B) }
+                  if (Test-Path (Join-Path $mdB 'dz_cbs.txt')) { throw ("budget {0}: the FINDING marker was written -- its ledger row would claim a corrupt system binary the tool never found" -f $case.B) }
+                  if ($outB -match '(?m)^\[OK\]') { throw ("budget {0}: an all-clear printed over a log that was not read in full" -f $case.B) }
+                } finally { Remove-Item $mdB -Recurse -Force -EA SilentlyContinue }
+              }
+            } finally { Remove-Item $fxB -Force -EA SilentlyContinue }
+            # ONE FILE READ, ONE NOT: the unread one is part of the window NOT
+            # examined, so it is a raised gap and withholds the all-clear (it
+            # used to print only an [INFO] line beneath an [OK]).
+            $fxM = Join-Path $env:TEMP ("dz_cbs_mixed_{0}.log" -f $PID)
+            Set-Content -LiteralPath $fxM -Encoding ASCII -Value '2026-09-01 08:00:00, Info                  CBS    Starting TrustedInstaller initialization.'
+            $mdM = Join-Path $env:TEMP ("dz_cbs_mixed_md_{0}" -f $PID)
+            New-Item -ItemType Directory -Path $mdM -Force | Out-Null
+            try {
+              $outM = (.\tools\cbs_integrity_check.ps1 -Path $fxM, (Join-Path $env:TEMP ("dz_no_such_cbs_m_{0}.log" -f $PID)) -MarkerDir $mdM) -join "`n"
+              Write-Host $outM
+              if ($outM -notmatch '(?m)^\[WARNING\] System-file integrity check NOT performed in full -- 0 CBS log file\(s\) denied and 1 unreadable') { throw 'a CBS log that could not be opened beside a readable one was not declared as a gap' }
+              if (-not (Test-Path (Join-Path $mdM 'dz_cbs_gap.txt'))) { throw 'the partly-unread window wrote no gap marker' }
+              if ($outM -match '(?m)^\[OK\]') { throw 'an all-clear printed over a window with an unread log' }
+            } finally { Remove-Item $fxM, $mdM -Recurse -Force -EA SilentlyContinue }
+            # A CLEAN RUNNER WRITES NO FINDING MARKER. This used to accept a
+            # WARNING "because the runner may run out of budget" -- the branch
+            # that accepted the misworded row above. A budget or access gap
+            # now writes only dz_cbs_gap.txt, so a finding marker here is a
+            # false positive (measured: the runner reads its CBS logs in full).
+            if ((Test-Path (Join-Path $md 'dz_cbs_gap.txt')) -or $out -match 'NOT performed') { throw "cbs_integrity_check declared a gap on an elevated runner with a 120 s budget, where every CBS log is readable: $out" }
             $m = Join-Path $md 'dz_cbs.txt'
-            if (Test-Path $m) {
-              $sev = (Get-Content $m).Trim()
-              # A WARNING is acceptable: the runner may deny the log or run out
-              # of budget, and both are DECLARED rather than passed off as
-              # clean. A CRITICAL is not a severity this check ever emits.
-              if ($sev -eq 'CRITICAL') { throw "cbs_integrity_check reported CRITICAL on a clean runner (false positive): $out" }
-              Write-Host "  (marker $sev on the runner)"
-            }
+            if (Test-Path $m) { throw ("cbs_integrity_check wrote a {0} finding marker on a clean runner (false positive): {1}" -f (Get-Content $m).Trim(), $out) }
             # An unreadable log must never be graded OK, and budget exhaustion
             # must never read as a pass. Both framings are load-bearing.
             $src = Get-Content .\tools\cbs_integrity_check.ps1 -Raw
