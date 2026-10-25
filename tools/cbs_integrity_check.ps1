@@ -417,7 +417,9 @@ foreach ($lg in $logs) {
 $clock.Stop()
 
 if (($read + $partial) -eq 0) {
-    if ($denied -gt 0) {
+    if ($skipped -gt 0 -and ($denied + $failed) -eq 0) {
+        "[WARNING] System-file integrity check NOT performed -- the ${BudgetSeconds}s wall-clock budget ran out before any of $skipped CBS log file(s) was opened. This is missing coverage, not a pass."
+    } elseif ($denied -gt 0) {
         '[WARNING] CBS log(s) could not be read (access denied) -- system-file integrity NOT checked. Reading %SystemRoot%\Logs\CBS needs administrator rights.'
     } else {
         '[WARNING] CBS log(s) could not be read -- system-file integrity NOT checked.'
@@ -448,11 +450,16 @@ if ($denied -gt 0) {
 if ($failed -gt 0) {
     "[INFO] $failed CBS log file(s) could not be read for another reason and were NOT examined."
 }
-if (($partial + $skipped) -gt 0) {
+$cutShort = (($partial + $skipped) -gt 0)
+if ($cutShort) {
     # Budget exhaustion is missing coverage, and is declared as such. A clean
     # verdict over a partially read log would be a claim this run cannot make.
-    "[BUDGET] $partial CBS log file(s) cut short and $skipped never opened -- the ${BudgetSeconds}s wall-clock budget ran out. This is missing coverage, not a pass."
-    $v.Sev = Get-MaxSev $v.Sev 'WARNING'
+    # It is a GAP, raised through the gap marker: it used to raise the
+    # FINDING severity, and the bat then filed it as "Windows servicing
+    # recorded a corrupt system binary" -- WIN11-02, 2026-10-24, where the
+    # tool had found no corrupt file at all.
+    "[WARNING] System-file integrity check NOT performed in full -- $partial CBS log file(s) cut short and $skipped never opened: the ${BudgetSeconds}s wall-clock budget ran out. This is missing coverage, not a pass."
+    Write-Marker -Name 'cbs_gap' -Sev 'WARNING'
 }
 
 # STATE THE WINDOW, ALWAYS. CBS logs rotate, so "nothing corrupt" is only ever
@@ -461,7 +468,7 @@ if (($partial + $skipped) -gt 0) {
 # already rotated away entirely, six days later. Without this line a reader
 # takes the all-clear for far more than it is.
 $window = if ($oldest) { "back to $($oldest.ToString('yyyy-MM-dd HH:mm'))" } else { 'an undetermined period' }
-if ($v.Sev -eq 'OK' -and $v.Findings.Count -eq 0 -and $v.Context.Count -eq 0) {
+if ($v.Sev -eq 'OK' -and $v.Findings.Count -eq 0 -and $v.Context.Count -eq 0 -and -not $cutShort) {
     "[OK] $read CBS log file(s) read, covering $window -- Windows servicing recorded no corrupt system files in that window."
     '[INFO] CBS logs rotate and can cover less than a week on a busy machine. Corruption older than the window above is not visible to this check, whether or not it happened.'
 } else {

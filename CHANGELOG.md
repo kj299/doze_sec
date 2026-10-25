@@ -6,6 +6,37 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### A time budget that ran out is a gap, never "a corrupt system binary"
+The re-run on a freshly built WIN11-02 (the owner's template, 2026-10-24)
+completed with no CRITICAL, and its ledger held a row the report did not
+support: "Windows servicing recorded a corrupt system binary that was never
+repaired" (T1554). Section 13 had printed only `[BUDGET] 1 CBS log file(s) cut
+short` and an `[INFO]` line -- no corrupt file at all. `cbs_integrity_check`
+raised its FINDING severity when its 20 s budget ran out, so the bat filed
+missing coverage under the finding's wording. Nothing caught it: Section 13
+had other findings, so the per-section gates were satisfied; `[BUDGET]` is
+not a severity tag, so no tag-reading lint saw a raised gap; and the CI step
+accepted a WARNING marker on the runner "because the runner may run out of
+budget" -- the branch that accepted the misworded row. Budget exhaustion now
+prints `[WARNING] System-file integrity check NOT performed in full ...`,
+raises through the gap marker, and never prints the all-clear; CI drives both
+budget paths through the real reader and a clean runner may write no finding
+marker at all.
+
+The same run showed an ADVISE explaining the wrong account: the OpenAI Codex
+sandbox entry matched every hidden-account line, so cloudbase-init's line
+carried a note about CodexSandbox accounts. For the check written for someone
+who may be in danger, an ADVISE now names only lines that list exactly the
+accounts it knows; `cloudbase-init, <anything else>` gets none.
+
+Misses first, against the predictions written before the results: 11 rows,
+not 8-10 -- BitLocker off and Sticky Keys on (known VM classes I left out)
+and the T1554 row above. Held: no CRITICAL, exit 4 (reboot pending), the
+template's log clear read as image preparation, field_test OK, Defender on,
+LSA Protection on, PSv2 disabled. The clone was installed seven days after
+the template's clear, which is why the review's suggested lower bound on the
+date was declined: it would have read this real image as CRITICAL.
+
 ### A log cleared while a Windows image was being prepared is not graded as an intrusion
 The second-machine run on WIN11-02 completed this time and raised one
 CRITICAL: "Security event log was CLEARED ... Treat as active compromise",

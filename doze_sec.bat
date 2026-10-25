@@ -3778,7 +3778,7 @@ if exist "%TEMP%\dz_cbs_gap.txt" (
     rem A gap is its own row: the tool could not perform (part of) this check.
     set "_GAPSEV="
     set /p _GAPSEV=<"%TEMP%\dz_cbs_gap.txt"
-    call :dz_finding !_GAPSEV! 13 T1554 "System-file integrity NOT checked - CBS log missing or unreadable"
+    call :dz_finding !_GAPSEV! 13 T1554 "System-file integrity NOT checked in full - CBS log missing, unreadable or cut short by the time budget"
     del "%TEMP%\dz_cbs_gap.txt" 2>nul
 )
 
