@@ -2087,29 +2087,48 @@ jobs:
             # (2026-10-24) printed only "[BUDGET] 1 CBS log file(s) cut short"
             # and its ledger read "Windows servicing recorded a corrupt system
             # binary that was never repaired": the tool raised its FINDING
-            # severity for missing coverage. Both budget paths, through the
-            # real reader: never opened (budget 0) and cut short mid-file (a
-            # fixture too long for a 1 s budget).
+            # severity for missing coverage. The never-opened path through the
+            # real reader here (budget 0); the cut-short path is driven by the
+            # self-test's fake clock, deterministically.
             $fxB = Join-Path $env:TEMP ("dz_cbs_budget_{0}.log" -f $PID)
-            $big = New-Object System.Text.StringBuilder
-            [void]$big.Append("2026-09-01 08:00:00, Info                  CBS    Starting TrustedInstaller initialization.`r`n")
-            for ($i = 0; $i -lt 2000000; $i++) { [void]$big.Append("x`r`n") }
-            [IO.File]::WriteAllText($fxB, $big.ToString())
-            $big = $null
+            Set-Content -LiteralPath $fxB -Encoding ASCII -Value '2026-09-01 08:00:00, Info                  CBS    Starting TrustedInstaller initialization.'
+            $mdB = Join-Path $env:TEMP ("dz_cbs_budget_md_{0}" -f $PID)
+            New-Item -ItemType Directory -Path $mdB -Force | Out-Null
             try {
-              foreach ($case in @(@{ B = 0; Rx = 'NOT performed -- the 0s wall-clock budget ran out before any of 1 CBS log file' }, @{ B = 1; Rx = 'NOT performed in full -- 1 CBS log file\(s\) cut short and 0 never opened' })) {
-                $mdB = Join-Path $env:TEMP ("dz_cbs_budget_md_{0}_{1}" -f $PID, $case.B)
-                New-Item -ItemType Directory -Path $mdB -Force | Out-Null
-                try {
-                  $outB = (.\tools\cbs_integrity_check.ps1 -Path $fxB -MarkerDir $mdB -BudgetSeconds $case.B) -join "`n"
-                  Write-Host $outB
-                  if ($outB -notmatch ('(?m)^\[WARNING\] System-file integrity check ' + $case.Rx)) { throw ("budget {0}: the exhausted budget was not declared as a NOT-performed gap" -f $case.B) }
-                  if (-not (Test-Path (Join-Path $mdB 'dz_cbs_gap.txt'))) { throw ("budget {0}: no gap marker -- the gap would vanish from the ledger" -f $case.B) }
-                  if (Test-Path (Join-Path $mdB 'dz_cbs.txt')) { throw ("budget {0}: the FINDING marker was written -- its ledger row would claim a corrupt system binary the tool never found" -f $case.B) }
-                  if ($outB -match '(?m)^\[OK\]') { throw ("budget {0}: an all-clear printed over a log that was not read in full" -f $case.B) }
-                } finally { Remove-Item $mdB -Recurse -Force -EA SilentlyContinue }
-              }
-            } finally { Remove-Item $fxB -Force -EA SilentlyContinue }
+              $outB = (.\tools\cbs_integrity_check.ps1 -Path $fxB -MarkerDir $mdB -BudgetSeconds 0) -join "`n"
+              Write-Host $outB
+              if ($outB -notmatch '(?m)^\[WARNING\] System-file integrity check NOT performed -- the 0s wall-clock budget ran out before any of 1 CBS log file') { throw 'budget 0: the exhausted budget was not declared as a NOT-performed gap' }
+              if (-not (Test-Path (Join-Path $mdB 'dz_cbs_gap.txt'))) { throw 'budget 0: no gap marker -- the gap would vanish from the ledger' }
+              if (Test-Path (Join-Path $mdB 'dz_cbs.txt')) { throw 'budget 0: the FINDING marker was written -- its ledger row would claim a corrupt system binary the tool never found' }
+              if ($outB -match '(?m)^\[OK\]') { throw 'budget 0: an all-clear printed over a log that was never opened' }
+            } finally { Remove-Item $fxB, $mdB -Recurse -Force -EA SilentlyContinue }
+            # THE DEFAULT BUDGET COVERS A LARGE LOG. WIN11-02 ran out of the
+            # 20 s budget on both runs: the old reader walked the log one line
+            # at a time in PowerShell. A 150 MB CBS-shaped log -- noise, and one
+            # corrupt-file line at the very END -- must be read IN FULL within
+            # the default budget on 5.1, and that last line must be found.
+            $fxS = Join-Path $env:TEMP ("dz_cbs_speed_{0}.log" -f $PID)
+            $noiseLine = "2026-10-18 05:21:00, Info                  CSI    00000001 Noise line for the servicing stack with some ordinary content here`r`n"
+            $block = [Text.Encoding]::ASCII.GetBytes(($noiseLine * [int](1MB / $noiseLine.Length)))
+            $fsS = [IO.File]::Open($fxS, 'Create', 'Write', 'None')
+            try {
+              $head = [Text.Encoding]::ASCII.GetBytes("2026-10-18 05:21:00, Info                  CBS    Starting TrustedInstaller initialization.`r`n")
+              $fsS.Write($head, 0, $head.Length)
+              for ($k = 0; $k -lt 150; $k++) { $fsS.Write($block, 0, $block.Length) }
+              $tail = [Text.Encoding]::ASCII.GetBytes("2026-10-24 09:00:00, Info                  DEPLOY [Pnp] Corrupt file: C:\WINDOWS\System32\dz_ci_cbs_speed_absent_$PID.dll`r`n")
+              $fsS.Write($tail, 0, $tail.Length)
+            } finally { $fsS.Dispose() }
+            $mdS = Join-Path $env:TEMP ("dz_cbs_speed_md_{0}" -f $PID)
+            New-Item -ItemType Directory -Path $mdS -Force | Out-Null
+            try {
+              $outS = (.\tools\cbs_integrity_check.ps1 -Path $fxS -MarkerDir $mdS) -join "`n"
+              Write-Host $outS
+              if ($outS -match 'NOT performed' -or (Test-Path (Join-Path $mdS 'dz_cbs_gap.txt'))) { throw "a 150 MB CBS log did not fit the default 20 s budget on 5.1 -- the reader is too slow for a real machine's log: $outS" }
+              if ($outS -notmatch '1 file\(s\) recorded as corrupt are no longer on disk') { throw 'the corrupt-file line at the END of the 150 MB log was not found' }
+              $sp = [regex]::Match($outS, 'Scanned ([\d.,]+) MB of CBS log in ([\d.,]+) s')
+              if (-not $sp.Success) { throw 'the reader did not print what it scanned and how long it took' }
+              Write-Host ("MEASURED: the 150 MB fixture scanned in {0} s on Windows PowerShell 5.1" -f $sp.Groups[2].Value)
+            } finally { Remove-Item $fxS, $mdS -Recurse -Force -EA SilentlyContinue }
             # ONE FILE READ, ONE NOT: the unread one is part of the window NOT
             # examined, so it is a raised gap and withholds the all-clear (it
             # used to print only an [INFO] line beneath an [OK]).
@@ -2129,6 +2148,8 @@ jobs:
             # that accepted the misworded row above. A budget or access gap
             # now writes only dz_cbs_gap.txt, so a finding marker here is a
             # false positive (measured: the runner reads its CBS logs in full).
+            $spL = [regex]::Match($out, 'Scanned ([\d.,]+) MB of CBS log in ([\d.,]+) s')
+            if ($spL.Success) { Write-Host ("MEASURED: the runner's own CBS logs: {0} MB in {1} s" -f $spL.Groups[1].Value, $spL.Groups[2].Value) } else { throw 'the live read did not print what it scanned' }
             if ((Test-Path (Join-Path $md 'dz_cbs_gap.txt')) -or $out -match 'NOT performed') { throw "cbs_integrity_check declared a gap on an elevated runner with a 120 s budget, where every CBS log is readable: $out" }
             $m = Join-Path $md 'dz_cbs.txt'
             if (Test-Path $m) { throw ("cbs_integrity_check wrote a {0} finding marker on a clean runner (false positive): {1}" -f (Get-Content $m).Trim(), $out) }

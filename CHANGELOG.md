@@ -6,6 +6,23 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### The CBS log is read fast enough for the budget to cover it
+The re-run after the gap fix scored clean -- no "corrupt system binary" row,
+the gap worded as a gap -- and showed the gap itself again: on WIN11-02 the
+system-file check ran out of its 20 s budget on both runs, so part of
+Windows' own corrupt-file record was never read there. The cause was the
+reader, not the budget: it walked the log one line at a time in PowerShell,
+three `IndexOf` calls and a clock read per line. A 150 MB CBS-shaped log took
+11.3 s under pwsh 7 that way (Windows PowerShell 5.1 is slower still). The
+reader now scans in 4 MB chunks with one .NET regex and widens each hit to its
+line: 2.0 s for the same log. The first attempt anchored the pattern to the
+line start, backtracked across every noise line and was only 2.4x faster. The
+budget stays 20 s; every run now prints how many MB it scanned in how many
+seconds, CI proves a 150 MB log is read in full within the default budget on
+5.1 with its last line found, and the self-test drives the reader through
+real files: chunk edges, LF and CRLF, a last line with no newline, and a fake
+clock for the cut-short path.
+
 ### A time budget that ran out is a gap, never "a corrupt system binary"
 The re-run on a freshly built WIN11-02 (the owner's template, 2026-10-24)
 completed with no CRITICAL, and its ledger held a row the report did not
