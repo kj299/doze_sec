@@ -6,6 +6,32 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### New accounts and WMI persistence: a read that failed is a gap, never an all-clear
+Found by hunting the false-all-clear class this project bans, with no field
+report behind it.
+
+- **New local accounts (4720) and privileged-group additions (4732), Section
+  16.** The section itself read the Security log with `-EA SilentlyContinue`,
+  so an elevated run whose read failed printed `[OK] No new local account
+  creation events (4720).` having checked nothing, and the dashboard tiles
+  re-read the log the same way and printed PASS. `tools/account_events_check.ps1`
+  now opens the log first, so "could not be read" is never "no events": that
+  is a raised `NOT performed` gap for an administrator and a deferral for a
+  standard user. The tiles read its state.
+- **WMI permanent subscriptions (T1546.003), Section 17.** A query that failed
+  printed `[SKIPPED] ... NOT performed` through `:dz_ps_scan`, and `[SKIPPED]`
+  never raises -- so a broken WMI repository, a known way to hide a
+  subscription, reached neither the ledger, the verdict nor the exit code.
+  The dashboard tile re-ran the query with errors silenced, printed PASS when
+  it failed, and graded a hit CRIT where the section raised WARNING.
+  `tools/wmi_subscription_check.ps1` keeps the section's three checks, its
+  allowlist and its tables, gives a failed query its own gap marker (so the
+  row never reads "Non-default WMI EventFilter" for a query that found
+  nothing), and the tile reads its state.
+
+CI drives the failed-read path of both through the real readers, with a log
+and a namespace that do not exist.
+
 ### The log-clear check prints its times with their UTC offset
 Between two WIN11-02 reports the same Security-log clear read 23:00:23 in one
 and 02:00:23 in the next: the VM's time zone had been misconfigured and then
