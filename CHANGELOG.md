@@ -6,6 +6,75 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### A log cleared while a Windows image was being prepared is not graded as an intrusion
+The second-machine run on WIN11-02 completed this time and raised one
+CRITICAL: "Security event log was CLEARED ... Treat as active compromise",
+with the dashboard telling the owner to isolate the machine and image its
+drive. The records said otherwise. The 1102 and three 104 records (System,
+Application and Setup cleared within 20 ms) were written by the built-in
+Administrator under the computer name WIN-EIH5CPD9P56 -- Setup's random name
+-- before cloudbase-init renamed the VM WIN11-02. The owner confirmed it is
+their own image. An image build clears every log before capture; an intruder
+covering tracks does not rename the computer afterwards.
+
+`tools/log_clear_check.ps1` now grades both events and reads the name of the
+computer each record was written under. A clear under this PC's own name
+(NetBIOS or DNS host name, any case) stays CRITICAL. A name alone is not
+enough, though: an owner who renames DESKTOP-XXXX months after buying it
+moves the name, not the history, and a real clear made before that rename
+would have read as image preparation (found by the review, before the push).
+So a clear is graded as image preparation only when every record names
+another computer AND it was made no later than 24 hours after the OLDEST
+install date the PC records AND the PC was not renamed more than 24 hours
+after that date (an image is cleared before the clone's first boot sets the
+install date, and the first-boot rename follows within minutes). The second
+review found why "oldest" matters: a feature update resets
+`Win32_OperatingSystem.InstallDate` while the Security log carries over, so
+with the current date an owner's rename plus a routine upgrade would have
+turned an intruder's earlier clear into image preparation. The tool now takes
+the oldest of that value and each `Source OS (Updated on ...)` key's
+InstallDate, and a real Security-log clear on the CI runner is pinned
+CRITICAL.
+
+Measured on CI, unprompted: GitHub's own runner image is the same shape.
+Packer cleared every log at 21:17:38 under the build name `pkrvm7m03zjoygf`,
+and the clone's install date is 21:45:34, 28 minutes later; the runner
+grades `sec=prep`. On main that clear was CRITICAL and took a TOP FINDINGS
+slot, so moving it down surfaced a finding with no analyst note (Process-
+creation command-line logging DISABLED), which the full-run job caught; it
+now has one. It is then a WARNING that names both names and the install date,
+asks whether the PC was ever called the old name while in use (if so: a
+compromise), and says to treat it as one if the reader did not build the
+image or get it from a trusted source -- still counted, never silenced. An
+unreadable install date, a record with no computer name, or no name of our
+own to compare keeps it CRITICAL. Every Event 104 now names the log it
+cleared, since a cleared Sysmon or PowerShell log is not the routine
+System-log clear, and the ledger row reads "Event log cleared (Event 104)".
+Dates print as `yyyy-MM-dd HH:mm:ss` whatever the culture (the first draft
+printed `10.17.2026` on de-DE).
+
+Found while reading: the dashboard tile re-read the Security log itself with
+`-EA SilentlyContinue`, so an elevated run whose read failed printed PASS
+"Security event log has not been cleared" having checked nothing. (The first
+draft of this entry said a standard user saw that PASS; it did not -- on
+`doze_sec_noAdmin.bat` the tiles sat inside the dashboard's admin gate.) The
+tiles now read the section's state, outside that gate, so a standard user
+sees NOT graded (deferred) for the Security log and a real verdict for Event
+104; the standard-user path runs the check too (the System log is readable
+there). An unreadable Security log is a raised gap for an administrator and a
+deferral for a standard user; an unreadable System log is a raised gap on
+either token; and a tool that ran but wrote no verdict is a raised gap, not
+an ungraded tile.
+
+Misses first, against the predictions written before the results: exit 8 and
+10 rows, not 0-2 and 3-6 (the image-prep clear, and the cloud image's own
+agents); LSA Protection read ON, not off; the unknown lines came from the
+cloud image (cloudbase-init's hidden account, unsigned QEMU-GA and
+cloudbase-init services, the build-time clear), not from the preview build.
+Held: the run completed from a fresh ZIP (the CRLF fix works on a real
+download), PowerShell v2 disabled, Defender on with 6-day-old signatures. The
+three cloud-image lines are catalogued in `tests/benign_corpus.txt`.
+
 ### A downloaded ZIP runs; an LF-only bat refuses instead of dying at a goto
 The owner's first second-machine run stopped at INIT 8: `The system cannot
 find the batch label specified - runonce_done`. The label is there. The copy

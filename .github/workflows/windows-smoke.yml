@@ -2244,6 +2244,34 @@ jobs:
       # with injected status objects; the live run grades this runner's real
       # state, which ships with real-time protection OFF (every full-run report
       # since the image was built shows the CRITICAL).
+      - name: log_clear_check.ps1 -SelfTest + live (a clear under this PC's own name is CRITICAL; one made before it took its name is image preparation)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $st = (.\tools\log_clear_check.ps1 -SelfTest) -join "`n"
+          if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'log_clear_check.ps1 -SelfTest failed' }
+          $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($nst -lt 31) { throw "log_clear_check self-test ran only $nst case(s)" }
+          Write-Host "log_clear_check -SelfTest OK ($nst cases)"
+          # Live, read-only: the runner's own logs, graded by the same rule. A
+          # runner image is itself a prepared image, so an 1102/104 written
+          # under its build name is graded as preparation -- printed either way.
+          $md = Join-Path $env:TEMP 'dz_ci_logclear_live'
+          Remove-Item $md -Recurse -Force -EA SilentlyContinue
+          New-Item -ItemType Directory -Path $md | Out-Null
+          $out = (.\tools\log_clear_check.ps1 -MarkerDir $md) -join "`n"
+          Write-Host $out
+          if ($out -match 'Exception|is not recognized|CategoryInfo') { throw "PowerShell error text in the output: $out" }
+          foreach ($g in 'dz_logclear_gap.txt', 'dz_logclear104_gap.txt') {
+            if (Test-Path (Join-Path $md $g)) { throw "an administrator could not read the runner's Security or System log ($g): $out" }
+          }
+          $state = (Get-Content (Join-Path $md 'dz_logclear_state.txt') -Raw).Trim()
+          if ($state -notmatch '^sec=(critical|prep|none),sys=(cleared|none)$') { throw "unexpected state line: $state" }
+          Write-Host ("MEASURED: the runner's log-clear state is {0}" -f $state)
+          Write-Host ("MEASURED: the runner's Windows install date is {0}" -f (Get-CimInstance Win32_OperatingSystem).InstallDate.ToString('yyyy-MM-dd HH:mm:ss'))
+          Remove-Item $md -Recurse -Force -EA SilentlyContinue
+          exit 0
+
       - name: defender_core_check.ps1 -SelfTest + live (passive mode is INFO, not a finding; the runner's real state graded)
         shell: powershell
         run: |
@@ -5846,36 +5874,29 @@ jobs:
       # SHIPPED fragment extracted from doze_sec.bat -- not a copy that can
       # drift. Runs after the main harness because direction (b) clears this
       # ephemeral runner's System log.
-      - name: "Event 104 provider filter: benign 104 stays quiet, a real clear fires"
+      - name: "Event 104 provider filter: benign 104 stays quiet, a real clear fires; a real Security-log clear is CRITICAL"
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          $line = (Select-String -Path .\doze_sec.bat -Pattern '^echo .*dz_ev104_hit' | Select-Object -First 1).Line
-          if (-not $line) { throw 'could not find the ev104 fragment in doze_sec.bat' }
-          $lineNA = (Select-String -Path .\doze_sec_noAdmin.bat -Pattern '^echo .*dz_ev104_hit' | Select-Object -First 1).Line
-          if ($lineNA -ne $line) { throw 'ev104 fragment differs between doze_sec.bat and doze_sec_noAdmin.bat' }
+          # The 1102/104 queries live in tools\log_clear_check.ps1 now; both bats
+          # call it and carry no inline query of their own.
           foreach ($bat in '.\doze_sec.bat','.\doze_sec_noAdmin.bat') {
-            $l1102 = (Select-String -Path $bat -Pattern '^echo .*dz_ev1102_hit' | Select-Object -First 1).Line
-            if ($l1102 -notmatch "ProviderName='Microsoft-Windows-Eventlog'") { throw "$bat 1102 query lost its provider filter" }
+            if (-not (Select-String -Path $bat -SimpleMatch 'tools\log_clear_check.ps1' -Quiet)) { throw "$bat does not run tools\log_clear_check.ps1" }
+            if (Select-String -Path $bat -Pattern "Id=(1102|104);ProviderName" -Quiet) { throw "$bat still carries an inline 1102/104 query (a second measurement)" }
           }
-          $frag = $line -replace '^\s*echo ', '' -replace ' >> "%PSRUN%"\s*$', ''
-          if ($frag -notmatch "ProviderName='Microsoft-Windows-Eventlog'") { throw 'the ev104 query lost its provider filter' }
-          $marker = Join-Path $env:TEMP 'dz_ev104_hit.txt'
+          $src = Get-Content -Raw .\tools\log_clear_check.ps1
+          $prov = ([regex]::Match($src, "ProviderName = '([^']+)'")).Groups[1].Value
+          if ($prov -ne 'Microsoft-Windows-Eventlog') { throw "log_clear_check lost its provider filter (found '$prov')" }
+          $md = Join-Path $env:TEMP 'dz_ci_logclear'
+          Remove-Item $md -Recurse -Force -EA SilentlyContinue
+          New-Item -ItemType Directory -Path $md | Out-Null
 
           # (a) FALSE-POSITIVE direction -- the field report's exact shape: a
           # non-eventlog provider's Event 104 in the System log must not be
-          # what the check matches. This CANNOT be asserted on the fragment's
-          # whole output: the runner image already carries a genuine
-          # Microsoft-Windows-Eventlog 104, and 'wevtutil cl' writes another
-          # into the fresh log, so no reachable state is free of genuine
-          # clears -- the first version of this step silently skipped here and
-          # then claimed "both directions". Test the discriminating PROPERTY
-          # instead, using the provider name taken from the SHIPPED fragment:
-          # the bare-ID query (the field bug) must match the planted benign
-          # event, and the shipped provider-filtered query must exclude it.
-          # Holds on any image; no skip path.
-          $prov = ([regex]::Match($frag, "ProviderName='([^']+)'")).Groups[1].Value
-          if (-not $prov) { throw 'could not extract the provider filter from the shipped ev104 fragment' }
+          # what the check matches. The runner image already carries a genuine
+          # Microsoft-Windows-Eventlog 104, so the discriminating PROPERTY is
+          # tested: the bare-ID query (the field bug) matches the planted
+          # benign event, and the shipped provider-filtered query excludes it.
           if (-not [System.Diagnostics.EventLog]::SourceExists('dz_ci_benign104')) {
             New-EventLog -LogName System -Source dz_ci_benign104
           }
@@ -5883,24 +5904,45 @@ jobs:
           Start-Sleep -Seconds 2
           $bare = @(Get-WinEvent -FilterHashtable @{LogName='System';Id=104} -EA SilentlyContinue | Where-Object { $_.ProviderName -eq 'dz_ci_benign104' })
           if ($bare.Count -lt 1) { throw 'benign 104 did not land in the System log -- direction (a) could not be tested (this is a failure, not a skip)' }
-          Write-Host ("direction (a): bare-ID query matches the planted benign 104 ({0} event(s)) -- the field bug shape reproduces" -f $bare.Count)
           $filtered = @(Get-WinEvent -FilterHashtable @{LogName='System';Id=104;ProviderName=$prov} -EA SilentlyContinue)
           $leak = @($filtered | Where-Object { $_.ProviderName -ne $prov })
-          if ($leak.Count -gt 0) { throw ("the shipped provider filter let {0} non-{1} event(s) through -- the field false positive is NOT fixed" -f $leak.Count, $prov) }
+          if ($leak.Count -gt 0) { throw ("the shipped provider filter let {0} non-{1} event(s) through" -f $leak.Count, $prov) }
           Write-Host ("direction (a): shipped filter ({0}) returns {1} event(s), zero from the benign source -- discrimination PASS" -f $prov, $filtered.Count)
-          Remove-Item $marker -Force -EA SilentlyContinue
 
-          # (b) TRUE-POSITIVE direction, never previously proven: actually
-          # clear this ephemeral runner's System log. The clear itself writes
-          # 104 from Microsoft-Windows-Eventlog into the fresh log.
+          # (b) TRUE-POSITIVE direction: actually clear this ephemeral runner's
+          # System log. The clear writes a 104 from Microsoft-Windows-Eventlog
+          # under THIS computer's name -- so it is also the real-record proof
+          # that a clear made in this machine's own life is not called image
+          # preparation.
           wevtutil cl System
           Start-Sleep -Seconds 3
-          Remove-Item $marker -Force -EA SilentlyContinue
-          $out2 = Invoke-Expression $frag | Out-String
-          Write-Host $out2.Trim()
-          if ($out2 -notmatch '\[WARNING\]') { throw 'a genuinely cleared System log was NOT detected' }
-          if (-not (Test-Path $marker)) { throw 'cleared-log WARNING wrote no marker -- the finding would never reach the ledger' }
-          Write-Host 'ev104: benign-source discrimination PASS; genuine-clear detection PASS'
+          $out2 = (& .\tools\log_clear_check.ps1 -MarkerDir $md) -join "`n"
+          Write-Host $out2
+          if ($out2 -match 'Exception|is not recognized|CategoryInfo') { throw "PowerShell error text in the output: $out2" }
+          if ($out2 -notmatch '(?m)^\[WARNING\] System event log was cleared at ') { throw 'a genuinely cleared System log was NOT detected' }
+          if ($out2 -match 'System event log was cleared at [^\r\n]*before this PC took its current name') { throw 'a clear made under this runner''s own name was called image preparation' }
+          if (-not (Test-Path (Join-Path $md 'dz_logclear104.txt'))) { throw 'cleared-log WARNING wrote no marker -- the finding would never reach the ledger' }
+          if ((Get-Content (Join-Path $md 'dz_logclear_state.txt')) -notmatch 'sys=cleared') { throw 'the state line does not say the System log was cleared' }
+
+          # (c) PINNED, not branched on: clear this ephemeral runner's SECURITY
+          # log (the last step of this job; nothing after it reads that log).
+          # The 1102 is written under the runner's own name, after its install
+          # date, so the verdict must be CRITICAL -- whatever the image held
+          # before. A run that reads it as image preparation is the false
+          # reassurance this rule exists to avoid.
+          # Touches: eventlog:System, eventlog:Security (both cleared; CI runner only).
+          Remove-Item (Join-Path $md 'dz_logclear*.txt') -Force -EA SilentlyContinue
+          wevtutil cl Security
+          Start-Sleep -Seconds 3
+          $out3 = (& .\tools\log_clear_check.ps1 -MarkerDir $md) -join "`n"
+          Write-Host $out3
+          if ($out3 -match 'Exception|is not recognized|CategoryInfo') { throw "PowerShell error text in the output: $out3" }
+          if ($out3 -notmatch '(?m)^\[CRITICAL\] Security event log was CLEARED at ') { throw 'a Security log cleared under the runner''s own name was NOT graded CRITICAL' }
+          if ($out3 -match 'before this PC took its current name') { throw 'a Security log cleared under the runner''s own name was called image preparation' }
+          if ((Get-Content (Join-Path $md 'dz_logclear.txt') -EA SilentlyContinue) -ne 'CRITICAL') { throw 'the CRITICAL clear wrote no CRITICAL marker -- it would never reach the ledger' }
+          if ((Get-Content (Join-Path $md 'dz_logclear_state.txt')) -notmatch '^sec=critical,') { throw 'the state line does not say sec=critical' }
+          Remove-Item $md -Recurse -Force -EA SilentlyContinue
+          Write-Host 'ev104: benign-source discrimination PASS; genuine-clear detection PASS; a clear under the runner''s own name is not called image preparation; a real Security-log clear is CRITICAL'
 
       - name: Upload the selftest audit artifacts
         if: always()

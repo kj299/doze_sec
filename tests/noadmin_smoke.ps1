@@ -400,9 +400,27 @@ try {
     Assert ($text1 -match 'WinInit Event 12') `
         'Section 12 names WinInit Event 12 as the evidence it consulted for LSA Protection' `
         'Section 12 graded LSA Protection without naming the boot event (registry-only reading is back)'
-    Assert (-not @($ledger1 | Where-Object { $_ -match '^\w+\|16\|T1070\.001\|' }).Count) `
+    # The System log IS readable from this token, so a genuine System-log
+    # clear (the runner image carries one) is a real row -- with its line
+    # printed. Nothing about the Security log may be raised from here.
+    $lc16 = @($ledger1 | Where-Object { $_ -match '^\w+\|16\|T1070\.001\|' -and $_ -notmatch '\|Event log cleared \(Event 104\)$' })
+    Assert (-not $lc16.Count) `
         'no T1070.001 row for a Security log the token cannot list' `
-        ("a T1070.001 row was raised on a standard-user run with nothing printed: {0}" -f (($ledger1 | Where-Object { $_ -match '\|16\|T1070\.001\|' }) -join ' ; '))
+        ("a Security-log T1070.001 row was raised on a standard-user run: {0}" -f ($lc16 -join ' ; '))
+    if (@($ledger1 | Where-Object { $_ -match '\|16\|T1070\.001\|Event log cleared \(Event 104\)$' }).Count) {
+        Assert ($text1 -match '(?m)^\[WARNING\] (System event log|Event log ''[^'']+'') was cleared at ') `
+            'the System-log clear row has its printed line' `
+            'a System-log clear row was raised with no printed WARNING line'
+    }
+    Assert ($text1 -match '\[DEFERRED - ADMIN REQUIRED\] Security log clears \(Event 1102\)') `
+        'the Security-log clear check is stated as deferred on a standard-user token' `
+        'the Security-log clear check was not stated as deferred'
+    Assert ($text1 -notmatch '(?m)^\s*\[\s*OK\s*\]\s+Security event log has not been cleared') `
+        'no PASS tile claims the Security log was not cleared (this token cannot read it)' `
+        'the dashboard printed a PASS for a Security log this token cannot read'
+    Assert ($text1 -match 'Security event log clears: NOT graded -- deferred, needs admin \(Section 16\)') `
+        'the Security-log clear tile reads NOT graded (deferred) on a standard-user token' `
+        'the Security-log clear tile did not say it was deferred -- the tiles may be back inside the isAdmin gate'
     Assert (-not @($ledger1 | Where-Object { $_ -match '^\w+\|17\|T1014\|' }).Count) `
         'no T1014 row for a TaskCache the token cannot read' `
         ("a T1014 row was raised on a standard-user run with nothing printed: {0}" -f (($ledger1 | Where-Object { $_ -match '\|17\|T1014\|' }) -join ' ; '))
