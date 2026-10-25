@@ -6,6 +6,14 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### The log-clear check prints its times with their UTC offset
+Between two WIN11-02 reports the same Security-log clear read 23:00:23 in one
+and 02:00:23 in the next: the VM's time zone had been misconfigured and then
+corrected, and nothing on the line said which clock it was on. The times
+`log_clear_check` prints (the clear, the install date, the rename) now carry
+the offset, e.g. `2026-10-18 02:00:23 +03:00`, so two reports of the same
+record can be compared. Other tools' time formats are unchanged.
+
 ### The CBS log is read fast enough for the budget to cover it
 The re-run after the gap fix scored clean -- no "corrupt system binary" row,
 the gap worded as a gap -- and showed the gap itself again: on WIN11-02 the
