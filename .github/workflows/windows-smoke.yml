@@ -2353,6 +2353,40 @@ jobs:
       # with injected status objects; the live run grades this runner's real
       # state, which ships with real-time protection OFF (every full-run report
       # since the image was built shows the CRITICAL).
+      - name: named_pipe_check.ps1 -SelfTest + live (a C2 pipe list that could not be read is a raised gap, never an all-clear)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $st = (.\tools\named_pipe_check.ps1 -SelfTest) -join "`n"
+          if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'named_pipe_check -SelfTest failed' }
+          $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($n -lt 6) { throw "named_pipe_check self-test ran only $n case(s)" }
+          # LIVE on the runner: both sets list \\.\pipe\ cleanly and find no
+          # default C2 pipe (a clean runner's state is a claim to pin).
+          foreach ($c in @(@{ Set = 'CobaltStrike'; Key = 'cs' }, @{ Set = 'NextGenC2'; Key = 'c2' })) {
+            $md = Join-Path $env:TEMP ("dz_ci_pipes_{0}_{1}" -f $c.Key, $PID); New-Item -ItemType Directory -Path $md -Force | Out-Null
+            try {
+              $o = (.\tools\named_pipe_check.ps1 -Set $c.Set -MarkerDir $md) -join "`n"; Write-Host $o
+              if ($o -match 'Exception|is not recognized|CategoryInfo') { throw "PowerShell error text: $o" }
+              $state = (Get-Content (Join-Path $md ("dz_pipes_{0}_state.txt" -f $c.Key)) -Raw).Trim()
+              if ($state -ne ($c.Key + '=0')) { throw "a clean runner did not read $($c.Key)=0 (state $state): $o" }
+              Write-Host "MEASURED: the runner's $($c.Set) pipe state is $state"
+            } finally { Remove-Item $md -Recurse -Force -EA SilentlyContinue }
+          }
+          # THE LISTING THAT FAILS, through the real reader: a pipe directory
+          # that does not exist must be a raised gap, never "[OK] No ... pipes".
+          $md = Join-Path $env:TEMP ("dz_ci_pipes_gap_{0}" -f $PID); New-Item -ItemType Directory -Path $md -Force | Out-Null
+          try {
+            $o = (.\tools\named_pipe_check.ps1 -Set CobaltStrike -MarkerDir $md -PipeDir (Join-Path $env:TEMP ("dz_no_such_pipe_dir_{0}" -f $PID))) -join "`n"; Write-Host $o
+            if ($o -notmatch '(?m)^\[WARNING\] Cobalt Strike named-pipe check NOT performed') { throw 'a pipe list that could not be read was not declared a NOT-performed gap' }
+            if ($o -match '(?m)^\[(OK|SKIPPED)\]') { throw 'a failed pipe listing printed [OK] or an unraised [SKIPPED]' }
+            if (-not (Test-Path (Join-Path $md 'dz_pipes_cs_gap.txt'))) { throw 'the gap wrote no gap marker' }
+            if (Test-Path (Join-Path $md 'dz_pipes_cs_hit.txt')) { throw 'the gap wrote the hit marker -- its row would claim a Cobalt Strike pipe' }
+            if ((Get-Content (Join-Path $md 'dz_pipes_cs_state.txt') -Raw).Trim() -ne 'cs=gap') { throw 'the state does not say gap' }
+          } finally { Remove-Item $md -Recurse -Force -EA SilentlyContinue }
+          Write-Host 'named pipes: clean on the runner; a failed listing is a raised gap through the real reader'
+          exit 0
+
       - name: account_events_check.ps1 + wmi_subscription_check.ps1 -SelfTest + live (a read that failed is a raised gap, never an all-clear)
         shell: powershell
         run: |

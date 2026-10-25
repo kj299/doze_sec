@@ -529,6 +529,22 @@ jobs:
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
           n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 31 ] || { echo "only $n case(s)"; exit 1; }
+      - name: named_pipe_check -- a C2 pipe is WARNING, a pipe list that could not be read is a raised gap, never an all-clear
+        run: |
+          out=$(pwsh -NoProfile -File tools/named_pipe_check.ps1 -SelfTest); echo "$out"
+          for n in 'ordinary Windows pipes: [OK], nothing raised, the old wording kept' \
+                   'Cobalt Strike default pipes: named, then the WARNING line, and a hit' \
+                   'a pipe list that could not be read is a raised gap, never [OK] and never an unraised [SKIPPED]'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 6 ] || { echo "only $n case(s)"; exit 1; }
+          for b in doze_sec.bat doze_sec_noAdmin.bat; do
+            # The broken shape: a silenced listing inside a try, whose catch can
+            # never run (18b's silenced listing is fine: an empty list is its gap).
+            grep -qF 'try{$pipes=Get-ChildItem \\.\pipe\ -EA SilentlyContinue' "$b" && { echo "$b: a silenced pipe listing inside a try is back (a failed listing reads as no pipes)"; exit 1; }
+            grep -qF "PIPES_CS_STATE%'" "$b" || { echo "$b: the Cobalt Strike tile does not read Section 17's state"; exit 1; }
+          done
+          echo 'named pipes: a failed listing is a gap; the tile reads the section'
       - name: account_events_check + wmi_subscription_check -- a read that failed is a raised gap or a deferral, never an all-clear
         run: |
           out=$(pwsh -NoProfile -File tools/account_events_check.ps1 -SelfTest); echo "$out"

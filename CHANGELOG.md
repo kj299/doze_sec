@@ -6,6 +6,19 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### The C2 named-pipe checks: a pipe list that could not be read is a gap
+The Cobalt Strike (Section 17) and Sliver / Havoc / Brute Ratel (Section 18)
+pipe checks wrapped `Get-ChildItem \\.\pipe\ -EA SilentlyContinue` in a
+`try/catch`. With errors silenced a failed listing is not an exception, so
+the catch never ran and the check printed `[OK] No Cobalt Strike default
+named pipes.` having looked at nothing -- and the catch's `[SKIPPED]` would
+have raised nothing anyway. The dashboard tile re-listed the pipes with a
+shorter pattern list than the section's and graded a hit CRIT where the
+section raised WARNING. `tools/named_pipe_check.ps1` lists with `-EA Stop`,
+keeps both sets' patterns, wording and ledger rows, gives a failed listing its
+own gap row, and writes the state the tile now reads. CI drives the failed
+listing through the real reader with a pipe directory that does not exist.
+
 ### New accounts and WMI persistence: a read that failed is a gap, never an all-clear
 Found by hunting the false-all-clear class this project bans, with no field
 report behind it.

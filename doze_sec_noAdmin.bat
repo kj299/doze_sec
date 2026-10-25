@@ -204,6 +204,7 @@ set "PPL_STATE=ungraded"
 set "LOGCLEAR_STATE=sec=ungraded,sys=ungraded"
 set "ACCTEV_STATE=ungraded"
 set "WMISUB_STATE=ungraded"
+set "PIPES_CS_STATE=ungraded"
 set "REBOOT_AGE=unknown"
 set "BITLOCKER_STATE=ungraded"
 set "EXEC_BLOCKED=0"
@@ -4356,9 +4357,33 @@ echo if(-not $found){'[OK] No unexpected RMM software found.'} >> "%PSRUN%"
 
 echo.>> "%REPORT%"
 echo --- [ALL ACTORS] Cobalt Strike Named Pipes (MDDR: most abused C2 tool) --->> "%REPORT%"
-echo  Command: powershell -Command "Get-ChildItem \\.\pipe\ -EA SilentlyContinue">> "%REPORT%"
-echo try{$pipes=Get-ChildItem \\.\pipe\ -EA SilentlyContinue ^| Where-Object {$_.Name -match 'postex_^|msagent_^|MSSE-^|metsvc^|beacon^|cobaltstrike^|status_'}; if($pipes){$pipes ^| Select-Object Name; '[WARNING] Possible Cobalt Strike pipes detected.'}else{'[OK] No Cobalt Strike default named pipes.'}}catch{'[SKIPPED] Named pipe enumeration failed -- Cobalt Strike pipe check NOT performed.'} > "%PSRUN%"
-call :dz_ps_scan 17 T1071 "Cobalt Strike default named pipe present"
+echo  Command: powershell -File tools\named_pipe_check.ps1 -Set CobaltStrike>> "%REPORT%"
+del "%TEMP%\dz_pipes_cs_hit.txt" 2>nul
+del "%TEMP%\dz_pipes_cs_gap.txt" 2>nul
+del "%TEMP%\dz_pipes_cs_state.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\named_pipe_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\named_pipe_check.ps1" -Set CobaltStrike>> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\named_pipe_check.ps1 not found -- CobaltStrike named-pipe check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 17 T1071 "Cobalt Strike named-pipe check NOT performed - tool missing"
+)
+if exist "%TEMP%\dz_pipes_cs_hit.txt" (
+    call :dz_finding WARNING 17 T1071 "Cobalt Strike default named pipe present"
+    del "%TEMP%\dz_pipes_cs_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_pipes_cs_gap.txt" (
+    rem A gap is its own row: the pipe list could not be read.
+    call :dz_finding WARNING 17 T1071 "Cobalt Strike named-pipe check NOT performed - the pipe list could not be read"
+    del "%TEMP%\dz_pipes_cs_gap.txt" 2>nul
+)
+set "_PCST="
+if exist "%TEMP%\dz_pipes_cs_state.txt" set /p _PCST=<"%TEMP%\dz_pipes_cs_state.txt"
+del "%TEMP%\dz_pipes_cs_state.txt" 2>nul
+if defined _PCST if "!_PCST:~0,3!"=="cs=" set "PIPES_CS_STATE=!_PCST!"
+if not "!PIPES_CS_STATE:~0,3!"=="cs=" if exist "%SCRIPT_DIR%tools\named_pipe_check.ps1" (
+    echo [WARNING] Cobalt Strike named-pipe check produced no verdict -- NOT performed: tools\named_pipe_check.ps1 ran but wrote no usable verdict.>> "%REPORT%"
+    call :dz_finding WARNING 17 T1071 "Cobalt Strike named-pipe check produced no verdict - NOT performed"
+)
 
 echo.>> "%REPORT%"
 echo --- [ALL ACTORS] WMI Permanent Subscriptions (stealthy persistence) --->> "%REPORT%"
@@ -5039,9 +5064,25 @@ echo.>> "%REPORT%"
 :: --- [CTI] Sliver / Havoc / Brute Ratel Named Pipes (next-gen C2) ---
 echo.>> "%REPORT%"
 echo --- [CTI] Sliver / Havoc / Brute Ratel C2 Named Pipes --->> "%REPORT%"
-echo  Command: powershell -Command "Get-ChildItem \\.\pipe\ -EA SilentlyContinue">> "%REPORT%"
-echo try{$pipes=Get-ChildItem \\.\pipe\ -EA SilentlyContinue ^| Where-Object {$_.Name -match 'sliverpb^|havoc^|bruteratel^|badger_^|b4_^|_krbtgt^|dcetest^|systemd-^|svc_pivot'}; if($pipes){$pipes ^| Select-Object Name; '[WARNING] Possible next-gen C2 named pipes detected.'}else{'[OK] No Sliver/Havoc/BruteRatel default pipes.'}}catch{'[SKIPPED] Named pipe enumeration failed -- next-gen C2 pipe check NOT performed.'} > "%PSRUN%"
-call :dz_ps_scan 18 T1071 "Sliver/Havoc/Brute Ratel named pipe IOC"
+echo  Command: powershell -File tools\named_pipe_check.ps1 -Set NextGenC2>> "%REPORT%"
+del "%TEMP%\dz_pipes_c2_hit.txt" 2>nul
+del "%TEMP%\dz_pipes_c2_gap.txt" 2>nul
+del "%TEMP%\dz_pipes_c2_state.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\named_pipe_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\named_pipe_check.ps1" -Set NextGenC2>> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\named_pipe_check.ps1 not found -- NextGenC2 named-pipe check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 18 T1071 "Sliver/Havoc/Brute Ratel named-pipe check NOT performed - tool missing"
+)
+if exist "%TEMP%\dz_pipes_c2_hit.txt" (
+    call :dz_finding WARNING 18 T1071 "Sliver/Havoc/Brute Ratel named pipe IOC"
+    del "%TEMP%\dz_pipes_c2_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_pipes_c2_gap.txt" (
+    rem A gap is its own row: the pipe list could not be read.
+    call :dz_finding WARNING 18 T1071 "Sliver/Havoc/Brute Ratel named-pipe check NOT performed - the pipe list could not be read"
+    del "%TEMP%\dz_pipes_c2_gap.txt" 2>nul
+)
 
 :: --- [CTI] DLL Search Order Hijacking (T1574.001) ---
 echo.>> "%REPORT%"
@@ -5436,7 +5477,7 @@ echo }else{ >> "%PSRUN%"
 echo ck 'INFO' 'Security event log analysis deferred (requires admin)' >> "%PSRUN%"
 echo ck 'INFO' 'netsh portproxy check deferred (requires admin)' >> "%PSRUN%"
 echo } >> "%PSRUN%"
-echo try{$pipes=Get-ChildItem \\.\pipe\ -EA Stop^|Where-Object{$_.Name -match 'postex_^|msagent_^|MSSE-^|metsvc'};if($pipes){ck 'CRIT' ('Cobalt Strike named pipes detected: '+@($pipes).Count) ('Pipes: '+($pipes.Name -join ', ')+'. Active C2. See Section 17.')}else{ck 'PASS' 'No Cobalt Strike default named pipes detected'}}catch{ck 'INFO' 'Named pipe check unavailable (non-fatal)'} >> "%PSRUN%"
+echo $pc='%PIPES_CS_STATE%';if($pc -match 'cs=(\d+)'){if([int]$matches[1] -gt 0){ck 'WARN' ('Cobalt Strike default named pipes present: '+$matches[1]+' (Section 17)') 'Possible active C2. See Section 17 for the pipe names.'}else{ck 'PASS' 'No Cobalt Strike default named pipes detected (Section 17)'}}else{ck 'INFO' 'Cobalt Strike named pipes: NOT graded -- Section 17 could not list the pipes'} >> "%PSRUN%"
 echo $ws='%WMISUB_STATE%';if($ws -match 'filter=(\d+)'){if([int]$matches[1] -gt 0){ck 'WARN' ('Non-default WMI EventFilter subscriptions present: '+$matches[1]+' (Section 17)') 'Stealthy reboot-persistent implant. See Section 17 for the filters and their queries.'}else{ck 'PASS' 'No non-default WMI permanent EventFilter subscriptions (Section 17)'}}elseif($ws -match 'filter=deferred'){ck 'INFO' 'WMI EventFilter subscriptions: NOT graded -- deferred, needs admin (Section 17)'}else{ck 'INFO' 'WMI EventFilter subscriptions: NOT graded -- Section 17 could not query root\subscription'} >> "%PSRUN%"
 if "%PROCPATH_STATE%"=="warn" echo ck 'WARN' 'Suspicious process paths: %PROCPATH_BAD% of %PROCPATH_TOTAL% in the Section 4 process snapshot' 'Running from Temp, Downloads, Users\Public or $Recycle, or not validly signed: %PROCPATH_NAMES%. Full paths in Section 4. This tile reports the Section 4 grade itself -- it does not enumerate the process list a second time.' >> "%PSRUN%"
 if "%PROCPATH_STATE%"=="info" echo ck 'INFO' 'Processes from user-profile paths, all validly signed: %PROCPATH_TOTAL% in the Section 4 process snapshot' '%PROCPATH_NAMES%. Per-user installs (Brave, Chrome, Edge, Slack, Teams, VS Code) live under AppData by design. Context, not a finding.' >> "%PSRUN%"
