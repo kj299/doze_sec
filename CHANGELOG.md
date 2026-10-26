@@ -6,6 +6,19 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### The Guest-account check: accounts that could not be read are a gap
+Section 2 read `Get-CimInstance Win32_UserAccount ... -EA SilentlyContinue`,
+so a CIM query that failed printed `[OK] Guest account is disabled or
+absent.` having looked at nothing -- a broken or tampered WMI repository
+turned an enabled Guest account into an all-clear.
+`tools/guest_account_check.ps1` asks two independent sources (CIM, then
+`Get-LocalUser`), names the one that answered, says "disabled" and "absent"
+apart, and only when neither could be read -- or both returned no accounts,
+which never happens on Windows -- prints a raised `NOT performed` gap. The
+enabled-Guest wording and ledger row are unchanged. CI pins the runner's
+state from each source alone and drives the failure through a CIM class that
+does not exist.
+
 ### The C2 named-pipe checks: a pipe list that could not be read is a gap
 The Cobalt Strike (Section 17) and Sliver / Havoc / Brute Ratel (Section 18)
 pipe checks wrapped `Get-ChildItem \\.\pipe\ -EA SilentlyContinue` in a

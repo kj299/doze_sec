@@ -2353,6 +2353,41 @@ jobs:
       # with injected status objects; the live run grades this runner's real
       # state, which ships with real-time protection OFF (every full-run report
       # since the image was built shows the CRITICAL).
+      - name: guest_account_check.ps1 -SelfTest + live (two sources; accounts that could not be read are a raised gap, never an all-clear)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $st = (.\tools\guest_account_check.ps1 -SelfTest) -join "`n"
+          if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'guest_account_check -SelfTest failed' }
+          $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($n -lt 7) { throw "guest_account_check self-test ran only $n case(s)" }
+          function RunG([hashtable]$Extra) {
+            $md = Join-Path $env:TEMP ("dz_ci_guest_{0}_{1}" -f $PID, [guid]::NewGuid().ToString('N').Substring(0, 6)); New-Item -ItemType Directory -Path $md -Force | Out-Null
+            try {
+              $o = (& .\tools\guest_account_check.ps1 -MarkerDir $md @Extra) -join "`n"; Write-Host $o
+              if ($o -match 'is not recognized|CategoryInfo') { throw "PowerShell error text: $o" }
+              return @{ Out = $o; State = (Get-Content (Join-Path $md 'dz_guest_state.txt') -Raw).Trim(); Gap = (Test-Path (Join-Path $md 'dz_guest_gap.txt')); Hit = (Test-Path (Join-Path $md 'dz_guest_hit.txt')) }
+            } finally { Remove-Item $md -Recurse -Force -EA SilentlyContinue }
+          }
+          # LIVE: both sources read the runner; the built-in Guest is disabled
+          # on a clean image (a claim to pin), and each source alone agrees.
+          $both = RunG @{}
+          if ($both.State -ne 'guest=disabled' -or $both.Gap -or $both.Hit) { throw "a clean runner did not read guest=disabled: $($both.Out)" }
+          $c = RunG @{ Sources = 'cim' }; $l = RunG @{ Sources = 'localuser' }
+          if ($c.State -ne $both.State -or $l.State -ne $both.State) { throw "the two sources disagree: cim=$($c.State) localuser=$($l.State)" }
+          if ($c.Out -notmatch 'read by CIM Win32_UserAccount' -or $l.Out -notmatch 'read by Get-LocalUser') { throw 'a line does not name the source that answered' }
+          Write-Host "MEASURED: the runner's Guest state is $($both.State) (CIM and Get-LocalUser agree)"
+          # THE READ THAT FAILS, through the real readers: a CIM class that
+          # does not exist, alone, is a raised gap; beside Get-LocalUser, the
+          # fallback answers.
+          $g = RunG @{ Sources = 'cim'; CimClass = 'Win32_DzCiNoSuchClass' }
+          if ($g.State -ne 'guest=gap' -or -not $g.Gap -or $g.Hit) { throw "a CIM query that failed was not a raised gap: $($g.Out)" }
+          if ($g.Out -match '(?m)^\[OK\]') { throw 'a CIM query that failed printed an all-clear' }
+          $f = RunG @{ CimClass = 'Win32_DzCiNoSuchClass' }
+          if ($f.State -ne $both.State -or $f.Gap -or $f.Out -notmatch 'read by Get-LocalUser') { throw "Get-LocalUser did not answer when CIM failed: $($f.Out)" }
+          Write-Host 'guest account: both sources agree; a failed CIM read falls back to Get-LocalUser, and both failing is a raised gap'
+          exit 0
+
       - name: named_pipe_check.ps1 -SelfTest + live (a C2 pipe list that could not be read is a raised gap, never an all-clear)
         shell: powershell
         run: |

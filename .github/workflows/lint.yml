@@ -529,6 +529,20 @@ jobs:
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
           n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 31 ] || { echo "only $n case(s)"; exit 1; }
+      - name: guest_account_check -- an enabled Guest is WARNING from either source; accounts that could not be read are a raised gap
+        run: |
+          out=$(pwsh -NoProfile -File tools/guest_account_check.ps1 -SelfTest); echo "$out"
+          for n in 'Guest enabled: the WARNING the bats always printed, and a hit' \
+                   'CIM failed: Get-LocalUser answers, and still finds an ENABLED Guest' \
+                   'both sources failed: a raised gap naming both, never "[OK] disabled or absent"'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 7 ] || { echo "only $n case(s)"; exit 1; }
+          for b in doze_sec.bat doze_sec_noAdmin.bat; do
+            grep -qF 'Get-CimInstance Win32_UserAccount -Filter "LocalAccount=True" -EA SilentlyContinue' "$b" && { echo "$b: the silenced Guest query is back"; exit 1; }
+            grep -qF 'Guest-account check produced no verdict' "$b" || { echo "$b: the Guest check lost its no-verdict backstop"; exit 1; }
+          done
+          echo 'guest account: a failed read is a gap'
       - name: named_pipe_check -- a C2 pipe is WARNING, a pipe list that could not be read is a raised gap, never an all-clear
         run: |
           out=$(pwsh -NoProfile -File tools/named_pipe_check.ps1 -SelfTest); echo "$out"
