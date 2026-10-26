@@ -537,7 +537,8 @@ jobs:
                    'both sources failed: a raised gap naming both, never "[OK] disabled or absent"'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 7 ] || { echo "only $n case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 10 ] || { echo "only $n case(s)"; exit 1; }
+          echo "$out" | grep -qF "CIM says disabled but Get-LocalUser says ENABLED: the finding wins" || { echo 'case gone: the enabled-wins case'; exit 1; }
           for b in doze_sec.bat doze_sec_noAdmin.bat; do
             grep -qF 'Get-CimInstance Win32_UserAccount -Filter "LocalAccount=True" -EA SilentlyContinue' "$b" && { echo "$b: the silenced Guest query is back"; exit 1; }
             grep -qF 'Guest-account check produced no verdict' "$b" || { echo "$b: the Guest check lost its no-verdict backstop"; exit 1; }

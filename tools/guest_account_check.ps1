@@ -60,32 +60,48 @@ function ConvertTo-PrintableText {
 
 # PURE. $Reads: one entry per source tried, in order, each @{ Source;
 # Accounts; Error }, Accounts being objects with SID (string) and Disabled
-# (bool). The first source that returned accounts decides. Returns
-# @{ Lines; Hit; Gap; State }.
+# (bool). EVERY source that answered is weighed, not the first: evidence is
+# not symmetric. An ENABLED Guest seen by any source is the finding, whatever
+# another source says -- a stale or tampered provider must not be able to
+# talk a second source out of it. "Disabled" needs a -501 account and no
+# source calling it enabled; "absent" needs no source showing one at all.
+# Sources that disagree are said so. Returns @{ Lines; Hit; Gap; State }.
 function Get-GuestVerdict {
     param([object[]]$Reads = @())
     $out = New-Object System.Collections.ArrayList
-    $tried = New-Object System.Collections.ArrayList
+    $failed = New-Object System.Collections.ArrayList
+    $seen = New-Object System.Collections.ArrayList   # @{ Source; Verdict; Count }
     foreach ($r in @($Reads)) {
         $accts = @($r.Accounts | Where-Object { $null -ne $_ -and [string]$_.SID })
-        if ($r.Error) { [void]$tried.Add(($r.Source + ': ' + (ConvertTo-PrintableText $r.Error))); continue }
-        if ($accts.Count -eq 0) { [void]$tried.Add(($r.Source + ': returned no local accounts, and Windows always has the built-in Administrator')); continue }
+        if ($r.Error) { [void]$failed.Add(($r.Source + ': ' + (ConvertTo-PrintableText $r.Error))); continue }
+        if ($accts.Count -eq 0) { [void]$failed.Add(($r.Source + ': returned no local accounts, and Windows always has the built-in Administrator')); continue }
         $g = @($accts | Where-Object { ([string]$_.SID) -match '-501$' })
-        if ($g.Count -eq 0) {
-            [void]$out.Add(('[OK] No Guest account (SID -501) among the ' + $accts.Count + ' local account(s) (read by ' + $r.Source + ').'))
-            return @{ Lines = @($out.ToArray()); Hit = $false; Gap = $false; State = 'guest=absent' }
-        }
-        if (@($g | Where-Object { -not [bool]$_.Disabled }).Count -gt 0) {
-            [void]$out.Add('[WARNING] Guest account (SID -501) is ENABLED -- disable it: net user guest /active:no')
-            [void]$out.Add(('[INFO] Read by ' + $r.Source + '.'))
-            return @{ Lines = @($out.ToArray()); Hit = $true; Gap = $false; State = 'guest=enabled' }
-        }
-        [void]$out.Add(('[OK] Guest account (SID -501) is disabled (read by ' + $r.Source + ').'))
-        return @{ Lines = @($out.ToArray()); Hit = $false; Gap = $false; State = 'guest=disabled' }
+        $verdict = if ($g.Count -eq 0) { 'absent' } elseif (@($g | Where-Object { -not [bool]$_.Disabled }).Count -gt 0) { 'enabled' } else { 'disabled' }
+        [void]$seen.Add(@{ Source = $r.Source; Verdict = $verdict; Count = $accts.Count })
     }
-    $why = if ($tried.Count -gt 0) { ($tried.ToArray() -join '; ') } else { 'no source was tried' }
-    [void]$out.Add(('[WARNING] Guest-account check NOT performed -- the local accounts could not be read (' + $why + '), so an enabled Guest account would go unseen (T1078.001).'))
-    return @{ Lines = @($out.ToArray()); Hit = $false; Gap = $true; State = 'guest=gap' }
+    if ($seen.Count -eq 0) {
+        $why = if ($failed.Count -gt 0) { ($failed.ToArray() -join '; ') } else { 'no source was tried' }
+        [void]$out.Add(('[WARNING] Guest-account check NOT performed -- the local accounts could not be read (' + $why + '), so an enabled Guest account would go unseen (T1078.001).'))
+        return @{ Lines = @($out.ToArray()); Hit = $false; Gap = $true; State = 'guest=gap' }
+    }
+    $by = { param($v) (@($seen | Where-Object { $_.Verdict -eq $v } | ForEach-Object { $_.Source }) -join ' and ') }
+    $all = (@($seen | ForEach-Object { $_.Source }) -join ' and ')
+    if (@($seen | Where-Object { $_.Verdict -eq 'enabled' }).Count -gt 0) {
+        [void]$out.Add('[WARNING] Guest account (SID -501) is ENABLED -- disable it: net user guest /active:no')
+        [void]$out.Add(('[INFO] Read by ' + (& $by 'enabled') + '.'))
+        $state = 'guest=enabled'; $hit = $true
+    } elseif (@($seen | Where-Object { $_.Verdict -eq 'disabled' }).Count -gt 0) {
+        [void]$out.Add(('[OK] Guest account (SID -501) is disabled (read by ' + (& $by 'disabled') + ').'))
+        $state = 'guest=disabled'; $hit = $false
+    } else {
+        [void]$out.Add(('[OK] No Guest account (SID -501) among the ' + $seen[0].Count + ' local account(s) (read by ' + $all + ').'))
+        $state = 'guest=absent'; $hit = $false
+    }
+    if (@($seen | ForEach-Object { $_.Verdict } | Sort-Object -Unique).Count -gt 1) {
+        [void]$out.Add(('[INFO] The sources disagree: ' + ((@($seen | ForEach-Object { $_.Source + ' read ' + $_.Verdict })) -join ', ') + '. The verdict above takes the one that found the Guest account in use.'))
+    }
+    if ($failed.Count -gt 0) { [void]$out.Add(('[INFO] Not every source could be read: ' + ($failed.ToArray() -join '; ') + '.')) }
+    return @{ Lines = @($out.ToArray()); Hit = $hit; Gap = $false; State = $state }
 }
 
 function Read-ViaCim {
@@ -124,6 +140,13 @@ if ($SelfTest) {
     T 'both sources failed: a raised gap naming both, never "[OK] disabled or absent"' ($v.Gap -and (-not $v.Hit) -and $v.State -eq 'guest=gap' -and $t -match '(?m)^\[WARNING\] Guest-account check NOT performed' -and $t -match 'CIM Win32_UserAccount: CimException' -and $t -match 'Get-LocalUser: CommandNotFoundException' -and $t -notmatch '\[OK\]') $t
     $v = Get-GuestVerdict -Reads @((& $cim @()), (& $lu @()))
     T 'both sources returned NO accounts: a raised gap (Windows always has Administrator), never [OK]' ($v.Gap -and $v.State -eq 'guest=gap' -and ($v.Lines -join "`n") -notmatch '\[OK\]') ($v.Lines -join ' | ')
+    $v = Get-GuestVerdict -Reads @((& $cim @($admin, (A "$base-501" $true))), (& $lu @($admin, (A "$base-501" $false))))
+    $t = $v.Lines -join "`n"
+    T 'CIM says disabled but Get-LocalUser says ENABLED: the finding wins, and the disagreement is said' ($v.Hit -and $v.State -eq 'guest=enabled' -and $t -match 'Read by Get-LocalUser\.' -and $t -match 'The sources disagree: CIM Win32_UserAccount read disabled, Get-LocalUser read enabled') $t
+    $v = Get-GuestVerdict -Reads @((& $cim @($admin, $user)), (& $lu @($admin, $user, (A "$base-501" $true))))
+    T 'one source lists no Guest, the other a disabled one: disabled, never "absent"' ((-not $v.Hit) -and $v.State -eq 'guest=disabled' -and ($v.Lines -join "`n") -match 'read by Get-LocalUser\)') ($v.Lines -join ' | ')
+    $v = Get-GuestVerdict -Reads @((& $cim @($admin, (A "$base-501" $true))), (& $lu @($admin, (A "$base-501" $true))))
+    T 'both sources agree it is disabled: [OK] naming both' ($v.State -eq 'guest=disabled' -and ($v.Lines -join "`n") -match 'read by CIM Win32_UserAccount and Get-LocalUser\)' -and ($v.Lines -join "`n") -notmatch 'disagree') ($v.Lines -join ' | ')
     $v = Get-GuestVerdict -Reads @((& $cim @() ('bad' + [char]10 + '[OK] fine')))
     T 'a control character in an error cannot start a report line' (@($v.Lines | Where-Object { $_ -match '^\[OK\] fine' }).Count -eq 0) ($v.Lines -join ' | ')
     if ($fails) { Write-Output "[FAIL] $fails guest_account_check self-test expectation(s) unmet"; exit 1 }

@@ -685,7 +685,10 @@ $cases = @(
         Tier   = 'required'  # Section 2 now emits a SID -501 verdict (issue #138)
         Touches= @('account:guest (enabled)|net user guest')
         Affects= @('defense')
-        Expect = '(?im)\[(WARNING|CRITICAL)\][^\r\n]*guest'
+        # Anchored to the FINDING: since guest_account_check, a gap line
+        # ("Guest-account check NOT performed") also holds the word guest, so
+        # the loose pattern passed on a plant that was never detected.
+        Expect = '(?m)^\[WARNING\] Guest account \(SID -501\) is ENABLED'
         Plant  = { & net user guest /active:yes | Out-Null }
         Cleanup= { & net user guest /active:no  | Out-Null }
     },
