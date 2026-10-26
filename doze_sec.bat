@@ -2062,12 +2062,33 @@ echo.>> "%REPORT%"
 echo --- Guest Account (must be Disabled) --->> "%REPORT%"
 echo  Command: net user guest>> "%REPORT%"
 net user guest>> "%REPORT%" 2>&1
+echo  Command: powershell -File tools\guest_account_check.ps1>> "%REPORT%"
 del "%TEMP%\dz_guest_hit.txt" 2>nul
-echo $g=Get-CimInstance Win32_UserAccount -Filter "LocalAccount=True" -EA SilentlyContinue ^| Where-Object {$_.SID -like '*-501'};if($g -and -not $g.Disabled){'[WARNING] Guest account (SID -501) is ENABLED -- disable it: net user guest /active:no';Set-Content -LiteralPath "$env:TEMP\dz_guest_hit.txt" -Value hit}else{'[OK] Guest account is disabled or absent.'} > "%PSRUN%"
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+del "%TEMP%\dz_guest_gap.txt" 2>nul
+del "%TEMP%\dz_guest_state.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\guest_account_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\guest_account_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\guest_account_check.ps1 not found -- Guest-account check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 2 T1078.001 "Guest-account check NOT performed - tool missing"
+)
 if exist "%TEMP%\dz_guest_hit.txt" (
     call :dz_finding WARNING 2 T1078.001 "Guest account SID -501 is ENABLED"
     del "%TEMP%\dz_guest_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_guest_gap.txt" (
+    rem A gap is its own row: the local accounts could not be read.
+    call :dz_finding WARNING 2 T1078.001 "Guest-account check NOT performed - the local accounts could not be read"
+    del "%TEMP%\dz_guest_gap.txt" 2>nul
+)
+set "_GUST="
+if exist "%TEMP%\dz_guest_state.txt" set /p _GUST=<"%TEMP%\dz_guest_state.txt"
+del "%TEMP%\dz_guest_state.txt" 2>nul
+set "_GUOK="
+if defined _GUST if "!_GUST:~0,6!"=="guest=" set "_GUOK=1"
+if not defined _GUOK if exist "%SCRIPT_DIR%tools\guest_account_check.ps1" (
+    echo [WARNING] Guest-account check produced no verdict -- NOT performed: tools\guest_account_check.ps1 ran but wrote no usable verdict.>> "%REPORT%"
+    call :dz_finding WARNING 2 T1078.001 "Guest-account check produced no verdict - NOT performed"
 )
 
 echo.>> "%REPORT%"
