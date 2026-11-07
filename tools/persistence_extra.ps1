@@ -663,8 +663,8 @@ if ($SelfTest) {
     # on the exact job, at the exact age. Microsoft serves this endpoint over
     # HTTP/80 by design, so it must be context and nothing else.
     $edge = 'http://msedge.b.tlu.dl.delivery.mp.microsoft.com/filestreamingservice/files/8f2c1e7a-4d31-4a5b-9c60-1f2e3d4c5b6a?P1=1789012345&P2=404&P3=2&P4=abcdef'
-    $v = Get-BitsVerdict -Name 'Edge Component Updater' -Owner 'Z4NEE52\khali' -Created $old `
-                         -Remotes @($edge) -Locals @('C:\Users\khali\AppData\Local\Temp\BIT9A2C.tmp') -Now $now
+    $v = Get-BitsVerdict -Name 'Edge Component Updater' -Owner 'DESKTOP7\alice' -Created $old `
+                         -Remotes @($edge) -Locals @('C:\Users\alice\AppData\Local\Temp\BIT9A2C.tmp') -Now $now
     T 'the real Edge Component Updater remote is context, not a finding' `
       ($v.Sev -eq 'OK' -and $v.Flagged -eq 0 -and $v.Aged -eq 1 -and (& $j $v) -match '^\[INFO\]') (& $j $v)
     T 'no line anywhere says plain HTTP -- that branch is deleted, not narrowed' `
@@ -777,7 +777,7 @@ if ($SelfTest) {
     # Download (default), Upload or UploadReply, and for an upload the SOURCE is
     # the local file and the DESTINATION is the URL. Before this arm existed,
     # every rule here read a job the download way round.
-    $doc = 'C:\Users\khali\Documents\tax-2026.pdf'
+    $doc = 'C:\Users\alice\Documents\tax-2026.pdf'
     $v = Get-BitsVerdict -Name 'dz_up' -Owner 'u' -Created $now.AddDays(-1) -TransferType 'Upload' `
                          -Locals @('C:\Windows\Temp\agentdiag.cab') `
                          -Remotes @('https://collector.example.com/upload/agentdiag.cab') `

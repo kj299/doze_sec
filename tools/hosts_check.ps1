@@ -437,15 +437,15 @@ if ($SelfTest) {
 
     # No suffix discoverable: first-label fallback, declared as inferred.
     $script:OwnNameCache = $null
-    $script:OwnNameProbe = { @{ ComputerName = 'z4nee52'; Suffixes = @() } }
-    $r = V @('10.1.0.100 z4nee52.corp.example.com')
+    $script:OwnNameProbe = { @{ ComputerName = 'desktop7'; Suffixes = @() } }
+    $r = V @('10.1.0.100 desktop7.corp.example.com')
     T 'with no discoverable suffix the first label answers, and says so' `
       ($r.Redirect.Count -eq 0 -and ((@($r.Context) -join '; ') -match 'inferred from the first label')) `
       ("redirect=$($r.Redirect.Count) ctx=" + (@($r.Context) -join '; '))
 
     # ...but the fallback is still a whole-label match, not a prefix.
     $script:OwnNameCache = $null
-    $r = V @('10.1.0.100 z4nee52x.corp.example.com')
+    $r = V @('10.1.0.100 desktop7x.corp.example.com')
     T 'the inferred fallback still refuses a prefix match' `
       ($r.Redirect.Count -eq 1) ("redirect=$($r.Redirect.Count)")
 

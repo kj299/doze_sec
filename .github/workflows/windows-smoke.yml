@@ -3838,8 +3838,8 @@ jobs:
           # tests/benign_corpus.txt carries the ADVISE note that tells the
           # reader to ask whether they were installing something.
           Set-Content $dump -Value @(
-            'OllamaSetup.exe  5420  C:\Users\khali\AppData\Local\Temp\WinGet\Ollama.Ollama.0.34.2\OllamaSetup.exe',
-            'OllamaSetup.tmp  20636  C:\Users\khali\AppData\Local\Temp\is-0X2Z2LGMY8.tmp\OllamaSetup.tmp',
+            'OllamaSetup.exe  5420  C:\Users\alice\AppData\Local\Temp\WinGet\Ollama.Ollama.0.34.2\OllamaSetup.exe',
+            'OllamaSetup.tmp  20636  C:\Users\alice\AppData\Local\Temp\is-0X2Z2LGMY8.tmp\OllamaSetup.tmp',
             ("svchost.exe  399  " + (Join-Path $env:SystemRoot 'System32\svchost.exe')))
           $out = (.\tools\proc_path_grade.ps1 -Path $dump -MarkerFile $mk -StateFile $st) -join "`n"
           Write-Host $out

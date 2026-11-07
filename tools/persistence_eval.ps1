@@ -278,12 +278,12 @@ if ($SelfTest) {
     # ordinary software and every one must grade $null.
     $benign = @(
         @($hkcu, 'OneDrive', '"C:\Program Files\Microsoft OneDrive\OneDrive.exe" /background'),
-        @($hkcu, 'BraveSoftware Update', '"C:\Users\khali\AppData\Local\BraveSoftware\Update\1.3.361.151\BraveUpdateCore.exe"'),
-        @($hkcu, 'org.whispersystems.signal-desktop', 'C:\Users\khali\AppData\Local\Programs\signal-desktop\Signal.exe --start-in-tray'),
+        @($hkcu, 'BraveSoftware Update', '"C:\Users\alice\AppData\Local\BraveSoftware\Update\1.3.361.151\BraveUpdateCore.exe"'),
+        @($hkcu, 'org.whispersystems.signal-desktop', 'C:\Users\alice\AppData\Local\Programs\signal-desktop\Signal.exe --start-in-tray'),
         @($hkcu, 'Adobe Acrobat Synchronizer', '"C:\Program Files\Adobe\Acrobat DC\Acrobat\AdobeCollabSync.exe"'),
-        @($hkcu, 'Proton Drive', '"C:\Users\khali\AppData\Local\Programs\Proton\Drive\ProtonDrive.exe" -quiet'),
+        @($hkcu, 'Proton Drive', '"C:\Users\alice\AppData\Local\Programs\Proton\Drive\ProtonDrive.exe" -quiet'),
         @($hkcu, 'MicrosoftEdgeAutoLaunch_5B486EA56FC3A190C4F0BB45771E329D', '"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --no-startup-window --win-session-start'),
-        @($hkcu, 'Docker Desktop', 'C:\Users\khali\AppData\Local\Programs\DockerDesktop\Docker Desktop.exe'),
+        @($hkcu, 'Docker Desktop', 'C:\Users\alice\AppData\Local\Programs\DockerDesktop\Docker Desktop.exe'),
         @($hkcu, 'MicrosoftCopilotAutoLaunch_F6FB03BD129D17F0D98665BA91661954', '"C:\Program Files (x86)\Microsoft\Copilot\Application\mscopilot.exe" --no-startup-window --win-session-start'),
         @($hklm, 'SecurityHealth', '%windir%\system32\SecurityHealthSystray.exe'),
         @($hklm, 'RtkAudUService', '"C:\WINDOWS\System32\DriverStore\FileRepository\realtekservice.inf_amd64_d4e2f40b8460b254\RtkAudUService64.exe" -background'),

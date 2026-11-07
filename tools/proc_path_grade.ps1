@@ -209,9 +209,9 @@ if ($SelfTest) {
     # and they must stay findings. tests/benign_corpus.txt carries the ADVISE
     # entry that tells the reader to ask whether they were installing software.
     $r = Get-Verdict -SigCheck $sig -Paths @(
-        'C:\Users\khali\AppData\Local\Temp\is-0X2Z2LGMY8.tmp\OllamaSetup.tmp',
-        'C:\Users\khali\AppData\Local\Temp\WinGet\Ollama.Ollama.0.34.2\OllamaSetup.exe',
-        'C:\Users\khali\AppData\Local\BraveSoftware\Brave-Browser\Application\signed-brave.exe')
+        'C:\Users\alice\AppData\Local\Temp\is-0X2Z2LGMY8.tmp\OllamaSetup.tmp',
+        'C:\Users\alice\AppData\Local\Temp\WinGet\Ollama.Ollama.0.34.2\OllamaSetup.exe',
+        'C:\Users\alice\AppData\Local\BraveSoftware\Brave-Browser\Application\signed-brave.exe')
     if ($r.Bad.Count -eq 2 -and $r.Total -eq 3) { Write-Output '[OK]   the 2026-09-19 installer-in-Temp shape stays a finding, and only it' }
     else { Write-Output "[FAIL] installer-in-Temp: $($r.Bad.Count) of $($r.Total), expected 2 of 3"; $fails++ }
 
