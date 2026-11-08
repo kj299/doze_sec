@@ -830,7 +830,7 @@ $cases = @(
         # Void the case only when the profile is observably enabled again at
         # scoreboard time (before cleanup restores it), so a genuine miss --
         # profile still off, detector silent -- still counts as a regression.
-        VoidIf     = { (Get-NetFirewallProfile -Profile 'Private' -EA SilentlyContinue).Enabled -eq $true }
+        VoidIf     = { (Get-NetFirewallProfile -Profile 'Private' -PolicyStore ActiveStore -EA SilentlyContinue).Enabled -eq $true }
         VoidReason = "the Private firewall profile was re-enabled by the environment (Windows Security auto-remediation or Group Policy) before the audit read it, so the disabled-firewall path had nothing to detect"
         Plant  = { $script:fwPrevEnabled = (Get-NetFirewallProfile -Profile $fwProfile).Enabled
                    Set-NetFirewallProfile -Profile $fwProfile -Enabled False }
@@ -1313,7 +1313,8 @@ try {
     # catches any such divergence on whatever state this runner is in.
     Write-Host ""
     Write-Host "== False-positive guards (ground truth) =="
-    $fwp = @(Get-NetFirewallProfile -EA SilentlyContinue)
+    # ActiveStore: the effective state, which is what Section 8 grades.
+    $fwp = @(Get-NetFirewallProfile -PolicyStore ActiveStore -EA SilentlyContinue)
     if ($fwp.Count -gt 0) {
         # Enum-robust (GpoBoolean): "True" means enabled; anything else is off.
         # Must NOT use `-not $_.Enabled` -- that is the idiom under test, so the

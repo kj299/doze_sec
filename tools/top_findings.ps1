@@ -50,6 +50,8 @@ $whyTable = [ordered]@{
     'WDigest ENABLED'      = 'WDigest plaintext credential caching is on. Attackers extract cleartext passwords from LSASS using documented techniques.'
     'NTLMv1 allowed'       = 'NTLMv1 is crackable in minutes via Responder + hashcat. Set LmCompatibilityLevel=5 to require NTLMv2.'
     'Firewall DISABLED'    = 'Windows Firewall is off, removing host-level network filtering. Lateral movement and inbound C2 become easier.'
+    'Firewall service DISABLED' = 'The Windows Defender Firewall service is not running, so no profile filters anything whatever its setting says. Stopping it is a one-line defense evasion; start it and set it to Automatic.'
+    'SMBv1 server component INSTALLED' = 'The SMBv1 server component is installed and this run could not read whether the server accepts SMBv1; installed, it does by default. Removing the component closes the EternalBlue path for good.'
     'SMBv1 ENABLED'        = 'SMBv1 is the protocol exploited by EternalBlue / WannaCry. It must be disabled in 2024+.'
     'UAC DISABLED'         = 'No prompt before privilege elevation. Any malware running as user gets silent admin via auto-elevating processes.'
     'portproxy tunnel rules are ACTIVE' = 'netsh portproxy rules are an active Volt Typhoon TTP for hiding C2 traffic behind the local interface.'

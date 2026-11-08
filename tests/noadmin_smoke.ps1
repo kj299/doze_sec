@@ -435,6 +435,27 @@ try {
             'a WMI deferral is not a ledger row' `
             'a WMI deferral was raised as a ledger row'
     }
+    # Firewall (Section 8) and SMBv1 (Section 10) on this token. The old inline
+    # lines printed an unraised [SKIPPED] whenever their cmdlet failed, and
+    # Get-SmbServerConfiguration ALWAYS fails for a standard user. Each check
+    # now either ran (from any source this token can read), deferred (every
+    # failure access denied), or printed a raised gap -- and its tile says
+    # which, never PASS for a state that was not read.
+    foreach ($c in @(
+        @{ Name = 'firewall'; Ran = '(?m)^\[OK\] All firewall profiles enabled|(?m)^\[CRITICAL\] Firewall (service )?DISABLED'; Def = '(?m)^\[DEFERRED - ADMIN REQUIRED\] Firewall-state check'; Gap = '(?m)^\[WARNING\] Firewall-state check NOT performed'; Row = '\|8\|T1562\.004\|Firewall-state check NOT performed'; Old = '\[SKIPPED\] Get-NetFirewallProfile unavailable'; Tile = 'Firewall state: NOT graded'; Pass = '(?m)^\s*\[\s*OK\s*\]\s+All firewall profiles enabled' },
+        @{ Name = 'SMBv1'; Ran = '(?m)^\[OK\] SMBv1 (disabled|server component not installed)|(?m)^\[CRITICAL\] SMBv1 ENABLED|(?m)^\[WARNING\] SMBv1 server component INSTALLED'; Def = '(?m)^\[DEFERRED - ADMIN REQUIRED\] SMBv1 check'; Gap = '(?m)^\[WARNING\] SMBv1 check NOT performed'; Row = '\|10\|T1210\|SMBv1 check NOT performed'; Old = '\[SKIPPED\] SMBv1 state unavailable'; Tile = 'SMBv1 state: NOT graded'; Pass = '(?m)^\s*\[\s*OK\s*\]\s+SMBv1 (disabled|server component)' })) {
+        $ran = $text1 -match $c.Ran; $def = $text1 -match $c.Def; $gap = $text1 -match $c.Gap
+        Write-Host ("  MEASURED: the {0} check on a standard-user token: ran={1} deferred={2} gap={3}" -f $c.Name, $ran, $def, $gap)
+        Assert ($text1 -notmatch $c.Old) ('no unraised [SKIPPED] for the {0} check' -f $c.Name) ('the old unraised {0} [SKIPPED] line is back' -f $c.Name)
+        Assert ($ran -or $def -or $gap) ('the {0} check stated what it did on a standard-user token' -f $c.Name) ('the {0} check printed neither a result, a deferral nor a gap' -f $c.Name)
+        $rows = @($ledger1 | Where-Object { $_ -match $c.Row }).Count
+        if ($gap) { Assert ($rows -gt 0) ('the {0} gap has its ledger row' -f $c.Name) ('a {0} NOT-performed line was printed with no ledger row' -f $c.Name) }
+        if ($def) {
+            Assert ($rows -eq 0) ('a {0} deferral is not a ledger row' -f $c.Name) ('a {0} deferral was raised as a ledger row' -f $c.Name)
+            Assert ($text1 -match $c.Tile) ('the {0} tile reads NOT graded when the check deferred' -f $c.Name) ('the {0} tile did not say NOT graded for a deferred check' -f $c.Name)
+            Assert ($text1 -notmatch $c.Pass) ('no PASS tile for a {0} state this token could not read' -f $c.Name) ('the dashboard printed a {0} PASS this token could not read' -f $c.Name)
+        }
+    }
     Assert ($text1 -match '\[DEFERRED - ADMIN REQUIRED\] Security log clears \(Event 1102\)') `
         'the Security-log clear check is stated as deferred on a standard-user token' `
         'the Security-log clear check was not stated as deferred'

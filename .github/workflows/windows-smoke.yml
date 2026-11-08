@@ -2388,6 +2388,69 @@ jobs:
           Write-Host 'guest account: both sources agree; a failed CIM read falls back to Get-LocalUser, and both failing is a raised gap'
           exit 0
 
+      - name: firewall_state_check.ps1 + smb1_check.ps1 -SelfTest + live (the effective state from every source; a state that could not be read is a raised gap; SMBv1 planted)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($t in 'firewall_state_check', 'smb1_check') {
+            $st = (& ".\tools\$t.ps1" -SelfTest) -join "`n"
+            if ($LASTEXITCODE -ne 0) { Write-Host $st; throw "$t -SelfTest failed" }
+            $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+            if ($n -lt 16) { throw "$t self-test ran only $n case(s)" }
+          }
+          function RunT([string]$Tool, [string]$Name, [hashtable]$Extra) {
+            $md = Join-Path $env:TEMP ("dz_ci_{0}_{1}_{2}" -f $Name, $PID, [guid]::NewGuid().ToString('N').Substring(0, 6)); New-Item -ItemType Directory -Path $md -Force | Out-Null
+            try {
+              $o = (& ".\tools\$Tool.ps1" -MarkerDir $md @Extra) -join "`n"; Write-Host $o
+              if ($o -match 'is not recognized|CategoryInfo') { throw "PowerShell error text: $o" }
+              $sf = Join-Path $md ("dz_{0}_state.txt" -f $Name)
+              return @{ Out = $o; State = $(if (Test-Path $sf) { (Get-Content $sf -Raw).Trim() } else { '' }); Gap = (Test-Path (Join-Path $md "dz_${Name}_gap.txt")); Hit = (Test-Path (Join-Path $md "dz_${Name}_hit.txt")) }
+            } finally { Remove-Item $md -Recurse -Force -EA SilentlyContinue }
+          }
+          # FIREWALL, LIVE: every source reads the runner's effective state;
+          # each profile source alone must agree with the other.
+          $all = RunT 'firewall_state_check' 'fw' @{}
+          if ($all.State -notmatch '^fw=(on|off),' -or $all.Gap) { throw "the runner's firewall state was not read: $($all.Out)" }
+          $ns = RunT 'firewall_state_check' 'fw' @{ Sources = 'netsecurity' }
+          $co = RunT 'firewall_state_check' 'fw' @{ Sources = 'com' }
+          if ($ns.State -ne $co.State) { throw "the two profile sources disagree on this runner: netsecurity=$($ns.State) com=$($co.State)" }
+          if ($ns.Out -notmatch 'Get-NetFirewallProfile \(ActiveStore\)' -or $co.Out -notmatch 'HNetCfg\.FwPolicy2') { throw 'a line does not name the source that answered' }
+          Write-Host "MEASURED: the runner's firewall reads $($all.State) (ActiveStore and FwPolicy2 agree: $($ns.State))"
+          # THE READS THAT FAIL, through the real readers: a service that does
+          # not exist is said and does not move the profile verdict; asking no
+          # profile source at all is a raised gap, never an all-clear.
+          $sv = RunT 'firewall_state_check' 'fw' @{ ServiceName = 'dz_ci_nosuchsvc' }
+          if ($sv.State -ne $ns.State -or $sv.Out -notmatch 'firewall service could not be queried') { throw "a failed service query moved or hid the verdict: $($sv.Out)" }
+          $g = RunT 'firewall_state_check' 'fw' @{ Sources = 'service' }
+          if ($g.State -ne 'fw=gap,profiles=-' -or -not $g.Gap -or $g.Hit -or $g.Out -match '(?m)^\[OK\]') { throw "no profile source was not a raised gap: $($g.Out)" }
+          # SMBv1, LIVE: a clean runner has no SMBv1 server -- a claim to pin.
+          $s = RunT 'smb1_check' 'smb1' @{}
+          if ($s.State -notmatch '^smb1=(disabled|absent)$' -or $s.Gap -or $s.Hit) { throw "a clean runner did not read SMBv1 disabled or absent: $($s.Out)" }
+          $sm = RunT 'smb1_check' 'smb1' @{ Sources = 'smb' }; $ci = RunT 'smb1_check' 'smb1' @{ Sources = 'cim' }
+          Write-Host "MEASURED: SMBv1 reads $($s.State); Get-SmbServerConfiguration alone $($sm.State), Win32_OptionalFeature alone $($ci.State)"
+          if ($sm.Gap -or $ci.Gap) { throw 'a single SMBv1 source could not be read on an elevated runner' }
+          $g = RunT 'smb1_check' 'smb1' @{ Sources = 'cim'; CimClass = 'Win32_DzCiNoSuchClass' }
+          if ($g.State -ne 'smb1=gap' -or -not $g.Gap -or $g.Hit -or $g.Out -match '(?m)^\[OK\]') { throw "a CIM query that failed was not a raised gap: $($g.Out)" }
+          # SMBv1 PLANT (runner only; restored in finally): the server's own
+          # configuration says SMBv1 is on. If this image refuses the setting,
+          # say so -- the self-test still pins the judgement.
+          $prev = (Get-SmbServerConfiguration).EnableSMB1Protocol
+          $planted = $false; $refused = ''
+          try {
+            try { Set-SmbServerConfiguration -EnableSMB1Protocol $true -Force -Confirm:$false -ErrorAction Stop; $planted = ((Get-SmbServerConfiguration).EnableSMB1Protocol -eq $true) }
+            catch { $refused = $_.Exception.Message }
+            if ($planted) {
+              $p = RunT 'smb1_check' 'smb1' @{}
+              if ($p.State -ne 'smb1=enabled' -or -not $p.Hit -or $p.Out -notmatch '(?m)^\[CRITICAL\] SMBv1 ENABLED \(EternalBlue CVE-2017-0144\)$') { throw "a planted SMBv1 server was not CRITICAL: $($p.Out)" }
+              Write-Host 'smb1 plant: the enabled server configuration is the CRITICAL finding'
+            } elseif ($refused) { Write-Host ("[ SKIP ] SMBv1 plant not run: this image refuses Set-SmbServerConfiguration -EnableSMB1Protocol ({0}); the self-test pins the judgement" -f $refused) }
+            else { Write-Host '[ SKIP ] SMBv1 plant not run: the setting did not take on this image; the self-test pins the judgement' }
+          } finally {
+            Set-SmbServerConfiguration -EnableSMB1Protocol ([bool]$prev) -Force -Confirm:$false -EA SilentlyContinue
+          }
+          Write-Host 'firewall and SMBv1: every source agrees on the runner, a failed read is a raised gap, never an all-clear'
+          exit 0
+
       - name: named_pipe_check.ps1 -SelfTest + live (a C2 pipe list that could not be read is a raised gap, never an all-clear)
         shell: powershell
         run: |
