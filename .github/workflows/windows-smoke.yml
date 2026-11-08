@@ -2451,6 +2451,40 @@ jobs:
           Write-Host 'firewall and SMBv1: every source agrees on the runner, a failed read is a raised gap, never an all-clear'
           exit 0
 
+      - name: winrm_check.ps1 -SelfTest + live (a WinRM service that could not be queried is a raised gap; a name that does not exist is "not present" by the service manager's own answer)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $st = (.\tools\winrm_check.ps1 -SelfTest) -join "`n"
+          if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'winrm_check -SelfTest failed' }
+          $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
+          if ($n -lt 13) { throw "winrm_check self-test ran only $n case(s)" }
+          function RunW([hashtable]$Extra) {
+            $md = Join-Path $env:TEMP ("dz_ci_winrm_{0}_{1}" -f $PID, [guid]::NewGuid().ToString('N').Substring(0, 6)); New-Item -ItemType Directory -Path $md -Force | Out-Null
+            try {
+              $o = (& .\tools\winrm_check.ps1 -MarkerDir $md @Extra) -join "`n"; Write-Host $o
+              if ($o -match 'is not recognized|CategoryInfo') { throw "PowerShell error text: $o" }
+              $sf = Join-Path $md 'dz_winrm_state.txt'
+              return @{ Out = $o; State = $(if (Test-Path $sf) { (Get-Content $sf -Raw).Trim() } else { '' }); Gap = (Test-Path (Join-Path $md 'dz_winrm_gap.txt')); Hit = (Test-Path (Join-Path $md 'dz_winrm_hit.txt')) }
+            } finally { Remove-Item $md -Recurse -Force -EA SilentlyContinue }
+          }
+          # LIVE: the runner's own WinRM, graded by Get-Service; the ports said.
+          $live = RunW @{}
+          if ($live.State -notmatch '^winrm=(running|stopped)$' -or $live.Gap) { throw "the runner's WinRM service was not read: $($live.Out)" }
+          if ($live.Out -notmatch '\[INFO\] (Listening on TCP|Nothing is listening on TCP|The WinRM listening ports)') { throw 'the listening ports were not stated' }
+          # Server images run WinRM with an HTTP listener on 5985: a running
+          # service must not be told "nothing is listening" (the per-port
+          # not-found error once discarded the 5985 rows).
+          if ($live.State -eq 'winrm=running' -and $live.Out -match 'Nothing is listening on TCP 5985') { Write-Host 'MEASURED: WinRM runs with no listener on this image' }
+          Write-Host "MEASURED: the runner's WinRM reads $($live.State)"
+          # THE READ THAT FAILS, through the real readers: Get-Service cannot
+          # find the name, and the service manager's own exit code (1060)
+          # says it does not exist -- not present, no gap, never a guess.
+          $ab = RunW @{ ServiceName = 'dz_ci_nosuchsvc' }
+          if ($ab.State -ne 'winrm=absent' -or $ab.Gap -or $ab.Hit -or $ab.Out -notmatch 'sc\.exe query exit 1060') { throw "a service that does not exist was not read as not present by the SCM: $($ab.Out)" }
+          Write-Host 'winrm: the runner is read by Get-Service; a missing service is "not present" by the service manager''s own exit code'
+          exit 0
+
       - name: named_pipe_check.ps1 -SelfTest + live (a C2 pipe list that could not be read is a raised gap, never an all-clear)
         shell: powershell
         run: |
