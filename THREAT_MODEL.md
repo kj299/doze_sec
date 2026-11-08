@@ -411,6 +411,12 @@ Found during the v7.1 coverage review; tracked for future work:
   17 RMM running/installed checks (`Get-Process`/Uninstall-key empties
   mean "not present"). Probes elsewhere may still degrade silently, but
   the high-value verdict checks across Sections 4-18 now fail visibly.
+- ~~The Section 10 WinRM verdict read `Get-Service WinRM -EA SilentlyContinue`,
+  so a query that failed printed `[OK] WinRM not running.`~~ **Closed:**
+  `tools/winrm_check.ps1` grades `Get-Service`. When that fails, it asks the
+  service manager by name and reads only the exit code: 1060 is "not
+  present", 5 on a standard-user token is a deferral, and anything else is a
+  raised NOT-performed gap. Listeners on 5985/5986 are context only.
 - ~~The Section 8 firewall and Section 10 SMBv1 verdicts read their cmdlet
   with `-EA SilentlyContinue`, so a query that failed printed an unraised
   `[SKIPPED]` (for SMBv1, on every standard-user run). The firewall verdict

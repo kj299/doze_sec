@@ -589,6 +589,27 @@ jobs:
           la=$(grep -n '^:sec8_fwstate' "$nb" | head -1 | cut -d: -f1); tc=$(grep -n 'tools\\firewall_state_check.ps1">>' "$nb" | head -1 | cut -d: -f1)
           [ -n "$la" ] && [ -n "$tc" ] && [ "$la" -lt "$tc" ] || { echo "$nb: :sec8_fwstate must come before the firewall-state tool call (label=$la call=$tc)"; exit 1; }
           echo 'firewall and SMBv1: a failed read is a gap; tiles and fixes read the section and the ledger; the standard-user path grades the firewall state'
+      - name: winrm_check -- a running WinRM is WARNING; a service that could not be queried is a raised gap, never "[OK] WinRM not running"
+        run: |
+          out=$(pwsh -NoProfile -File tools/winrm_check.ps1 -SelfTest); echo "$out"
+          for n in 'running: the WARNING wording the bats always printed, a hit, and the listener said' \
+                   'Get-Service failed and the service manager says the service does not exist (1060): [OK] not present' \
+                   'denied (5) on a standard-user token: a counted deferral, never a gap row and never an all-clear' \
+                   'any other answer: a raised gap that prints what each probe said, never "[OK] WinRM not running"' \
+                   'an empty Get-Service answer with no fallback is a gap, never "not running"' \
+                   'a listener on 5985 with the service stopped (http.sys shares the port): [OK] plus INFO, never a finding' \
+                   'starting (delayed auto-start right after boot): the RUNNING finding, never [OK]' \
+                   'paused (transitional): a raised gap that names the state, never [OK] and never the RUNNING finding'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 13 ] || { echo "only $n WinRM case(s)"; exit 1; }
+          for b in doze_sec.bat doze_sec_noAdmin.bat; do
+            grep -qF 'Get-Service WinRM -EA SilentlyContinue' "$b" && { echo "$b: the silenced WinRM query is back (in the section or a re-measuring tile)"; exit 1; }
+            grep -qF 'WinRM check produced no verdict' "$b" || { echo "$b: the WinRM check lost its no-verdict backstop"; exit 1; }
+            grep -qF "echo \$ws='%WINRM_STATE%'" "$b" || { echo "$b: the WinRM tile no longer reads Section 10's verdict"; exit 1; }
+            grep -qF "if(led 'WARNING' '10' 'T1021.006' 'WinRM running')" "$b" || { echo "$b: the WinRM fix no longer triggers off the ledger"; exit 1; }
+          done
+          echo 'WinRM: a failed query is a gap; the tile and the fix read the section and the ledger'
       - name: named_pipe_check -- a C2 pipe is WARNING, a pipe list that could not be read is a raised gap, never an all-clear
         run: |
           out=$(pwsh -NoProfile -File tools/named_pipe_check.ps1 -SelfTest); echo "$out"

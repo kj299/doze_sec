@@ -6,6 +6,22 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### The WinRM check: a service that could not be queried is a gap
+**Before.**
+- Section 10 read `Get-Service WinRM -EA SilentlyContinue`. When that query failed (a broken service manager, a denied query, a cmdlet that would not load), it printed `[OK] WinRM not running.` without having looked, and remote-PowerShell exposure (T1021.006) read clean.
+- The dashboard ran the query again.
+- The fix keyed off the dashboard's wording.
+
+**Now.** `tools/winrm_check.ps1` reads `Get-Service`.
+- **Running** is the WARNING finding, with the wording and row unchanged.
+- **Get-Service fails:** the service manager is asked by name, and only its exit code is read, because the text `sc.exe` prints is localized:
+  - 1060 means the service does not exist, which reads `[OK]` not present;
+  - 5 (access denied) on a standard-user token is a counted deferral;
+  - anything else is a raised `NOT performed` row that prints what each probe said.
+- **Listeners** on TCP 5985/5986 are printed as context and never decide.
+- **Dashboard and fix:** the tile reads the section's verdict, and the fix triggers off the ledger.
+- **CI:** measures the runner and drives a service name that does not exist through the real readers.
+
 ### The firewall and SMBv1 checks: a state that could not be read is a gap
 **Before.**
 - Section 8 read `Get-NetFirewallProfile -EA SilentlyContinue` and Section 10 read `Get-SmbServerConfiguration -EA SilentlyContinue`. When either query failed, the check printed `[SKIPPED] ... unavailable` and raised nothing. For SMBv1 that happened on every standard-user run, because the cmdlet needs administrator.

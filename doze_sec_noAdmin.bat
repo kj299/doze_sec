@@ -207,6 +207,7 @@ set "WMISUB_STATE=ungraded"
 set "PIPES_CS_STATE=ungraded"
 set "FW_STATE=ungraded"
 set "SMB1_STATE=ungraded"
+set "WINRM_STATE=ungraded"
 set "REBOOT_AGE=unknown"
 set "BITLOCKER_STATE=ungraded"
 set "EXEC_BLOCKED=0"
@@ -3030,8 +3031,17 @@ if exist "%SCRIPT_DIR%tools\smb1_check.ps1" (
     call :dz_finding WARNING 10 T1210 "SMBv1 check NOT performed - tool missing"
 )
 echo $rdp=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -EA SilentlyContinue).fDenyTSConnections;if($rdp -eq 1){'[OK] RDP disabled.'}else{$nla=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -EA SilentlyContinue).UserAuthentication;if($nla -eq 1){'[OK] RDP enabled with NLA.'}else{'[WARNING] RDP enabled WITHOUT NLA';Set-Content -LiteralPath "$env:TEMP\dz_rdpnla_hit.txt" -Value hit}} > "%PSRUN%"
-echo $wmr=Get-Service WinRM -EA SilentlyContinue;if($wmr -and $wmr.Status -eq 'Running'){'[WARNING] WinRM RUNNING (remote PowerShell enabled)';Set-Content -LiteralPath "$env:TEMP\dz_winrm_hit.txt" -Value hit}else{'[OK] WinRM not running.'} >> "%PSRUN%"
 "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+echo  Command: powershell -File tools\winrm_check.ps1>> "%REPORT%"
+del "%TEMP%\dz_winrm_gap.txt" 2>nul
+del "%TEMP%\dz_winrm_deferred.txt" 2>nul
+del "%TEMP%\dz_winrm_state.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\winrm_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\winrm_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\winrm_check.ps1 not found -- WinRM check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 10 T1021.006 "WinRM check NOT performed - tool missing"
+)
 if exist "%TEMP%\dz_smb1_hit.txt" (
     call :dz_finding CRITICAL 10 T1210 "SMBv1 enabled - EternalBlue exposure"
     del "%TEMP%\dz_smb1_hit.txt" 2>nul
@@ -3067,6 +3077,25 @@ if exist "%TEMP%\dz_rdpnla_hit.txt" (
 if exist "%TEMP%\dz_winrm_hit.txt" (
     call :dz_finding WARNING 10 T1021.006 "WinRM running - remote PowerShell enabled"
     del "%TEMP%\dz_winrm_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_winrm_gap.txt" (
+    rem A gap is its own row: the WinRM service could not be queried.
+    call :dz_finding WARNING 10 T1021.006 "WinRM check NOT performed - the WinRM service could not be queried"
+    del "%TEMP%\dz_winrm_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_winrm_deferred.txt" (
+    set "_WRDEF=0"
+    set /p _WRDEF=<"%TEMP%\dz_winrm_deferred.txt"
+    set /a DEFERRED_COUNT+=!_WRDEF!
+    del "%TEMP%\dz_winrm_deferred.txt" 2>nul
+)
+set "_WRST="
+if exist "%TEMP%\dz_winrm_state.txt" set /p _WRST=<"%TEMP%\dz_winrm_state.txt"
+del "%TEMP%\dz_winrm_state.txt" 2>nul
+if defined _WRST if "!_WRST:~0,6!"=="winrm=" set "WINRM_STATE=!_WRST!"
+if not "!WINRM_STATE:~0,6!"=="winrm=" if exist "%SCRIPT_DIR%tools\winrm_check.ps1" (
+    echo [WARNING] WinRM check produced no verdict -- NOT performed: tools\winrm_check.ps1 ran but wrote no usable verdict.>> "%REPORT%"
+    call :dz_finding WARNING 10 T1021.006 "WinRM check produced no verdict - NOT performed"
 )
 echo.>> "%REPORT%"
 
@@ -5622,7 +5651,7 @@ echo }else{ >> "%PSRUN%"
 echo ck 'INFO' 'PSv2 status check deferred (requires admin)' >> "%PSRUN%"
 echo } >> "%PSRUN%"
 echo $rdp=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -EA SilentlyContinue).fDenyTSConnections;if($rdp -eq 1){ck 'PASS' 'RDP is disabled'}else{$nla=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -EA SilentlyContinue).UserAuthentication;if($nla -eq 1){ck 'PASS' 'RDP enabled with NLA (Network Level Authentication)'}else{ck 'WARN' 'RDP enabled WITHOUT NLA' 'Set UserAuthentication=1 in HKLM\...\RDP-Tcp or via Group Policy'}} >> "%PSRUN%"
-echo $wmr=Get-Service WinRM -EA SilentlyContinue;if($wmr -and $wmr.Status -eq 'Running'){ck 'WARN' 'WinRM RUNNING (remote PowerShell enabled)' 'Disable: Stop-Service WinRM; Set-Service WinRM -StartupType Disabled'}else{ck 'PASS' 'WinRM not running'} >> "%PSRUN%"
+echo $ws='%WINRM_STATE%';if($ws -eq 'winrm=running'){ck 'WARN' 'WinRM RUNNING (remote PowerShell enabled)' 'Disable: Stop-Service WinRM; Set-Service WinRM -StartupType Disabled'}elseif($ws -eq 'winrm=stopped'){ck 'PASS' 'WinRM not running (Section 10)'}elseif($ws -eq 'winrm=absent'){ck 'PASS' 'WinRM service not present (Section 10)'}elseif($ws -eq 'winrm=deferred'){ck 'INFO' 'WinRM: NOT graded -- deferred, needs administrator (Section 10)'}else{ck 'INFO' 'WinRM: NOT graded -- Section 10 could not query it'} >> "%PSRUN%"
 echo. >> "%PSRUN%"
 
 :: ===== SYSTEM HARDENING ==============================================
@@ -5771,7 +5800,7 @@ echo if(led 'CRITICAL' '8' 'T1562.004' 'Windows Firewall service mpssvc not runn
 echo if((led 'CRITICAL' '10' 'T1210' 'SMBv1 enabled') -or (led 'WARNING' '10' 'T1210' 'SMBv1 server component installed')){ addfix 'Disable SMBv1 (EternalBlue mitigation)' "Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart" '' } >> "%PSRUN%"
 echo if($joined -match 'PowerShell v2 ENABLED'){ addfix 'Disable PowerShell v2 (AMSI downgrade mitigation)' "Disable-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2Root -NoRestart" '' } >> "%PSRUN%"
 echo if($joined -match 'RDP enabled WITHOUT NLA'){ addfix 'Require Network Level Authentication for RDP' "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -Value 1 -Type DWord -Force" '' } >> "%PSRUN%"
-echo if($joined -match 'WinRM RUNNING'){ addfix 'Stop and disable WinRM' "Stop-Service WinRM -Force; Set-Service WinRM -StartupType Disabled" 'Set-Service WinRM -StartupType Automatic; Start-Service WinRM' } >> "%PSRUN%"
+echo if(led 'WARNING' '10' 'T1021.006' 'WinRM running'){ addfix 'Stop and disable WinRM' "Stop-Service WinRM -Force; Set-Service WinRM -StartupType Disabled" 'Set-Service WinRM -StartupType Automatic; Start-Service WinRM' } >> "%PSRUN%"
 echo if($joined -match 'UAC DISABLED'){ addfix 'Re-enable UAC (reboot required)' "Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name EnableLUA -Value 1 -Type DWord -Force" '' } >> "%PSRUN%"
 echo if($joined -match 'UAC auto-elevates'){ addfix 'Restore UAC prompt on secure desktop' "Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name ConsentPromptBehaviorAdmin -Value 2 -Type DWord -Force" '' } >> "%PSRUN%"
 echo if($joined -match 'testsigning=Yes^|testsigning\s*=\s*Yes'){ addfix 'Disable test-signing (re-enforce driver signatures)' "bcdedit /set testsigning off" 'bcdedit /set testsigning on' } >> "%PSRUN%"
