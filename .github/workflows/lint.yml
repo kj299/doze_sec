@@ -579,7 +579,16 @@ jobs:
             grep -qF "if((led 'CRITICAL' '10' 'T1210' 'SMBv1 enabled')" "$b" || { echo "$b: the SMBv1 fix no longer triggers off the ledger"; exit 1; }
             grep -qF "if(led 'CRITICAL' '8' 'T1562.004' 'Windows Firewall service mpssvc not running')" "$b" || { echo "$b: a stopped firewall service has no fix of its own"; exit 1; }
           done
-          echo 'firewall and SMBv1: a failed read is a gap; tiles and fixes read the section and the ledger'
+          # The standard-user path must still run the firewall tool: a goto from
+          # :sec8_noadmin straight to the verdict skipped it, and the tile then
+          # read NOT graded for a state this token may well be able to read.
+          nb=doze_sec_noAdmin.bat
+          branch=$(awk '/^:sec8_noadmin/{f=1;next} /^:sec8_run/{f=0} f' "$nb")
+          echo "$branch" | grep -qF 'goto :sec8_fwstate' || { echo "$nb: the standard-user Section 8 branch no longer reaches the firewall-state tool"; exit 1; }
+          echo "$branch" | grep -qF 'goto :sec8_verdict' && { echo "$nb: the standard-user Section 8 branch skips the firewall-state tool again"; exit 1; }
+          la=$(grep -n '^:sec8_fwstate' "$nb" | head -1 | cut -d: -f1); tc=$(grep -n 'tools\\firewall_state_check.ps1">>' "$nb" | head -1 | cut -d: -f1)
+          [ -n "$la" ] && [ -n "$tc" ] && [ "$la" -lt "$tc" ] || { echo "$nb: :sec8_fwstate must come before the firewall-state tool call (label=$la call=$tc)"; exit 1; }
+          echo 'firewall and SMBv1: a failed read is a gap; tiles and fixes read the section and the ledger; the standard-user path grades the firewall state'
       - name: named_pipe_check -- a C2 pipe is WARNING, a pipe list that could not be read is a raised gap, never an all-clear
         run: |
           out=$(pwsh -NoProfile -File tools/named_pipe_check.ps1 -SelfTest); echo "$out"

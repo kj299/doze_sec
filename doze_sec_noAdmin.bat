@@ -2636,11 +2636,14 @@ if "%IS_ADMIN%"=="0" goto :sec8_noadmin
 goto :sec8_run
 :sec8_noadmin
 echo  [DEFERRED - ADMIN REQUIRED] netsh advfirewall requires administrator privileges.>> "%REPORT%"
-echo  Affected: Firewall profile status, inbound allow rules, outbound block rules.>> "%REPORT%"
+echo  Affected: the netsh profile dump, inbound allow rules, outbound block rules.>> "%REPORT%"
+echo  The effective profile STATE is still graded below, from what this token can read.>> "%REPORT%"
 echo.>> "%REPORT%"
-echo %C_MAGENTA%[8/18] [DEFERRED]%C_RESET% Firewall check requires admin.
+echo %C_MAGENTA%[8/18] [DEFERRED]%C_RESET% Firewall rule dumps require admin; profile state still graded.
 set /a DEFERRED_COUNT+=1
-goto :sec8_verdict
+rem The profile state is graded on this token too: a goto that skips a tool
+rem on the standard-user path is an all-clear by omission.
+goto :sec8_fwstate
 :sec8_run
 
 echo --- All Firewall Profile Status --->> "%REPORT%"
@@ -2657,6 +2660,7 @@ echo --- Outbound BLOCK Rules --->> "%REPORT%"
 echo  Command: netsh advfirewall firewall show rule name=all dir=out action=block ^| findstr /i /c:"Rule Name" /c:"RemoteIP" /c:"Enabled" /c:"Program">> "%REPORT%"
 netsh advfirewall firewall show rule name=all dir=out action=block | findstr /i /c:"Rule Name" /c:"RemoteIP" /c:"Enabled" /c:"Program">> "%REPORT%" 2>&1
 
+:sec8_fwstate
 echo.>> "%REPORT%"
 echo --- Firewall Profile State (evaluated) --->> "%REPORT%"
 echo  Command: powershell -Command "Get-NetFirewallProfile -PolicyStore ActiveStore"   [the effective state, Group Policy included]>> "%REPORT%"
