@@ -548,23 +548,26 @@ jobs:
         run: |
           out=$(pwsh -NoProfile -File tools/firewall_state_check.ps1 -SelfTest); echo "$out"
           for n in 'Private off: the CRITICAL wording the bats always printed, a hit, state names the profile' \
-                   'one source says Public is off, the other on: the finding wins, and the disagreement is said' \
-                   'every profile reads on but mpssvc is stopped: CRITICAL, never [OK]' \
+                   'Group Policy forces Public ON while the LOCAL setting reads off: [OK] from ActiveStore, the local setting said, never CRITICAL' \
+                   'the EFFECTIVE state has Public off while the local setting reads on (a policy turned it off): CRITICAL' \
+                   'every profile reads on but mpssvc is stopped: its own CRITICAL finding, never [OK]' \
                    'no profile source could be read, elevated: a raised gap naming both, never [OK] and never [SKIPPED]' \
                    'standard-user token, every failure access denied: a counted deferral, never a gap row and never an all-clear' \
                    'a profile no source could place is a gap, never "enabled"'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 14 ] || { echo "only $n firewall case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 16 ] || { echo "only $n firewall case(s)"; exit 1; }
           out=$(pwsh -NoProfile -File tools/smb1_check.ps1 -SelfTest); echo "$out"
-          for n in 'the server configuration says enabled: the CRITICAL wording the bats always printed, and the disagreement is said' \
-                   'the cmdlet denied, the feature enabled: still CRITICAL, from the feature' \
+          for n in 'the server configuration says enabled: the CRITICAL wording the bats always printed' \
+                   'component installed but the server configured not to accept SMBv1 (a documented mitigation): [OK] with the removal advice, never CRITICAL' \
+                   'the configuration unreadable, the component installed: a WARNING that says the setting was not seen, never CRITICAL and never [OK]' \
+                   'the configuration denied and the feature class listed nothing: no answer, a raised gap, never "[OK] not installed"' \
                    'neither source readable, elevated: a raised gap naming both, never [OK] and never [SKIPPED]' \
                    'standard-user token, every failure access denied: a counted deferral, never a gap row and never an all-clear' \
                    'registry SMB1=1 while the effect is off: [OK] with the intent as INFO, never CRITICAL'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 14 ] || { echo "only $n SMBv1 case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 16 ] || { echo "only $n SMBv1 case(s)"; exit 1; }
           for b in doze_sec.bat doze_sec_noAdmin.bat; do
             grep -qF '$fwp=@(Get-NetFirewallProfile -EA SilentlyContinue)' "$b" && { echo "$b: the silenced firewall query is back (in the section or a re-measuring tile)"; exit 1; }
             grep -qF '(Get-SmbServerConfiguration -EA SilentlyContinue).EnableSMB1Protocol' "$b" && { echo "$b: the silenced SMBv1 query is back (in the section or a re-measuring tile)"; exit 1; }
@@ -573,7 +576,8 @@ jobs:
             grep -qF "echo \$fs='%FW_STATE%'" "$b" || { echo "$b: the firewall tile no longer reads Section 8's verdict"; exit 1; }
             grep -qF "echo \$ss='%SMB1_STATE%'" "$b" || { echo "$b: the SMBv1 tile no longer reads Section 10's verdict"; exit 1; }
             grep -qF "if(led 'CRITICAL' '8' 'T1562.004' 'Windows Firewall disabled')" "$b" || { echo "$b: the firewall fix no longer triggers off the ledger"; exit 1; }
-            grep -qF "if(led 'CRITICAL' '10' 'T1210' 'SMBv1 enabled')" "$b" || { echo "$b: the SMBv1 fix no longer triggers off the ledger"; exit 1; }
+            grep -qF "if((led 'CRITICAL' '10' 'T1210' 'SMBv1 enabled')" "$b" || { echo "$b: the SMBv1 fix no longer triggers off the ledger"; exit 1; }
+            grep -qF "if(led 'CRITICAL' '8' 'T1562.004' 'Windows Firewall service mpssvc not running')" "$b" || { echo "$b: a stopped firewall service has no fix of its own"; exit 1; }
           done
           echo 'firewall and SMBv1: a failed read is a gap; tiles and fixes read the section and the ledger'
       - name: named_pipe_check -- a C2 pipe is WARNING, a pipe list that could not be read is a raised gap, never an all-clear

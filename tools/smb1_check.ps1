@@ -9,14 +9,20 @@
 # a deferral, and the dashboard re-ran the same query for its tile.
 #
 # THE RULE (pure, in Get-Smb1Verdict, pinned by -SelfTest):
-#   * two sources of the EFFECT, every one weighed: the SMB server's own
-#     configuration (Get-SmbServerConfiguration .EnableSMB1Protocol), and the
-#     Windows optional feature that carries the SMBv1 server
-#     (Win32_OptionalFeature SMB1Protocol-Server, or SMB1Protocol on a build
-#     without that subfeature; InstallState 1 Enabled, 2 Disabled, 3 Absent);
-#   * evidence is not symmetric: SMBv1 enabled from EITHER source is the
-#     CRITICAL finding (wording kept, hit marker dz_smb1_hit.txt that the bat
-#     already raises), whatever the other says;
+#   * the SMB server's own configuration (Get-SmbServerConfiguration
+#     .EnableSMB1Protocol) is the EFFECT -- what the server accepts -- and
+#     decides whenever it answered: enabled -> the CRITICAL finding (wording
+#     kept, hit marker dz_smb1_hit.txt that the bat already raises);
+#     disabled -> [OK], even with the component installed (Microsoft
+#     documents that setting as a way to disable SMBv1), the installed
+#     component then said as [INFO];
+#   * the optional feature (Win32_OptionalFeature SMB1Protocol-Server, or
+#     SMB1Protocol on a build without that subfeature; InstallState 1
+#     Enabled, 2 Disabled, 3 Absent) decides only when the configuration
+#     could not be read: installed -> a WARNING that says the setting was not
+#     seen (marker dz_smb1_inst.txt, its own row), never the CRITICAL; off or
+#     not installed -> [OK]. A class that lists no SMB1Protocol row at all is
+#     no answer: every Windows 10/11 build lists it;
 #   * the LanmanServer SMB1 registry value is INTENT, printed as [INFO] and
 #     never deciding: a stale value must not raise CRITICAL on a machine
 #     whose SMBv1 component is removed, nor clear one where it runs;
@@ -24,7 +30,7 @@
 #     is NOT access denied, a raised "[WARNING] ... NOT performed" gap
 #     (dz_smb1_gap.txt); on a standard-user token where every failure was
 #     access denied, [DEFERRED - ADMIN REQUIRED] (dz_smb1_deferred.txt).
-# State line (dz_smb1_state.txt): smb1=<enabled|disabled|absent|gap|deferred>
+# State line (dz_smb1_state.txt): smb1=<enabled|installed|disabled|absent|gap|deferred>
 #
 # Usage:
 #   powershell -File tools\smb1_check.ps1 [-MarkerDir <dir>] [-StateFile <path>] [-Elevated 0|1]
@@ -65,16 +71,25 @@ function ConvertTo-PrintableText {
     return (([string]$s) -replace '[\x00-\x1F\x7F]', '?')
 }
 
-# PURE. $Reads: one entry per source tried, each @{ Source; Verdict; Error;
-# Denied }, Verdict 'enabled'|'disabled'|'absent'. $RegValue: the
-# LanmanServer SMB1 value as read ($null when absent or unreadable).
-# Returns @{ Lines; Hit; Gap; Deferred; State }.
+# PURE. $Reads: one entry per source tried, each @{ Source; Kind; Verdict;
+# Error; Denied }, Kind 'config' (Get-SmbServerConfiguration: what the server
+# ACCEPTS) or 'feature' (Win32_OptionalFeature: whether the component is
+# installed), Verdict 'enabled'|'disabled'|'absent'. The server configuration
+# is the effect and DECIDES whenever it answered: Microsoft documents
+# Set-SmbServerConfiguration -EnableSMB1Protocol $false as a way to disable
+# SMBv1 with the component still installed, so "installed" is not "enabled".
+# The feature decides only when the configuration could not be read, and
+# then an installed component is a WARNING (the server accepts SMBv1 by
+# default when it is installed, but this run could not see the setting),
+# never the CRITICAL. $RegValue: the LanmanServer SMB1 value as read ($null
+# when absent or unreadable) -- intent, printed, never deciding.
+# Returns @{ Lines; Hit; Installed; Gap; Deferred; State }.
 function Get-Smb1Verdict {
     param([object[]]$Reads = @(), $RegValue = $null, [bool]$IsElevated = $true)
     $out = New-Object System.Collections.ArrayList
     $failed = New-Object System.Collections.ArrayList
     $allDenied = $true
-    $seen = New-Object System.Collections.ArrayList
+    $cfg = $null; $feat = $null
     foreach ($r in @($Reads)) {
         if ($r.Error) {
             [void]$failed.Add(($r.Source + ': ' + (ConvertTo-PrintableText $r.Error)))
@@ -86,52 +101,59 @@ function Get-Smb1Verdict {
             $allDenied = $false
             continue
         }
-        [void]$seen.Add(@{ Source = $r.Source; Verdict = [string]$r.Verdict })
+        if ($r.Kind -eq 'config' -and $null -eq $cfg) { $cfg = $r }
+        elseif ($r.Kind -eq 'feature' -and $null -eq $feat) { $feat = $r }
     }
     $reg = ''
     if ($null -ne $RegValue) {
         $reg = ('[INFO] Registry intent: LanmanServer\Parameters SMB1 = ' + (ConvertTo-PrintableText ([string]$RegValue)) + ' (a setting, not the effect; it does not decide this verdict).')
     }
-    if ($seen.Count -eq 0) {
-        $why = if ($failed.Count -gt 0) { ($failed.ToArray() -join '; ') } else { 'no source was tried' }
-        if ((-not $IsElevated) -and $allDenied -and $failed.Count -gt 0) {
-            [void]$out.Add(('[DEFERRED - ADMIN REQUIRED] SMBv1 check: a standard-user token cannot read the SMB server state (' + $why + ') -- re-run as administrator to check it.'))
-            if ($reg) { [void]$out.Add($reg) }
-            return @{ Lines = @($out.ToArray()); Hit = $false; Gap = $false; Deferred = 1; State = 'smb1=deferred' }
+    $done = { param($o, $hit, $inst, $state)
+        if ($failed.Count -gt 0) { [void]$o.Add(('[INFO] Not every source could be read: ' + ($failed.ToArray() -join '; ') + '.')) }
+        if ($reg) { [void]$o.Add($reg) }
+        return @{ Lines = @($o.ToArray()); Hit = $hit; Installed = $inst; Gap = $false; Deferred = 0; State = $state }
+    }
+    if ($null -ne $cfg) {
+        if ($cfg.Verdict -eq 'enabled') {
+            [void]$out.Add('[CRITICAL] SMBv1 ENABLED (EternalBlue CVE-2017-0144)')
+            [void]$out.Add(('[INFO] Read by ' + $cfg.Source + ' (the server accepts SMBv1).'))
+            return (& $done $out $true $false 'smb1=enabled')
         }
-        [void]$out.Add(('[WARNING] SMBv1 check NOT performed -- the SMB server state could not be read (' + $why + '), so an enabled SMBv1 server would go unseen (T1210).'))
+        [void]$out.Add(('[OK] SMBv1 disabled. (read by ' + $cfg.Source + ': the server does not accept SMBv1)'))
+        if ($null -ne $feat -and $feat.Verdict -eq 'enabled') {
+            [void]$out.Add('[INFO] The SMBv1 server component is still installed (' + $feat.Source + '). Removing it, Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol, is the stronger mitigation: a setting can be turned back on.')
+        }
+        return (& $done $out $false $false 'smb1=disabled')
+    }
+    if ($null -ne $feat) {
+        if ($feat.Verdict -eq 'enabled') {
+            [void]$out.Add(('[WARNING] SMBv1 server component INSTALLED (' + $feat.Source + ') and the SMB server configuration could not be read, so whether it accepts SMBv1 is unknown -- installed, it does by default (T1210).'))
+            return (& $done $out $false $true 'smb1=installed')
+        }
+        if ($feat.Verdict -eq 'disabled') { [void]$out.Add(('[OK] SMBv1 disabled. (read by ' + $feat.Source + ': the server component is turned off)')); return (& $done $out $false $false 'smb1=disabled') }
+        [void]$out.Add(('[OK] SMBv1 server component not installed. (read by ' + $feat.Source + ')'))
+        return (& $done $out $false $false 'smb1=absent')
+    }
+    $why = if ($failed.Count -gt 0) { ($failed.ToArray() -join '; ') } else { 'no source was tried' }
+    if ((-not $IsElevated) -and $allDenied -and $failed.Count -gt 0) {
+        [void]$out.Add(('[DEFERRED - ADMIN REQUIRED] SMBv1 check: a standard-user token cannot read the SMB server state (' + $why + ') -- re-run as administrator to check it.'))
         if ($reg) { [void]$out.Add($reg) }
-        return @{ Lines = @($out.ToArray()); Hit = $false; Gap = $true; Deferred = 0; State = 'smb1=gap' }
+        return @{ Lines = @($out.ToArray()); Hit = $false; Installed = $false; Gap = $false; Deferred = 1; State = 'smb1=deferred' }
     }
-    $by = { param($v) (@($seen | Where-Object { $_.Verdict -eq $v } | ForEach-Object { $_.Source }) -join ' and ') }
-    $hit = $false
-    if (@($seen | Where-Object { $_.Verdict -eq 'enabled' }).Count -gt 0) {
-        [void]$out.Add('[CRITICAL] SMBv1 ENABLED (EternalBlue CVE-2017-0144)')
-        [void]$out.Add(('[INFO] Read by ' + (& $by 'enabled') + '.'))
-        $hit = $true; $state = 'smb1=enabled'
-    } elseif (@($seen | Where-Object { $_.Verdict -eq 'disabled' }).Count -gt 0) {
-        [void]$out.Add(('[OK] SMBv1 disabled. (read by ' + (& $by 'disabled') + ')'))
-        $state = 'smb1=disabled'
-    } else {
-        [void]$out.Add(('[OK] SMBv1 server component not installed. (read by ' + (& $by 'absent') + ')'))
-        $state = 'smb1=absent'
-    }
-    if (@($seen | ForEach-Object { $_.Verdict } | Sort-Object -Unique).Count -gt 1) {
-        [void]$out.Add(('[INFO] The sources disagree: ' + ((@($seen | ForEach-Object { $_.Source + ' read ' + $_.Verdict })) -join ', ') + '. The verdict above takes the one that found SMBv1 in use.'))
-    }
-    if ($failed.Count -gt 0) { [void]$out.Add(('[INFO] Not every source could be read: ' + ($failed.ToArray() -join '; ') + '.')) }
+    [void]$out.Add(('[WARNING] SMBv1 check NOT performed -- the SMB server state could not be read (' + $why + '), so an enabled SMBv1 server would go unseen (T1210).'))
     if ($reg) { [void]$out.Add($reg) }
-    return @{ Lines = @($out.ToArray()); Hit = $hit; Gap = $false; Deferred = 0; State = $state }
+    return @{ Lines = @($out.ToArray()); Hit = $false; Installed = $false; Gap = $true; Deferred = 0; State = 'smb1=gap' }
 }
 
 # PURE. Which verdict a set of optional-feature rows gives: the -Server
-# subfeature when it exists, else the parent. $null when neither is listed
-# (only meaningful when the class answered).
+# subfeature when it exists, else the parent. Every Windows 10/11 build lists
+# SMB1Protocol even when it is not installed, so NO row is no answer (a
+# provider that returned nothing), never "absent".
 function Get-FeatureVerdict {
     param([object[]]$Rows = @())
     $pick = @($Rows | Where-Object { [string]$_.Name -eq 'SMB1Protocol-Server' })
     if ($pick.Count -eq 0) { $pick = @($Rows | Where-Object { [string]$_.Name -eq 'SMB1Protocol' }) }
-    if ($pick.Count -eq 0) { return 'absent' }
+    if ($pick.Count -eq 0) { return '' }
     switch ([int]$pick[0].InstallState) { 1 { 'enabled' } 2 { 'disabled' } 3 { 'absent' } default { '' } }
 }
 
@@ -155,15 +177,15 @@ function Read-ViaSmb {
         $c = Get-SmbServerConfiguration -ErrorAction Stop
         $e = $c.EnableSMB1Protocol
         $verdict = if ($e -eq $true) { 'enabled' } elseif ($e -eq $false) { 'disabled' } else { '' }
-        return @{ Source = $src; Verdict = $verdict; Error = ''; Denied = $false }
-    } catch { return @{ Source = $src; Verdict = ''; Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message); Denied = (Test-Denied $_) } }
+        return @{ Source = $src; Kind = 'config'; Verdict = $verdict; Error = ''; Denied = $false }
+    } catch { return @{ Source = $src; Kind = 'config'; Verdict = ''; Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message); Denied = (Test-Denied $_) } }
 }
 function Read-ViaCim {
     $src = 'CIM Win32_OptionalFeature'
     try {
         $rows = @(Get-CimInstance -ClassName $CimClass -Filter "Name LIKE 'SMB1Protocol%'" -ErrorAction Stop)
-        return @{ Source = $src; Verdict = (Get-FeatureVerdict -Rows $rows); Error = ''; Denied = $false }
-    } catch { return @{ Source = $src; Verdict = ''; Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message); Denied = (Test-Denied $_) } }
+        return @{ Source = $src; Kind = 'feature'; Verdict = (Get-FeatureVerdict -Rows $rows); Error = ''; Denied = $false }
+    } catch { return @{ Source = $src; Kind = 'feature'; Verdict = ''; Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message); Denied = (Test-Denied $_) } }
 }
 function Read-RegistryIntent {
     try {
@@ -177,20 +199,24 @@ if ($SelfTest) {
     function T { param([string]$Name, [bool]$Ok, [string]$Got)
         if ($Ok) { Write-Output "[OK]   $Name" } else { Write-Output "[FAIL] $Name$(if ($Got) { ": $Got" })"; $script:fails++ }
     }
-    $sm = { param($v, $err = '', $den = $false) @{ Source = 'Get-SmbServerConfiguration'; Verdict = $v; Error = $err; Denied = $den } }
-    $ci = { param($v, $err = '', $den = $false) @{ Source = 'CIM Win32_OptionalFeature'; Verdict = $v; Error = $err; Denied = $den } }
+    $sm = { param($v, $err = '', $den = $false) @{ Source = 'Get-SmbServerConfiguration'; Kind = 'config'; Verdict = $v; Error = $err; Denied = $den } }
+    $ci = { param($v, $err = '', $den = $false) @{ Source = 'CIM Win32_OptionalFeature'; Kind = 'feature'; Verdict = $v; Error = $err; Denied = $den } }
     function F { param([string]$n, [int]$s) New-Object PSObject -Property @{ Name = $n; InstallState = $s } }
 
     $v = Get-Smb1Verdict -Reads @((& $sm 'disabled'), (& $ci 'disabled'))
     $t = $v.Lines -join "`n"
-    T 'both sources disabled: [OK] naming both, nothing raised' ((-not $v.Hit) -and (-not $v.Gap) -and $v.State -eq 'smb1=disabled' -and $t -match '(?m)^\[OK\] SMBv1 disabled\. \(read by Get-SmbServerConfiguration and CIM Win32_OptionalFeature\)$') $t
-    $v = Get-Smb1Verdict -Reads @((& $sm 'enabled'), (& $ci 'disabled'))
+    T 'the server configuration disabled: [OK] naming it, nothing raised' ((-not $v.Hit) -and (-not $v.Installed) -and (-not $v.Gap) -and $v.State -eq 'smb1=disabled' -and $t -match '(?m)^\[OK\] SMBv1 disabled\. \(read by Get-SmbServerConfiguration: the server does not accept SMBv1\)$') $t
+    $v = Get-Smb1Verdict -Reads @((& $sm 'enabled'), (& $ci 'enabled'))
     $t = $v.Lines -join "`n"
-    T 'the server configuration says enabled: the CRITICAL wording the bats always printed, and the disagreement is said' ($v.Hit -and $v.State -eq 'smb1=enabled' -and $t -match '(?m)^\[CRITICAL\] SMBv1 ENABLED \(EternalBlue CVE-2017-0144\)$' -and $t -match 'The sources disagree') $t
+    T 'the server configuration says enabled: the CRITICAL wording the bats always printed' ($v.Hit -and $v.State -eq 'smb1=enabled' -and $t -match '(?m)^\[CRITICAL\] SMBv1 ENABLED \(EternalBlue CVE-2017-0144\)$') $t
+    $v = Get-Smb1Verdict -Reads @((& $sm 'disabled'), (& $ci 'enabled'))
+    $t = $v.Lines -join "`n"
+    T 'component installed but the server configured not to accept SMBv1 (a documented mitigation): [OK] with the removal advice, never CRITICAL' ((-not $v.Hit) -and (-not $v.Installed) -and $v.State -eq 'smb1=disabled' -and $t -match 'still installed' -and $t -notmatch '\[CRITICAL\]' -and $t -notmatch '\[WARNING\]') $t
     $v = Get-Smb1Verdict -Reads @((& $sm '' 'CimException: Access denied' $true), (& $ci 'enabled'))
-    T 'the cmdlet denied, the feature enabled: still CRITICAL, from the feature' ($v.Hit -and ($v.Lines -join "`n") -match 'Read by CIM Win32_OptionalFeature\.') ($v.Lines -join ' | ')
+    $t = $v.Lines -join "`n"
+    T 'the configuration unreadable, the component installed: a WARNING that says the setting was not seen, never CRITICAL and never [OK]' ($v.Installed -and (-not $v.Hit) -and $v.State -eq 'smb1=installed' -and $t -match '(?m)^\[WARNING\] SMBv1 server component INSTALLED' -and $t -notmatch '\[OK\]' -and $t -notmatch '\[CRITICAL\]') $t
     $v = Get-Smb1Verdict -Reads @((& $sm '' 'CimException: Access denied' $true), (& $ci 'absent'))
-    T 'the cmdlet denied, the feature absent: [OK] not installed, and the failure is said' ((-not $v.Hit) -and $v.State -eq 'smb1=absent' -and ($v.Lines -join "`n") -match 'Not every source could be read') ($v.Lines -join ' | ')
+    T 'the configuration unreadable, the component not installed: [OK] not installed, and the failure is said' ((-not $v.Hit) -and $v.State -eq 'smb1=absent' -and ($v.Lines -join "`n") -match 'Not every source could be read') ($v.Lines -join ' | ')
     $v = Get-Smb1Verdict -Reads @((& $sm '' 'CimException: Invalid class'), (& $ci '' 'CimException: Invalid class')) -IsElevated $true
     $t = $v.Lines -join "`n"
     T 'neither source readable, elevated: a raised gap naming both, never [OK] and never [SKIPPED]' ($v.Gap -and (-not $v.Hit) -and $v.State -eq 'smb1=gap' -and $t -match '(?m)^\[WARNING\] SMBv1 check NOT performed' -and $t -notmatch '\[OK\]' -and $t -notmatch '\[SKIPPED\]') $t
@@ -199,6 +225,9 @@ if ($SelfTest) {
     T 'standard-user token, every failure access denied: a counted deferral, never a gap row and never an all-clear' ((-not $v.Gap) -and $v.Deferred -eq 1 -and $v.State -eq 'smb1=deferred' -and $t -match '(?m)^\[DEFERRED - ADMIN REQUIRED\] SMBv1 check' -and $t -notmatch '\[OK\]' -and $t -notmatch '\[WARNING\]') $t
     $v = Get-Smb1Verdict -Reads @((& $sm '' 'CimException: Access denied' $true), (& $ci '' 'CimException: Invalid class' $false)) -IsElevated $false
     T 'standard-user token, one failure NOT access denied: a raised gap, the token does not explain it' ($v.Gap -and $v.Deferred -eq 0) ($v.Lines -join ' | ')
+    $v = Get-Smb1Verdict -Reads @((& $sm '' 'CimException: Access denied' $true), (& $ci '')) -IsElevated $false
+    $t = $v.Lines -join "`n"
+    T 'the configuration denied and the feature class listed nothing: no answer, a raised gap, never "[OK] not installed"' ($v.Gap -and $v.State -eq 'smb1=gap' -and $t -notmatch '\[OK\]') $t
     $v = Get-Smb1Verdict -Reads @((& $sm 'disabled'), (& $ci 'absent')) -RegValue 1
     $t = $v.Lines -join "`n"
     T 'registry SMB1=1 while the effect is off: [OK] with the intent as INFO, never CRITICAL' ((-not $v.Hit) -and $v.State -eq 'smb1=disabled' -and $t -match '\[INFO\] Registry intent: LanmanServer\\Parameters SMB1 = 1' -and $t -notmatch '\[CRITICAL\]') $t
@@ -210,9 +239,9 @@ if ($SelfTest) {
     T 'a control character in an error cannot start a report line' (@($v.Lines | Where-Object { $_ -match '^\[OK\] fine' }).Count -eq 0) ($v.Lines -join ' | ')
     T 'feature rows: the -Server subfeature decides when it exists' ((Get-FeatureVerdict -Rows @((F 'SMB1Protocol' 1), (F 'SMB1Protocol-Server' 2))) -eq 'disabled') ''
     T 'feature rows: the parent decides on a build without the subfeature' ((Get-FeatureVerdict -Rows @((F 'SMB1Protocol' 1))) -eq 'enabled') ''
-    T 'feature rows: none listed by a class that answered is absent; an unknown state is no answer' ((Get-FeatureVerdict -Rows @()) -eq 'absent' -and (Get-FeatureVerdict -Rows @((F 'SMB1Protocol-Server' 7))) -eq '') ''
+    T 'feature rows: none listed is no answer (every build lists SMB1Protocol); an unknown state is no answer' ((Get-FeatureVerdict -Rows @()) -eq '' -and (Get-FeatureVerdict -Rows @((F 'SMB1Protocol-Server' 7))) -eq '' -and (Get-FeatureVerdict -Rows @((F 'SMB1Protocol' 3))) -eq 'absent') ''
     if ($fails) { Write-Output "[FAIL] $fails smb1_check self-test expectation(s) unmet"; exit 1 }
-    Write-Output '[OK] smb1_check self-test: SMBv1 enabled from either source is CRITICAL, the registry is intent and never decides, and a state that could not be read is a raised gap (a deferral only for an access-denied standard user), never an all-clear.'
+    Write-Output '[OK] smb1_check self-test: the server configuration decides (enabled is CRITICAL, disabled is OK even with the component installed), an installed component with the setting unseen is a WARNING, the registry is intent and never decides, and a state that could not be read is a raised gap (a deferral only for an access-denied standard user), never an all-clear.'
     exit 0
 }
 
@@ -227,7 +256,7 @@ if ($all -or $Sources -contains 'smb') { $reads += , (Read-ViaSmb) }
 if ($all -or $Sources -contains 'cim') { $reads += , (Read-ViaCim) }
 $v = $null
 try { $v = Get-Smb1Verdict -Reads $reads -RegValue (Read-RegistryIntent) -IsElevated ($Elevated -eq 1) } catch { $v = $null }
-if ($null -eq $v -or [string]$v.State -notmatch '^smb1=(enabled|disabled|absent|gap|deferred)$') {
+if ($null -eq $v -or [string]$v.State -notmatch '^smb1=(enabled|installed|disabled|absent|gap|deferred)$') {
     # No verdict is never a verdict: write no state, and the bat raises the
     # gap for a tool that ran without one.
     'smb1_check: the grading step failed; no verdict was written.'
@@ -235,6 +264,7 @@ if ($null -eq $v -or [string]$v.State -notmatch '^smb1=(enabled|disabled|absent|
 }
 foreach ($l in $v.Lines) { $l }
 if ($v.Hit) { Write-Marker -Name 'smb1_hit' -Sev 'hit' }
+if ($v.Installed) { Write-Marker -Name 'smb1_inst' -Sev 'WARNING' }
 if ($v.Gap) { Write-Marker -Name 'smb1_gap' -Sev 'WARNING' }
 if ($v.Deferred -gt 0) { Write-Marker -Name 'smb1_deferred' -Sev ([string]$v.Deferred) }
 try { Set-Content -LiteralPath $StateFile -Value $v.State -Encoding ASCII -ErrorAction Stop }

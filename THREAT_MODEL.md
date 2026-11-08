@@ -415,13 +415,17 @@ Found during the v7.1 coverage review; tracked for future work:
   with `-EA SilentlyContinue`, so a query that failed printed an unraised
   `[SKIPPED]` (for SMBv1, on every standard-user run). The firewall verdict
   also read the LOCAL policy store, so a Group Policy that turned a profile
-  off was not seen.~~ **Closed:** `tools/firewall_state_check.ps1` grades the
-  EFFECTIVE state from `Get-NetFirewallProfile -PolicyStore ActiveStore` and
-  the `HNetCfg.FwPolicy2` COM API, plus the `mpssvc` service.
-  `tools/smb1_check.ps1` grades the SMB server configuration and the SMBv1
-  optional feature; the `LanmanServer` `SMB1` value is printed as intent and
-  never decides. Both tools follow the same rules:
-  - off or enabled from any source wins;
+  off was not seen.~~ **Closed:**
+  - `tools/firewall_state_check.ps1` grades the EFFECTIVE state from
+    `Get-NetFirewallProfile -PolicyStore ActiveStore`. The `HNetCfg.FwPolicy2`
+    COM API reads only the local setting, so it decides only when ActiveStore
+    cannot be read. A stopped `mpssvc` service is its own finding.
+  - `tools/smb1_check.ps1` lets the SMB server configuration decide, with the
+    optional feature as a fallback. An installed component whose setting
+    could not be read is a WARNING. The `LanmanServer` `SMB1` value is printed
+    as intent and never decides.
+
+  In both tools:
   - a state no source could read is a raised NOT-performed gap, or a counted
     deferral when an access-denied standard-user token explains it;
   - the dashboard tiles read the sections' verdicts, and the fixes trigger

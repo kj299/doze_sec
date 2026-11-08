@@ -2396,7 +2396,7 @@ jobs:
             $st = (& ".\tools\$t.ps1" -SelfTest) -join "`n"
             if ($LASTEXITCODE -ne 0) { Write-Host $st; throw "$t -SelfTest failed" }
             $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-            if ($n -lt 14) { throw "$t self-test ran only $n case(s)" }
+            if ($n -lt 16) { throw "$t self-test ran only $n case(s)" }
           }
           function RunT([string]$Tool, [string]$Name, [hashtable]$Extra) {
             $md = Join-Path $env:TEMP ("dz_ci_{0}_{1}_{2}" -f $Name, $PID, [guid]::NewGuid().ToString('N').Substring(0, 6)); New-Item -ItemType Directory -Path $md -Force | Out-Null
