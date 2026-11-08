@@ -217,6 +217,8 @@ set "LOGCLEAR_STATE=sec=ungraded,sys=ungraded"
 set "ACCTEV_STATE=ungraded"
 set "WMISUB_STATE=ungraded"
 set "PIPES_CS_STATE=ungraded"
+set "FW_STATE=ungraded"
+set "SMB1_STATE=ungraded"
 set "REBOOT_AGE=unknown"
 set "BITLOCKER_STATE=ungraded"
 set "EXEC_BLOCKED=0"
@@ -3011,13 +3013,40 @@ netsh advfirewall firewall show rule name=all dir=out action=block | findstr /i 
 
 echo.>> "%REPORT%"
 echo --- Firewall Profile State (evaluated) --->> "%REPORT%"
-echo  Command: powershell -Command "Get-NetFirewallProfile">> "%REPORT%"
+echo  Command: powershell -Command "Get-NetFirewallProfile -PolicyStore ActiveStore"   [the effective state, Group Policy included]>> "%REPORT%"
+echo  Command: powershell -File tools\firewall_state_check.ps1>> "%REPORT%"
 del "%TEMP%\dz_fw_hit.txt" 2>nul
-echo $fwp=@(Get-NetFirewallProfile -EA SilentlyContinue);$off=@($fwp^|Where-Object{"$($_.Enabled)" -ne 'True'});if($fwp.Count -eq 0){'[SKIPPED] Get-NetFirewallProfile unavailable -- firewall state NOT evaluated.'}elseif($off.Count -eq 0){'[OK] All firewall profiles enabled - Domain, Private, Public.'}else{'[CRITICAL] Firewall DISABLED on '+$off.Count+' profile(s): '+($off.Name -join ', ')+' (T1562.004)';Set-Content -LiteralPath "$env:TEMP\dz_fw_hit.txt" -Value hit} > "%PSRUN%"
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+del "%TEMP%\dz_fw_gap.txt" 2>nul
+del "%TEMP%\dz_fw_deferred.txt" 2>nul
+del "%TEMP%\dz_fw_state.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\firewall_state_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\firewall_state_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\firewall_state_check.ps1 not found -- firewall-state check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 8 T1562.004 "Firewall-state check NOT performed - tool missing"
+)
 if exist "%TEMP%\dz_fw_hit.txt" (
     call :dz_finding CRITICAL 8 T1562.004 "Windows Firewall disabled on one or more profiles"
     del "%TEMP%\dz_fw_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_fw_gap.txt" (
+    rem A gap is its own row: the firewall profiles could not be read.
+    call :dz_finding WARNING 8 T1562.004 "Firewall-state check NOT performed - the firewall state could not be read"
+    del "%TEMP%\dz_fw_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_fw_deferred.txt" (
+    set "_FWDEF=0"
+    set /p _FWDEF=<"%TEMP%\dz_fw_deferred.txt"
+    set /a DEFERRED_COUNT+=!_FWDEF!
+    del "%TEMP%\dz_fw_deferred.txt" 2>nul
+)
+set "_FWST="
+if exist "%TEMP%\dz_fw_state.txt" set /p _FWST=<"%TEMP%\dz_fw_state.txt"
+del "%TEMP%\dz_fw_state.txt" 2>nul
+if defined _FWST if "!_FWST:~0,3!"=="fw=" set "FW_STATE=!_FWST!"
+if not "!FW_STATE:~0,3!"=="fw=" if exist "%SCRIPT_DIR%tools\firewall_state_check.ps1" (
+    echo [WARNING] Firewall-state check produced no verdict -- NOT performed: tools\firewall_state_check.ps1 ran but wrote no usable verdict.>> "%REPORT%"
+    call :dz_finding WARNING 8 T1562.004 "Firewall-state check produced no verdict - NOT performed"
 )
 echo.>> "%REPORT%"
 
@@ -3293,16 +3322,44 @@ if defined _SSHD_HIT (
 set "_SSHD_HIT="
 echo.>> "%REPORT%"
 echo --- Remote-Access Exposure (evaluated) --->> "%REPORT%"
+echo  Command: powershell -File tools\smb1_check.ps1>> "%REPORT%"
 del "%TEMP%\dz_smb1_hit.txt" 2>nul
 del "%TEMP%\dz_rdpnla_hit.txt" 2>nul
 del "%TEMP%\dz_winrm_hit.txt" 2>nul
-echo $s1=(Get-SmbServerConfiguration -EA SilentlyContinue).EnableSMB1Protocol;if($s1 -eq $true){'[CRITICAL] SMBv1 ENABLED (EternalBlue CVE-2017-0144)';Set-Content -LiteralPath "$env:TEMP\dz_smb1_hit.txt" -Value hit}elseif($s1 -eq $false){'[OK] SMBv1 disabled.'}else{'[SKIPPED] SMBv1 state unavailable.'} > "%PSRUN%"
-echo $rdp=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -EA SilentlyContinue).fDenyTSConnections;if($rdp -eq 1){'[OK] RDP disabled.'}else{$nla=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -EA SilentlyContinue).UserAuthentication;if($nla -eq 1){'[OK] RDP enabled with NLA.'}else{'[WARNING] RDP enabled WITHOUT NLA';Set-Content -LiteralPath "$env:TEMP\dz_rdpnla_hit.txt" -Value hit}} >> "%PSRUN%"
+del "%TEMP%\dz_smb1_gap.txt" 2>nul
+del "%TEMP%\dz_smb1_deferred.txt" 2>nul
+del "%TEMP%\dz_smb1_state.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\smb1_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\smb1_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\smb1_check.ps1 not found -- SMBv1 check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 10 T1210 "SMBv1 check NOT performed - tool missing"
+)
+echo $rdp=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -EA SilentlyContinue).fDenyTSConnections;if($rdp -eq 1){'[OK] RDP disabled.'}else{$nla=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -EA SilentlyContinue).UserAuthentication;if($nla -eq 1){'[OK] RDP enabled with NLA.'}else{'[WARNING] RDP enabled WITHOUT NLA';Set-Content -LiteralPath "$env:TEMP\dz_rdpnla_hit.txt" -Value hit}} > "%PSRUN%"
 echo $wmr=Get-Service WinRM -EA SilentlyContinue;if($wmr -and $wmr.Status -eq 'Running'){'[WARNING] WinRM RUNNING (remote PowerShell enabled)';Set-Content -LiteralPath "$env:TEMP\dz_winrm_hit.txt" -Value hit}else{'[OK] WinRM not running.'} >> "%PSRUN%"
 "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_smb1_hit.txt" (
     call :dz_finding CRITICAL 10 T1210 "SMBv1 enabled - EternalBlue exposure"
     del "%TEMP%\dz_smb1_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_smb1_gap.txt" (
+    rem A gap is its own row: the SMB server state could not be read.
+    call :dz_finding WARNING 10 T1210 "SMBv1 check NOT performed - the SMB server state could not be read"
+    del "%TEMP%\dz_smb1_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_smb1_deferred.txt" (
+    set "_SMDEF=0"
+    set /p _SMDEF=<"%TEMP%\dz_smb1_deferred.txt"
+    set /a DEFERRED_COUNT+=!_SMDEF!
+    del "%TEMP%\dz_smb1_deferred.txt" 2>nul
+)
+set "_SMST="
+if exist "%TEMP%\dz_smb1_state.txt" set /p _SMST=<"%TEMP%\dz_smb1_state.txt"
+del "%TEMP%\dz_smb1_state.txt" 2>nul
+if defined _SMST if "!_SMST:~0,5!"=="smb1=" set "SMB1_STATE=!_SMST!"
+if not "!SMB1_STATE:~0,5!"=="smb1=" if exist "%SCRIPT_DIR%tools\smb1_check.ps1" (
+    echo [WARNING] SMBv1 check produced no verdict -- NOT performed: tools\smb1_check.ps1 ran but wrote no usable verdict.>> "%REPORT%"
+    call :dz_finding WARNING 10 T1210 "SMBv1 check produced no verdict - NOT performed"
 )
 if exist "%TEMP%\dz_rdpnla_hit.txt" (
     call :dz_finding WARNING 10 T1021.001 "RDP enabled without NLA"
@@ -5644,8 +5701,8 @@ echo. >> "%PSRUN%"
 
 :: ===== ATTACK SURFACE ================================================
 echo sec 'ATTACK SURFACE  (Sections 8, 10, 11)' >> "%PSRUN%"
-echo $fwp=@(Get-NetFirewallProfile -EA SilentlyContinue);$fwOff=@($fwp^|Where-Object{"$($_.Enabled)" -ne 'True'});if($fwp.Count -eq 0){ck 'INFO' 'Firewall state unavailable via Get-NetFirewallProfile -- see Section 8'}elseif($fwOff.Count -eq 0){ck 'PASS' 'All firewall profiles enabled - Domain, Private, Public'}else{ck 'CRIT' "Firewall DISABLED on $($fwOff.Count) profile(s): $($fwOff.Name -join ', ')" 'Fix: Set-NetFirewallProfile -All -Enabled True'} >> "%PSRUN%"
-echo $s1=(Get-SmbServerConfiguration -EA SilentlyContinue).EnableSMB1Protocol;if($s1 -eq $false){ck 'PASS' 'SMBv1 disabled (EternalBlue not exploitable)'}elseif($s1 -eq $true){ck 'CRIT' 'SMBv1 ENABLED (EternalBlue CVE-2017-0144)' 'Run: Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart'}else{ck 'INFO' 'SMBv1 state unavailable -- see Section 10'} >> "%PSRUN%"
+echo $fs='%FW_STATE%';if($fs -like 'fw=off,profiles=service'){ck 'CRIT' 'Firewall DISABLED: the firewall service (mpssvc) is not running (Section 8)' 'Run: Start-Service mpssvc'}elseif($fs -like 'fw=off,profiles=*'){$fn=@($fs.Substring(16).Split('+'));ck 'CRIT' ('Firewall DISABLED on '+$fn.Count+' profile(s): '+($fn -join ', ')+' (Section 8)') 'Fix: Set-NetFirewallProfile -All -Enabled True'}elseif($fs -like 'fw=on,*'){ck 'PASS' 'All firewall profiles enabled - Domain, Private, Public (effective state, Section 8)'}elseif($fs -like 'fw=deferred,*'){ck 'INFO' 'Firewall state: NOT graded -- deferred, needs administrator (Section 8)'}else{ck 'INFO' 'Firewall state: NOT graded -- Section 8 could not read it'} >> "%PSRUN%"
+echo $ss='%SMB1_STATE%';if($ss -eq 'smb1=enabled'){ck 'CRIT' 'SMBv1 ENABLED (EternalBlue CVE-2017-0144)' 'Run: Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart'}elseif($ss -eq 'smb1=disabled'){ck 'PASS' 'SMBv1 disabled (EternalBlue not exploitable)'}elseif($ss -eq 'smb1=absent'){ck 'PASS' 'SMBv1 server component not installed (EternalBlue not exploitable)'}elseif($ss -eq 'smb1=deferred'){ck 'INFO' 'SMBv1 state: NOT graded -- deferred, needs administrator (Section 10)'}else{ck 'INFO' 'SMBv1 state: NOT graded -- Section 10 could not read it'} >> "%PSRUN%"
 echo $p2=''; if(Test-Path "$env:TEMP\dz_psv2_state.txt"){$p2=[string](Get-Content "$env:TEMP\dz_psv2_state.txt" -EA SilentlyContinue ^| Select-Object -First 1)}; if($p2 -eq 'ENABLED'){ck 'WARN' 'PowerShell v2 ENABLED (AMSI downgrade possible)' 'Run: Disable-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2Root'}elseif($p2 -eq 'DISABLED'){ck 'PASS' 'PowerShell v2 disabled'}else{ck 'INFO' 'PSv2 state unavailable -- see Section 11'} >> "%PSRUN%"
 echo $rdp=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -EA SilentlyContinue).fDenyTSConnections;if($rdp -eq 1){ck 'PASS' 'RDP is disabled'}else{$nla=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -EA SilentlyContinue).UserAuthentication;if($nla -eq 1){ck 'PASS' 'RDP enabled with NLA (Network Level Authentication)'}else{ck 'WARN' 'RDP enabled WITHOUT NLA' 'Set UserAuthentication=1 in HKLM\...\RDP-Tcp or via Group Policy'}} >> "%PSRUN%"
 echo $wmr=Get-Service WinRM -EA SilentlyContinue;if($wmr -and $wmr.Status -eq 'Running'){ck 'WARN' 'WinRM RUNNING (remote PowerShell enabled)' 'Disable: Stop-Service WinRM; Set-Service WinRM -StartupType Disabled'}else{ck 'PASS' 'WinRM not running'} >> "%PSRUN%"
@@ -5766,8 +5823,8 @@ rem the registry cannot undo, and RunAsPPL=2 is only enforced on Win11 22H2+. An
 rem irreversible change on the authentication path is advice, not an auto-fix.
 echo if($joined -match 'WDigest ENABLED'){ addfix 'Disable WDigest plaintext credential cache (reboot required)' "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' -Name UseLogonCredential -Value 0 -Type DWord -Force" '' } >> "%PSRUN%"
 echo if($joined -match 'NTLMv1 allowed^|NTLM partially hardened'){ addfix 'Harden NTLM to NTLMv2-only' "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name LmCompatibilityLevel -Value 5 -Type DWord -Force" '' } >> "%PSRUN%"
-echo if($joined -match 'Firewall DISABLED'){ addfix 'Enable all Windows Firewall profiles' "Set-NetFirewallProfile -All -Enabled True" '' } >> "%PSRUN%"
-echo if($joined -match 'SMBv1 ENABLED'){ addfix 'Disable SMBv1 (EternalBlue mitigation)' "Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart" '' } >> "%PSRUN%"
+echo if(led 'CRITICAL' '8' 'T1562.004' 'Windows Firewall disabled'){ addfix 'Enable all Windows Firewall profiles' "Set-NetFirewallProfile -All -Enabled True" '' } >> "%PSRUN%"
+echo if(led 'CRITICAL' '10' 'T1210' 'SMBv1 enabled'){ addfix 'Disable SMBv1 (EternalBlue mitigation)' "Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart" '' } >> "%PSRUN%"
 echo if($joined -match 'PowerShell v2 ENABLED'){ addfix 'Disable PowerShell v2 (AMSI downgrade mitigation)' "Disable-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2Root -NoRestart" '' } >> "%PSRUN%"
 echo if($joined -match 'RDP enabled WITHOUT NLA'){ addfix 'Require Network Level Authentication for RDP' "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -Value 1 -Type DWord -Force" '' } >> "%PSRUN%"
 echo if($joined -match 'WinRM RUNNING'){ addfix 'Stop and disable WinRM' "Stop-Service WinRM -Force; Set-Service WinRM -StartupType Disabled" 'Set-Service WinRM -StartupType Automatic; Start-Service WinRM' } >> "%PSRUN%"

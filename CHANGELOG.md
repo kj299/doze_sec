@@ -6,6 +6,25 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### The firewall and SMBv1 checks: a state that could not be read is a gap
+**Before.**
+- Section 8 read `Get-NetFirewallProfile -EA SilentlyContinue` and Section 10 read `Get-SmbServerConfiguration -EA SilentlyContinue`. When either query failed, the check printed `[SKIPPED] ... unavailable` and raised nothing. For SMBv1 that happened on every standard-user run, because the cmdlet needs administrator.
+- The firewall query read the LOCAL policy store, so a Group Policy that turned a profile off was not seen.
+- The dashboard ran both queries again for its tiles.
+- The remediation script queued its fixes off the dashboard's wording, not the ledger.
+
+**Now.**
+- `tools/firewall_state_check.ps1` grades the effective state from three sources: ActiveStore, the `HNetCfg.FwPolicy2` COM API, and the `mpssvc` service. A profile off in any source, or the service stopped, is the CRITICAL finding, with the wording and row unchanged.
+- `tools/smb1_check.ps1` grades the SMB server configuration and the SMBv1 optional feature. The registry value is printed as intent and never decides.
+- A state neither tool could read is a raised `NOT performed` row with its own wording, or a counted deferral when an access-denied standard-user token explains it.
+- The tiles read the sections' verdicts and say `NOT graded` rather than PASS.
+- The two fixes trigger off the ledger.
+
+**CI.**
+- Measures every source on the runner and drives the failures through the real readers: a service that does not exist, no profile source, and a CIM class that does not exist.
+- Plants SMBv1 on the runner, then restores it.
+- The standard-user job states what each check did on that token.
+
 ### Secrets audit: no keys or passwords; personal names taken out of test data
 The repository was audited for exposed credentials in four passes. Two scanners ran: a credential-pattern scanner (cloud and service API keys, private-key blocks, JWTs, credentials in URLs, password assignments, `-AsPlainText`, `net user ... /add`, auth headers) and detect-secrets 1.5.0 (high-entropy strings). The passes:
 - both scanners over the 125 tracked files;
