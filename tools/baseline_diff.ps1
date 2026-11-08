@@ -471,7 +471,7 @@ if ($SelfTest) {
     T 'CHANGED Defender platform path (monthly platform update, signed) is INFO' ($v.Sev -eq 'INFO') ("sev=" + $v.Sev)
     $v = Get-ChangedVerdict -Cat 'RUN' -Id 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\SecurityHealth' -Old '%windir%\system32\SecurityHealthSystray.exe' -New '%windir%\system32\SecurityHealthSystray.exe -x' -MsSignedNow $true
     T 'CHANGED autorun value stays WARNING even when signed (persistence content changed)' ($v.Sev -eq 'WARNING') ("sev=" + $v.Sev)
-    $v = Get-ChangedVerdict -Cat 'ADMIN' -Id 'Z4NEE52\khali' -Old 'Local' -New 'MicrosoftAccount' -MsSignedNow $false
+    $v = Get-ChangedVerdict -Cat 'ADMIN' -Id 'DESKTOP7\alice' -Old 'Local' -New 'MicrosoftAccount' -MsSignedNow $false
     T 'CHANGED admin record is WARNING' ($v.Sev -eq 'WARNING') ''
     $v = Get-ChangedVerdict -Cat 'PORT' -Id 'tcp/49668' -Old 'svchost' -New 'lsass' -MsSignedNow $false
     T 'CHANGED dynamic port owner svchost -> lsass (reboot reshuffle) is INFO' ($v.Sev -eq 'INFO') ("sev=" + $v.Sev)
@@ -507,7 +507,7 @@ if ($SelfTest) {
     T 'NEW autorun of signed powershell with -enc is WARNING (arguments graded first)' ($v.Sev -eq 'WARNING') ("sev=" + $v.Sev)
     $v = Get-AddedVerdict -Cat 'RUN' -Id 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\X' -Detail 'C:\Users\u\AppData\Local\Vendor\app.exe' -MsSigned $false
     T 'NEW autorun of an unsigned third-party binary is WARNING' ($v.Sev -eq 'WARNING') ''
-    $v = Get-AddedVerdict -Cat 'ADMIN' -Id 'Z4NEE52\helper' -Detail 'Local' -MsSigned $false
+    $v = Get-AddedVerdict -Cat 'ADMIN' -Id 'DESKTOP7\helper' -Detail 'Local' -MsSigned $false
     T 'NEW local administrator is WARNING' ($v.Sev -eq 'WARNING') ''
     $v = Get-AddedVerdict -Cat 'CERT' -Id 'ABCDEF0123456789' -Detail 'CN=Corp Proxy Root' -MsSigned $false
     T 'NEW root CA is WARNING' ($v.Sev -eq 'WARNING') ''
@@ -517,8 +517,8 @@ if ($SelfTest) {
     # The argument grader on the owner's real autoruns: nothing suspicious.
     $real = @(
         '"C:\Program Files\Microsoft OneDrive\OneDrive.exe" /background',
-        '"C:\Users\khali\AppData\Local\BraveSoftware\Update\1.3.361.151\BraveUpdateCore.exe"',
-        'C:\Users\khali\AppData\Local\Programs\signal-desktop\Signal.exe --start-in-tray',
+        '"C:\Users\alice\AppData\Local\BraveSoftware\Update\1.3.361.151\BraveUpdateCore.exe"',
+        'C:\Users\alice\AppData\Local\Programs\signal-desktop\Signal.exe --start-in-tray',
         '"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --no-startup-window --win-session-start',
         '"C:\WINDOWS\System32\DriverStore\FileRepository\wavesapo12de.inf_amd64_7705ab85ca3fc744\WavesSvc64.exe" -Jack',
         '"C:\Program Files (x86)\Microsoft\EdgeWebView\Application\153.0.4234.48\Installer\setup.exe" --msedgewebview --delete-old-versions --system-level --verbose-logging'

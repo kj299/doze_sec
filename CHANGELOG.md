@@ -6,6 +6,20 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Secrets audit: no keys or passwords; personal names taken out of test data
+The repository was audited for exposed credentials in four passes. Two scanners ran: a credential-pattern scanner (cloud and service API keys, private-key blocks, JWTs, credentials in URLs, password assignments, `-AsPlainText`, `net user ... /add`, auth headers) and detect-secrets 1.5.0 (high-entropy strings). The passes:
+- both scanners over the 125 tracked files;
+- both over all 1152 blobs reachable from the 257 commits on every branch, plus every commit message;
+- a check of every file name ever committed.
+
+No secret was found:
+- every high-entropy hit was a registry path, a Windows AutoLaunch value name, or the throwaway password CI uses to build its password-protected test archives;
+- no key, certificate or password-database file has ever been committed;
+- the workflows use no repository secrets;
+- the CI standard user's password is generated fresh on every run.
+
+The audit did find the owner's Windows username and PC name in self-test fixtures copied from field reports, on 25 lines in 9 files. They are now `alice` and `DESKTOP7`, and every affected self-test prints the same output as before. Published history was deliberately not rewritten, so older commits still contain the original names.
+
 ### The Guest-account check: accounts that could not be read are a gap
 Section 2 read `Get-CimInstance Win32_UserAccount ... -EA SilentlyContinue`,
 so a CIM query that failed printed `[OK] Guest account is disabled or

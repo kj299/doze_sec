@@ -189,10 +189,10 @@ if ($SelfTest) {
     $english = @(
         '',
         'Machine Name,Policy Target,Subcategory,Subcategory GUID,Inclusion Setting,Exclusion Setting',
-        'Z4NEE52,System,Process Creation,{0CCE922B-69AE-11D9-BED3-505054503030},Success,',
-        'Z4NEE52,System,Logon,{0CCE9215-69AE-11D9-BED3-505054503030},Success and Failure,',
-        'Z4NEE52,System,User Account Management,{0CCE9235-69AE-11D9-BED3-505054503030},No Auditing,',
-        'Z4NEE52,System,Audit Policy Change,{0CCE922F-69AE-11D9-BED3-505054503030},Success,'
+        'DESKTOP7,System,Process Creation,{0CCE922B-69AE-11D9-BED3-505054503030},Success,',
+        'DESKTOP7,System,Logon,{0CCE9215-69AE-11D9-BED3-505054503030},Success and Failure,',
+        'DESKTOP7,System,User Account Management,{0CCE9235-69AE-11D9-BED3-505054503030},No Auditing,',
+        'DESKTOP7,System,Audit Policy Change,{0CCE922F-69AE-11D9-BED3-505054503030},Success,'
     )
     $rows = ConvertFrom-AuditpolCsv -Lines $english
     T 'the English CSV yields one setting per GUID (4 rows, header ignored)' ($rows.Count -eq 4) ("count=" + $rows.Count)

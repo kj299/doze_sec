@@ -186,7 +186,7 @@ if ($SelfTest) {
     # --- THE FIELD FALSE POSITIVE -----------------------------------------
     $script:ExistsProbe = { param($p) $false }
     $script:SigProbe    = { param($p) $null }
-    $v = Get-ClsidVerdict -Guid '{06B74C04}' -RawPath 'C:\Users\khali\AppData\Local\BraveSoftware\Update\1.3.361.151\psuser_64.dll'
+    $v = Get-ClsidVerdict -Guid '{06B74C04}' -RawPath 'C:\Users\alice\AppData\Local\BraveSoftware\Update\1.3.361.151\psuser_64.dll'
     T "Brave's stale updater CLSID is context, not a finding" `
       ($v.Bucket -eq 'stale' -and $v.Label -eq 'no-file') "$($v.Bucket)/$($v.Label)"
 

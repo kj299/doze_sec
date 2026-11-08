@@ -935,7 +935,7 @@ if ($SelfTest) {
     $dump = @(
         'svchost.exe  1234  C:\WINDOWS\system32\svchost.exe',
         'Explorer.EXE  5678  C:\WINDOWS\Explorer.EXE',
-        'brave.exe  25976  C:\Users\khali\AppData\Local\BraveSoftware\Brave-Browser\Application\brave.exe',
+        'brave.exe  25976  C:\Users\alice\AppData\Local\BraveSoftware\Brave-Browser\Application\brave.exe',
         'csrss.exe  700  ',
         'System  4  ',
         'svchost.exe  9999  C:\Users\Public\dz_selftest_masq\svchost.exe'
