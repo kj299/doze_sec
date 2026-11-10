@@ -623,7 +623,8 @@ jobs:
                    'both keys missing: WDigest is [OK] (the key is optional), the Lsa key is a gap (it always exists)'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 20 ] || { echo "only $n case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 22 ] || { echo "only $n case(s)"; exit 1; }
+          echo "$out" | grep -qF 'WDigest 2 (any nonzero number): ENABLED' || { echo 'case gone: a nonzero WDigest value could dodge the finding'; exit 1; }
           for b in doze_sec.bat doze_sec_noAdmin.bat; do
             grep -qF "Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' -Name UseLogonCredential -EA SilentlyContinue" "$b" && { echo "$b: a silenced WDigest read is back (in the section or a re-measuring tile)"; exit 1; }
             grep -qF 'Name LmCompatibilityLevel -EA SilentlyContinue' "$b" && { echo "$b: a silenced NTLM-level read is back (in the section or a re-measuring tile)"; exit 1; }

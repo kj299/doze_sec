@@ -15,11 +15,13 @@
 # apart: value present, value absent under a key that was read, key does not
 # exist, key could not be read. Only the last is "NOT performed".
 #   WDigest UseLogonCredential (SecurityProviders\WDigest):
-#     1                    -> the CRITICAL finding (wording kept; marker
-#                             dz_wdigest_hit.txt the bat already raises);
+#     any nonzero number   -> the CRITICAL finding (wording kept; marker
+#                             dz_wdigest_hit.txt the bat already raises). Not
+#                             only 1: the setting is a flag, and 2 must not
+#                             dodge the finding;
 #     0                    -> [OK];
 #     absent, or no key    -> [OK]: off by default on Windows 8.1 and later;
-#     anything else        -> WARNING, an unexpected value (dz_wdigest_odd.txt);
+#     not a number         -> WARNING, state unknown (dz_wdigest_odd.txt);
 #     key unreadable       -> a raised gap (dz_wdigest_gap.txt).
 #   LmCompatibilityLevel (Control\Lsa). Microsoft, "Network security: LAN
 #   Manager authentication level": the default on Windows Vista and later is
@@ -102,14 +104,18 @@ function Get-CredSettingsVerdict {
     switch ([string]$WDigest.State) {
         'present' {
             $n = ConvertTo-RegNumber $WDigest.Value
-            if ($n -eq 1) {
+            if ($null -ne $n -and $n -ne 0) {
+                # Any nonzero number, not only 1: the setting is a flag, and a
+                # check that calls 2 merely "unexpected" would let it dodge
+                # the finding and its fix. False reassurance is the worse error.
                 [void]$out.Add('[CRITICAL] WDigest ENABLED -- plaintext passwords cached in RAM (T1003.001)')
+                if ($n -ne 1) { [void]$out.Add(('[INFO] UseLogonCredential holds ' + $n + ', not the documented 1. A nonzero value is graded as enabled.')) }
                 $r.WdHit = $true; $wdState = 'on'
             } elseif ($n -eq 0) {
                 [void]$out.Add('[OK] WDigest not caching plaintext credentials (UseLogonCredential=0).')
                 $wdState = 'off'
             } else {
-                [void]$out.Add(('[WARNING] WDigest UseLogonCredential holds an unexpected value (' + (ConvertTo-PrintableText ([string]$WDigest.Value)) + ', type ' + (ConvertTo-PrintableText ([string]$WDigest.Kind)) + ') -- only 0 and 1 are defined; a value nobody documents on a credential setting is worth explaining (T1003.001).'))
+                [void]$out.Add(('[WARNING] WDigest UseLogonCredential holds a value that is not a number (' + (ConvertTo-PrintableText ([string]$WDigest.Value)) + ', type ' + (ConvertTo-PrintableText ([string]$WDigest.Kind)) + '), so whether plaintext caching is on cannot be stated; only 0 and 1 are defined (T1003.001).'))
                 $r.WdOdd = $true; $wdState = 'odd'
             }
         }
@@ -192,7 +198,11 @@ if ($SelfTest) {
     $v = Get-CredSettingsVerdict -WDigest (P '1' 'String') -Ntlm $abs
     T 'WDigest stored as the string "1": still ENABLED -- another type must not dodge the finding' ($v.WdHit -and (-not $v.WdOdd)) ($v.Lines -join ' | ')
     $v = Get-CredSettingsVerdict -WDigest (P 2) -Ntlm $abs; $t = $v.Lines -join "`n"
-    T 'WDigest 2: a WARNING naming the unexpected value, neither CRITICAL nor [OK]' ($v.WdOdd -and (-not $v.WdHit) -and $v.State -like 'wdigest=odd,*' -and $t -match 'unexpected value \(2, type DWord\)' -and $t -notmatch 'WDigest not caching') $t
+    T 'WDigest 2 (any nonzero number): ENABLED, with the value said -- an undocumented value must not dodge the finding' ($v.WdHit -and (-not $v.WdOdd) -and $v.State -like 'wdigest=on,*' -and $t -match '(?m)^\[CRITICAL\] WDigest ENABLED' -and $t -match 'holds 2, not the documented 1') $t
+    $v = Get-CredSettingsVerdict -WDigest (P -1) -Ntlm $abs
+    T 'WDigest 0xFFFFFFFF (read as -1): ENABLED' ($v.WdHit) ($v.Lines -join ' | ')
+    $v = Get-CredSettingsVerdict -WDigest (P 'yes' 'String') -Ntlm $abs; $t = $v.Lines -join "`n"
+    T 'WDigest holding text that is not a number: a WARNING that says the state is unknown, neither CRITICAL nor [OK]' ($v.WdOdd -and (-not $v.WdHit) -and $v.State -like 'wdigest=odd,*' -and $t -match 'not a number \(yes, type String\)' -and $t -notmatch 'WDigest not caching') $t
     foreach ($lv in 0, 1, 2) {
         $v = Get-CredSettingsVerdict -WDigest $abs -Ntlm (P $lv); $t = $v.Lines -join "`n"
         T ("NTLM level {0}: the WARNING wording the bats always printed, and a hit" -f $lv) ($v.NtHit -and $v.State -eq ("wdigest=absent,ntlm=weak,level={0}" -f $lv) -and $t -match ("(?m)^\[WARNING\] NTLMv1/LM permitted \(LmCompatibilityLevel={0}\) -- downgrade/relay exposure$" -f $lv)) $t

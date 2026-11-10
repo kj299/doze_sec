@@ -3298,7 +3298,7 @@ if exist "%TEMP%\dz_wdigest_hit.txt" (
     del "%TEMP%\dz_wdigest_hit.txt" 2>nul
 )
 if exist "%TEMP%\dz_wdigest_odd.txt" (
-    call :dz_finding WARNING 12 T1003.001 "WDigest UseLogonCredential holds an unexpected value"
+    call :dz_finding WARNING 12 T1003.001 "WDigest UseLogonCredential is not a number - state unknown"
     del "%TEMP%\dz_wdigest_odd.txt" 2>nul
 )
 if exist "%TEMP%\dz_wdigest_gap.txt" (
@@ -5658,7 +5658,7 @@ echo. >> "%PSRUN%"
 :: ===== CREDENTIAL PROTECTION =========================================
 echo sec 'CREDENTIAL PROTECTION  (Section 12)' >> "%PSRUN%"
 echo $v='%PPL_STATE%';if($v -eq 'on'){ck 'PASS' 'LSASS PPL protection enabled (Section 12)'}elseif($v -eq 'pending'){ck 'WARN' 'LSASS protection set but not in effect this boot (Section 12)' 'RunAsPPL is set but LSASS did not start protected: reboot, or value 2 is not enforced on this build (needs Windows 11 22H2+). Section 12 has the evidence.'}elseif($v -eq 'off'){ck 'WARN' 'LSASS PPL not enabled (Section 12)' 'Set RunAsPPL=dword:2 (protected, still removable) in HKLM\SYSTEM\...\Lsa and reboot. Prevents Mimikatz credential dump. Do NOT use 1: that writes a UEFI variable you cannot undo from the registry, and any smart-card driver, cryptographic plug-in or password filter that is not Microsoft-signed then fails to load and you may be unable to sign in.'}else{ck 'INFO' 'LSASS PPL: NOT graded -- Section 12 could not determine the LSA Protection state'} >> "%PSRUN%"
-echo $cs='%CRED_STATE%';$lv='';if($cs -match 'level=([0-5])'){$lv=$matches[1]};if($cs -like 'wdigest=on,*'){ck 'CRIT' 'WDigest ENABLED -- plaintext passwords are cached in RAM' 'Set UseLogonCredential=0 in HKLM\...\WDigest and reboot immediately'}elseif($cs -like 'wdigest=off,*'){ck 'PASS' 'WDigest disabled (UseLogonCredential=0)'}elseif($cs -like 'wdigest=absent,*'){ck 'PASS' 'WDigest not set (default off on Win8.1+)'}elseif($cs -like 'wdigest=odd,*'){ck 'WARN' 'WDigest UseLogonCredential holds an unexpected value (Section 12)' 'Only 0 and 1 are defined. See Section 12 for the value.'}else{ck 'INFO' 'WDigest: NOT graded -- Section 12 could not read it'} >> "%PSRUN%"
+echo $cs='%CRED_STATE%';$lv='';if($cs -match 'level=([0-5])'){$lv=$matches[1]};if($cs -like 'wdigest=on,*'){ck 'CRIT' 'WDigest ENABLED -- plaintext passwords are cached in RAM' 'Set UseLogonCredential=0 in HKLM\...\WDigest and reboot immediately'}elseif($cs -like 'wdigest=off,*'){ck 'PASS' 'WDigest disabled (UseLogonCredential=0)'}elseif($cs -like 'wdigest=absent,*'){ck 'PASS' 'WDigest not set (default off on Win8.1+)'}elseif($cs -like 'wdigest=odd,*'){ck 'WARN' 'WDigest UseLogonCredential is not a number -- state unknown (Section 12)' 'Only 0 and 1 are defined. See Section 12 for the value.'}else{ck 'INFO' 'WDigest: NOT graded -- Section 12 could not read it'} >> "%PSRUN%"
 echo if($cs -like '*,ntlm=weak,*'){ck 'WARN' ('NTLMv1 allowed (Level='+$lv+')') 'Set LmCompatibilityLevel=5 in HKLM\...\Lsa. NTLMv1 is crackable and relayable.'}elseif($cs -like '*,ntlm=ok,*'){ck 'PASS' ('NTLM level '+$lv+': NTLMv2 responses only (Section 12)')}elseif($cs -like '*,ntlm=default,*'){ck 'INFO' 'NTLM level not explicitly set -- the Windows default applies (NTLMv2 response only). Not a finding; set it explicitly to pin the behaviour.'}elseif($cs -like '*,ntlm=odd,*'){ck 'WARN' 'LmCompatibilityLevel holds an unexpected value (Section 12)' 'Only 0 to 5 are defined. See Section 12 for the value.'}else{ck 'INFO' 'NTLM level: NOT graded -- Section 12 could not read it'} >> "%PSRUN%"
 echo. >> "%PSRUN%"
 

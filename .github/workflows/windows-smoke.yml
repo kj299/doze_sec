@@ -2492,7 +2492,7 @@ jobs:
           $st = (.\tools\cred_settings_check.ps1 -SelfTest) -join "`n"
           if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'cred_settings_check -SelfTest failed' }
           $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($n -lt 20) { throw "cred_settings_check self-test ran only $n case(s)" }
+          if ($n -lt 22) { throw "cred_settings_check self-test ran only $n case(s)" }
           function RunC([hashtable]$Extra) {
             $md = Join-Path $env:TEMP ("dz_ci_cred_{0}_{1}" -f $PID, [guid]::NewGuid().ToString('N').Substring(0, 6)); New-Item -ItemType Directory -Path $md -Force | Out-Null
             try {
@@ -2526,6 +2526,9 @@ jobs:
             Remove-ItemProperty -Path $wk -Name UseLogonCredential; Set-ItemProperty -Path $wk -Name UseLogonCredential -Value '1' -Type String
             $r = RunC $k
             if ($r.State -notlike 'wdigest=on,*') { throw "WDigest stored as REG_SZ '1' dodged the finding: $($r.State)" }
+            Set-ItemProperty -Path $wk -Name UseLogonCredential -Value 2 -Type DWord -Force
+            $r = RunC $k
+            if ($r.State -notlike 'wdigest=on,*') { throw "WDigest 2 (nonzero) dodged the finding: $($r.State)" }
             Remove-Item -Path $wk -Recurse -Force; Remove-Item -Path $lk -Recurse -Force
             $r = RunC $k
             if ($r.State -ne 'wdigest=absent,ntlm=gap,level=-' -or $r.Markers -ne 'dz_ntlm_gap') { throw "missing keys: WDigest should be absent and the Lsa key a gap: $($r.State) [$($r.Markers)]" }
@@ -2537,7 +2540,9 @@ jobs:
             try {
               $acl = Get-Acl -Path $wk
               $me = [Security.Principal.WindowsIdentity]::GetCurrent().User
-              $acl.AddAccessRule((New-Object Security.AccessControl.RegistryAccessRule($me, 'ReadKey', 'Deny')))
+              # Deny reading values and subkeys only -- not READ_CONTROL or
+              # WRITE_DAC -- so the cleanup below can always take the rule off.
+              $acl.AddAccessRule((New-Object Security.AccessControl.RegistryAccessRule($me, 'QueryValues, EnumerateSubKeys', 'Deny')))
               Set-Acl -Path $wk -AclObject $acl
               try { $null = Get-Item -LiteralPath $wk -ErrorAction Stop } catch { $denied = $true }
             } catch { Write-Host ("[ SKIP ] the deny ACL could not be set on this image ({0})" -f $_.Exception.Message) }
@@ -2547,13 +2552,16 @@ jobs:
               Write-Host 'cred settings: a key this account is denied is a raised gap, never an all-clear'
             } else { Write-Host '[ SKIP ] denied-key case not run: this account can still read the key through the deny rule; the self-test pins the judgement' }
           } finally {
-            # Take the deny rule off before removing, or the removal is refused.
-            try { if (Test-Path $root) { & reg.exe delete ("HKCU\Software\dz_ci_cred_$PID") /f 2>&1 | Out-Null } } catch {}
-            if (Test-Path $root) {
-              try { $sk = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Software\dz_ci_cred_$PID\WDigest", [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree, [Security.AccessControl.RegistryRights]::ChangePermissions); if ($sk) { $a = $sk.GetAccessControl(); foreach ($ru in @($a.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier]) | Where-Object { $_.AccessControlType -eq 'Deny' })) { [void]$a.RemoveAccessRule($ru) }; $sk.SetAccessControl($a); $sk.Close() } } catch {}
-              Remove-Item -Path $root -Recurse -Force -EA SilentlyContinue
-            }
-            if (Test-Path $root) { Write-Host "::warning::the CI test key $root could not be removed" }
+            # Take the deny rule off FIRST, through a handle that asks only to
+            # change permissions and without reading the old ACL (reading is
+            # what the rule denies): a fresh, unprotected ACL inherits the
+            # parent's. Then the removal can open the key.
+            try {
+              $sk = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Software\dz_ci_cred_$PID\WDigest", [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree, [Security.AccessControl.RegistryRights]::ChangePermissions)
+              if ($sk) { $fresh = New-Object Security.AccessControl.RegistrySecurity; $fresh.SetAccessRuleProtection($false, $false); $sk.SetAccessControl($fresh); $sk.Close() }
+            } catch { Write-Host ("cleanup: could not reset the test key's ACL ({0})" -f $_.Exception.Message) }
+            Remove-Item -Path $root -Recurse -Force -EA SilentlyContinue
+            if (Test-Path $root) { throw "the CI test key $root could not be removed" }
           }
           Write-Host 'cred settings: every state read through the real registry reader; absent is the default, a missing Lsa key or a denied key is a gap'
           exit 0

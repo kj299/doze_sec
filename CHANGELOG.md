@@ -14,8 +14,8 @@ are a separate, machine-specific record of changes each audit made.
 
 **Now.** `tools/cred_settings_check.ps1` tells four states apart: value present, value absent under a key that was read, key does not exist, key could not be read.
 - **Absent stays an answer.** WDigest caching is off by default on Windows 8.1 and later, and an unset NTLM level is level 3.
-- **Findings.** WDigest 1 is the CRITICAL and NTLM 0-2 the WARNING, with wording and rows unchanged. A value stored under another type cannot dodge either.
-- **Other values.** An undefined value is a WARNING that names it.
+- **Findings.** WDigest 1 is the CRITICAL and NTLM 0-2 the WARNING, with wording and rows unchanged. Any other nonzero WDigest number is CRITICAL too. A value stored under another type cannot dodge either.
+- **Other values.** A WDigest value that is not a number, or an NTLM level outside 0-5, is a WARNING that names it.
 - **Gaps.** A key that could not be read is a raised `NOT performed` row. So is a missing `Lsa` key, since that key exists on every Windows.
 - **Tiles.** They read Section 12's verdict.
 - **Fixes.** They trigger off the ledger. The NTLM fix now states its undo (restore the level the audit read) and warns what level 5 can break. Level 3-4 queues nothing.
