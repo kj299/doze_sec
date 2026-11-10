@@ -780,3 +780,43 @@ Proposed fix: the child accepts `DOZE_LOG_TS` only when no `SecurityReport_`,
 treats the variables as stale, clears them and starts its own capture. Prove
 it with a CI step that leaves the variables set in a cmd and checks that the
 next run's ChangeLog has a new name.
+
+## Silent all-clears: what the sweep has NOT reached (opened 2026-11-10 by the retrospective)
+
+Seven checks whose failed query read as clean were replaced by tools (Guest,
+the two pipe checks, WMI subscriptions, account events, firewall, SMBv1,
+WinRM -- CHANGELOG, CLAUDE.md). The sweep was then called done. It was not:
+it had only looked for lines that printed `[SKIPPED]` or wrapped a cmdlet in a
+dead `try/catch`. Grepping for the shape itself -- an inline line that
+silences errors and can print `[OK]` -- finds these, all still as they were.
+**None of them is fixed.** Line numbers are at 035bf13.
+
+Section lines (`doze_sec.bat` / `doze_sec_noAdmin.bat`):
+
+| Check | Lines | What a failed read prints today |
+|---|---|---|
+| RDP enabled / NLA (T1021.001) | 3346 / 3033 | a failed read of `fDenyTSConnections` falls to the NLA read; both failing prints the WARNING, so this one fails loud, but it cannot tell "unreadable" from "RDP on without NLA" |
+| WDigest (T1003.001) | 3585 / 3284 | `[OK]` |
+| NTLM `LmCompatibilityLevel` | 3586 / 3285 | `[OK] LmCompatibilityLevel not set` |
+| Alternate data streams in TEMP (T1564.004) | 4155 / 3906 | `[OK]` when the walk is denied part-way |
+| Large HTML/HTA in TEMP (HTML smuggling) | 4546 / 4402 | `[OK]` |
+| Outlook `.msg`/`.oft` | 4552 / 4408 | `[OK]` |
+
+Dashboard tiles that re-measure instead of reading their section's verdict
+(the "a tile that re-measures is a second opinion" class), `doze_sec.bat`
+5729-5764 / `doze_sec_noAdmin.bat` 5626-5674: WDigest, NTLM, RDP, UAC
+(`EnableLUA`), Script Block Logging, Winlogon `Userinit`, Winlogon `Shell`,
+`AppInit_DLLs`.
+
+One caution before any of these is touched: **for a registry VALUE, absent is
+a real answer.** `UseLogonCredential` not set means WDigest is off on every
+supported Windows; `LmCompatibilityLevel` not set means the default. So the
+fix is not "empty is a gap". It is to separate three states -- value present,
+value absent under a key that was read, key unreadable -- and only the third
+is NOT performed. The file walks (ADS, HTML, Outlook) need the per-directory
+idiom `archive_staging` already uses: grade what is readable, name and count
+what is not.
+
+Suggested order, by what a miss costs: WDigest and NTLM (credential theft,
+and their tiles), then the Winlogon/AppInit tiles (persistence), then RDP,
+then the three TEMP/Outlook walks.

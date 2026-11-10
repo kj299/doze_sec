@@ -6,6 +6,20 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Retrospective: the silent-all-clear sweep is not finished
+A three-pass retrospective checked the project's claims against the code.
+The claim that every check whose failed query read as clean had been fixed
+was wrong: the sweep had only looked for lines that printed `[SKIPPED]`.
+Six section lines (WDigest, NTLM, RDP, and three file walks) and eight
+dashboard tiles that re-measure the registry are still as they were, in both
+scripts. Nothing changes in behaviour here; they are now listed, with line
+numbers and the caution that an absent registry value is a real answer, in
+`docs/design/backlog.md`. CLAUDE.md gains the four lessons of the last
+eleven pull requests that it did not hold: a failed query that reads as
+empty reads as clean; weigh sources only when they measure the same thing;
+defer the command that needs administrator, never the section; and a branch
+whose pull request has merged is not that pull request any more.
+
 ### The WinRM check: a service that could not be queried is a gap
 **Before.**
 - Section 10 read `Get-Service WinRM -EA SilentlyContinue`. When that query failed (a broken service manager, a denied query, a cmdlet that would not load), it printed `[OK] WinRM not running.` without having looked, and remote-PowerShell exposure (T1021.006) read clean.
