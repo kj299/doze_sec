@@ -634,6 +634,56 @@ it was. And `-Refresh` retires the manifest of the copy it replaced
 exists is how a visited machine rolls the tool back to an older version and
 reads `[OK]`.
 
+**A failed query that reads as empty reads as clean.** The shape is
+`$x = <cmdlet> -EA SilentlyContinue; if ($x ...) { finding } else { '[OK] ...' }`:
+when the query FAILS, `$x` is empty and the else branch prints an all-clear
+having looked at nothing. Seven checks had it (some printed an unraised
+`[SKIPPED]` instead, which is the same hole): the Guest account, the two C2
+named-pipe checks, WMI subscriptions, the account events, the firewall, SMBv1
+and WinRM ("`[OK] WinRM not running.`" from a service manager that never
+answered). Each is now a `tools/*.ps1` (`guest_account_check`,
+`named_pipe_check`, `wmi_subscription_check`, `account_events_check`,
+`firewall_state_check`, `smb1_check`, `winrm_check`) that queries with
+`-ErrorAction Stop`, tells "answered: nothing there" from "did not answer",
+and raises the second as a NOT-performed gap. **The sweep that found them is
+NOT finished** -- it was declared done once, wrongly, because it only looked
+for lines that printed `[SKIPPED]`. The remaining lines are listed in
+`docs/design/backlog.md`; do not call a sweep done without grepping for the
+SHAPE, not for one of its symptoms.
+
+**Weigh sources only when they measure the same thing.** "Positive evidence
+outranks" (above) is a rule about sources of the same fact. The first
+firewall draft applied it across kinds: a profile OFF from ANY source was the
+finding, and one source (`HNetCfg.FwPolicy2`) reads the LOCAL setting --
+Microsoft documents it as "enabled locally (the effective result may differ
+due to group policy settings)" -- so a domain laptop whose policy forces the
+firewall ON would have read CRITICAL. The first SMBv1 draft let "the
+component is installed" outrank "the server is configured not to accept
+SMBv1", a documented mitigation. Both were caught by review, not by CI: a
+runner has no Group Policy and no SMBv1 component, so the sources always
+agree there. Decide first which source is the EFFECT; a setting-level source
+decides only when the effect could not be read, says so, and where the two
+differ the difference is `[INFO]`, never a grade -- in either direction.
+
+**Defer the command that needs administrator, never the section.**
+`doze_sec_noAdmin.bat` jumped on `IS_ADMIN=0` past all of Section 8 because
+`netsh advfirewall` needs elevation, so the new firewall tool never ran on a
+standard-user token and its tile read "could not read it" -- untrue: CI then
+measured that a standard user CAN read the effective firewall state, SMBv1
+and WinRM. This is the second instance of the skipped-by-goto class above.
+A section-wide deferral hides everything in the section the token could have
+answered. When a tool is added to a section, read the section's non-admin
+branch; `lint.yml` pins this one.
+
+**A branch whose PR has merged is not that PR any more.** The WinRM commit
+was pushed to the #271 branch moments after #271 was merged: it never reached
+main, it had never run in CI, and #271's description -- updated to announce
+it -- describes a change #271 does not contain. Before every push: fetch
+main, and check the PR's state, not the last state remembered. Describe a
+change in a PR body only once it is in that PR. And when a branch must be
+brought onto a moved main, MERGE main into it: a force-push was (rightly)
+refused, and a merge commit breaks nobody's checkout.
+
 ### A section and the dashboard must not contradict each other (REQUIRED)
 
 One field report said both things about the same six `brave.exe` processes:
