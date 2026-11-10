@@ -457,6 +457,15 @@ try {
             Assert ($text1 -notmatch $c.Pass) ('no PASS tile for a {0} state this token could not read' -f $c.Name) ('the dashboard printed a {0} PASS this token could not read' -f $c.Name)
         }
     }
+    # WDigest and the NTLM level (Section 12): HKLM is readable from this
+    # token, so the check must have GRADED both -- a gap row here would mean
+    # the tool cannot read what a standard user can.
+    Assert ($text1 -match '(?m)^\[OK\] WDigest not caching plaintext credentials' -and $text1 -match '(?m)^\[OK\] (LmCompatibilityLevel not set|NTLM level [3-5])') `
+        'Section 12 graded WDigest and the NTLM level on a standard-user token (clean runner: both OK)' `
+        'Section 12 did not grade WDigest and the NTLM level as OK on a clean runner, standard-user token'
+    Assert (-not @($ledger1 | Where-Object { $_ -match '\|12\|T(1003\.001|1550\.002)\|.*(NOT performed|unexpected value)' }).Count) `
+        'no WDigest/NTLM gap or unexpected-value row on a clean standard-user run' `
+        ("a WDigest/NTLM gap or unexpected-value row on a clean runner: {0}" -f (($ledger1 | Where-Object { $_ -match '\|12\|T(1003\.001|1550\.002)\|' }) -join ' ; '))
     Assert ($text1 -match '\[DEFERRED - ADMIN REQUIRED\] Security log clears \(Event 1102\)') `
         'the Security-log clear check is stated as deferred on a standard-user token' `
         'the Security-log clear check was not stated as deferred'

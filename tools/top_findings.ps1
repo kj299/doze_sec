@@ -53,6 +53,7 @@ $whyTable = [ordered]@{
     'Firewall service DISABLED' = 'The Windows Defender Firewall service is not running, so no profile filters anything whatever its setting says. Stopping it is a one-line defense evasion; start it and set it to Automatic.'
     'SMBv1 server component INSTALLED' = 'The SMBv1 server component is installed and this run could not read whether the server accepts SMBv1; installed, it does by default. Removing the component closes the EternalBlue path for good.'
     'SMBv1 ENABLED'        = 'SMBv1 is the protocol exploited by EternalBlue / WannaCry. It must be disabled in 2024+.'
+    'UAC auto-elevates without prompting' = 'UAC is on but set to elevate administrators silently (ConsentPromptBehaviorAdmin=0), so anything running as an administrator gains full rights with no prompt to notice or refuse. Set it back to prompt for consent.'
     'UAC DISABLED'         = 'No prompt before privilege elevation. Any malware running as user gets silent admin via auto-elevating processes.'
     'portproxy tunnel rules are ACTIVE' = 'netsh portproxy rules are an active Volt Typhoon TTP for hiding C2 traffic behind the local interface.'
     'runs from .*\(T1036 masquerading\)' = 'A Windows system-process name running from a directory Windows never uses: an implant wearing a familiar name so Task Manager reads as normal. The path proves the file is not the Windows binary, not what it is: check its signature (Get-AuthenticodeSignature) and what started it, and treat a match as an incident.'

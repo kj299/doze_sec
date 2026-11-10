@@ -220,6 +220,7 @@ set "PIPES_CS_STATE=ungraded"
 set "FW_STATE=ungraded"
 set "SMB1_STATE=ungraded"
 set "WINRM_STATE=ungraded"
+set "CRED_STATE=ungraded"
 set "REBOOT_AGE=unknown"
 set "BITLOCKER_STATE=ungraded"
 set "EXEC_BLOCKED=0"
@@ -3546,7 +3547,7 @@ echo.>> "%REPORT%"
 echo --- WDigest: SAFE=UseLogonCredential=0 (1=plaintext in RAM) --->> "%REPORT%"
 echo  Command: reg query "HKLM\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest" /v UseLogonCredential>> "%REPORT%"
 reg query "HKLM\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest" /v UseLogonCredential>> "%REPORT%" 2>nul
-if errorlevel 1 (echo [OK] WDigest UseLogonCredential not set -- Win11 default does not cache plaintext credentials.)>> "%REPORT%"
+if errorlevel 1 echo  No value returned by reg query. It is graded below, under Credential Protection State.>> "%REPORT%"
 
 echo.>> "%REPORT%"
 echo --- NTLM Level: SAFE=LmCompatibilityLevel=5 (NTLMv2 only) --->> "%REPORT%"
@@ -3581,13 +3582,30 @@ del "%TEMP%\dz_wdigest_hit.txt" 2>nul
 del "%TEMP%\dz_lsa.txt" 2>nul
 del "%TEMP%\dz_lsa_gap.txt" 2>nul
 del "%TEMP%\dz_ntlm_hit.txt" 2>nul
-echo $lsa='HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' > "%PSRUN%"
-echo $wd=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' -Name UseLogonCredential -EA SilentlyContinue).UseLogonCredential;if($wd -eq 1){'[CRITICAL] WDigest ENABLED -- plaintext passwords cached in RAM (T1003.001)';Set-Content -LiteralPath "$env:TEMP\dz_wdigest_hit.txt" -Value hit}else{'[OK] WDigest not caching plaintext credentials.'} >> "%PSRUN%"
-echo $nl=(Get-ItemProperty $lsa -Name LmCompatibilityLevel -EA SilentlyContinue).LmCompatibilityLevel;if($nl -eq $null){'[OK] LmCompatibilityLevel not set (modern Windows defaults to NTLMv2-only behaviour).'}elseif($nl -ge 3){'[OK] NTLM level '+$nl+' (NTLMv2).'}else{'[WARNING] NTLMv1/LM permitted (LmCompatibilityLevel='+$nl+') -- downgrade/relay exposure';Set-Content -LiteralPath "$env:TEMP\dz_ntlm_hit.txt" -Value hit} >> "%PSRUN%"
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+del "%TEMP%\dz_wdigest_odd.txt" 2>nul
+del "%TEMP%\dz_wdigest_gap.txt" 2>nul
+del "%TEMP%\dz_ntlm_odd.txt" 2>nul
+del "%TEMP%\dz_ntlm_gap.txt" 2>nul
+del "%TEMP%\dz_cred_state.txt" 2>nul
+echo  Command: powershell -File tools\cred_settings_check.ps1>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\cred_settings_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\cred_settings_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\cred_settings_check.ps1 not found -- WDigest and NTLM level checks NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 12 T1003.001 "WDigest and NTLM level checks NOT performed - tool missing"
+)
 if exist "%TEMP%\dz_wdigest_hit.txt" (
     call :dz_finding CRITICAL 12 T1003.001 "WDigest enabled - plaintext credentials cached in RAM"
     del "%TEMP%\dz_wdigest_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_wdigest_odd.txt" (
+    call :dz_finding WARNING 12 T1003.001 "WDigest UseLogonCredential is not a number - state unknown"
+    del "%TEMP%\dz_wdigest_odd.txt" 2>nul
+)
+if exist "%TEMP%\dz_wdigest_gap.txt" (
+    rem A gap is its own row: the key could not be read. An absent value is not a gap.
+    call :dz_finding WARNING 12 T1003.001 "WDigest check NOT performed - the WDigest key could not be read"
+    del "%TEMP%\dz_wdigest_gap.txt" 2>nul
 )
 if exist "%SCRIPT_DIR%tools\lsa_protection_check.ps1" (
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\lsa_protection_check.ps1" -Mode Report>> "%REPORT%" 2>&1
@@ -3745,6 +3763,23 @@ del "%TEMP%\dz_lsa_lines.txt" 2>nul
 if exist "%TEMP%\dz_ntlm_hit.txt" (
     call :dz_finding WARNING 12 T1550.002 "NTLMv1/LM permitted - downgrade and relay exposure"
     del "%TEMP%\dz_ntlm_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_ntlm_odd.txt" (
+    call :dz_finding WARNING 12 T1550.002 "LmCompatibilityLevel holds an unexpected value"
+    del "%TEMP%\dz_ntlm_odd.txt" 2>nul
+)
+if exist "%TEMP%\dz_ntlm_gap.txt" (
+    rem A gap is its own row: the key could not be read. An absent value is not a gap.
+    call :dz_finding WARNING 12 T1550.002 "NTLM level check NOT performed - the Lsa key could not be read"
+    del "%TEMP%\dz_ntlm_gap.txt" 2>nul
+)
+set "_CRST="
+if exist "%TEMP%\dz_cred_state.txt" set /p _CRST=<"%TEMP%\dz_cred_state.txt"
+del "%TEMP%\dz_cred_state.txt" 2>nul
+if defined _CRST if "!_CRST:~0,8!"=="wdigest=" set "CRED_STATE=!_CRST!"
+if not "!CRED_STATE:~0,8!"=="wdigest=" if exist "%SCRIPT_DIR%tools\cred_settings_check.ps1" (
+    echo [WARNING] WDigest and NTLM level checks produced no verdict -- NOT performed: tools\cred_settings_check.ps1 ran but wrote no usable verdict.>> "%REPORT%"
+    call :dz_finding WARNING 12 T1003.001 "WDigest and NTLM level checks produced no verdict - NOT performed"
 )
 echo.>> "%REPORT%"
 
@@ -5726,8 +5761,8 @@ echo. >> "%PSRUN%"
 :: ===== CREDENTIAL PROTECTION =========================================
 echo sec 'CREDENTIAL PROTECTION  (Section 12)' >> "%PSRUN%"
 echo $v='%PPL_STATE%';if($v -eq 'on'){ck 'PASS' 'LSASS PPL protection enabled (Section 12)'}elseif($v -eq 'pending'){ck 'WARN' 'LSASS protection set but not in effect this boot (Section 12)' 'RunAsPPL is set but LSASS did not start protected: reboot, or value 2 is not enforced on this build (needs Windows 11 22H2+). Section 12 has the evidence.'}elseif($v -eq 'off'){ck 'WARN' 'LSASS PPL not enabled (Section 12)' 'Set RunAsPPL=dword:2 (protected, still removable) in HKLM\SYSTEM\...\Lsa and reboot. Prevents Mimikatz credential dump. Do NOT use 1: that writes a UEFI variable you cannot undo from the registry, and any smart-card driver, cryptographic plug-in or password filter that is not Microsoft-signed then fails to load and you may be unable to sign in.'}else{ck 'INFO' 'LSASS PPL: NOT graded -- Section 12 could not determine the LSA Protection state'} >> "%PSRUN%"
-echo $v=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' -Name UseLogonCredential -EA SilentlyContinue).UseLogonCredential;if($v -eq 1){ck 'CRIT' 'WDigest ENABLED -- plaintext passwords are cached in RAM' 'Set UseLogonCredential=0 in HKLM\...\WDigest and reboot immediately'}elseif($v -eq 0){ck 'PASS' 'WDigest disabled (UseLogonCredential=0)'}else{ck 'PASS' 'WDigest not set (default off on Win8.1+)'} >> "%PSRUN%"
-echo $v=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name LmCompatibilityLevel -EA SilentlyContinue).LmCompatibilityLevel;if($v -ge 5){ck 'PASS' ('NTLM hardened: NTLMv2 only (Level='+$v+')')}elseif($v -ge 3){ck 'WARN' ('NTLM partially hardened (Level='+$v+')') 'Set LmCompatibilityLevel=5. GPO: Network security: LAN Manager authentication level.'}elseif($null -eq $v){ck 'INFO' 'NTLM level not explicitly set -- the Windows default applies (NTLMv2 response only). Not a finding; set it explicitly to pin the behaviour.'}else{ck 'WARN' ('NTLMv1 allowed (Level='+$v+')') 'Set LmCompatibilityLevel=5 in HKLM\...\Lsa. NTLMv1 is crackable and relayable.'} >> "%PSRUN%"
+echo $cs='%CRED_STATE%';$lv='';if($cs -match 'level=([0-5])'){$lv=$matches[1]};if($cs -like 'wdigest=on,*'){ck 'CRIT' 'WDigest ENABLED -- plaintext passwords are cached in RAM' 'Set UseLogonCredential=0 in HKLM\...\WDigest and reboot immediately'}elseif($cs -like 'wdigest=off,*'){ck 'PASS' 'WDigest disabled (UseLogonCredential=0)'}elseif($cs -like 'wdigest=absent,*'){ck 'PASS' 'WDigest not set (default off on Win8.1+)'}elseif($cs -like 'wdigest=odd,*'){ck 'WARN' 'WDigest UseLogonCredential is not a number -- state unknown (Section 12)' 'Only 0 and 1 are defined. See Section 12 for the value.'}else{ck 'INFO' 'WDigest: NOT graded -- Section 12 could not read it'} >> "%PSRUN%"
+echo if($cs -like '*,ntlm=weak,*'){ck 'WARN' ('NTLMv1 allowed (Level='+$lv+')') 'Set LmCompatibilityLevel=5 in HKLM\...\Lsa. NTLMv1 is crackable and relayable.'}elseif($cs -like '*,ntlm=ok,*'){ck 'PASS' ('NTLM level '+$lv+': NTLMv2 responses only (Section 12)')}elseif($cs -like '*,ntlm=default,*'){ck 'INFO' 'NTLM level not explicitly set -- the Windows default applies (NTLMv2 response only). Not a finding; set it explicitly to pin the behaviour.'}elseif($cs -like '*,ntlm=odd,*'){ck 'WARN' 'LmCompatibilityLevel holds an unexpected value (Section 12)' 'Only 0 to 5 are defined. See Section 12 for the value.'}else{ck 'INFO' 'NTLM level: NOT graded -- Section 12 could not read it'} >> "%PSRUN%"
 echo. >> "%PSRUN%"
 
 :: ===== WINDOWS DEFENDER ==============================================
@@ -5862,8 +5897,12 @@ echo $joined = ($r -join "`n") >> "%PSRUN%"
 rem LSASS PPL is deliberately NOT auto-queued: RunAsPPL=1 writes a UEFI variable that
 rem the registry cannot undo, and RunAsPPL=2 is only enforced on Win11 22H2+. An
 rem irreversible change on the authentication path is advice, not an auto-fix.
-echo if($joined -match 'WDigest ENABLED'){ addfix 'Disable WDigest plaintext credential cache (reboot required)' "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' -Name UseLogonCredential -Value 0 -Type DWord -Force" '' } >> "%PSRUN%"
-echo if($joined -match 'NTLMv1 allowed^|NTLM partially hardened'){ addfix 'Harden NTLM to NTLMv2-only' "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name LmCompatibilityLevel -Value 5 -Type DWord -Force" '' } >> "%PSRUN%"
+echo if(led 'CRITICAL' '12' 'T1003.001' 'WDigest enabled'){ addfix 'Disable WDigest plaintext credential cache (reboot required)' "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' -Name UseLogonCredential -Value 0 -Type DWord -Force" '' } >> "%PSRUN%"
+rem One line per level, so each UNDO is a literal: it restores the level this audit read.
+echo $cs2='%CRED_STATE%' >> "%PSRUN%"
+echo if((led 'WARNING' '12' 'T1550.002' 'NTLMv1/LM permitted') -and $cs2 -like '*,level=0'){ addfix 'Harden NTLM to NTLMv2-only -- can break sign-in to older NAS boxes and printers that only speak NTLMv1, so test first' "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name LmCompatibilityLevel -Value 5 -Type DWord -Force" 'Set-ItemProperty -Path HKLM:\SYSTEM\CurrentControlSet\Control\Lsa -Name LmCompatibilityLevel -Value 0 -Type DWord -Force' } >> "%PSRUN%"
+echo if((led 'WARNING' '12' 'T1550.002' 'NTLMv1/LM permitted') -and $cs2 -like '*,level=1'){ addfix 'Harden NTLM to NTLMv2-only -- can break sign-in to older NAS boxes and printers that only speak NTLMv1, so test first' "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name LmCompatibilityLevel -Value 5 -Type DWord -Force" 'Set-ItemProperty -Path HKLM:\SYSTEM\CurrentControlSet\Control\Lsa -Name LmCompatibilityLevel -Value 1 -Type DWord -Force' } >> "%PSRUN%"
+echo if((led 'WARNING' '12' 'T1550.002' 'NTLMv1/LM permitted') -and $cs2 -like '*,level=2'){ addfix 'Harden NTLM to NTLMv2-only -- can break sign-in to older NAS boxes and printers that only speak NTLMv1, so test first' "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name LmCompatibilityLevel -Value 5 -Type DWord -Force" 'Set-ItemProperty -Path HKLM:\SYSTEM\CurrentControlSet\Control\Lsa -Name LmCompatibilityLevel -Value 2 -Type DWord -Force' } >> "%PSRUN%"
 echo if(led 'CRITICAL' '8' 'T1562.004' 'Windows Firewall disabled'){ addfix 'Enable all Windows Firewall profiles' "Set-NetFirewallProfile -All -Enabled True" '' } >> "%PSRUN%"
 echo if(led 'CRITICAL' '8' 'T1562.004' 'Windows Firewall service mpssvc not running'){ addfix 'Start the Windows Defender Firewall service and set it to start automatically' 'Set-Service -Name mpssvc -StartupType Automatic; Start-Service -Name mpssvc' '' } >> "%PSRUN%"
 echo if((led 'CRITICAL' '10' 'T1210' 'SMBv1 enabled') -or (led 'WARNING' '10' 'T1210' 'SMBv1 server component installed')){ addfix 'Disable SMBv1 (EternalBlue mitigation)' "Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart" '' } >> "%PSRUN%"
