@@ -411,6 +411,15 @@ Found during the v7.1 coverage review; tracked for future work:
   17 RMM running/installed checks (`Get-Process`/Uninstall-key empties
   mean "not present"). Probes elsewhere may still degrade silently, but
   the high-value verdict checks across Sections 4-18 now fail visibly.
+- ~~Section 5 (Winlogon Userinit/Shell, AppInit_DLLs), Section 11 (Script
+  Block Logging) and Section 13 (UAC) read their registry values with
+  `-EA SilentlyContinue`: a failed read printed `[OK]` for AppInit_DLLs and
+  UAC, an unraised `[SKIPPED]` for Winlogon, and an unobserved "NOT enabled"
+  for logging.~~ **Closed:** `tools/reg_policy_check.ps1` grades each from a
+  four-state read, decides per value what an absent value means, and raises
+  an unreadable key as a NOT-performed gap. Residual: a set `AppInit_DLLs` is
+  reported whether or not Windows would load it (`LoadAppInit_DLLs`, Secure
+  Boot); the line says which, and the finding stands either way.
 - ~~The Section 12 WDigest and NTLM-level verdicts read their registry value
   with `-EA SilentlyContinue`, so a read that failed printed the same `[OK]`
   as a value that was absent; the dashboard re-read both and graded the

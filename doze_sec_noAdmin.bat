@@ -209,6 +209,9 @@ set "FW_STATE=ungraded"
 set "SMB1_STATE=ungraded"
 set "WINRM_STATE=ungraded"
 set "CRED_STATE=ungraded"
+set "WINLOGON_STATE=ungraded"
+set "SBL_STATE=ungraded"
+set "UAC_STATE=ungraded"
 set "REBOOT_AGE=unknown"
 set "BITLOCKER_STATE=ungraded"
 set "EXEC_BLOCKED=0"
@@ -2450,13 +2453,17 @@ echo.>> "%REPORT%"
 echo --- Winlogon / AppInit Integrity (evaluated) --->> "%REPORT%"
 del "%TEMP%\dz_winlogon_hit.txt" 2>nul
 del "%TEMP%\dz_appinit_hit.txt" 2>nul
-echo $wl='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' > "%PSRUN%"
-echo $ui=(Get-ItemProperty $wl -Name Userinit -EA SilentlyContinue).Userinit;$sh=(Get-ItemProperty $wl -Name Shell -EA SilentlyContinue).Shell >> "%PSRUN%"
-echo if($ui -and ($ui.Trim().TrimEnd(',') -ine (Join-Path $env:SystemRoot 'system32\userinit.exe'))){'[CRITICAL] Winlogon Userinit MODIFIED (T1547.004): '+$ui;Set-Content -LiteralPath "$env:TEMP\dz_winlogon_hit.txt" -Value hit}elseif($ui){'[OK] Winlogon Userinit is the default userinit.exe.'}else{'[SKIPPED] Winlogon Userinit not readable.'} >> "%PSRUN%"
-echo if($sh -and ($sh.Trim() -ine 'explorer.exe')){'[CRITICAL] Winlogon Shell MODIFIED (T1547.004): '+$sh;Set-Content -LiteralPath "$env:TEMP\dz_winlogon_hit.txt" -Value hit}elseif($sh){'[OK] Winlogon Shell is the default explorer.exe.'}else{'[SKIPPED] Winlogon Shell not readable.'} >> "%PSRUN%"
-echo $ai=@();foreach($k in 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows','HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows NT\CurrentVersion\Windows'){$v=(Get-ItemProperty $k -Name AppInit_DLLs -EA SilentlyContinue).AppInit_DLLs;if($v -and $v.Trim()){$ai+=$v.Trim()}} >> "%PSRUN%"
-echo if($ai.Count -gt 0){'[CRITICAL] AppInit_DLLs is set (T1546.010) -- DLL loaded into every GUI process: '+($ai -join '; ');Set-Content -LiteralPath "$env:TEMP\dz_appinit_hit.txt" -Value hit}else{'[OK] AppInit_DLLs empty.'} >> "%PSRUN%"
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+del "%TEMP%\dz_winlogon_missing.txt" 2>nul
+del "%TEMP%\dz_winlogon_gap.txt" 2>nul
+del "%TEMP%\dz_appinit_gap.txt" 2>nul
+del "%TEMP%\dz_winlogon_state.txt" 2>nul
+echo  Command: powershell -File tools\reg_policy_check.ps1 -Check Winlogon>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\reg_policy_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\reg_policy_check.ps1" -Check Winlogon>> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\reg_policy_check.ps1 not found -- Winlogon and AppInit_DLLs checks NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 5 T1547.004 "Winlogon and AppInit_DLLs checks NOT performed - tool missing"
+)
 if exist "%TEMP%\dz_winlogon_hit.txt" (
     call :dz_finding CRITICAL 5 T1547.004 "Winlogon Userinit or Shell modified"
     del "%TEMP%\dz_winlogon_hit.txt" 2>nul
@@ -2464,6 +2471,27 @@ if exist "%TEMP%\dz_winlogon_hit.txt" (
 if exist "%TEMP%\dz_appinit_hit.txt" (
     call :dz_finding CRITICAL 5 T1546.010 "AppInit_DLLs set - DLL injected into every GUI process"
     del "%TEMP%\dz_appinit_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_winlogon_missing.txt" (
+    call :dz_finding WARNING 5 T1547.004 "Winlogon Userinit or Shell value missing - it exists on every Windows"
+    del "%TEMP%\dz_winlogon_missing.txt" 2>nul
+)
+if exist "%TEMP%\dz_winlogon_gap.txt" (
+    rem A gap is its own row: the key could not be read. An absent value is not a gap.
+    call :dz_finding WARNING 5 T1547.004 "Winlogon Userinit and Shell check NOT performed - the Winlogon key could not be read"
+    del "%TEMP%\dz_winlogon_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_appinit_gap.txt" (
+    call :dz_finding WARNING 5 T1546.010 "AppInit_DLLs check NOT performed - the registry key could not be read"
+    del "%TEMP%\dz_appinit_gap.txt" 2>nul
+)
+set "_WLST="
+if exist "%TEMP%\dz_winlogon_state.txt" set /p _WLST=<"%TEMP%\dz_winlogon_state.txt"
+del "%TEMP%\dz_winlogon_state.txt" 2>nul
+if defined _WLST if "!_WLST:~0,9!"=="userinit=" set "WINLOGON_STATE=!_WLST!"
+if not "!WINLOGON_STATE:~0,9!"=="userinit=" if exist "%SCRIPT_DIR%tools\reg_policy_check.ps1" (
+    echo [WARNING] Winlogon and AppInit_DLLs checks produced no verdict -- NOT performed: tools\reg_policy_check.ps1 ran but wrote no usable verdict.>> "%REPORT%"
+    call :dz_finding WARNING 5 T1547.004 "Winlogon and AppInit_DLLs checks produced no verdict - NOT performed"
 )
 
 echo.>> "%REPORT%"
@@ -3178,17 +3206,37 @@ echo.>> "%REPORT%"
 echo --- Logging Policy --->> "%REPORT%"
 echo  Command: powershell -Command "(Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' -Name EnableScriptBlockLogging).EnableScriptBlockLogging">> "%REPORT%"
 del "%TEMP%\dz_sbl_hit.txt" 2>nul
+del "%TEMP%\dz_sbl_gap.txt" 2>nul
+del "%TEMP%\dz_sbl_state.txt" 2>nul
+echo  Command: powershell -File tools\reg_policy_check.ps1 -Check ScriptBlockLogging>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\reg_policy_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\reg_policy_check.ps1" -Check ScriptBlockLogging>> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\reg_policy_check.ps1 not found -- Script Block Logging check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 11 T1562.002 "Script Block Logging check NOT performed - tool missing"
+)
 echo $base='HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell' > "%PSRUN%"
-echo $sbl=(Get-ItemProperty "$base\ScriptBlockLogging" -Name EnableScriptBlockLogging -EA SilentlyContinue).EnableScriptBlockLogging >> "%PSRUN%"
 echo $ml=(Get-ItemProperty "$base\ModuleLogging" -Name EnableModuleLogging -EA SilentlyContinue).EnableModuleLogging >> "%PSRUN%"
 echo $tr=(Get-ItemProperty "$base\Transcription" -Name EnableTranscripting -EA SilentlyContinue).EnableTranscripting >> "%PSRUN%"
-echo if($sbl -eq 1){'ScriptBlockLogging  : [OK] ENABLED (GPO)'}else{'[WARNING] PS Script Block Logging NOT enabled -- PowerShell commands are not recorded to Event 4104 (T1562.002)';Set-Content -LiteralPath "$env:TEMP\dz_sbl_hit.txt" -Value hit} >> "%PSRUN%"
 echo if($ml  -eq 1){'ModuleLogging       : [OK] ENABLED (GPO)'}else{'ModuleLogging       : [OK] Not configured (optional)'} >> "%PSRUN%"
 echo if($tr  -eq 1){'Transcription       : [OK] ENABLED (GPO)'}else{'Transcription       : [OK] Not configured (optional)'} >> "%PSRUN%"
 "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 if exist "%TEMP%\dz_sbl_hit.txt" (
     call :dz_finding WARNING 11 T1562.002 "PowerShell Script Block Logging not enabled"
     del "%TEMP%\dz_sbl_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_sbl_gap.txt" (
+    rem A gap is its own row: the key could not be read. An absent value is not a gap.
+    call :dz_finding WARNING 11 T1562.002 "Script Block Logging check NOT performed - the policy key could not be read"
+    del "%TEMP%\dz_sbl_gap.txt" 2>nul
+)
+set "_SBST="
+if exist "%TEMP%\dz_sbl_state.txt" set /p _SBST=<"%TEMP%\dz_sbl_state.txt"
+del "%TEMP%\dz_sbl_state.txt" 2>nul
+if defined _SBST if "!_SBST:~0,4!"=="sbl=" set "SBL_STATE=!_SBST!"
+if not "!SBL_STATE:~0,4!"=="sbl=" if exist "%SCRIPT_DIR%tools\reg_policy_check.ps1" (
+    echo [WARNING] Script Block Logging check produced no verdict -- NOT performed: tools\reg_policy_check.ps1 ran but wrote no usable verdict.>> "%REPORT%"
+    call :dz_finding WARNING 11 T1562.002 "Script Block Logging check produced no verdict - NOT performed"
 )
 
 echo.>> "%REPORT%"
@@ -3508,39 +3556,18 @@ echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
 echo --- UAC Config --->> "%REPORT%"
-echo  Command: reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v EnableLUA ^&^& set "_LUA_HIT=1">> "%REPORT%"
-:: Each value gets an individual presence check via the _FLAG pattern
-:: (mirrors the _AR_HIT/_ADFS_HIT/_SSHD_HIT idiom used elsewhere). A
-:: missing EnableLUA or ConsentPromptBehaviorAdmin is unusual on Win10/11
-:: defaults; surfacing absence as [WARNING] catches a plausible (if rare)
-:: tampering path. LocalAccountTokenFilterPolicy is normally absent --
-:: report that as [OK].
-set "_LUA_HIT="
-reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v EnableLUA >nul 2>nul && set "_LUA_HIT=1"
-if defined _LUA_HIT (
-    reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v EnableLUA>> "%REPORT%" 2>nul
-) else (
-    echo [WARNING] EnableLUA registry value MISSING -- unusual on Win10/11; investigate for tampering.>> "%REPORT%"
-    set "_LUA_MISSING=1"
-)
-rem The absence itself is the finding, so it has to reach the ledger -- a
-rem [WARNING] that only lands in the report leaves the section verdict CLEAN.
-if defined _LUA_MISSING call :dz_finding WARNING 13 T1548.002 "EnableLUA value missing - UAC policy may have been tampered with"
-set "_LUA_MISSING="
-set "_LUA_HIT="
-set "_CPBA_HIT="
-reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v ConsentPromptBehaviorAdmin >nul 2>nul && set "_CPBA_HIT=1"
-if defined _CPBA_HIT (
-    reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v ConsentPromptBehaviorAdmin>> "%REPORT%" 2>nul
-) else (
-    echo [WARNING] ConsentPromptBehaviorAdmin registry value MISSING -- unusual on Win10/11; investigate for tampering.>> "%REPORT%"
-    set "_CPBA_MISSING=1"
-)
-if defined _CPBA_MISSING call :dz_finding WARNING 13 T1548.002 "ConsentPromptBehaviorAdmin value missing - UAC policy may have been tampered with"
-set "_CPBA_MISSING="
-set "_CPBA_HIT="
+echo  Command: reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v EnableLUA   [also /v ConsentPromptBehaviorAdmin and /v LocalAccountTokenFilterPolicy]>> "%REPORT%"
+:: The raw values, for the reader. The verdict -- including a value that is
+:: missing, and a key that could not be read -- comes from the evaluated
+:: block below. This dump used to raise "value MISSING" whenever reg.exe
+:: failed for any reason, and print [OK] for LocalAccountTokenFilterPolicy
+:: the same way.
+reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v EnableLUA>> "%REPORT%" 2>nul
+if errorlevel 1 echo  EnableLUA: no value returned by reg query. It is graded below, under UAC and Disk Encryption State.>> "%REPORT%"
+reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v ConsentPromptBehaviorAdmin>> "%REPORT%" 2>nul
+if errorlevel 1 echo  ConsentPromptBehaviorAdmin: no value returned by reg query. It is graded below, under UAC and Disk Encryption State.>> "%REPORT%"
 reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v LocalAccountTokenFilterPolicy>> "%REPORT%" 2>nul
-if errorlevel 1 (echo [OK] LocalAccountTokenFilterPolicy not set -- default remote-admin token filtering applies.)>> "%REPORT%"
+if errorlevel 1 echo  LocalAccountTokenFilterPolicy: no value returned by reg query. It is graded below, under UAC and Disk Encryption State.>> "%REPORT%"
 
 echo.>> "%REPORT%"
 echo --- Secure Boot --->> "%REPORT%"
@@ -3574,17 +3601,25 @@ del "%TEMP%\dz_uacprompt_hit.txt" 2>nul
 del "%TEMP%\dz_bitlocker_hit.txt" 2>nul
 del "%TEMP%\dz_bitlocker_state.txt" 2>nul
 if "%IS_ADMIN%"=="0" set "BITLOCKER_STATE=deferred"
-echo $pol='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' > "%PSRUN%"
-echo $lua=(Get-ItemProperty $pol -Name EnableLUA -EA SilentlyContinue).EnableLUA;$cpb=(Get-ItemProperty $pol -Name ConsentPromptBehaviorAdmin -EA SilentlyContinue).ConsentPromptBehaviorAdmin >> "%PSRUN%"
-echo if($lua -eq 0){'[CRITICAL] UAC DISABLED (EnableLUA=0) -- all processes auto-elevate silently (T1548.002)';Set-Content -LiteralPath "$env:TEMP\dz_uac_hit.txt" -Value hit}elseif($cpb -eq 0){'[WARNING] UAC auto-elevates without prompting (ConsentPromptBehaviorAdmin=0)';Set-Content -LiteralPath "$env:TEMP\dz_uacprompt_hit.txt" -Value hit}else{'[OK] UAC enabled with elevation prompt.'} >> "%PSRUN%"
+del "%TEMP%\dz_uac_luamissing.txt" 2>nul
+del "%TEMP%\dz_uac_cpbmissing.txt" 2>nul
+del "%TEMP%\dz_uac_gap.txt" 2>nul
+del "%TEMP%\dz_uac_state.txt" 2>nul
+echo  Command: powershell -File tools\reg_policy_check.ps1 -Check Uac>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\reg_policy_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\reg_policy_check.ps1" -Check Uac>> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\reg_policy_check.ps1 not found -- UAC check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 13 T1548.002 "UAC check NOT performed - tool missing"
+)
 rem A standard-user token cannot query BitLocker. The BitLocker block above
 rem already printed and counted that deferral; running the cmdlet again here
 rem printed a second, [SKIPPED] declaration of the same gap and inflated
 rem Checks SKIPPED in the coverage block.
 if "%IS_ADMIN%"=="0" goto :sec13_bl_eval_done
-echo try{$bl=Get-BitLockerVolume -MountPoint $env:SystemDrive -EA Stop;if($bl.ProtectionStatus -eq 'On'){'[OK] BitLocker ON for '+$env:SystemDrive+' ('+$bl.EncryptionMethod+').';Set-Content -LiteralPath "$env:TEMP\dz_bitlocker_state.txt" -Value on}else{'[WARNING] BitLocker OFF for '+$env:SystemDrive+' -- data readable if the drive is removed';Set-Content -LiteralPath "$env:TEMP\dz_bitlocker_hit.txt" -Value hit;Set-Content -LiteralPath "$env:TEMP\dz_bitlocker_state.txt" -Value off}}catch{'[SKIPPED] BitLocker status unavailable (edition or cmdlet missing).';Set-Content -LiteralPath "$env:TEMP\dz_bitlocker_state.txt" -Value unavailable} >> "%PSRUN%"
-:sec13_bl_eval_done
+echo try{$bl=Get-BitLockerVolume -MountPoint $env:SystemDrive -EA Stop;if($bl.ProtectionStatus -eq 'On'){'[OK] BitLocker ON for '+$env:SystemDrive+' ('+$bl.EncryptionMethod+').';Set-Content -LiteralPath "$env:TEMP\dz_bitlocker_state.txt" -Value on}else{'[WARNING] BitLocker OFF for '+$env:SystemDrive+' -- data readable if the drive is removed';Set-Content -LiteralPath "$env:TEMP\dz_bitlocker_hit.txt" -Value hit;Set-Content -LiteralPath "$env:TEMP\dz_bitlocker_state.txt" -Value off}}catch{'[SKIPPED] BitLocker status unavailable (edition or cmdlet missing).';Set-Content -LiteralPath "$env:TEMP\dz_bitlocker_state.txt" -Value unavailable} > "%PSRUN%"
 "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+:sec13_bl_eval_done
 if exist "%TEMP%\dz_uac_hit.txt" (
     call :dz_finding CRITICAL 13 T1548.002 "UAC disabled - processes auto-elevate silently"
     del "%TEMP%\dz_uac_hit.txt" 2>nul
@@ -3592,6 +3627,27 @@ if exist "%TEMP%\dz_uac_hit.txt" (
 if exist "%TEMP%\dz_uacprompt_hit.txt" (
     call :dz_finding WARNING 13 T1548.002 "UAC elevates without prompting"
     del "%TEMP%\dz_uacprompt_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_uac_luamissing.txt" (
+    call :dz_finding WARNING 13 T1548.002 "EnableLUA value missing - UAC policy may have been tampered with"
+    del "%TEMP%\dz_uac_luamissing.txt" 2>nul
+)
+if exist "%TEMP%\dz_uac_cpbmissing.txt" (
+    call :dz_finding WARNING 13 T1548.002 "ConsentPromptBehaviorAdmin value missing - UAC policy may have been tampered with"
+    del "%TEMP%\dz_uac_cpbmissing.txt" 2>nul
+)
+if exist "%TEMP%\dz_uac_gap.txt" (
+    rem A gap is its own row: the key could not be read. An absent value is not a gap.
+    call :dz_finding WARNING 13 T1548.002 "UAC check NOT performed - the Policies\System key could not be read or holds an undefined value"
+    del "%TEMP%\dz_uac_gap.txt" 2>nul
+)
+set "_UAST="
+if exist "%TEMP%\dz_uac_state.txt" set /p _UAST=<"%TEMP%\dz_uac_state.txt"
+del "%TEMP%\dz_uac_state.txt" 2>nul
+if defined _UAST if "!_UAST:~0,4!"=="uac=" set "UAC_STATE=!_UAST!"
+if not "!UAC_STATE:~0,4!"=="uac=" if exist "%SCRIPT_DIR%tools\reg_policy_check.ps1" (
+    echo [WARNING] UAC check produced no verdict -- NOT performed: tools\reg_policy_check.ps1 ran but wrote no usable verdict.>> "%REPORT%"
+    call :dz_finding WARNING 13 T1548.002 "UAC check produced no verdict - NOT performed"
 )
 if exist "%TEMP%\dz_bitlocker_hit.txt" (
     call :dz_finding WARNING 13 T1486 "System drive not encrypted with BitLocker"
@@ -5691,7 +5747,7 @@ echo. >> "%PSRUN%"
 
 :: ===== SYSTEM HARDENING ==============================================
 echo sec 'SYSTEM HARDENING  (Sections 11, 13)' >> "%PSRUN%"
-echo $lua=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name EnableLUA -EA SilentlyContinue).EnableLUA;$cpb=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name ConsentPromptBehaviorAdmin -EA SilentlyContinue).ConsentPromptBehaviorAdmin;if($lua -eq 1 -and ($cpb -eq 2 -or $cpb -eq 5)){ck 'PASS' ('UAC on with prompt (EnableLUA=1, ConsentPrompt='+$cpb+')')}elseif($lua -eq 0){ck 'CRIT' 'UAC DISABLED -- all processes auto-elevate silently' 'Set EnableLUA=1 in HKLM\...\Policies\System and reboot'}elseif($cpb -eq 0){ck 'WARN' 'UAC auto-elevates without prompting (ConsentPromptBehaviorAdmin=0)' 'Set ConsentPromptBehaviorAdmin=2 for secure desktop confirmation'}else{ck 'WARN' ('UAC not fully hardened (EnableLUA='+$lua+', ConsentPrompt='+$cpb+')') 'Recommend: EnableLUA=1, ConsentPromptBehaviorAdmin=2'} >> "%PSRUN%"
+echo $us='%UAC_STATE%';$uc='';if($us -match 'cpb=([0-5])'){$uc=$matches[1]};if($us -like 'uac=on,*'){ck 'PASS' ('UAC on with prompt (EnableLUA=1, ConsentPrompt='+$uc+')')}elseif($us -like 'uac=off,*'){ck 'CRIT' 'UAC DISABLED -- all processes auto-elevate silently' 'Set EnableLUA=1 in HKLM\...\Policies\System and reboot'}elseif($us -like 'uac=noprompt,*'){ck 'WARN' 'UAC auto-elevates without prompting (ConsentPromptBehaviorAdmin=0)' 'Set ConsentPromptBehaviorAdmin=2 for secure desktop confirmation'}elseif($us -like 'uac=missing,*'){ck 'WARN' 'A UAC policy value is MISSING (Section 13)' 'EnableLUA and ConsentPromptBehaviorAdmin exist on every Windows. See Section 13.'}else{ck 'INFO' 'UAC: NOT graded -- Section 13 could not read it'} >> "%PSRUN%"
 echo if($isAdmin -eq '1'){ >> "%PSRUN%"
 echo $ts=bcdedit /enum 2^>$null^|Select-String 'testsigning\s+yes';if($ts){ck 'WARN' 'Driver signature enforcement DISABLED (testsigning=Yes)' 'Unsigned kernel drivers can load. Fix: bcdedit /set testsigning off'}else{ck 'PASS' 'Driver signature enforcement active'} >> "%PSRUN%"
 echo $blst='%BITLOCKER_STATE%';if($blst -eq 'on'){ck 'PASS' ('BitLocker ON for '+$env:SystemDrive+' (Section 13)')}elseif($blst -eq 'off'){ck 'WARN' ('BitLocker OFF for '+$env:SystemDrive+' (Section 13)') 'Drive unencrypted -- data readable if the drive is removed. BEFORE enabling: save the recovery key OFF this machine (manage-bde -protectors -get C:) or back it up to your Microsoft account. Without it, a later firmware, TPM or boot-config change makes every file on C: permanently unrecoverable. Then: manage-bde -on C:'}elseif($blst -eq 'unavailable'){ck 'INFO' 'BitLocker status unavailable -- see Section 13'}elseif($blst -eq 'deferred'){ck 'INFO' 'BitLocker status check deferred (requires admin)'}else{ck 'INFO' 'BitLocker: NOT graded -- Section 13 recorded no BitLocker state'} >> "%PSRUN%"
@@ -5699,14 +5755,14 @@ echo }else{ >> "%PSRUN%"
 echo ck 'INFO' 'Driver signature check deferred (requires admin)' >> "%PSRUN%"
 echo ck 'INFO' 'BitLocker status check deferred (requires admin)' >> "%PSRUN%"
 echo } >> "%PSRUN%"
-echo $sbl=(Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' -Name EnableScriptBlockLogging -EA SilentlyContinue).EnableScriptBlockLogging;if($sbl -eq 1){ck 'PASS' 'PS Script Block Logging enabled (Event 4104 active)'}else{ck 'WARN' 'PS Script Block Logging NOT enabled' 'Set EnableScriptBlockLogging=1 in HKLM\...\ScriptBlockLogging via GPO'} >> "%PSRUN%"
+echo $ss2='%SBL_STATE%';if($ss2 -eq 'sbl=on'){ck 'PASS' 'PS Script Block Logging enabled (Event 4104 active)'}elseif($ss2 -eq 'sbl=off'){ck 'WARN' 'PS Script Block Logging NOT enabled' 'Set EnableScriptBlockLogging=1 in HKLM\...\ScriptBlockLogging via GPO'}else{ck 'INFO' 'PS Script Block Logging: NOT graded -- Section 11 could not read it'} >> "%PSRUN%"
 echo. >> "%PSRUN%"
 
 :: ===== PERSISTENCE INTEGRITY =========================================
 echo sec 'PERSISTENCE INTEGRITY  (Sections 5, 6, 7)' >> "%PSRUN%"
-echo $ui=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name Userinit -EA SilentlyContinue).Userinit;if($ui -match '^C:\\Windows\\[Ss]ystem32\\userinit\.exe,?\s*$'){ck 'PASS' ('Winlogon Userinit clean: '+$ui.Trim())}else{ck 'CRIT' ('Winlogon Userinit MODIFIED: '+$ui) 'Expected: C:\Windows\system32\userinit.exe, -- malware hijacks this at every login'} >> "%PSRUN%"
-echo $sh=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name Shell -EA SilentlyContinue).Shell;if($sh -match '^explorer\.exe$'){ck 'PASS' 'Winlogon Shell clean (explorer.exe)'}else{ck 'CRIT' ('Winlogon Shell MODIFIED: '+$sh) 'Expected: explorer.exe only. Fix via regedit: HKLM\...\Winlogon\Shell'} >> "%PSRUN%"
-echo $ai=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows' -Name AppInit_DLLs -EA SilentlyContinue).AppInit_DLLs;if([string]::IsNullOrWhiteSpace($ai)){ck 'PASS' 'AppInit_DLLs empty (no injected DLL)'}else{ck 'CRIT' ('AppInit_DLLs set: '+$ai) 'DLL loads into every GUI process. Clear AppInit_DLLs in HKLM\...\Windows immediately.'} >> "%PSRUN%"
+echo $ws2='%WINLOGON_STATE%';if($ws2 -like 'userinit=ok,*'){ck 'PASS' 'Winlogon Userinit clean (Section 5)'}elseif($ws2 -like 'userinit=modified,*'){ck 'CRIT' 'Winlogon Userinit MODIFIED (see Section 5 for the value)' 'Expected: <Windows>\system32\userinit.exe, -- malware hijacks this at every login'}elseif($ws2 -like 'userinit=missing,*'){ck 'WARN' 'Winlogon Userinit value MISSING (Section 5)' 'It exists on every Windows. See Section 5.'}else{ck 'INFO' 'Winlogon Userinit: NOT graded -- Section 5 could not read it'} >> "%PSRUN%"
+echo if($ws2 -like '*,shell=ok,*'){ck 'PASS' 'Winlogon Shell clean (explorer.exe)'}elseif($ws2 -like '*,shell=modified,*'){ck 'CRIT' 'Winlogon Shell MODIFIED (see Section 5 for the value)' 'Expected: explorer.exe only. Fix via regedit: HKLM\...\Winlogon\Shell'}elseif($ws2 -like '*,shell=missing,*'){ck 'WARN' 'Winlogon Shell value MISSING (Section 5)' 'It exists on every Windows. See Section 5.'}else{ck 'INFO' 'Winlogon Shell: NOT graded -- Section 5 could not read it'} >> "%PSRUN%"
+echo if($ws2 -like '*,appinit=empty'){ck 'PASS' 'AppInit_DLLs empty (no injected DLL)'}elseif($ws2 -like '*,appinit=set'){ck 'CRIT' 'AppInit_DLLs set (see Section 5 for the DLL)' 'DLL loads into every GUI process. Clear AppInit_DLLs in HKLM\...\Windows immediately.'}else{ck 'INFO' 'AppInit_DLLs: NOT graded -- Section 5 could not read it'} >> "%PSRUN%"
 echo $m=Join-Path $env:TEMP 'dz_susptask_crit.txt';if(Test-Path $m){$n=(Get-Content $m -EA SilentlyContinue^|Select-Object -First 1);ck 'CRIT' ("Scheduled task(s) in suspicious locations, unsigned or hard-path: $n") 'See Section 6 for the task list and signer status.'}else{ck 'PASS' 'No unsigned scheduled tasks in suspicious locations'} >> "%PSRUN%"
 echo. >> "%PSRUN%"
 
@@ -5840,11 +5896,11 @@ echo if((led 'CRITICAL' '10' 'T1210' 'SMBv1 enabled') -or (led 'WARNING' '10' 'T
 echo if($joined -match 'PowerShell v2 ENABLED'){ addfix 'Disable PowerShell v2 (AMSI downgrade mitigation)' "Disable-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2Root -NoRestart" '' } >> "%PSRUN%"
 echo if($joined -match 'RDP enabled WITHOUT NLA'){ addfix 'Require Network Level Authentication for RDP' "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -Value 1 -Type DWord -Force" '' } >> "%PSRUN%"
 echo if(led 'WARNING' '10' 'T1021.006' 'WinRM running'){ addfix 'Stop and disable WinRM' "Stop-Service WinRM -Force; Set-Service WinRM -StartupType Disabled" 'Set-Service WinRM -StartupType Automatic; Start-Service WinRM' } >> "%PSRUN%"
-echo if($joined -match 'UAC DISABLED'){ addfix 'Re-enable UAC (reboot required)' "Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name EnableLUA -Value 1 -Type DWord -Force" '' } >> "%PSRUN%"
-echo if($joined -match 'UAC auto-elevates'){ addfix 'Restore UAC prompt on secure desktop' "Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name ConsentPromptBehaviorAdmin -Value 2 -Type DWord -Force" '' } >> "%PSRUN%"
+echo if(led 'CRITICAL' '13' 'T1548.002' 'UAC disabled'){ addfix 'Re-enable UAC (reboot required)' "Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name EnableLUA -Value 1 -Type DWord -Force" '' } >> "%PSRUN%"
+echo if(led 'WARNING' '13' 'T1548.002' 'UAC elevates without prompting'){ addfix 'Restore UAC prompt on secure desktop' "Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name ConsentPromptBehaviorAdmin -Value 2 -Type DWord -Force" '' } >> "%PSRUN%"
 echo if($joined -match 'testsigning=Yes^|testsigning\s*=\s*Yes'){ addfix 'Disable test-signing (re-enforce driver signatures)' "bcdedit /set testsigning off" 'bcdedit /set testsigning on' } >> "%PSRUN%"
-echo if($joined -match 'PS Script Block Logging NOT'){ addfix 'Enable PowerShell Script Block Logging' "New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' -Force | Out-Null; Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' -Name EnableScriptBlockLogging -Value 1 -Type DWord -Force" 'Remove-ItemProperty -Path ''HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging'' -Name EnableScriptBlockLogging -EA SilentlyContinue' } >> "%PSRUN%"
-echo if($joined -match 'AppInit_DLLs set'){ addfix 'Clear AppInit_DLLs (remove DLL injection vector)' "Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows' -Name AppInit_DLLs -Value '' -Force; Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows' -Name LoadAppInit_DLLs -Value 0 -Type DWord -Force" '' } >> "%PSRUN%"
+echo if(led 'WARNING' '11' 'T1562.002' 'Script Block Logging not enabled'){ addfix 'Enable PowerShell Script Block Logging' "New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' -Force | Out-Null; Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' -Name EnableScriptBlockLogging -Value 1 -Type DWord -Force" 'Remove-ItemProperty -Path ''HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging'' -Name EnableScriptBlockLogging -EA SilentlyContinue' } >> "%PSRUN%"
+echo if(led 'CRITICAL' '5' 'T1546.010' 'AppInit_DLLs set'){ addfix 'Clear AppInit_DLLs (remove DLL injection vector)' "Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows' -Name AppInit_DLLs -Value '' -Force; Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows' -Name LoadAppInit_DLLs -Value 0 -Type DWord -Force" '' } >> "%PSRUN%"
 rem TEMPORARY WIDENING, and it must come out. CLAUDE.md says a fix triggers
 rem off the LEDGER, and prose matching is the weaker pattern that rule exists
 rem to retire. But the ledger row is currently NOT being written: the owner's

@@ -457,6 +457,24 @@ try {
             Assert ($text1 -notmatch $c.Pass) ('no PASS tile for a {0} state this token could not read' -f $c.Name) ('the dashboard printed a {0} PASS this token could not read' -f $c.Name)
         }
     }
+    # Winlogon/AppInit (Section 5), Script Block Logging (11) and UAC (13):
+    # HKLM is readable from this token, so each must be GRADED -- no gap row,
+    # no unraised [SKIPPED], and no "NOT graded" tile.
+    Assert ($text1 -match '(?m)^\[OK\] Winlogon Userinit is the default userinit\.exe\.' -and $text1 -match '(?m)^\[OK\] Winlogon Shell is the default explorer\.exe\.' -and $text1 -match '(?m)^\[OK\] AppInit_DLLs empty\.') `
+        'Section 5 graded Winlogon Userinit, Shell and AppInit_DLLs on a standard-user token (clean runner: all OK)' `
+        'Section 5 did not grade Winlogon and AppInit_DLLs as OK on a clean runner, standard-user token'
+    Assert ($text1 -match '(?m)^(\[OK\] UAC enabled with elevation prompt\.|\[WARNING\] UAC auto-elevates without prompting|\[CRITICAL\] UAC DISABLED)') `
+        'Section 13 graded UAC on a standard-user token' `
+        'Section 13 printed no UAC verdict on a standard-user token'
+    Assert ($text1 -notmatch '\[SKIPPED\] Winlogon (Userinit|Shell) not readable') `
+        'no unraised [SKIPPED] for Winlogon Userinit or Shell' `
+        'the old unraised Winlogon [SKIPPED] line is back'
+    Assert (-not @($ledger1 | Where-Object { $_ -match '\|(5\|T1547\.004|5\|T1546\.010|11\|T1562\.002|13\|T1548\.002)\|.*(NOT performed|value missing)' }).Count) `
+        'no Winlogon/AppInit/logging/UAC gap or missing-value row on a clean standard-user run' `
+        ("a gap or missing-value row on a clean runner: {0}" -f (($ledger1 | Where-Object { $_ -match '\|(5\|T1547\.004|5\|T1546\.010|11\|T1562\.002|13\|T1548\.002)\|.*(NOT performed|value missing)' }) -join ' ; '))
+    Assert ($text1 -notmatch '(Winlogon Userinit|Winlogon Shell|AppInit_DLLs|UAC|PS Script Block Logging): NOT graded') `
+        'no NOT-graded tile for Winlogon, AppInit_DLLs, UAC or Script Block Logging on a standard-user run' `
+        'a tile read NOT graded for a value a standard user can read'
     # WDigest and the NTLM level (Section 12): HKLM is readable from this
     # token, so the check must have GRADED both -- a gap row here would mean
     # the tool cannot read what a standard user can.

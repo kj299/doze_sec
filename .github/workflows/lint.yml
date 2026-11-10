@@ -636,6 +636,44 @@ jobs:
             grep -qF 'NTLM partially hardened' "$b" && { echo "$b: level 3-4 is graded WARN or queues a fix again, against Section 12"; exit 1; }
           done
           echo 'WDigest and NTLM: absent is the default, unreadable is a gap; the tiles and fixes read the section and the ledger'
+      - name: reg_policy_check -- Winlogon/AppInit, Script Block Logging and UAC; a key that could not be read is a raised gap, never an all-clear
+        run: |
+          out=$(pwsh -NoProfile -File tools/reg_policy_check.ps1 -SelfTest); echo "$out"
+          for n in 'a second program appended to Userinit: the CRITICAL wording the bats always printed, with the value' \
+                   'the default is judged against THIS Windows directory, not a hardcoded C:\Windows' \
+                   'the Winlogon key could not be read: two raised gaps, never [SKIPPED] and never "is the default"' \
+                   'a line break inside a Userinit value cannot forge an [OK] line' \
+                   'AppInit_DLLs set only under Wow6432Node, with loading switched off: still CRITICAL -- context never downgrades' \
+                   'the native AppInit key could not be read: a raised gap, never "[OK] AppInit_DLLs empty."' \
+                   'the Script Block Logging key could not be read: a raised gap, not "NOT enabled" (the tool did not observe that)' \
+                   'UAC on with the Windows default prompt (5): [OK], nothing raised' \
+                   'EnableLUA 0: the CRITICAL wording the bats always printed, and one finding, not two' \
+                   'Policies\System could not be read: a raised gap, never "[OK] UAC enabled" and never "value MISSING"'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 37 ] || { echo "only $n case(s)"; exit 1; }
+          for b in doze_sec.bat doze_sec_noAdmin.bat; do
+            for v in Userinit Shell AppInit_DLLs EnableLUA EnableScriptBlockLogging; do
+              # A fix's own command may read the old value for its undo; that is not a check.
+              grep -vF 'addfix ' "$b" | grep -qE -- "-Name $v -EA SilentlyContinue" && { echo "$b: a silenced read of $v is back (in a section or a re-measuring tile)"; exit 1; }
+            done
+            grep -qF 'if errorlevel 1 (echo [OK] LocalAccountTokenFilterPolicy' "$b" && { echo "$b: the raw reg query prints [OK] on any failure again"; exit 1; }
+            grep -qF '_LUA_MISSING' "$b" && { echo "$b: a failed reg.exe is raised as a MISSING value again"; exit 1; }
+            for w in 'Winlogon and AppInit_DLLs checks produced no verdict' 'Script Block Logging check produced no verdict' 'UAC check produced no verdict'; do
+              grep -qF "$w" "$b" || { echo "$b: lost its no-verdict backstop: $w"; exit 1; }
+            done
+            for t in "echo \$us='%UAC_STATE%'" "echo \$ss2='%SBL_STATE%'" "echo \$ws2='%WINLOGON_STATE%'"; do
+              grep -qF "$t" "$b" || { echo "$b: a tile no longer reads its section's verdict: $t"; exit 1; }
+            done
+            for f in "led 'CRITICAL' '13' 'T1548.002' 'UAC disabled'" "led 'WARNING' '13' 'T1548.002' 'UAC elevates without prompting'" "led 'WARNING' '11' 'T1562.002' 'Script Block Logging not enabled'" "led 'CRITICAL' '5' 'T1546.010' 'AppInit_DLLs set'"; do
+              grep -qF "$f" "$b" || { echo "$b: a fix no longer triggers off the ledger: $f"; exit 1; }
+            done
+            grep -qF 'UAC not fully hardened' "$b" && { echo "$b: a prompting UAC setting is graded WARN again, against Section 13"; exit 1; }
+          done
+          # A standard user skips the BitLocker PSRUN: the run line must sit
+          # inside the skipped stretch, or a stale script would be executed.
+          awk '/^if "%IS_ADMIN%"=="0" goto :sec13_bl_eval_done/{f=1} /^:sec13_bl_eval_done/{f=0} f' doze_sec_noAdmin.bat | grep -qF -- '-File "%PSRUN%"' || { echo 'doze_sec_noAdmin.bat: the Section 13 PSRUN run is outside the standard-user skip -- it would run a stale script'; exit 1; }
+          echo 'Winlogon/AppInit, Script Block Logging and UAC: unreadable is a gap; the tiles and fixes read the sections and the ledger'
       - name: named_pipe_check -- a C2 pipe is WARNING, a pipe list that could not be read is a raised gap, never an all-clear
         run: |
           out=$(pwsh -NoProfile -File tools/named_pipe_check.ps1 -SelfTest); echo "$out"
