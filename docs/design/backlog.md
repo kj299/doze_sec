@@ -796,15 +796,15 @@ Section lines (`doze_sec.bat` / `doze_sec_noAdmin.bat`):
 | Check | Lines | What a failed read prints today |
 |---|---|---|
 | RDP enabled / NLA (T1021.001) | 3346 / 3033 | a failed read of `fDenyTSConnections` falls to the NLA read; both failing prints the WARNING, so this one fails loud, but it cannot tell "unreadable" from "RDP on without NLA" |
-| WDigest (T1003.001) | 3585 / 3284 | `[OK]` |
-| NTLM `LmCompatibilityLevel` | 3586 / 3285 | `[OK] LmCompatibilityLevel not set` |
+| ~~WDigest (T1003.001)~~ | DONE 2026-11-10 | `tools/cred_settings_check.ps1` |
+| ~~NTLM `LmCompatibilityLevel`~~ | DONE 2026-11-10 | `tools/cred_settings_check.ps1`; the raw `reg query ... if errorlevel 1 echo [OK]` above it had the same hole and went with it |
 | Alternate data streams in TEMP (T1564.004) | 4155 / 3906 | `[OK]` when the walk is denied part-way |
 | Large HTML/HTA in TEMP (HTML smuggling) | 4546 / 4402 | `[OK]` |
 | Outlook `.msg`/`.oft` | 4552 / 4408 | `[OK]` |
 
 Dashboard tiles that re-measure instead of reading their section's verdict
 (the "a tile that re-measures is a second opinion" class), `doze_sec.bat`
-5729-5764 / `doze_sec_noAdmin.bat` 5626-5674: WDigest, NTLM, RDP, UAC
+5729-5764 / `doze_sec_noAdmin.bat` 5626-5674: ~~WDigest, NTLM~~ (DONE 2026-11-10: they read `CRED_STATE`), RDP, UAC
 (`EnableLUA`), Script Block Logging, Winlogon `Userinit`, Winlogon `Shell`,
 `AppInit_DLLs`.
 

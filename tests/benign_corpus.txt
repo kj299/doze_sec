@@ -361,6 +361,13 @@ proof     = ci:com_clsid_check.ps1 -SelfTest
 signature = point at a file that is not present -- they cannot load as-is
 note      = Brave's updater (Omaha, as used by Chrome and Edge) registers HKCU CLSIDs pointing into a versioned directory and leaves the registration behind when it rolls to a new version. Field false positive 2026-09-06: three CLSIDs -> ...\BraveSoftware\Update\1.3.361.151\psuser_64.dll raised '[WARNING] Suspicious COM CLSID overrides (3)' on a clean machine. The check already had a vendor tier, but it keys on the Authenticode SIGNER and a missing file has none. A registration whose file is absent cannot load anything; it stays a WARNING only when the path is a staging directory. Verify: Get-ItemProperty 'HKCU:\Software\Classes\CLSID\<guid>\InprocServer32' and Test-Path the value.
 
+[ntlm-level-default-or-unset]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:cred_settings_check.ps1 -SelfTest
+signature = NTLM level [34] \(NTLMv2\)|LmCompatibilityLevel not set \(the Windows default applies
+note      = LmCompatibilityLevel 3 ("Send NTLMv2 response only") is the Windows default since Vista, and most PCs carry no value at all, which means the same thing (Microsoft, "Network security: LAN Manager authentication level"). The dashboard used to grade an explicit 3 or 4 as "NTLM partially hardened" (WARN) and queue a change to level 5 -- which makes the PC refuse NTLMv1 from others and can break sign-in from an old NAS or printer -- while Section 12 called the same value OK. Only 0-2, where this PC itself may send LM or NTLMv1, is the finding. CI plants level 3 beside level 1 through the real registry reader: the first raises nothing, the second raises.
+
 [hosts-docker-desktop]
 class     = QUIET
 maxsev    = INFO

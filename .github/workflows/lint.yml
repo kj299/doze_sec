@@ -610,6 +610,31 @@ jobs:
             grep -qF "if(led 'WARNING' '10' 'T1021.006' 'WinRM running')" "$b" || { echo "$b: the WinRM fix no longer triggers off the ledger"; exit 1; }
           done
           echo 'WinRM: a failed query is a gap; the tile and the fix read the section and the ledger'
+      - name: cred_settings_check -- WDigest and NTLM; an absent value is the default, a key that could not be read is a raised gap
+        run: |
+          out=$(pwsh -NoProfile -File tools/cred_settings_check.ps1 -SelfTest); echo "$out"
+          for n in 'WDigest 1: the CRITICAL wording the bats always printed, and a hit' \
+                   'both values absent (a clean Windows 11): two [OK] lines that say "not set", nothing raised' \
+                   'the WDigest key could not be read: a raised gap, never "[OK] not caching"' \
+                   'WDigest stored as the string "1": still ENABLED -- another type must not dodge the finding' \
+                   'NTLM level 2: the WARNING wording the bats always printed, and a hit' \
+                   'NTLM level 3 (3 is the Windows default): [OK] plus an INFO on level 5, never a WARNING' \
+                   'the Lsa key could not be read: a raised gap, never "[OK] not set"' \
+                   'both keys missing: WDigest is [OK] (the key is optional), the Lsa key is a gap (it always exists)'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 20 ] || { echo "only $n case(s)"; exit 1; }
+          for b in doze_sec.bat doze_sec_noAdmin.bat; do
+            grep -qF "Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' -Name UseLogonCredential -EA SilentlyContinue" "$b" && { echo "$b: a silenced WDigest read is back (in the section or a re-measuring tile)"; exit 1; }
+            grep -qF 'Name LmCompatibilityLevel -EA SilentlyContinue' "$b" && { echo "$b: a silenced NTLM-level read is back (in the section or a re-measuring tile)"; exit 1; }
+            grep -qF 'if errorlevel 1 (echo [OK] WDigest' "$b" && { echo "$b: the raw reg query prints [OK] on any failure again"; exit 1; }
+            grep -qF 'WDigest and NTLM level checks produced no verdict' "$b" || { echo "$b: the check lost its no-verdict backstop"; exit 1; }
+            grep -qF "echo \$cs='%CRED_STATE%'" "$b" || { echo "$b: the WDigest/NTLM tiles no longer read Section 12's verdict"; exit 1; }
+            grep -qF "if(led 'CRITICAL' '12' 'T1003.001' 'WDigest enabled')" "$b" || { echo "$b: the WDigest fix no longer triggers off the ledger"; exit 1; }
+            [ "$(grep -cF "(led 'WARNING' '12' 'T1550.002' 'NTLMv1/LM permitted') -and \$cs2 -like '*,level=" "$b")" -eq 3 ] || { echo "$b: the NTLM fix is not one ledger-triggered line per level with its own undo"; exit 1; }
+            grep -qF 'NTLM partially hardened' "$b" && { echo "$b: level 3-4 is graded WARN or queues a fix again, against Section 12"; exit 1; }
+          done
+          echo 'WDigest and NTLM: absent is the default, unreadable is a gap; the tiles and fixes read the section and the ledger'
       - name: named_pipe_check -- a C2 pipe is WARNING, a pipe list that could not be read is a raised gap, never an all-clear
         run: |
           out=$(pwsh -NoProfile -File tools/named_pipe_check.ps1 -SelfTest); echo "$out"

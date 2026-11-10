@@ -237,8 +237,8 @@ if ($SelfTest) {
            Find = '-DisableRealtimeMonitoring `\$false'; Repl = '-DisableRealtimeMonitoring \$false'
            Expect = 'PowerShell escapes with a backtick' },
         @{ Name = 'a $ variable inside a double-quoted command (the WMI bug)'
-           Find = [regex]::Escape("addfix 'Harden NTLM to NTLMv2-only' `"Set-ItemProperty")
-           Repl = "addfix 'Harden NTLM to NTLMv2-only' `"`$ms=@('a'); Set-ItemProperty"
+           Find = [regex]::Escape("addfix 'Disable WDigest plaintext credential cache (reboot required)' `"Set-ItemProperty")
+           Repl = "addfix 'Disable WDigest plaintext credential cache (reboot required)' `"`$ms=@('a'); Set-ItemProperty"
            Expect = 'expansion' },
         @{ Name = 'a bare pipe in an addfix payload (cmd would split the line)'
            Find = [regex]::Escape('addfix ''Update Defender signatures'' "Update-MpSignature"')

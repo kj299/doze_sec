@@ -6,6 +6,22 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### WDigest and the NTLM level: absent is the default, unreadable is a gap
+**Before.** Section 12 could print an all-clear from a failed read, and the dashboard could contradict the section.
+- **The evaluated lines.** They read `UseLogonCredential` and `LmCompatibilityLevel` with `-EA SilentlyContinue`. A read that failed and a value that was simply absent both came back empty, and empty printed `[OK]`.
+- **The raw dump above them.** It did the same in cmd: `reg query ... 2>nul`, then `if errorlevel 1 echo [OK]`.
+- **The dashboard tiles.** They re-read both values. For NTLM, the tile contradicted its section: level 3 or 4 was `[OK] NTLM level 3 (NTLMv2)` in Section 12, but `WARN NTLM partially hardened` on the tile, with a queued change to level 5. That change can break sign-in from an old NAS or printer, for a value that is the Windows default.
+
+**Now.** `tools/cred_settings_check.ps1` tells four states apart: value present, value absent under a key that was read, key does not exist, key could not be read.
+- **Absent stays an answer.** WDigest caching is off by default on Windows 8.1 and later, and an unset NTLM level is level 3.
+- **Findings.** WDigest 1 is the CRITICAL and NTLM 0-2 the WARNING, with wording and rows unchanged. A value stored under another type cannot dodge either.
+- **Other values.** An undefined value is a WARNING that names it.
+- **Gaps.** A key that could not be read is a raised `NOT performed` row. So is a missing `Lsa` key, since that key exists on every Windows.
+- **Tiles.** They read Section 12's verdict.
+- **Fixes.** They trigger off the ledger. The NTLM fix now states its undo (restore the level the audit read) and warns what level 5 can break. Level 3-4 queues nothing.
+
+**CI.** It plants every state through the real registry reader on throwaway keys, the benign twin (level 3) beside the malign one (level 1).
+
 ### Retrospective: the silent-all-clear sweep is not finished
 A three-pass retrospective checked the project's claims against the code.
 The claim that every check whose failed query read as clean had been fixed

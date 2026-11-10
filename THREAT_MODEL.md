@@ -411,6 +411,15 @@ Found during the v7.1 coverage review; tracked for future work:
   17 RMM running/installed checks (`Get-Process`/Uninstall-key empties
   mean "not present"). Probes elsewhere may still degrade silently, but
   the high-value verdict checks across Sections 4-18 now fail visibly.
+- ~~The Section 12 WDigest and NTLM-level verdicts read their registry value
+  with `-EA SilentlyContinue`, so a read that failed printed the same `[OK]`
+  as a value that was absent; the dashboard re-read both and graded the
+  default NTLM level as a warning.~~ **Closed:**
+  `tools/cred_settings_check.ps1` separates value present, value absent, key
+  missing and key unreadable. Absent is the Windows default and is said; an
+  unreadable key is a raised NOT-performed gap. Residual: the audit reads the
+  setting, not whether a logon since the change has already cached plaintext
+  credentials.
 - ~~The Section 10 WinRM verdict read `Get-Service WinRM -EA SilentlyContinue`,
   so a query that failed printed `[OK] WinRM not running.`~~ **Closed:**
   `tools/winrm_check.ps1` grades `Get-Service`. When that fails, it asks the
