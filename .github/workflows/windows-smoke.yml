@@ -2573,7 +2573,7 @@ jobs:
           $st = (.\tools\reg_policy_check.ps1 -SelfTest) -join "`n"
           if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'reg_policy_check -SelfTest failed' }
           $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($n -lt 37) { throw "reg_policy_check self-test ran only $n case(s)" }
+          if ($n -lt 38) { throw "reg_policy_check self-test ran only $n case(s)" }
           $stateFile = @{ Winlogon = 'dz_winlogon_state.txt'; ScriptBlockLogging = 'dz_sbl_state.txt'; Uac = 'dz_uac_state.txt' }
           function RunP([string]$Check, [hashtable]$Extra) {
             $md = Join-Path $env:TEMP ("dz_ci_regpol_{0}_{1}" -f $PID, [guid]::NewGuid().ToString('N').Substring(0, 6)); New-Item -ItemType Directory -Path $md -Force | Out-Null

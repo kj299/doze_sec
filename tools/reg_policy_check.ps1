@@ -124,7 +124,7 @@ function Get-WinlogonValueVerdict {
             $raw = [string]$S.Value
             if ($S.Value -is [array]) { $raw = (@($S.Value) -join ' ') }
             $norm = $raw.Trim().TrimEnd(',').Trim()
-            if ($norm -ieq $Expected) { return @{ Line = ('[OK] Winlogon ' + $Name + ' is the default ' + $DefaultText + '.'); Verdict = 'ok' } }
+            if ($Expected -and $norm -ieq $Expected) { return @{ Line = ('[OK] Winlogon ' + $Name + ' is the default ' + $DefaultText + '.'); Verdict = 'ok' } }
             $shown = if ($raw.Trim()) { ConvertTo-PrintableText $raw } else { '(empty)' }
             return @{ Line = ('[CRITICAL] Winlogon ' + $Name + ' MODIFIED (T1547.004): ' + $shown); Verdict = 'modified' }
         }
@@ -145,6 +145,8 @@ function Get-WinlogonVerdict {
     param($Userinit, $Shell, [object[]]$AppInit = @(), $Load = $null, $Signed = $null, [string]$SystemRoot = $env:SystemRoot)
     $out = New-Object System.Collections.ArrayList
     $r = @{ WlHit = $false; WlMissing = $false; WlGap = $false; AiHit = $false; AiGap = $false }
+    # With no Windows directory to compare against there is no default to
+    # match: Get-WinlogonValueVerdict never treats an empty expectation as met.
     $expUi = if ($SystemRoot) { (($SystemRoot.TrimEnd('\')) + '\system32\userinit.exe') } else { '' }
     $u = Get-WinlogonValueVerdict -Name 'Userinit' -S $Userinit -Expected $expUi -DefaultText 'userinit.exe'
     $s = Get-WinlogonValueVerdict -Name 'Shell' -S $Shell -Expected 'explorer.exe' -DefaultText 'explorer.exe'
@@ -299,6 +301,8 @@ if ($SelfTest) {
     T 'a second program appended to Shell: CRITICAL' ($v.WlHit -and $v.State -eq 'userinit=ok,shell=modified,appinit=empty' -and ($v.Lines -join "`n") -match '(?m)^\[CRITICAL\] Winlogon Shell MODIFIED \(T1547\.004\): ') ($v.Lines -join ' | ')
     $v = Get-WinlogonVerdict -Userinit (P '') -Shell $shOk -AppInit $aiOk -SystemRoot $sr
     T 'an EMPTY Userinit is modified, shown as (empty), never the default' ($v.WlHit -and ($v.Lines -join "`n") -match 'Userinit MODIFIED \(T1547\.004\): \(empty\)') ($v.Lines -join ' | ')
+    $v = Get-WinlogonVerdict -Userinit (P '') -Shell $shOk -AppInit $aiOk -SystemRoot ''
+    T 'no Windows directory known: an empty Userinit still cannot match a default' ($v.WlHit -and $v.State -like 'userinit=modified,*') ($v.Lines -join ' | ')
     $v = Get-WinlogonVerdict -Userinit $abs -Shell $shOk -AppInit $aiOk -SystemRoot $sr; $t = $v.Lines -join "`n"
     T 'Userinit value absent: a WARNING that it is missing, neither [OK] nor CRITICAL' ($v.WlMissing -and (-not $v.WlHit) -and (-not $v.WlGap) -and $v.State -like 'userinit=missing,*' -and $t -match '(?m)^\[WARNING\] Winlogon Userinit value is MISSING' -and $t -notmatch 'Userinit is the default') $t
     $v = Get-WinlogonVerdict -Userinit $bad -Shell $bad -AppInit $aiOk -SystemRoot $sr; $t = $v.Lines -join "`n"

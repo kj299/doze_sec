@@ -651,7 +651,7 @@ jobs:
                    'Policies\System could not be read: a raised gap, never "[OK] UAC enabled" and never "value MISSING"'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 37 ] || { echo "only $n case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 38 ] || { echo "only $n case(s)"; exit 1; }
           for b in doze_sec.bat doze_sec_noAdmin.bat; do
             for v in Userinit Shell AppInit_DLLs EnableLUA EnableScriptBlockLogging; do
               # A fix's own command may read the old value for its undo; that is not a check.
@@ -673,6 +673,36 @@ jobs:
           # A standard user skips the BitLocker PSRUN: the run line must sit
           # inside the skipped stretch, or a stale script would be executed.
           awk '/^if "%IS_ADMIN%"=="0" goto :sec13_bl_eval_done/{f=1} /^:sec13_bl_eval_done/{f=0} f' doze_sec_noAdmin.bat | grep -qF -- '-File "%PSRUN%"' || { echo 'doze_sec_noAdmin.bat: the Section 13 PSRUN run is outside the standard-user skip -- it would run a stale script'; exit 1; }
+          # cmd reads a bare < or > in an echo as a file redirection, quoted or
+          # not by PowerShell's single quotes: 'Expected: <Windows>\system32...'
+          # in a tile's help text made the whole line vanish from the dashboard
+          # script. No echo that writes to %PSRUN% may carry one outside
+          # double quotes unless it is caret-escaped.
+          python3 - <<'PY'
+          import re, sys
+          bad = []
+          for b in ('doze_sec.bat', 'doze_sec_noAdmin.bat'):
+              for n, l in enumerate(open(b, encoding='latin-1', newline='').read().replace('\r\n', '\n').split('\n'), 1):
+                  m = re.match(r'^echo (.*?)\s*>>?\s*"%PSRUN%"\s*$', l)
+                  if not m:
+                      continue
+                  body, q, i = m.group(1), False, 0
+                  while i < len(body):
+                      c = body[i]
+                      if c == '"':
+                          q = not q
+                      elif c == '^' and not q:
+                          i += 1
+                      elif c in '<>' and not q:
+                          bad.append('%s:%d: %s' % (b, n, body[max(0, i - 40):i + 20]))
+                          break
+                      i += 1
+          if bad:
+              print('a bare < or > in an echo written to %PSRUN% -- cmd treats it as a redirection and the line never reaches the script:')
+              print('\n'.join(bad))
+              sys.exit(1)
+          print('no bare redirection character in any echo written to %PSRUN%')
+          PY
           echo 'Winlogon/AppInit, Script Block Logging and UAC: unreadable is a gap; the tiles and fixes read the sections and the ledger'
       - name: named_pipe_check -- a C2 pipe is WARNING, a pipe list that could not be read is a raised gap, never an all-clear
         run: |
