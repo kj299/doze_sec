@@ -673,6 +673,19 @@ jobs:
           # A standard user skips the BitLocker PSRUN: the run line must sit
           # inside the skipped stretch, or a stale script would be executed.
           awk '/^if "%IS_ADMIN%"=="0" goto :sec13_bl_eval_done/{f=1} /^:sec13_bl_eval_done/{f=0} f' doze_sec_noAdmin.bat | grep -qF -- '-File "%PSRUN%"' || { echo 'doze_sec_noAdmin.bat: the Section 13 PSRUN run is outside the standard-user skip -- it would run a stale script'; exit 1; }
+          # GitHub will not run a workflow file over its size limit, and says
+          # so nowhere on the pull request: the six Windows jobs simply never
+          # appear, and the 28 lint checks alone read as a green PR. Measured:
+          # 510,010 bytes ran; 518,967 did not. New CI step bodies go in
+          # .github/ci/*.ps1 and are called from the step.
+          for w in .github/workflows/*.yml; do
+            sz=$(wc -c < "$w")
+            [ "$sz" -le 505000 ] || { echo "$w is $sz bytes -- over 505,000, too close to the size at which GitHub silently refuses to run it (a 510,010-byte file ran, a 518,967-byte one did not). Move a step's body into .github/ci/ and call it from the step."; exit 1; }
+          done
+          for f in cred_settings_states.ps1 reg_policy_states.ps1; do
+            [ -s ".github/ci/$f" ] || { echo ".github/ci/$f is missing -- its step in windows-smoke.yml would run nothing"; exit 1; }
+            grep -qF ".github\\ci\\$f" .github/workflows/windows-smoke.yml || { echo "windows-smoke.yml no longer calls .github/ci/$f"; exit 1; }
+          done
           # cmd reads a bare < or > in an echo as a file redirection, quoted or
           # not by PowerShell's single quotes: 'Expected: <Windows>\system32...'
           # in a tile's help text made the whole line vanish from the dashboard
