@@ -6,6 +6,34 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Winlogon, AppInit_DLLs, Script Block Logging and UAC: a failed read is no longer an answer
+The retrospective's backlog listed five dashboard tiles that re-read the registry. The section lines behind them had the same hole. The backlog missed those because each is a two-line block, with the silenced read on one line and the verdict on the next, and the search was per line.
+
+**Before.**
+- **Section 5, AppInit_DLLs:** a failed read printed `[OK] AppInit_DLLs empty.`
+- **Section 13, UAC:** two failed reads printed `[OK] UAC enabled with elevation prompt.` The raw dump above it raised "value MISSING" whenever `reg.exe` failed for any reason.
+- **Section 5, Winlogon Userinit and Shell:** a failed read printed an unraised `[SKIPPED]`.
+- **Section 11, Script Block Logging:** a failed read printed "NOT enabled", a finding the tool had not observed.
+- **The tiles contradicted their sections.**
+  - A failed Userinit or Shell read was `CRIT ... MODIFIED:` with no ledger row.
+  - A failed AppInit read was PASS.
+  - `ConsentPromptBehaviorAdmin` 1, 3 or 4 was `WARN not fully hardened`, while Section 13 printed `[OK]`.
+
+**Now.** `tools/reg_policy_check.ps1` grades all three sections with the four-state registry reader from the WDigest fix.
+- **What an absent value means is decided per value:**
+  - A missing Userinit or Shell is a WARNING, because they exist on every Windows.
+  - A missing or blank AppInit_DLLs is `[OK]`.
+  - No logging policy key is the ordinary "not configured" finding.
+  - A missing UAC value keeps its "value MISSING" row.
+- **A key that could not be read** is a raised `NOT performed` row in each check.
+- **Existing findings** keep their wording and rows.
+- **Userinit** is judged against this PC's own Windows directory, not a hardcoded `C:\Windows`.
+- **A set AppInit_DLLs** stays CRITICAL, and now says whether Windows is configured to load it.
+- **The tiles** read the sections' verdicts.
+- **The four fixes** trigger off the ledger.
+
+**CI.** It plants the benign and malign twin of every state through the real registry reader.
+
 ### WDigest and the NTLM level: absent is the default, unreadable is a gap
 **Before.** Section 12 could print an all-clear from a failed read, and the dashboard could contradict the section.
 - **The evaluated lines.** They read `UseLogonCredential` and `LmCompatibilityLevel` with `-EA SilentlyContinue`. A read that failed and a value that was simply absent both came back empty, and empty printed `[OK]`.

@@ -804,9 +804,18 @@ Section lines (`doze_sec.bat` / `doze_sec_noAdmin.bat`):
 
 Dashboard tiles that re-measure instead of reading their section's verdict
 (the "a tile that re-measures is a second opinion" class), `doze_sec.bat`
-5729-5764 / `doze_sec_noAdmin.bat` 5626-5674: ~~WDigest, NTLM~~ (DONE 2026-11-10: they read `CRED_STATE`), RDP, UAC
-(`EnableLUA`), Script Block Logging, Winlogon `Userinit`, Winlogon `Shell`,
-`AppInit_DLLs`.
+5729-5764 / `doze_sec_noAdmin.bat` 5626-5674: ~~WDigest, NTLM~~ (DONE 2026-11-10: they read `CRED_STATE`), RDP,
+~~UAC (`EnableLUA`), Script Block Logging, Winlogon `Userinit`, Winlogon
+`Shell`, `AppInit_DLLs`~~ (DONE 2026-11-10: `tools/reg_policy_check.ps1`).
+
+**This list was itself incomplete.** Fixing those five tiles showed that the
+SECTION lines behind them had the same hole -- AppInit_DLLs and UAC printed
+`[OK]` on a failed read, Winlogon printed an unraised `[SKIPPED]` -- and none
+was in the table above. The search that built the table looked for a
+silenced read and an `[OK]` on the SAME line; these are two-line blocks
+(read on one line, verdict on the next). They are fixed with their tiles.
+Before calling the remaining rows the whole list, search per PSRUN BLOCK:
+any staged block that contains `-EA SilentlyContinue` and can print `[OK]`.
 
 One caution before any of these is touched: **for a registry VALUE, absent is
 a real answer.** `UseLogonCredential` not set means WDigest is off on every

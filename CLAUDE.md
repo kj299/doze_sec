@@ -957,6 +957,18 @@ the outage that manual route caught five real bugs CI had never seen. The jobs:
   `self_update_check` / `disk_info` / `smart_health`) against real
   WMI/CIM/Authenticode.
 
+**A workflow file GitHub will not run reports nothing.** `windows-smoke.yml`
+grew past GitHub's size limit (measured: a 510,010-byte file ran, a
+518,967-byte one did not). The run is created and fails at once with no jobs,
+so the six Windows jobs never appear on the pull request, and the 28 lint
+checks alone read as green. It was noticed only by COUNTING the checks: 28,
+not 34. So: after every push that touches a workflow, count the checks, and
+treat a missing job as a failure, never as "still queued". New CI step bodies
+go in `.github/ci/*.ps1` (excluded from the USB stick, like the rest of
+`.github`) and are called from the step; `lint.yml` fails when a workflow
+file passes 505,000 bytes. Step NAMES stay in the workflow -- the benign
+corpus resolves its `ci:` proofs against them.
+
 ## INIT-path PowerShell: prefer tools/*.ps1 over inline echo-built PSRUN
 
 Building PowerShell by echoing lines into `%PSRUN%` and running it is a
