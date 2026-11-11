@@ -8,8 +8,8 @@ $ErrorActionPreference = 'Stop'
 $st = (.\tools\reg_policy_check.ps1 -SelfTest) -join "`n"
 if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'reg_policy_check -SelfTest failed' }
 $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-if ($n -lt 38) { throw "reg_policy_check self-test ran only $n case(s)" }
-$stateFile = @{ Winlogon = 'dz_winlogon_state.txt'; ScriptBlockLogging = 'dz_sbl_state.txt'; Uac = 'dz_uac_state.txt' }
+if ($n -lt 55) { throw "reg_policy_check self-test ran only $n case(s)" }
+$stateFile = @{ Winlogon = 'dz_winlogon_state.txt'; ScriptBlockLogging = 'dz_sbl_state.txt'; Uac = 'dz_uac_state.txt'; Rdp = 'dz_rdp_state.txt' }
 function RunP([string]$Check, [hashtable]$Extra) {
   $md = Join-Path $env:TEMP ("dz_ci_regpol_{0}_{1}" -f $PID, [guid]::NewGuid().ToString('N').Substring(0, 6)); New-Item -ItemType Directory -Path $md -Force | Out-Null
   try {
@@ -21,8 +21,13 @@ function RunP([string]$Check, [hashtable]$Extra) {
 }
 # LIVE: this runner's real HKLM. Winlogon and AppInit are pinned (a
 # clean image); UAC and logging are measured, and must be GRADED.
-$w = RunP 'Winlogon' @{}; $u = RunP 'Uac' @{}; $l = RunP 'ScriptBlockLogging' @{}
-Write-Host "MEASURED: the runner's own state is $($w.State) ; $($u.State) ; $($l.State)"
+$w = RunP 'Winlogon' @{}; $u = RunP 'Uac' @{}; $l = RunP 'ScriptBlockLogging' @{}; $d = RunP 'Rdp' @{}
+Write-Host "MEASURED: the runner's own state is $($w.State) ; $($u.State) ; $($l.State) ; $($d.State) [$($d.Markers)]"
+# A hosted runner is reached over RDP, so on or off, with or without NLA, is
+# measured -- but it must be GRADED, with the service context line.
+if ($d.State -notmatch '^rdp=(off|nla|nonla)$') { throw "the runner's RDP state was not graded: $($d.State) [$($d.Markers)] $($d.Out)" }
+if ($d.Out -notmatch '(?m)^\[INFO\] (Remote Desktop service \(TermService\): |The Remote Desktop service state or its listener could not be read)') { throw "the RDP check printed no service context line: $($d.Out)" }
+if (($d.State -eq 'rdp=nonla') -ne ($d.Markers -match '^dz_rdpnla_(hit|pol)$')) { throw "the RDP state and its marker disagree: $($d.State) [$($d.Markers)]" }
 if ($w.State -ne 'userinit=ok,shell=ok,appinit=empty' -or $w.Markers) { throw "a clean runner did not read Winlogon and AppInit_DLLs clean: $($w.State) [$($w.Markers)]" }
 if ($u.State -notmatch '^uac=(on|noprompt|off),cpb=[0-5]$') { throw "the runner's UAC state was not graded: $($u.State) [$($u.Markers)]" }
 if ($l.State -notmatch '^sbl=(on|off)$') { throw "the runner's Script Block Logging state was not graded: $($l.State)" }
@@ -34,6 +39,7 @@ $nat = "$root\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows"
 $wow = "$root\SOFTWARE\Wow6432Node\Microsoft\Windows NT\CurrentVersion\Windows"
 $pol = "$root\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"
 $sbl = "$root\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging"
+$ts = "$root\SYSTEM\CurrentControlSet\Control\Terminal Server"; $tcp = "$ts\WinStations\RDP-Tcp"; $gp = "$root\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services"
 $good = (Join-Path $env:SystemRoot 'system32\userinit.exe') + ','
 function Expect($r, [string]$State, [string]$Markers, [string]$What) { if ($r.State -ne $State -or $r.Markers -ne $Markers) { throw ("{0}: expected {1} [{2}], got {3} [{4}] -- {5}" -f $What, $State, $Markers, $r.State, $r.Markers, $r.Out) } }
 try {
@@ -43,7 +49,25 @@ try {
   Expect (RunP 'Winlogon' $k) 'userinit=gap,shell=gap,appinit=gap' 'dz_appinit_gap,dz_winlogon_gap' 'no keys'
   Expect (RunP 'Uac' $k) 'uac=gap,cpb=-' 'dz_uac_gap' 'no keys'
   Expect (RunP 'ScriptBlockLogging' $k) 'sbl=off' 'dz_sbl_hit' 'no policy key'
-  foreach ($p in $wl, $nat, $pol, $sbl) { New-Item -Path $p -Force | Out-Null }
+  Expect (RunP 'Rdp' $k) 'rdp=gap' 'dz_rdp_gap' 'no Terminal Server key'
+  foreach ($p in $wl, $nat, $pol, $sbl, $tcp) { New-Item -Path $p -Force | Out-Null }
+  # RDP, every state. No policy key is the ordinary unmanaged machine.
+  Expect (RunP 'Rdp' $k) 'rdp=missing' 'dz_rdp_missing' 'fDenyTSConnections absent'
+  Set-ItemProperty -Path $ts -Name fDenyTSConnections -Value 1 -Type DWord
+  Expect (RunP 'Rdp' $k) 'rdp=off' '' 'RDP off (the benign twin)'
+  Set-ItemProperty -Path $ts -Name fDenyTSConnections -Value 0 -Type DWord
+  $r = RunP 'Rdp' $k; Expect $r 'rdp=nonla' 'dz_rdpnla_hit' 'RDP on, UserAuthentication absent (the malign twin)'
+  if ($r.Out -notmatch '(?m)^\[WARNING\] RDP enabled WITHOUT NLA\r?$') { throw 'the RDP finding wording changed' }
+  Set-ItemProperty -Path $tcp -Name UserAuthentication -Value 1 -Type DWord
+  Expect (RunP 'Rdp' $k) 'rdp=nla' '' 'RDP on with NLA'
+  # Group Policy outranks the local setting, in both directions.
+  New-Item -Path $gp -Force | Out-Null; Set-ItemProperty -Path $gp -Name UserAuthentication -Value 0 -Type DWord
+  Expect (RunP 'Rdp' $k) 'rdp=nonla' 'dz_rdpnla_pol' 'policy switches NLA off over a local 1 (its own marker: no local fix)'
+  Set-ItemProperty -Path $gp -Name fDenyTSConnections -Value 1 -Type DWord
+  $r = RunP 'Rdp' $k; Expect $r 'rdp=off' '' 'policy turns RDP off over a local 0'
+  if ($r.Out -notmatch 'differs from Group Policy') { throw "the policy/local difference was not said: $($r.Out)" }
+  Set-ItemProperty -Path $ts -Name fDenyTSConnections -Value 7 -Type DWord; Remove-ItemProperty -Path $gp -Name fDenyTSConnections
+  Expect (RunP 'Rdp' $k) 'rdp=gap' 'dz_rdp_gap' 'a value Windows does not define'
   # The benign twin: defaults everywhere.
   Set-ItemProperty -Path $wl -Name Userinit -Value $good; Set-ItemProperty -Path $wl -Name Shell -Value 'explorer.exe'
   Set-ItemProperty -Path $nat -Name AppInit_DLLs -Value ''
@@ -93,5 +117,5 @@ try {
   Remove-Item -Path $root -Recurse -Force -EA SilentlyContinue
   if (Test-Path $root) { throw "the CI test key $root could not be removed" }
 }
-Write-Host 'reg policy: every state read through the real registry reader for all three checks'
+Write-Host 'reg policy: every state read through the real registry reader for all four checks'
 exit 0

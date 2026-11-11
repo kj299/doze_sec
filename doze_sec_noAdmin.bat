@@ -212,6 +212,7 @@ set "CRED_STATE=ungraded"
 set "WINLOGON_STATE=ungraded"
 set "SBL_STATE=ungraded"
 set "UAC_STATE=ungraded"
+set "RDP_STATE=ungraded"
 set "REBOOT_AGE=unknown"
 set "BITLOCKER_STATE=ungraded"
 set "EXEC_BLOCKED=0"
@@ -3059,8 +3060,17 @@ if exist "%SCRIPT_DIR%tools\smb1_check.ps1" (
     echo [WARNING] tools\smb1_check.ps1 not found -- SMBv1 check NOT performed.>> "%REPORT%"
     call :dz_finding WARNING 10 T1210 "SMBv1 check NOT performed - tool missing"
 )
-echo $rdp=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -EA SilentlyContinue).fDenyTSConnections;if($rdp -eq 1){'[OK] RDP disabled.'}else{$nla=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -EA SilentlyContinue).UserAuthentication;if($nla -eq 1){'[OK] RDP enabled with NLA.'}else{'[WARNING] RDP enabled WITHOUT NLA';Set-Content -LiteralPath "$env:TEMP\dz_rdpnla_hit.txt" -Value hit}} > "%PSRUN%"
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+del "%TEMP%\dz_rdpnla_pol.txt" 2>nul
+del "%TEMP%\dz_rdp_missing.txt" 2>nul
+del "%TEMP%\dz_rdp_gap.txt" 2>nul
+del "%TEMP%\dz_rdp_state.txt" 2>nul
+echo  Command: powershell -File tools\reg_policy_check.ps1 -Check Rdp>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\reg_policy_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\reg_policy_check.ps1" -Check Rdp>> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\reg_policy_check.ps1 not found -- RDP check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 10 T1021.001 "RDP check NOT performed - tool missing"
+)
 echo  Command: powershell -File tools\winrm_check.ps1>> "%REPORT%"
 del "%TEMP%\dz_winrm_gap.txt" 2>nul
 del "%TEMP%\dz_winrm_deferred.txt" 2>nul
@@ -3102,6 +3112,28 @@ if not "!SMB1_STATE:~0,5!"=="smb1=" if exist "%SCRIPT_DIR%tools\smb1_check.ps1" 
 if exist "%TEMP%\dz_rdpnla_hit.txt" (
     call :dz_finding WARNING 10 T1021.001 "RDP enabled without NLA"
     del "%TEMP%\dz_rdpnla_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_rdpnla_pol.txt" (
+    rem Worded apart from the row above on purpose: the NLA fix triggers off that one, and a local change cannot override policy.
+    call :dz_finding WARNING 10 T1021.001 "RDP without NLA - switched off by Group Policy"
+    del "%TEMP%\dz_rdpnla_pol.txt" 2>nul
+)
+if exist "%TEMP%\dz_rdp_missing.txt" (
+    call :dz_finding WARNING 10 T1021.001 "fDenyTSConnections value missing - whether RDP is on cannot be read"
+    del "%TEMP%\dz_rdp_missing.txt" 2>nul
+)
+if exist "%TEMP%\dz_rdp_gap.txt" (
+    rem A gap is its own row: the key could not be read. An absent policy key is not a gap.
+    call :dz_finding WARNING 10 T1021.001 "RDP check NOT performed - a Terminal Services key could not be read or holds an undefined value"
+    del "%TEMP%\dz_rdp_gap.txt" 2>nul
+)
+set "_RDST="
+if exist "%TEMP%\dz_rdp_state.txt" set /p _RDST=<"%TEMP%\dz_rdp_state.txt"
+del "%TEMP%\dz_rdp_state.txt" 2>nul
+if defined _RDST if "!_RDST:~0,4!"=="rdp=" set "RDP_STATE=!_RDST!"
+if not "!RDP_STATE:~0,4!"=="rdp=" if exist "%SCRIPT_DIR%tools\reg_policy_check.ps1" (
+    echo [WARNING] RDP check produced no verdict -- NOT performed: tools\reg_policy_check.ps1 ran but wrote no usable verdict.>> "%REPORT%"
+    call :dz_finding WARNING 10 T1021.001 "RDP check produced no verdict - NOT performed"
 )
 if exist "%TEMP%\dz_winrm_hit.txt" (
     call :dz_finding WARNING 10 T1021.006 "WinRM running - remote PowerShell enabled"
@@ -3987,15 +4019,43 @@ if exist "%TEMP%\dz_archstage_deferred.txt" (
 
 echo.>> "%REPORT%"
 echo --- NTFS Alternate Data Streams in Temp --->> "%REPORT%"
-echo  Command: powershell -Command "Get-ChildItem -Path $env:TEMP -Recurse -EA SilentlyContinue">> "%REPORT%"
 rem The tag was '[ADS FOUND]', which is not a severity, so this check could reach
 rem neither the ledger nor the findings lint -- and Section 14 had no marker and
 rem no :dz_finding anywhere, meaning :dz_section_clean 14 could only ever return
 rem CLEAN. The section printed alternate-data-stream hits and then declared
 rem itself free of issues. It is a real hiding technique (T1564.004), so it is
 rem tagged and routed like every other finding.
-echo $f=$false; if(-not (Test-Path $env:TEMP)){'[SKIPPED] TEMP path unavailable -- ADS check NOT performed.'}else{Get-ChildItem -Path $env:TEMP -Recurse -EA SilentlyContinue ^| ForEach-Object {try{$s=Get-Item $_.FullName -Stream * -EA Stop ^| Where-Object {$_.Stream -ne ':$DATA' -and $_.Stream -ne 'Zone.Identifier'}; if($s){$f=$true;'[WARNING] Alternate data stream (T1564.004): '+$_.FullName+' :: '+($s.Stream -join ', ')}}catch{}}; if(-not $f){'[OK] No suspicious ADS in Temp.'}} > "%PSRUN%"
-call :dz_ps_scan 14 T1564.004 "Alternate data stream in TEMP - content hidden from ordinary file listings"
+del "%TEMP%\dz_ads_done.txt" 2>nul
+del "%TEMP%\dz_ads_hit.txt" 2>nul
+del "%TEMP%\dz_ads_gap.txt" 2>nul
+del "%TEMP%\dz_ads_deferred.txt" 2>nul
+echo  Command: powershell -File tools\file_walk_check.ps1 -Check TempAds>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\file_walk_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\file_walk_check.ps1" -Check TempAds>> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\file_walk_check.ps1 not found -- Alternate-data-stream check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 14 T1564.004 "Alternate-data-stream check NOT performed - tool missing"
+)
+if exist "%TEMP%\dz_ads_hit.txt" (
+    call :dz_finding WARNING 14 T1564.004 "Alternate data stream in TEMP - content hidden from ordinary file listings"
+    del "%TEMP%\dz_ads_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_ads_gap.txt" (
+    rem A gap is its own row: part of the tree was not examined.
+    call :dz_finding WARNING 14 T1564.004 "Alternate-data-stream check NOT performed in full - folders or files could not be read, or the time budget ran out"
+    del "%TEMP%\dz_ads_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_ads_deferred.txt" (
+    set "_ADDEF=0"
+    set /p _ADDEF=<"%TEMP%\dz_ads_deferred.txt"
+    set /a DEFERRED_COUNT+=!_ADDEF!
+    del "%TEMP%\dz_ads_deferred.txt" 2>nul
+)
+if not exist "%TEMP%\dz_ads_done.txt" if exist "%SCRIPT_DIR%tools\file_walk_check.ps1" (
+    echo [WARNING] Alternate-data-stream check produced no verdict -- NOT performed: tools\file_walk_check.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 14 T1564.004 "Alternate-data-stream check produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_ads_done.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- System32 Executables Modified Last 14 Days --->> "%REPORT%"
@@ -4489,15 +4549,71 @@ if %errorlevel% neq 0 echo [OK] No Office/AAD OAuth identity registrations found
 
 echo.>> "%REPORT%"
 echo --- [MIDNIGHT/AQUA BLIZZARD] Large HTML/HTA in Temp (HTML Smuggling) --->> "%REPORT%"
-echo  Command: powershell -Command "Get-ChildItem -Path $env:TEMP -Recurse -Include '*.html','*.htm','*.hta' -EA SilentlyContinue">> "%REPORT%"
-echo $r = @(Get-ChildItem -Path $env:TEMP -Recurse -Include '*.html','*.htm','*.hta' -EA SilentlyContinue ^| Where-Object {$_.Length -gt 200000}); if($r.Count -gt 0){ '[WARNING] Large HTML/HTA files in Temp:'; $r ^| Select-Object FullName,@{N='SizeKB';E={[math]::Round($_.Length/1024,1)}},LastWriteTime ^| Format-Table -AutoSize } else { '[OK] No oversized HTML/HTA files in user TEMP.' } > "%PSRUN%"
-call :dz_ps_scan 17 T1027.006 "Oversized HTML/HTA in TEMP - HTML smuggling staging"
+del "%TEMP%\dz_htmltemp_done.txt" 2>nul
+del "%TEMP%\dz_htmltemp_hit.txt" 2>nul
+del "%TEMP%\dz_htmltemp_gap.txt" 2>nul
+del "%TEMP%\dz_htmltemp_deferred.txt" 2>nul
+echo  Command: powershell -File tools\file_walk_check.ps1 -Check TempHtml>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\file_walk_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\file_walk_check.ps1" -Check TempHtml>> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\file_walk_check.ps1 not found -- Oversized HTML/HTA check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 17 T1027.006 "Oversized HTML/HTA check NOT performed - tool missing"
+)
+if exist "%TEMP%\dz_htmltemp_hit.txt" (
+    call :dz_finding WARNING 17 T1027.006 "Oversized HTML/HTA in TEMP - HTML smuggling staging"
+    del "%TEMP%\dz_htmltemp_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_htmltemp_gap.txt" (
+    rem A gap is its own row: part of the tree was not examined.
+    call :dz_finding WARNING 17 T1027.006 "Oversized HTML/HTA check NOT performed in full - folders or files could not be read, or the time budget ran out"
+    del "%TEMP%\dz_htmltemp_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_htmltemp_deferred.txt" (
+    set "_HTDEF=0"
+    set /p _HTDEF=<"%TEMP%\dz_htmltemp_deferred.txt"
+    set /a DEFERRED_COUNT+=!_HTDEF!
+    del "%TEMP%\dz_htmltemp_deferred.txt" 2>nul
+)
+if not exist "%TEMP%\dz_htmltemp_done.txt" if exist "%SCRIPT_DIR%tools\file_walk_check.ps1" (
+    echo [WARNING] Oversized HTML/HTA check produced no verdict -- NOT performed: tools\file_walk_check.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 17 T1027.006 "Oversized HTML/HTA check produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_htmltemp_done.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- [FOREST BLIZZARD] CVE-2023-23397 Outlook .msg Artefacts --->> "%REPORT%"
-echo  Command: powershell -Command "Get-ChildItem -Path ([System.Environment]::GetFolderPath('LocalApplicationData')+'\Microsoft\Outlook') -Recurse -Include '*.msg','*.oft' -EA SilentlyContinue">> "%REPORT%"
-echo $r = @(Get-ChildItem -Path ([System.Environment]::GetFolderPath('LocalApplicationData')+'\Microsoft\Outlook') -Recurse -Include '*.msg','*.oft' -EA SilentlyContinue ^| Where-Object {$_.LastWriteTime -gt (Get-Date).AddDays(-90)}); if($r.Count -gt 0){ '[WARNING] Recent Outlook .msg/.oft artefacts (review for CVE-2023-23397 NTLM relay):'; $r ^| Select-Object FullName,LastWriteTime ^| Format-Table -AutoSize } else { '[OK] No recent Outlook .msg/.oft artefacts (Outlook profile may be absent).' } > "%PSRUN%"
-call :dz_ps_scan 17 T1566.001 "Recent Outlook .msg/.oft artefacts - review for CVE-2023-23397 NTLM relay"
+del "%TEMP%\dz_outlookmsg_done.txt" 2>nul
+del "%TEMP%\dz_outlookmsg_hit.txt" 2>nul
+del "%TEMP%\dz_outlookmsg_gap.txt" 2>nul
+del "%TEMP%\dz_outlookmsg_deferred.txt" 2>nul
+echo  Command: powershell -File tools\file_walk_check.ps1 -Check OutlookMsg>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\file_walk_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\file_walk_check.ps1" -Check OutlookMsg>> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\file_walk_check.ps1 not found -- Outlook .msg/.oft check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 17 T1566.001 "Outlook .msg/.oft check NOT performed - tool missing"
+)
+if exist "%TEMP%\dz_outlookmsg_hit.txt" (
+    call :dz_finding WARNING 17 T1566.001 "Recent Outlook .msg/.oft artefacts - review for CVE-2023-23397 NTLM relay"
+    del "%TEMP%\dz_outlookmsg_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_outlookmsg_gap.txt" (
+    rem A gap is its own row: part of the tree was not examined.
+    call :dz_finding WARNING 17 T1566.001 "Outlook .msg/.oft check NOT performed in full - folders or files could not be read, or the time budget ran out"
+    del "%TEMP%\dz_outlookmsg_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_outlookmsg_deferred.txt" (
+    set "_OMDEF=0"
+    set /p _OMDEF=<"%TEMP%\dz_outlookmsg_deferred.txt"
+    set /a DEFERRED_COUNT+=!_OMDEF!
+    del "%TEMP%\dz_outlookmsg_deferred.txt" 2>nul
+)
+if not exist "%TEMP%\dz_outlookmsg_done.txt" if exist "%SCRIPT_DIR%tools\file_walk_check.ps1" (
+    echo [WARNING] Outlook .msg/.oft check produced no verdict -- NOT performed: tools\file_walk_check.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 17 T1566.001 "Outlook .msg/.oft check produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_outlookmsg_done.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- [PEACH SANDSTORM] ADFS Service (GoldenSAML attack surface) --->> "%REPORT%"
@@ -5741,7 +5857,7 @@ echo $p2=''; if(Test-Path "$env:TEMP\dz_psv2_state.txt"){$p2=[string](Get-Conten
 echo }else{ >> "%PSRUN%"
 echo ck 'INFO' 'PSv2 status check deferred (requires admin)' >> "%PSRUN%"
 echo } >> "%PSRUN%"
-echo $rdp=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -EA SilentlyContinue).fDenyTSConnections;if($rdp -eq 1){ck 'PASS' 'RDP is disabled'}else{$nla=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -EA SilentlyContinue).UserAuthentication;if($nla -eq 1){ck 'PASS' 'RDP enabled with NLA (Network Level Authentication)'}else{ck 'WARN' 'RDP enabled WITHOUT NLA' 'Set UserAuthentication=1 in HKLM\...\RDP-Tcp or via Group Policy'}} >> "%PSRUN%"
+echo $rs='%RDP_STATE%';if($rs -eq 'rdp=off'){ck 'PASS' 'RDP is disabled'}elseif($rs -eq 'rdp=nla'){ck 'PASS' 'RDP enabled with NLA (Network Level Authentication)'}elseif($rs -eq 'rdp=nonla'){ck 'WARN' 'RDP enabled WITHOUT NLA' 'Set UserAuthentication=1 in HKLM\...\RDP-Tcp or via Group Policy'}elseif($rs -eq 'rdp=missing'){ck 'WARN' 'fDenyTSConnections value MISSING (Section 10)' 'It exists on every Windows. See Section 10.'}else{ck 'INFO' 'RDP: NOT graded -- Section 10 could not read it'} >> "%PSRUN%"
 echo $ws='%WINRM_STATE%';if($ws -eq 'winrm=running'){ck 'WARN' 'WinRM RUNNING (remote PowerShell enabled)' 'Disable: Stop-Service WinRM; Set-Service WinRM -StartupType Disabled'}elseif($ws -eq 'winrm=stopped'){ck 'PASS' 'WinRM not running (Section 10)'}elseif($ws -eq 'winrm=absent'){ck 'PASS' 'WinRM service not present (Section 10)'}elseif($ws -eq 'winrm=deferred'){ck 'INFO' 'WinRM: NOT graded -- deferred, needs administrator (Section 10)'}else{ck 'INFO' 'WinRM: NOT graded -- Section 10 could not query it'} >> "%PSRUN%"
 echo. >> "%PSRUN%"
 
@@ -5894,7 +6010,7 @@ echo if(led 'CRITICAL' '8' 'T1562.004' 'Windows Firewall disabled'){ addfix 'Ena
 echo if(led 'CRITICAL' '8' 'T1562.004' 'Windows Firewall service mpssvc not running'){ addfix 'Start the Windows Defender Firewall service and set it to start automatically' 'Set-Service -Name mpssvc -StartupType Automatic; Start-Service -Name mpssvc' '' } >> "%PSRUN%"
 echo if((led 'CRITICAL' '10' 'T1210' 'SMBv1 enabled') -or (led 'WARNING' '10' 'T1210' 'SMBv1 server component installed')){ addfix 'Disable SMBv1 (EternalBlue mitigation)' "Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart" '' } >> "%PSRUN%"
 echo if($joined -match 'PowerShell v2 ENABLED'){ addfix 'Disable PowerShell v2 (AMSI downgrade mitigation)' "Disable-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2Root -NoRestart" '' } >> "%PSRUN%"
-echo if($joined -match 'RDP enabled WITHOUT NLA'){ addfix 'Require Network Level Authentication for RDP' "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -Value 1 -Type DWord -Force" '' } >> "%PSRUN%"
+echo if(led 'WARNING' '10' 'T1021.001' 'RDP enabled without NLA'){ addfix 'Require Network Level Authentication for RDP' "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -Value 1 -Type DWord -Force" '' } >> "%PSRUN%"
 echo if(led 'WARNING' '10' 'T1021.006' 'WinRM running'){ addfix 'Stop and disable WinRM' "Stop-Service WinRM -Force; Set-Service WinRM -StartupType Disabled" 'Set-Service WinRM -StartupType Automatic; Start-Service WinRM' } >> "%PSRUN%"
 echo if(led 'CRITICAL' '13' 'T1548.002' 'UAC disabled'){ addfix 'Re-enable UAC (reboot required)' "Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name EnableLUA -Value 1 -Type DWord -Force" '' } >> "%PSRUN%"
 echo if(led 'WARNING' '13' 'T1548.002' 'UAC elevates without prompting'){ addfix 'Restore UAC prompt on secure desktop' "Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name ConsentPromptBehaviorAdmin -Value 2 -Type DWord -Force" '' } >> "%PSRUN%"

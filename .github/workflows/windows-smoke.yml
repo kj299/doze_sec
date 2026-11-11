@@ -2500,6 +2500,12 @@ jobs:
           & .\.github\ci\reg_policy_states.ps1
           exit $LASTEXITCODE
 
+      - name: file_walk_check.ps1 -SelfTest + every state through the real walker (TEMP streams, large HTML, Outlook items; a folder that cannot be read is a raised gap)
+        shell: powershell
+        run: |
+          & .\.github\ci\file_walk_states.ps1
+          exit $LASTEXITCODE
+
       - name: named_pipe_check.ps1 -SelfTest + live (a C2 pipe list that could not be read is a raised gap, never an all-clear)
         shell: powershell
         run: |

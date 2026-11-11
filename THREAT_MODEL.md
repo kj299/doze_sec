@@ -411,6 +411,17 @@ Found during the v7.1 coverage review; tracked for future work:
   17 RMM running/installed checks (`Get-Process`/Uninstall-key empties
   mean "not present"). Probes elsewhere may still degrade silently, but
   the high-value verdict checks across Sections 4-18 now fail visibly.
+- ~~Section 10 (RDP/NLA) fell through a failed read to `[OK] RDP enabled
+  with NLA.` and read only the local setting; the Section 14 and 17 file
+  walks (alternate data streams, large HTML/HTA, Outlook `.msg`/`.oft`)
+  silenced their errors and printed `[OK]` past folders they could not
+  read.~~ **Closed:** `tools/reg_policy_check.ps1 -Check Rdp` grades the
+  Group Policy value over the local one and raises an unreadable key as a
+  NOT-performed gap; `tools/file_walk_check.ps1` counts and names what it
+  could not read and raises it. Residual: the walks cover the current
+  user's TEMP and Outlook folder only, do not follow junctions or symbolic
+  links (each is named in an `[INFO]` line), and stop at a time budget (a
+  raised gap when it runs out).
 - ~~Section 5 (Winlogon Userinit/Shell, AppInit_DLLs), Section 11 (Script
   Block Logging) and Section 13 (UAC) read their registry values with
   `-EA SilentlyContinue`: a failed read printed `[OK]` for AppInit_DLLs and

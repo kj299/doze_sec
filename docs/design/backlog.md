@@ -795,16 +795,16 @@ Section lines (`doze_sec.bat` / `doze_sec_noAdmin.bat`):
 
 | Check | Lines | What a failed read prints today |
 |---|---|---|
-| RDP enabled / NLA (T1021.001) | 3346 / 3033 | a failed read of `fDenyTSConnections` falls to the NLA read; both failing prints the WARNING, so this one fails loud, but it cannot tell "unreadable" from "RDP on without NLA" |
+| ~~RDP enabled / NLA (T1021.001)~~ | DONE 2026-11-11 | `tools/reg_policy_check.ps1 -Check Rdp`; the Group Policy value outranks the local one |
 | ~~WDigest (T1003.001)~~ | DONE 2026-11-10 | `tools/cred_settings_check.ps1` |
 | ~~NTLM `LmCompatibilityLevel`~~ | DONE 2026-11-10 | `tools/cred_settings_check.ps1`; the raw `reg query ... if errorlevel 1 echo [OK]` above it had the same hole and went with it |
-| Alternate data streams in TEMP (T1564.004) | 4155 / 3906 | `[OK]` when the walk is denied part-way |
-| Large HTML/HTA in TEMP (HTML smuggling) | 4546 / 4402 | `[OK]` |
-| Outlook `.msg`/`.oft` | 4552 / 4408 | `[OK]` |
+| ~~Alternate data streams in TEMP (T1564.004)~~ | DONE 2026-11-11 | `tools/file_walk_check.ps1 -Check TempAds` |
+| ~~Large HTML/HTA in TEMP (HTML smuggling)~~ | DONE 2026-11-11 | `tools/file_walk_check.ps1 -Check TempHtml` |
+| ~~Outlook `.msg`/`.oft`~~ | DONE 2026-11-11 | `tools/file_walk_check.ps1 -Check OutlookMsg` |
 
 Dashboard tiles that re-measure instead of reading their section's verdict
 (the "a tile that re-measures is a second opinion" class), `doze_sec.bat`
-5729-5764 / `doze_sec_noAdmin.bat` 5626-5674: ~~WDigest, NTLM~~ (DONE 2026-11-10: they read `CRED_STATE`), RDP,
+5729-5764 / `doze_sec_noAdmin.bat` 5626-5674: ~~WDigest, NTLM~~ (DONE 2026-11-10: they read `CRED_STATE`), ~~RDP~~ (DONE 2026-11-11: it reads `RDP_STATE`),
 ~~UAC (`EnableLUA`), Script Block Logging, Winlogon `Userinit`, Winlogon
 `Shell`, `AppInit_DLLs`~~ (DONE 2026-11-10: `tools/reg_policy_check.ps1`).
 
@@ -829,3 +829,14 @@ what is not.
 Suggested order, by what a miss costs: WDigest and NTLM (credential theft,
 and their tiles), then the Winlogon/AppInit tiles (persistence), then RDP,
 then the three TEMP/Outlook walks.
+
+**Every row above is done (2026-11-11).** That closes this table, not the
+class: the table was built by a per-line search and was already found
+incomplete once. The per-PSRUN-block search described above has still not
+been run. Two things the last four rows left open, on purpose:
+
+- The Downloads HTML listing in Section 14 prints files and no verdict, so it
+  cannot print a false `[OK]`; it still walks with errors silenced.
+- The three walks do not follow junctions or symbolic links (a link can loop
+  or lead to a whole drive). Each link skipped is counted and named in an
+  `[INFO]` line. The old inline walk followed them on Windows PowerShell 5.1.
