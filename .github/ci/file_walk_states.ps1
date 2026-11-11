@@ -8,7 +8,7 @@ $ErrorActionPreference = 'Stop'
 $st = (.\tools\file_walk_check.ps1 -SelfTest) -join "`n"
 if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'file_walk_check -SelfTest failed' }
 $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-if ($n -lt 27) { throw "file_walk_check self-test ran only $n case(s)" }
+if ($n -lt 28) { throw "file_walk_check self-test ran only $n case(s)" }
 function RunW([string]$Check, [hashtable]$Extra) {
   $md = Join-Path $env:TEMP ("dz_ci_walk_{0}_{1}" -f $PID, [guid]::NewGuid().ToString('N').Substring(0, 6)); New-Item -ItemType Directory -Path $md -Force | Out-Null
   try {

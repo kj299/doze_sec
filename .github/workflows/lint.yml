@@ -649,10 +649,11 @@ jobs:
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
           out=$(pwsh -NoProfile -File tools/file_walk_check.ps1 -SelfTest); echo "$out"
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 27 ] || { echo "only $n walk case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 28 ] || { echo "only $n walk case(s)"; exit 1; }
           echo "$out" | grep -q '^\[FAIL\]' && { echo 'a walk case failed'; exit 1; }
           for n in 'a stream read refused with Win32 error 5 is access denied' \
                    'a junction that was not followed is said and named beside the [OK], never silent' \
+                   'a path too long to print whole keeps its drive AND its file name' \
                    'no path for the Outlook folder at all is a gap, never "No Outlook data folder"'; do
             echo "$out" | grep -qF "$n" || { echo "walk case gone: $n"; exit 1; }
           done

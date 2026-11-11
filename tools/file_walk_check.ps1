@@ -88,7 +88,9 @@ function ConvertTo-PrintableText {
     # 'gpj.exe' print as 'exe.jpg'.
     $t = (([string]$s) -replace '[\x00-\x1F\x7F\u202A-\u202E\u2066-\u2069]', '?')
     if ($t.StartsWith('\\?\')) { $t = $t.Substring(4) }
-    if ($t.Length -gt 260) { $t = $t.Substring(0, 260) + '...' }
+    # Too long: keep the START and the END. Cutting the tail dropped the file
+    # name from a finding under a deep path, the one part the reader needs.
+    if ($t.Length -gt 260) { $t = $t.Substring(0, 110) + ' ... ' + $t.Substring($t.Length - 140) }
     return $t
 }
 
@@ -283,6 +285,8 @@ if ($SelfTest) {
     $v = Get-WalkVerdict -Check 'OutlookMsg' -Scan (Invoke-Walk -RootPath '' -Select { $null } -Budget 5); $t = $v.Lines -join "`n"
     T 'no path for the Outlook folder at all is a gap, never "No Outlook data folder"' ($v.Gap -and $t -notmatch '\[OK\]') $t
     T 'a right-to-left override in a file name cannot disguise it in the report' ((ConvertTo-PrintableText ('a' + [char]0x202E + 'gpj.exe')) -eq 'a?gpj.exe') ''
+    $long = 'C:\Users\alice\AppData\Local\Temp\' + (('d' * 40 + '\') * 7) + 'deep.html'; $p = ConvertTo-PrintableText $long
+    T 'a path too long to print whole keeps its drive AND its file name' ($long.Length -gt 300 -and $p.Length -le 260 -and $p.StartsWith('C:\Users\alice') -and $p.EndsWith('deep.html')) $p
     $den = @{ Path = 'C:\Users\alice\AppData\Local\Temp\locked'; Denied = $true }
     $io = @{ Path = 'C:\Users\alice\AppData\Local\Temp\broken'; Denied = $false }
 

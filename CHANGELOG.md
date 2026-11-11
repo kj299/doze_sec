@@ -24,6 +24,7 @@ These were the last four rows of the silent all-clear table in `docs/design/back
   - Folders or files that could not be read are counted and named. With no finding beside them that is a raised `NOT performed in full` row, or a counted deferral when access denied on a standard-user token explains all of it.
   - A missing TEMP folder is a gap. A missing Outlook folder is `[OK] No Outlook data folder for this user`.
   - A run that never reaches its end raises a `produced no verdict` row.
+  - A path too long to print whole keeps its start and its end, so the file name is never the part cut off.
 
 **Behaviour changes to know about.**
 - Each walk has a time budget: 180 seconds for the stream check, 60 for the other two. Running out is a raised `NOT performed in full` row, never `[OK]`. Before, a very large TEMP had no limit and no statement.
