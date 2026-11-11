@@ -645,15 +645,19 @@ jobs:
                    'the Terminal Server key could not be read: a raised gap, never "[OK] RDP enabled with NLA" (the old fall-through)' \
                    'fDenyTSConnections absent in both places: a WARNING that it is missing, never "enabled with NLA"' \
                    'NLA switched off BY POLICY is marked as such, so no local fix is queued for it' \
+                   'RDP off and the RDP-Tcp key unreadable: [OK] -- the value that decides was read, NLA does not matter with RDP off' \
+                   'RDP on and UserAuthentication holds an undefined value: a gap, not "WITHOUT NLA" (the tool did not observe that)' \
                    'a listener list that could not be read is said, never "is not listening"'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
           out=$(pwsh -NoProfile -File tools/file_walk_check.ps1 -SelfTest); echo "$out"
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 28 ] || { echo "only $n walk case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 29 ] || { echo "only $n walk case(s)"; exit 1; }
           echo "$out" | grep -q '^\[FAIL\]' && { echo 'a walk case failed'; exit 1; }
           for n in 'a stream read refused with Win32 error 5 is access denied' \
                    'a junction that was not followed is said and named beside the [OK], never silent' \
                    'a path too long to print whole keeps its drive AND its file name' \
+                   'ADS, a hit AND an unreadable folder: BOTH the finding and the gap -- one hit cannot hide an incomplete walk' \
+                   'a name its parent still lists did not vanish (unknown counts as listed, never as churn)' \
                    'no path for the Outlook folder at all is a gap, never "No Outlook data folder"'; do
             echo "$out" | grep -qF "$n" || { echo "walk case gone: $n"; exit 1; }
           done
@@ -665,12 +669,14 @@ jobs:
             for c in TempAds TempHtml OutlookMsg; do
               grep -qF "file_walk_check.ps1\" -Check $c>>" "$b" || { echo "$b: Section 14/17 no longer runs file_walk_check -Check $c"; exit 1; }
             done
-            for m in rdpnla_pol rdp_missing rdp_gap ads_hit ads_gap ads_deferred htmltemp_hit htmltemp_gap htmltemp_deferred outlookmsg_hit outlookmsg_gap outlookmsg_deferred; do
+            for m in rdpnla_pol rdp_missing rdp_gap ads_hit ads_gap htmltemp_hit htmltemp_gap outlookmsg_hit outlookmsg_gap; do
               grep -qF "if exist \"%TEMP%\\dz_$m.txt\" (" "$b" || { echo "$b: the dz_$m marker is never read -- that verdict would reach no ledger row"; exit 1; }
             done
             for d in ads htmltemp outlookmsg; do
               grep -qF "if not exist \"%TEMP%\\dz_${d}_done.txt\" if exist" "$b" || { echo "$b: the $d walk lost its no-verdict backstop"; exit 1; }
             done
+            grep -qF "rdp=nonla-policy" "$b" || { echo "$b: the RDP tile no longer tells policy-set NLA from a local setting"; exit 1; }
+            grep -qE 'dz_(ads|htmltemp|outlookmsg)_deferred' "$b" && { echo "$b: a walk of the user's own folder defers again -- a denial there is a gap"; exit 1; }
             grep -qF 'RDP check produced no verdict' "$b" || { echo "$b: lost the RDP no-verdict backstop"; exit 1; }
             grep -qF "echo \$rs='%RDP_STATE%'" "$b" || { echo "$b: the RDP tile no longer reads Section 10's verdict"; exit 1; }
             grep -qF "led 'WARNING' '10' 'T1021.001' 'RDP enabled without NLA'" "$b" || { echo "$b: the NLA fix no longer triggers off the ledger"; exit 1; }
@@ -691,7 +697,7 @@ jobs:
                    'Policies\System could not be read: a raised gap, never "[OK] UAC enabled" and never "value MISSING"'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 55 ] || { echo "only $n case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 58 ] || { echo "only $n case(s)"; exit 1; }
           for b in doze_sec.bat doze_sec_noAdmin.bat; do
             for v in Userinit Shell AppInit_DLLs EnableLUA EnableScriptBlockLogging; do
               # A fix's own command may read the old value for its undo; that is not a check.

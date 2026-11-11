@@ -8,7 +8,7 @@ $ErrorActionPreference = 'Stop'
 $st = (.\tools\reg_policy_check.ps1 -SelfTest) -join "`n"
 if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'reg_policy_check -SelfTest failed' }
 $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-if ($n -lt 55) { throw "reg_policy_check self-test ran only $n case(s)" }
+if ($n -lt 58) { throw "reg_policy_check self-test ran only $n case(s)" }
 $stateFile = @{ Winlogon = 'dz_winlogon_state.txt'; ScriptBlockLogging = 'dz_sbl_state.txt'; Uac = 'dz_uac_state.txt'; Rdp = 'dz_rdp_state.txt' }
 function RunP([string]$Check, [hashtable]$Extra) {
   $md = Join-Path $env:TEMP ("dz_ci_regpol_{0}_{1}" -f $PID, [guid]::NewGuid().ToString('N').Substring(0, 6)); New-Item -ItemType Directory -Path $md -Force | Out-Null
@@ -25,9 +25,9 @@ $w = RunP 'Winlogon' @{}; $u = RunP 'Uac' @{}; $l = RunP 'ScriptBlockLogging' @{
 Write-Host "MEASURED: the runner's own state is $($w.State) ; $($u.State) ; $($l.State) ; $($d.State) [$($d.Markers)]"
 # A hosted runner is reached over RDP, so on or off, with or without NLA, is
 # measured -- but it must be GRADED, with the service context line.
-if ($d.State -notmatch '^rdp=(off|nla|nonla)$') { throw "the runner's RDP state was not graded: $($d.State) [$($d.Markers)] $($d.Out)" }
+if ($d.State -notmatch '^rdp=(off|nla|nonla|nonla-policy)$') { throw "the runner's RDP state was not graded: $($d.State) [$($d.Markers)] $($d.Out)" }
 if ($d.Out -notmatch '(?m)^\[INFO\] (Remote Desktop service \(TermService\): |The Remote Desktop service state or its listener could not be read)') { throw "the RDP check printed no service context line: $($d.Out)" }
-if (($d.State -eq 'rdp=nonla') -ne ($d.Markers -match '^dz_rdpnla_(hit|pol)$')) { throw "the RDP state and its marker disagree: $($d.State) [$($d.Markers)]" }
+if (($d.State -like 'rdp=nonla*') -ne ($d.Markers -match '^dz_rdpnla_(hit|pol)$')) { throw "the RDP state and its marker disagree: $($d.State) [$($d.Markers)]" }
 if ($w.State -ne 'userinit=ok,shell=ok,appinit=empty' -or $w.Markers) { throw "a clean runner did not read Winlogon and AppInit_DLLs clean: $($w.State) [$($w.Markers)]" }
 if ($u.State -notmatch '^uac=(on|noprompt|off),cpb=[0-5]$') { throw "the runner's UAC state was not graded: $($u.State) [$($u.Markers)]" }
 if ($l.State -notmatch '^sbl=(on|off)$') { throw "the runner's Script Block Logging state was not graded: $($l.State)" }
@@ -62,7 +62,7 @@ try {
   Expect (RunP 'Rdp' $k) 'rdp=nla' '' 'RDP on with NLA'
   # Group Policy outranks the local setting, in both directions.
   New-Item -Path $gp -Force | Out-Null; Set-ItemProperty -Path $gp -Name UserAuthentication -Value 0 -Type DWord
-  Expect (RunP 'Rdp' $k) 'rdp=nonla' 'dz_rdpnla_pol' 'policy switches NLA off over a local 1 (its own marker: no local fix)'
+  Expect (RunP 'Rdp' $k) 'rdp=nonla-policy' 'dz_rdpnla_pol' 'policy switches NLA off over a local 1 (its own marker: no local fix)'
   Set-ItemProperty -Path $gp -Name fDenyTSConnections -Value 1 -Type DWord
   $r = RunP 'Rdp' $k; Expect $r 'rdp=off' '' 'policy turns RDP off over a local 0'
   if ($r.Out -notmatch 'differs from Group Policy') { throw "the policy/local difference was not said: $($r.Out)" }

@@ -467,9 +467,9 @@ try {
         ("an RDP gap or missing-value row on a runner: {0}" -f (($ledger1 | Where-Object { $_ -match '\|10\|T1021\.001\|' }) -join ' ; '))
     Assert ($text1 -notmatch 'RDP: NOT graded') 'no NOT-graded RDP tile on a standard-user run' 'the RDP tile read NOT graded for a value a standard user can read'
     # The three file walks (Sections 14 and 17) cover this user's own TEMP
-    # and Outlook folder. Each must say what it did: ran, deferred (every
-    # failure access denied) or a raised gap -- with a row for a gap and none
-    # for a deferral.
+    # and Outlook folder. Each must say what it did: ran, or a raised gap with
+    # its row. Never a deferral: a denial in the user's own folder is not
+    # explained by the token.
     foreach ($c in @(
         @{ Name = 'alternate-data-stream'; Ran = '(?m)^\[OK\] No suspicious ADS in Temp\.|(?m)^\[WARNING\] Alternate data stream \(T1564\.004\)'; Def = '(?m)^\[DEFERRED - ADMIN REQUIRED\] Alternate-data-stream check'; Gap = '(?m)^\[WARNING\] Alternate-data-stream check (NOT performed|produced no verdict)'; Row = '\|14\|T1564\.004\|Alternate-data-stream check ' },
         @{ Name = 'oversized HTML/HTA'; Ran = '(?m)^\[OK\] No oversized HTML/HTA files in user TEMP\.|(?m)^\[WARNING\] Large HTML/HTA files in Temp:'; Def = '(?m)^\[DEFERRED - ADMIN REQUIRED\] Oversized HTML/HTA check'; Gap = '(?m)^\[WARNING\] Oversized HTML/HTA check (NOT performed|produced no verdict)'; Row = '\|17\|T1027\.006\|Oversized HTML/HTA check ' },
@@ -479,7 +479,7 @@ try {
         Assert ($ran -or $def -or $gap) ('the {0} walk stated what it did on a standard-user token' -f $c.Name) ('the {0} walk printed neither a result, a deferral nor a gap' -f $c.Name)
         $rows = @($ledger1 | Where-Object { $_ -match $c.Row }).Count
         if ($gap) { Assert ($rows -gt 0) ('the {0} gap has its ledger row' -f $c.Name) ('a {0} NOT-performed line was printed with no ledger row' -f $c.Name) }
-        if ($def -and -not $gap) { Assert ($rows -eq 0) ('a {0} deferral is not a ledger row' -f $c.Name) ('a {0} deferral was raised as a ledger row' -f $c.Name) }
+        Assert (-not $def) ('the {0} walk did not defer: a denial in the user''s own folder is a gap' -f $c.Name) ('the {0} walk deferred a folder in the user''s own profile' -f $c.Name)
     }
     Assert ($text1 -notmatch '\[SKIPPED\] TEMP path unavailable') 'no unraised [SKIPPED] for the stream check' 'the old unraised ADS [SKIPPED] line is back'
     # Winlogon/AppInit (Section 5), Script Block Logging (11) and UAC (13):

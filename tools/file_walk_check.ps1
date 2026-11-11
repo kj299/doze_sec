@@ -18,11 +18,13 @@
 # THE RULE (pure, in Get-WalkVerdict, pinned by -SelfTest): grade what is
 # readable, and NAME and COUNT what is not.
 #   * a hit is the finding, wording kept, whatever else could not be read;
-#     what could not be read is then said as [INFO];
+#     what could not be read is raised BESIDE it (hit and gap are
+#     independent facts);
 #   * no hit, but folders or files could not be read, or the time budget ran
 #     out -> "[WARNING] ... NOT performed in full" with its own gap marker.
-#     When every failure was access denied on a standard-user token it is
-#     [DEFERRED - ADMIN REQUIRED], counted, never a row;
+#     NEVER a deferral: these are the user's OWN folders, so a denial
+#     there is not explained by a standard-user token (a deny ACE on a
+#     staging folder is exactly what it would look like);
 #   * the root folder: TEMP missing or unreadable is a gap (it always
 #     exists); a missing Outlook data folder is a real answer -- "[OK] No
 #     Outlook data folder for this user" -- and says so;
@@ -39,8 +41,8 @@
 #     \\?\ form before it is called unreadable;
 #   * the time budget is per check: 180 s for the stream read (one call per
 #     file), 60 s for the other two.
-# Markers: dz_ads_hit / dz_ads_gap / dz_ads_deferred, dz_htmltemp_hit /
-# _gap / _deferred, dz_outlookmsg_hit / _gap / _deferred; and
+# Markers: dz_ads_hit / dz_ads_gap, dz_htmltemp_hit / _gap,
+# dz_outlookmsg_hit / _gap; and
 # dz_<name>_done, written last on every run -- the bat raises a
 # "produced no verdict" row when it is absent.
 #
@@ -80,7 +82,7 @@ function Write-Marker {
     Set-Content -LiteralPath (Join-Path $MarkerDir ("dz_{0}.txt" -f $Name)) -Value $Sev -Encoding ASCII
 }
 
-function ConvertTo-PrintableText {
+function ConvertTo-PrintablePath {
     # A file name goes into the report as text: no control characters (a
     # name can hold a line break), and capped.
     param([string]$s)
@@ -108,7 +110,7 @@ function Get-WalkVerdict {
     param([string]$Check, $Scan, [bool]$IsElevated = $true)
     $c = $script:Checks[$Check]
     $out = New-Object System.Collections.ArrayList
-    $root = ConvertTo-PrintableText ([string]$Scan.RootPath)
+    $root = ConvertTo-PrintablePath ([string]$Scan.RootPath)
     if ([string]$Scan.RootState -eq 'missing') {
         if ($Check -eq 'OutlookMsg') {
             [void]$out.Add(('[OK] No Outlook data folder for this user (' + $root + ' does not exist), so there are no .msg/.oft files to check.'))
@@ -118,45 +120,37 @@ function Get-WalkVerdict {
         return @{ Lines = @($out.ToArray()); Hit = $false; Gap = $true; Deferred = 0 }
     }
     if ([string]$Scan.RootState -ne 'ok') {
-        $why = ConvertTo-PrintableText ([string]$Scan.RootError)
-        if ((-not $IsElevated) -and $Scan.RootDenied) {
-            [void]$out.Add(('[DEFERRED - ADMIN REQUIRED] ' + $c.What + ': ' + $root + ' is not readable from a standard-user token (' + $why + ') -- re-run as administrator to check it.'))
-            return @{ Lines = @($out.ToArray()); Hit = $false; Gap = $false; Deferred = 1 }
-        }
+        $why = ConvertTo-PrintablePath ([string]$Scan.RootError)
         [void]$out.Add(('[WARNING] ' + $c.What + ' NOT performed -- the folder ' + $root + ' could not be read (' + $why + '), so ' + $c.Miss + ' (' + $c.Tech + ').'))
         return @{ Lines = @($out.ToArray()); Hit = $false; Gap = $true; Deferred = 0 }
     }
     $hits = @($Scan.Hits | Where-Object { [string]$_ })
     $unread = @($Scan.Unreadable)
-    $allDenied = ($unread.Count -gt 0 -and @($unread | Where-Object { -not $_.Denied }).Count -eq 0)
-    $names = (@($unread | Select-Object -First 3 | ForEach-Object { ConvertTo-PrintableText ([string]$_.Path) }) -join '; ') + $(if ($unread.Count -gt 3) { ('; and ' + ($unread.Count - 3) + ' more') } else { '' })
+    $names = (@($unread | Select-Object -First 3 | ForEach-Object { ConvertTo-PrintablePath ([string]$_.Path) }) -join '; ') + $(if ($unread.Count -gt 3) { ('; and ' + ($unread.Count - 3) + ' more') } else { '' })
     $partial = New-Object System.Collections.ArrayList
     if ($unread.Count -gt 0) { [void]$partial.Add(([string]$unread.Count + ' folder(s) or file(s) could not be read (' + $names + ')')) }
     if ($Scan.OutOfTime) { [void]$partial.Add(('the ' + [string]$Scan.Budget + 's time budget ran out after ' + [string]$Scan.Examined + ' file(s)')) }
     $links = @($Scan.Links | Where-Object { [string]$_ })
     $linkLine = ''
-    if ($links.Count -gt 0) { $linkLine = ('[INFO] ' + [string]$links.Count + ' link(s) to another folder (junction or symbolic link) were NOT followed, so what they point at was not checked here: ' + (@($links | Select-Object -First 3 | ForEach-Object { ConvertTo-PrintableText ([string]$_) }) -join '; ') + $(if ($links.Count -gt 3) { ('; and ' + ($links.Count - 3) + ' more') } else { '' }) + '.') }
+    if ($links.Count -gt 0) { $linkLine = ('[INFO] ' + [string]$links.Count + ' link(s) to another folder (junction or symbolic link) were NOT followed, so what they point at was not checked here: ' + (@($links | Select-Object -First 3 | ForEach-Object { ConvertTo-PrintablePath ([string]$_) }) -join '; ') + $(if ($links.Count -gt 3) { ('; and ' + ($links.Count - 3) + ' more') } else { '' }) + '.') }
     $scope = ([string]$Scan.Examined + ' file(s) examined under ' + $root + ' in ' + [string]$Scan.Seconds + ' s' + $(if ([int]$Scan.Vanished -gt 0) { ('; ' + [string]$Scan.Vanished + ' vanished while being read (ordinary churn)') } else { '' }))
     if ($hits.Count -gt 0) {
         if ($Check -eq 'TempAds') {
-            foreach ($h in @($hits | Select-Object -First $script:MaxListed)) { [void]$out.Add(('[WARNING] Alternate data stream (T1564.004): ' + (ConvertTo-PrintableText $h))) }
+            foreach ($h in @($hits | Select-Object -First $script:MaxListed)) { [void]$out.Add(('[WARNING] Alternate data stream (T1564.004): ' + (ConvertTo-PrintablePath $h))) }
         } else {
             [void]$out.Add($(if ($Check -eq 'TempHtml') { '[WARNING] Large HTML/HTA files in Temp:' } else { '[WARNING] Recent Outlook .msg/.oft artefacts (review for CVE-2023-23397 NTLM relay):' }))
-            foreach ($h in @($hits | Select-Object -First $script:MaxListed)) { [void]$out.Add(('    ' + (ConvertTo-PrintableText $h))) }
+            foreach ($h in @($hits | Select-Object -First $script:MaxListed)) { [void]$out.Add(('    ' + (ConvertTo-PrintablePath $h))) }
         }
         if ($hits.Count -gt $script:MaxListed) { [void]$out.Add(('[INFO] ' + ($hits.Count - $script:MaxListed) + ' more not listed (' + $hits.Count + ' in all).')) }
-        if ($partial.Count -gt 0) { [void]$out.Add(('[INFO] This check was not complete: ' + ($partial.ToArray() -join '; ') + '. There may be more than is listed.')) }
+        # A hit does not make the walk complete: the incompleteness is its own
+        # raised line and row, or one benign hit would hide that most of the
+        # tree was never examined.
+        if ($partial.Count -gt 0) { [void]$out.Add(('[WARNING] ' + $c.What + ' NOT performed in full -- ' + ($partial.ToArray() -join '; ') + ', so there may be more than is listed (' + $c.Tech + ').')) }
         [void]$out.Add(('[INFO] ' + $scope + '.'))
         if ($linkLine) { [void]$out.Add($linkLine) }
-        return @{ Lines = @($out.ToArray()); Hit = $true; Gap = $false; Deferred = 0 }
+        return @{ Lines = @($out.ToArray()); Hit = $true; Gap = ($partial.Count -gt 0); Deferred = 0 }
     }
     if ($partial.Count -gt 0) {
-        if ((-not $IsElevated) -and $allDenied -and -not $Scan.OutOfTime) {
-            [void]$out.Add(('[DEFERRED - ADMIN REQUIRED] ' + $c.What + ': ' + ($partial.ToArray() -join '; ') + ' from a standard-user token -- they were NOT checked; re-run as administrator.'))
-            [void]$out.Add(('[INFO] Nothing was found in what could be read: ' + $scope + '.'))
-            if ($linkLine) { [void]$out.Add($linkLine) }
-            return @{ Lines = @($out.ToArray()); Hit = $false; Gap = $false; Deferred = 1 }
-        }
         [void]$out.Add(('[WARNING] ' + $c.What + ' NOT performed in full -- ' + ($partial.ToArray() -join '; ') + ', so ' + $c.Miss + ' (' + $c.Tech + ').'))
         [void]$out.Add(('[INFO] Nothing was found in what could be read: ' + $scope + '.'))
         if ($linkLine) { [void]$out.Add($linkLine) }
@@ -182,6 +176,18 @@ function Test-Denied {
         $x = $x.InnerException
     }
     return $false
+}
+function Test-StillListed {
+    # A name the parent folder still lists did not vanish: Windows refused to
+    # open it by that name (a trailing dot or space made through the \\?\
+    # form is the classic way to hide a folder). Unknown counts as listed.
+    param([string]$Path)
+    try {
+        $parent = [IO.Path]::GetDirectoryName($Path); $leaf = [IO.Path]::GetFileName($Path)
+        if (-not $parent -or -not $leaf) { return $true }
+        foreach ($n in [IO.Directory]::GetFileSystemEntries($parent)) { if ([IO.Path]::GetFileName($n) -eq $leaf -or $n -eq $Path) { return $true } }
+        return $false
+    } catch { return $true }
 }
 function Test-TooLong {
     param($Err)
@@ -236,7 +242,7 @@ function Invoke-Walk {
         }
         if ($err) {
             if ($first) { $scan.RootState = 'unreadable'; $scan.RootDenied = (Test-Denied $err); $scan.RootError = ($err.Exception.GetType().Name + ': ' + $err.Exception.Message); break }
-            if (Test-Vanished $err) { $scan.Vanished++ } else { [void]$scan.Unreadable.Add(@{ Path = $dir; Denied = (Test-Denied $err) }) }
+            if ((Test-Vanished $err) -and -not (Test-StillListed $dir)) { $scan.Vanished++ } else { [void]$scan.Unreadable.Add(@{ Path = $dir; Denied = (Test-Denied $err) }) }
             continue
         }
         $first = $false
@@ -255,7 +261,7 @@ function Invoke-Walk {
                 $h = & $Select $it
                 if ($h) { [void]$scan.Hits.Add([string]$h) }
             } catch {
-                if (Test-Vanished $_) { $scan.Vanished++ } else { [void]$scan.Unreadable.Add(@{ Path = $it.FullName; Denied = (Test-Denied $_) }) }
+                if ((Test-Vanished $_) -and -not (Test-StillListed $it.FullName)) { $scan.Vanished++ } else { [void]$scan.Unreadable.Add(@{ Path = $it.FullName; Denied = (Test-Denied $_) }) }
             }
         }
         if ($scan.OutOfTime) { break }
@@ -284,9 +290,10 @@ if ($SelfTest) {
     T 'a junction that was not followed is said and named beside the [OK], never silent' ($t -match '(?m)^\[INFO\] 1 link\(s\) to another folder .* NOT followed.*Temp\\x' -and -not $v.Gap) $t
     $v = Get-WalkVerdict -Check 'OutlookMsg' -Scan (Invoke-Walk -RootPath '' -Select { $null } -Budget 5); $t = $v.Lines -join "`n"
     T 'no path for the Outlook folder at all is a gap, never "No Outlook data folder"' ($v.Gap -and $t -notmatch '\[OK\]') $t
-    T 'a right-to-left override in a file name cannot disguise it in the report' ((ConvertTo-PrintableText ('a' + [char]0x202E + 'gpj.exe')) -eq 'a?gpj.exe') ''
-    $long = 'C:\Users\alice\AppData\Local\Temp\' + (('d' * 40 + '\') * 7) + 'deep.html'; $p = ConvertTo-PrintableText $long
+    T 'a right-to-left override in a file name cannot disguise it in the report' ((ConvertTo-PrintablePath ('a' + [char]0x202E + 'gpj.exe')) -eq 'a?gpj.exe') ''
+    $long = 'C:\Users\alice\AppData\Local\Temp\' + (('d' * 40 + '\') * 7) + 'deep.html'; $p = ConvertTo-PrintablePath $long
     T 'a path too long to print whole keeps its drive AND its file name' ($long.Length -gt 300 -and $p.Length -le 260 -and $p.StartsWith('C:\Users\alice') -and $p.EndsWith('deep.html')) $p
+    T 'a name its parent still lists did not vanish (unknown counts as listed, never as churn)' ((Test-StillListed $PSCommandPath) -and (Test-StillListed 'Z:\dz_no_such_parent\x') -and -not (Test-StillListed (Join-Path $PSScriptRoot 'dz_no_such_file_here.tmp'))) ''
     $den = @{ Path = 'C:\Users\alice\AppData\Local\Temp\locked'; Denied = $true }
     $io = @{ Path = 'C:\Users\alice\AppData\Local\Temp\broken'; Denied = $false }
 
@@ -297,19 +304,19 @@ if ($SelfTest) {
     $v = Get-WalkVerdict -Check 'TempAds' -Scan (S @{ Unreadable = @($den, $io) }) -IsElevated $true; $t = $v.Lines -join "`n"
     T 'ADS, folders that could not be read and no hit: a raised gap that names them, never "[OK] No suspicious ADS"' ($v.Gap -and (-not $v.Hit) -and $t -match '(?m)^\[WARNING\] Alternate-data-stream check NOT performed in full -- 2 folder\(s\) or file\(s\) could not be read \(C:\\Users\\alice\\AppData\\Local\\Temp\\locked; ' -and $t -notmatch 'No suspicious ADS' -and $t -match 'Nothing was found in what could be read') $t
     $v = Get-WalkVerdict -Check 'TempAds' -Scan (S @{ Unreadable = @($den) }) -IsElevated $false; $t = $v.Lines -join "`n"
-    T 'ADS, standard-user token, every failure access denied: a counted deferral, never a row and never [OK]' ((-not $v.Gap) -and $v.Deferred -eq 1 -and $t -match '(?m)^\[DEFERRED - ADMIN REQUIRED\] Alternate-data-stream check' -and $t -notmatch '\[OK\]' -and $t -notmatch '\[WARNING\]') $t
+    T 'ADS, standard-user token, every failure access denied: a RAISED gap -- this is the user''s own folder, the token does not explain a denial there' ($v.Gap -and $t -match '(?m)^\[WARNING\] Alternate-data-stream check NOT performed in full' -and $t -notmatch '\[OK\]' -and $t -notmatch 'DEFERRED') $t
     $v = Get-WalkVerdict -Check 'TempAds' -Scan (S @{ Unreadable = @($den, $io) }) -IsElevated $false
     T 'ADS, standard-user token, one failure NOT access denied: a raised gap, the token does not explain it' ($v.Gap -and $v.Deferred -eq 0) ($v.Lines -join ' | ')
     $v = Get-WalkVerdict -Check 'TempAds' -Scan (S @{ Unreadable = @($den) }) -IsElevated $true
     T 'ADS, administrator token, access denied: a raised gap, not a deferral' ($v.Gap -and $v.Deferred -eq 0) ($v.Lines -join ' | ')
     $v = Get-WalkVerdict -Check 'TempAds' -Scan (S @{ Hits = @('C:\T\a.txt :: x'); Unreadable = @($den) }); $t = $v.Lines -join "`n"
-    T 'ADS, a hit AND an unreadable folder: the finding, with the incompleteness said as INFO -- not a second row' ($v.Hit -and (-not $v.Gap) -and $t -match '\[INFO\] This check was not complete: 1 folder\(s\) or file\(s\) could not be read') $t
+    T 'ADS, a hit AND an unreadable folder: BOTH the finding and the gap -- one hit cannot hide an incomplete walk' ($v.Hit -and $v.Gap -and $t -match '(?m)^\[WARNING\] Alternate-data-stream check NOT performed in full -- 1 folder\(s\) or file\(s\) could not be read') $t
     $v = Get-WalkVerdict -Check 'TempAds' -Scan (S @{ OutOfTime = $true; Examined = 9000; Budget = 60 }) -IsElevated $false; $t = $v.Lines -join "`n"
     T 'the time budget ran out: a raised gap on any token (time is not the token), never [OK]' ($v.Gap -and $v.Deferred -eq 0 -and $t -match 'the 60s time budget ran out after 9000 file\(s\)' -and $t -notmatch '\[OK\]') $t
     $v = Get-WalkVerdict -Check 'TempAds' -Scan (S @{ RootState = 'missing' }); $t = $v.Lines -join "`n"
     T 'TEMP itself not found: a raised gap, not the old unraised [SKIPPED]' ($v.Gap -and $t -match '(?m)^\[WARNING\] Alternate-data-stream check NOT performed -- the folder .* was not found' -and $t -notmatch '\[SKIPPED\]') $t
     $v = Get-WalkVerdict -Check 'TempAds' -Scan (S @{ RootState = 'unreadable'; RootDenied = $true; RootError = 'UnauthorizedAccessException: denied' }) -IsElevated $false
-    T 'TEMP unreadable on a standard-user token (denied): a deferral' ($v.Deferred -eq 1 -and -not $v.Gap) ($v.Lines -join ' | ')
+    T 'TEMP unreadable on a standard-user token (denied): a raised gap, never a deferral' ($v.Gap -and ($v.Lines -join ' ') -notmatch 'DEFERRED') ($v.Lines -join ' | ')
     $v = Get-WalkVerdict -Check 'TempAds' -Scan (S @{ RootState = 'unreadable'; RootDenied = $false; RootError = 'IOException: device not ready' }) -IsElevated $false
     T 'TEMP unreadable for a reason that is not access denied: a raised gap' ($v.Gap -and ($v.Lines -join "`n") -match 'device not ready') ($v.Lines -join ' | ')
     $v = Get-WalkVerdict -Check 'TempAds' -Scan (S @{ Vanished = 3 })
@@ -336,7 +343,7 @@ if ($SelfTest) {
     $v = Get-WalkVerdict -Check 'OutlookMsg' -Scan (S @{ RootState = 'unreadable'; RootError = 'IOException: x' })
     T 'Outlook, the folder exists but could not be read: a raised gap, never the old [OK]' ($v.Gap -and ($v.Lines -join "`n") -notmatch '\[OK\]') ($v.Lines -join ' | ')
     if ($fails) { Write-Output "[FAIL] $fails file_walk_check self-test expectation(s) unmet"; exit 1 }
-    Write-Output '[OK] file_walk_check self-test: a hit keeps its wording; folders or files that could not be read, or a walk that ran out of time, are a raised gap (a deferral only for an access-denied standard user); a missing Outlook folder is said; and a clean walk says how much it examined.'
+    Write-Output '[OK] file_walk_check self-test: a hit keeps its wording; folders or files that could not be read, or a walk that ran out of time, are a raised gap (on either token: these are the user''s own folders); a missing Outlook folder is said; and a clean walk says how much it examined.'
     exit 0
 }
 
@@ -391,17 +398,15 @@ foreach ($l in $v.Lines) { $l }
 # The bat raises a row when this is absent: a helper that never got this far
 # printed no verdict, and no marker must not read as nothing found.
 Write-Marker -Name (@{ TempAds = 'ads'; TempHtml = 'htmltemp'; OutlookMsg = 'outlookmsg' }[$Check] + '_done') -Sev 'done'
+# Marker names are written out, not built: lint_unraised_findings reads them.
 if ($Check -eq 'TempAds') {
     if ($v.Hit) { Write-Marker -Name 'ads_hit' -Sev 'hit' }
     if ($v.Gap) { Write-Marker -Name 'ads_gap' -Sev 'WARNING' }
-    if ($v.Deferred -gt 0) { Write-Marker -Name 'ads_deferred' -Sev ([string]$v.Deferred) }
 } elseif ($Check -eq 'TempHtml') {
     if ($v.Hit) { Write-Marker -Name 'htmltemp_hit' -Sev 'hit' }
     if ($v.Gap) { Write-Marker -Name 'htmltemp_gap' -Sev 'WARNING' }
-    if ($v.Deferred -gt 0) { Write-Marker -Name 'htmltemp_deferred' -Sev ([string]$v.Deferred) }
 } else {
     if ($v.Hit) { Write-Marker -Name 'outlookmsg_hit' -Sev 'hit' }
     if ($v.Gap) { Write-Marker -Name 'outlookmsg_gap' -Sev 'WARNING' }
-    if ($v.Deferred -gt 0) { Write-Marker -Name 'outlookmsg_deferred' -Sev ([string]$v.Deferred) }
 }
 exit 0

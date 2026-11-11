@@ -4277,7 +4277,6 @@ rem tagged and routed like every other finding.
 del "%TEMP%\dz_ads_done.txt" 2>nul
 del "%TEMP%\dz_ads_hit.txt" 2>nul
 del "%TEMP%\dz_ads_gap.txt" 2>nul
-del "%TEMP%\dz_ads_deferred.txt" 2>nul
 echo  Command: powershell -File tools\file_walk_check.ps1 -Check TempAds>> "%REPORT%"
 if exist "%SCRIPT_DIR%tools\file_walk_check.ps1" (
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\file_walk_check.ps1" -Check TempAds>> "%REPORT%" 2>&1
@@ -4290,15 +4289,9 @@ if exist "%TEMP%\dz_ads_hit.txt" (
     del "%TEMP%\dz_ads_hit.txt" 2>nul
 )
 if exist "%TEMP%\dz_ads_gap.txt" (
-    rem A gap is its own row: part of the tree was not examined.
+    rem A gap is its own row, beside a hit or alone: part of the tree was not examined.
     call :dz_finding WARNING 14 T1564.004 "Alternate-data-stream check NOT performed in full - folders or files could not be read, or the time budget ran out"
     del "%TEMP%\dz_ads_gap.txt" 2>nul
-)
-if exist "%TEMP%\dz_ads_deferred.txt" (
-    set "_ADDEF=0"
-    set /p _ADDEF=<"%TEMP%\dz_ads_deferred.txt"
-    set /a DEFERRED_COUNT+=!_ADDEF!
-    del "%TEMP%\dz_ads_deferred.txt" 2>nul
 )
 if not exist "%TEMP%\dz_ads_done.txt" if exist "%SCRIPT_DIR%tools\file_walk_check.ps1" (
     echo [WARNING] Alternate-data-stream check produced no verdict -- NOT performed: tools\file_walk_check.ps1 did not run to its end.>> "%REPORT%"
@@ -4696,7 +4689,6 @@ echo --- [MIDNIGHT/AQUA BLIZZARD] Large HTML/HTA in Temp (HTML Smuggling) --->> 
 del "%TEMP%\dz_htmltemp_done.txt" 2>nul
 del "%TEMP%\dz_htmltemp_hit.txt" 2>nul
 del "%TEMP%\dz_htmltemp_gap.txt" 2>nul
-del "%TEMP%\dz_htmltemp_deferred.txt" 2>nul
 echo  Command: powershell -File tools\file_walk_check.ps1 -Check TempHtml>> "%REPORT%"
 if exist "%SCRIPT_DIR%tools\file_walk_check.ps1" (
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\file_walk_check.ps1" -Check TempHtml>> "%REPORT%" 2>&1
@@ -4709,15 +4701,9 @@ if exist "%TEMP%\dz_htmltemp_hit.txt" (
     del "%TEMP%\dz_htmltemp_hit.txt" 2>nul
 )
 if exist "%TEMP%\dz_htmltemp_gap.txt" (
-    rem A gap is its own row: part of the tree was not examined.
+    rem A gap is its own row, beside a hit or alone: part of the tree was not examined.
     call :dz_finding WARNING 17 T1027.006 "Oversized HTML/HTA check NOT performed in full - folders or files could not be read, or the time budget ran out"
     del "%TEMP%\dz_htmltemp_gap.txt" 2>nul
-)
-if exist "%TEMP%\dz_htmltemp_deferred.txt" (
-    set "_HTDEF=0"
-    set /p _HTDEF=<"%TEMP%\dz_htmltemp_deferred.txt"
-    set /a DEFERRED_COUNT+=!_HTDEF!
-    del "%TEMP%\dz_htmltemp_deferred.txt" 2>nul
 )
 if not exist "%TEMP%\dz_htmltemp_done.txt" if exist "%SCRIPT_DIR%tools\file_walk_check.ps1" (
     echo [WARNING] Oversized HTML/HTA check produced no verdict -- NOT performed: tools\file_walk_check.ps1 did not run to its end.>> "%REPORT%"
@@ -4730,7 +4716,6 @@ echo --- [FOREST BLIZZARD] CVE-2023-23397 Outlook .msg Artefacts --->> "%REPORT%
 del "%TEMP%\dz_outlookmsg_done.txt" 2>nul
 del "%TEMP%\dz_outlookmsg_hit.txt" 2>nul
 del "%TEMP%\dz_outlookmsg_gap.txt" 2>nul
-del "%TEMP%\dz_outlookmsg_deferred.txt" 2>nul
 echo  Command: powershell -File tools\file_walk_check.ps1 -Check OutlookMsg>> "%REPORT%"
 if exist "%SCRIPT_DIR%tools\file_walk_check.ps1" (
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\file_walk_check.ps1" -Check OutlookMsg>> "%REPORT%" 2>&1
@@ -4743,15 +4728,9 @@ if exist "%TEMP%\dz_outlookmsg_hit.txt" (
     del "%TEMP%\dz_outlookmsg_hit.txt" 2>nul
 )
 if exist "%TEMP%\dz_outlookmsg_gap.txt" (
-    rem A gap is its own row: part of the tree was not examined.
+    rem A gap is its own row, beside a hit or alone: part of the tree was not examined.
     call :dz_finding WARNING 17 T1566.001 "Outlook .msg/.oft check NOT performed in full - folders or files could not be read, or the time budget ran out"
     del "%TEMP%\dz_outlookmsg_gap.txt" 2>nul
-)
-if exist "%TEMP%\dz_outlookmsg_deferred.txt" (
-    set "_OMDEF=0"
-    set /p _OMDEF=<"%TEMP%\dz_outlookmsg_deferred.txt"
-    set /a DEFERRED_COUNT+=!_OMDEF!
-    del "%TEMP%\dz_outlookmsg_deferred.txt" 2>nul
 )
 if not exist "%TEMP%\dz_outlookmsg_done.txt" if exist "%SCRIPT_DIR%tools\file_walk_check.ps1" (
     echo [WARNING] Outlook .msg/.oft check produced no verdict -- NOT performed: tools\file_walk_check.ps1 did not run to its end.>> "%REPORT%"
@@ -5952,7 +5931,7 @@ echo sec 'ATTACK SURFACE  (Sections 8, 10, 11)' >> "%PSRUN%"
 echo $fs='%FW_STATE%';if($fs -like 'fw=off,profiles=service'){ck 'CRIT' 'Firewall service DISABLED: mpssvc is not running, so no profile filters (Section 8)' 'Run: Set-Service mpssvc -StartupType Automatic; Start-Service mpssvc'}elseif($fs -like 'fw=off,profiles=*'){$fn=@($fs.Substring(16).Split('+'));ck 'CRIT' ('Firewall DISABLED on '+$fn.Count+' profile(s): '+($fn -join ', ')+' (Section 8)') 'Fix: Set-NetFirewallProfile -All -Enabled True'}elseif($fs -like 'fw=on,*'){ck 'PASS' 'All firewall profiles enabled - Domain, Private, Public (effective state, Section 8)'}elseif($fs -like 'fw=deferred,*'){ck 'INFO' 'Firewall state: NOT graded -- deferred, needs administrator (Section 8)'}else{ck 'INFO' 'Firewall state: NOT graded -- Section 8 could not read it'} >> "%PSRUN%"
 echo $ss='%SMB1_STATE%';if($ss -eq 'smb1=enabled'){ck 'CRIT' 'SMBv1 ENABLED (EternalBlue CVE-2017-0144)' 'Run: Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart'}elseif($ss -eq 'smb1=installed'){ck 'WARN' 'SMBv1 server component INSTALLED -- the server setting could not be read (Section 10)' 'Run: Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart'}elseif($ss -eq 'smb1=disabled'){ck 'PASS' 'SMBv1 disabled (EternalBlue not exploitable)'}elseif($ss -eq 'smb1=absent'){ck 'PASS' 'SMBv1 server component not installed (EternalBlue not exploitable)'}elseif($ss -eq 'smb1=deferred'){ck 'INFO' 'SMBv1 state: NOT graded -- deferred, needs administrator (Section 10)'}else{ck 'INFO' 'SMBv1 state: NOT graded -- Section 10 could not read it'} >> "%PSRUN%"
 echo $p2=''; if(Test-Path "$env:TEMP\dz_psv2_state.txt"){$p2=[string](Get-Content "$env:TEMP\dz_psv2_state.txt" -EA SilentlyContinue ^| Select-Object -First 1)}; if($p2 -eq 'ENABLED'){ck 'WARN' 'PowerShell v2 ENABLED (AMSI downgrade possible)' 'Run: Disable-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2Root'}elseif($p2 -eq 'DISABLED'){ck 'PASS' 'PowerShell v2 disabled'}else{ck 'INFO' 'PSv2 state unavailable -- see Section 11'} >> "%PSRUN%"
-echo $rs='%RDP_STATE%';if($rs -eq 'rdp=off'){ck 'PASS' 'RDP is disabled'}elseif($rs -eq 'rdp=nla'){ck 'PASS' 'RDP enabled with NLA (Network Level Authentication)'}elseif($rs -eq 'rdp=nonla'){ck 'WARN' 'RDP enabled WITHOUT NLA' 'Set UserAuthentication=1 in HKLM\...\RDP-Tcp or via Group Policy'}elseif($rs -eq 'rdp=missing'){ck 'WARN' 'fDenyTSConnections value MISSING (Section 10)' 'It exists on every Windows. See Section 10.'}else{ck 'INFO' 'RDP: NOT graded -- Section 10 could not read it'} >> "%PSRUN%"
+echo $rs='%RDP_STATE%';if($rs -eq 'rdp=off'){ck 'PASS' 'RDP is disabled'}elseif($rs -eq 'rdp=nla'){ck 'PASS' 'RDP enabled with NLA (Network Level Authentication)'}elseif($rs -eq 'rdp=nonla'){ck 'WARN' 'RDP enabled WITHOUT NLA' 'Set UserAuthentication=1 in HKLM\...\RDP-Tcp or via Group Policy'}elseif($rs -eq 'rdp=nonla-policy'){ck 'WARN' 'RDP enabled WITHOUT NLA -- switched off by Group Policy' 'A local change has no effect. The policy itself has to change. See Section 10.'}elseif($rs -eq 'rdp=missing'){ck 'WARN' 'fDenyTSConnections value MISSING (Section 10)' 'It exists on every Windows. See Section 10.'}else{ck 'INFO' 'RDP: NOT graded -- Section 10 could not read it'} >> "%PSRUN%"
 echo $ws='%WINRM_STATE%';if($ws -eq 'winrm=running'){ck 'WARN' 'WinRM RUNNING (remote PowerShell enabled)' 'Disable: Stop-Service WinRM; Set-Service WinRM -StartupType Disabled'}elseif($ws -eq 'winrm=stopped'){ck 'PASS' 'WinRM not running (Section 10)'}elseif($ws -eq 'winrm=absent'){ck 'PASS' 'WinRM service not present (Section 10)'}elseif($ws -eq 'winrm=deferred'){ck 'INFO' 'WinRM: NOT graded -- deferred, needs administrator (Section 10)'}else{ck 'INFO' 'WinRM: NOT graded -- Section 10 could not query it'} >> "%PSRUN%"
 echo. >> "%PSRUN%"
 

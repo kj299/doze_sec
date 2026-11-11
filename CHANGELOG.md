@@ -21,7 +21,8 @@ These were the last four rows of the silent all-clear table in `docs/design/back
   - The tile reads Section 10's verdict. The NLA fix triggers off the ledger, and is not queued when Group Policy is what switches NLA off: a local change would have no effect.
 - **The walks:** `tools/file_walk_check.ps1 -Check TempAds|TempHtml|OutlookMsg`.
   - Findings keep their wording and rows.
-  - Folders or files that could not be read are counted and named. With no finding beside them that is a raised `NOT performed in full` row, or a counted deferral when access denied on a standard-user token explains all of it.
+  - Folders or files that could not be read are counted, named and raised as a `NOT performed in full` row, beside a finding or alone, on either token. These are the user's own folders, so a denial there is never deferred as "needs administrator".
+  - A folder or file that "was not found" a moment after it was listed counts as ordinary churn only when its parent no longer lists it. A name Windows lists but will not open (a trailing dot or space) is raised as unread.
   - A missing TEMP folder is a gap. A missing Outlook folder is `[OK] No Outlook data folder for this user`.
   - A run that never reaches its end raises a `produced no verdict` row.
   - A path too long to print whole keeps its start and its end, so the file name is never the part cut off.

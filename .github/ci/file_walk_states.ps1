@@ -8,7 +8,7 @@ $ErrorActionPreference = 'Stop'
 $st = (.\tools\file_walk_check.ps1 -SelfTest) -join "`n"
 if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'file_walk_check -SelfTest failed' }
 $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-if ($n -lt 28) { throw "file_walk_check self-test ran only $n case(s)" }
+if ($n -lt 29) { throw "file_walk_check self-test ran only $n case(s)" }
 function RunW([string]$Check, [hashtable]$Extra) {
   $md = Join-Path $env:TEMP ("dz_ci_walk_{0}_{1}" -f $PID, [guid]::NewGuid().ToString('N').Substring(0, 6)); New-Item -ItemType Directory -Path $md -Force | Out-Null
   try {
@@ -52,6 +52,9 @@ try {
   [IO.File]::WriteAllBytes((Join-Path $root 'sub [1]\deep\big.HTA'), (New-Object byte[] 300000))
   Set-Content -LiteralPath (Join-Path $root 'sub [1]\new.oft') -Value 'x'
   Expect (RunW 'TempAds' $k) 'dz_ads_hit' '(?m)^\[WARNING\] Alternate data stream \(T1564\.004\): .*note\.txt :: dz_ci_payload' 'a planted stream'
+  # A hit beside an incomplete walk: BOTH markers, so one hit cannot hide the rest.
+  $r = RunW 'TempAds' (@{ Root = $root; BudgetSeconds = 0 })
+  if ($r.Out -match '(?m)^\[OK\]' -or $r.Markers -notmatch 'dz_ads_gap') { throw "an out-of-time stream walk was not a raised gap: [$($r.Markers)] $($r.Out)" }
   Expect (RunW 'TempHtml' $k) 'dz_htmltemp_hit' '(?m)^\[WARNING\] Large HTML/HTA files in Temp:' 'a 300 KB .HTA'
   $r = RunW 'TempHtml' $k; if ($r.Out -notmatch 'big\.HTA') { throw "the large file was not listed: $($r.Out)" }
   Expect (RunW 'OutlookMsg' $k) 'dz_outlookmsg_hit' '(?m)^\[WARNING\] Recent Outlook \.msg/\.oft artefacts' 'a recent .oft'
@@ -101,8 +104,10 @@ try {
     & icacls.exe $nf /reset /C /Q | Out-Null
   } else { Write-Host '[ SKIP ] denied-folder case not run: this account can still list the folder through the deny rule; the self-test pins the judgement' }
 } finally {
+  # Native tools write to stderr; under 'Stop' that would end the cleanup early.
+  $ErrorActionPreference = 'Continue'
   if (Test-Path -LiteralPath $locked) { & icacls.exe $locked /reset /T /C /Q | Out-Null }
-  Get-ChildItem -LiteralPath $root -Force -EA SilentlyContinue | ForEach-Object { & icacls.exe $_.FullName /reset /C /Q 2>$null | Out-Null }
+  Get-ChildItem -LiteralPath $root -Force -EA SilentlyContinue | ForEach-Object { & icacls.exe $_.FullName /reset /C /Q | Out-Null }
   if (Test-Path -LiteralPath (Join-Path $root 'jn')) { & cmd.exe /c rmdir (Join-Path $root 'jn') | Out-Null }
   Remove-Item -LiteralPath $root -Recurse -Force -EA SilentlyContinue
   if ($outside) { Remove-Item -LiteralPath $outside -Recurse -Force -EA SilentlyContinue }
