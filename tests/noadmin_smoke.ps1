@@ -457,6 +457,31 @@ try {
             Assert ($text1 -notmatch $c.Pass) ('no PASS tile for a {0} state this token could not read' -f $c.Name) ('the dashboard printed a {0} PASS this token could not read' -f $c.Name)
         }
     }
+    # RDP (Section 10): HKLM is readable from this token, so it must be
+    # GRADED -- no gap row and no "NOT graded" tile.
+    Assert ($text1 -match '(?m)^\[OK\] RDP (disabled\.|enabled with NLA\.)|(?m)^\[WARNING\] RDP enabled WITHOUT NLA') `
+        'Section 10 graded RDP on a standard-user token' `
+        'Section 10 printed no RDP verdict on a standard-user token'
+    Assert (-not @($ledger1 | Where-Object { $_ -match '\|10\|T1021\.001\|.*(NOT performed|value missing)' }).Count) `
+        'no RDP gap or missing-value row on a standard-user run' `
+        ("an RDP gap or missing-value row on a runner: {0}" -f (($ledger1 | Where-Object { $_ -match '\|10\|T1021\.001\|' }) -join ' ; '))
+    Assert ($text1 -notmatch 'RDP: NOT graded') 'no NOT-graded RDP tile on a standard-user run' 'the RDP tile read NOT graded for a value a standard user can read'
+    # The three file walks (Sections 14 and 17) cover this user's own TEMP
+    # and Outlook folder. Each must say what it did: ran, or a raised gap with
+    # its row. Never a deferral: a denial in the user's own folder is not
+    # explained by the token.
+    foreach ($c in @(
+        @{ Name = 'alternate-data-stream'; Ran = '(?m)^\[OK\] No suspicious ADS in Temp\.|(?m)^\[WARNING\] Alternate data stream \(T1564\.004\)'; Def = '(?m)^\[DEFERRED - ADMIN REQUIRED\] Alternate-data-stream check'; Gap = '(?m)^\[WARNING\] Alternate-data-stream check (NOT performed|produced no verdict)'; Row = '\|14\|T1564\.004\|Alternate-data-stream check ' },
+        @{ Name = 'oversized HTML/HTA'; Ran = '(?m)^\[OK\] No oversized HTML/HTA files in user TEMP\.|(?m)^\[WARNING\] Large HTML/HTA files in Temp:'; Def = '(?m)^\[DEFERRED - ADMIN REQUIRED\] Oversized HTML/HTA check'; Gap = '(?m)^\[WARNING\] Oversized HTML/HTA check (NOT performed|produced no verdict)'; Row = '\|17\|T1027\.006\|Oversized HTML/HTA check ' },
+        @{ Name = 'Outlook .msg/.oft'; Ran = '(?m)^\[OK\] No (recent Outlook \.msg/\.oft artefacts\.|Outlook data folder for this user)|(?m)^\[WARNING\] Recent Outlook \.msg/\.oft artefacts'; Def = '(?m)^\[DEFERRED - ADMIN REQUIRED\] Outlook \.msg/\.oft check'; Gap = '(?m)^\[WARNING\] Outlook \.msg/\.oft check (NOT performed|produced no verdict)'; Row = '\|17\|T1566\.001\|Outlook \.msg/\.oft check ' })) {
+        $ran = $text1 -match $c.Ran; $def = $text1 -match $c.Def; $gap = $text1 -match $c.Gap
+        Write-Host ("  MEASURED: the {0} walk on a standard-user token: ran={1} deferred={2} gap={3}" -f $c.Name, $ran, $def, $gap)
+        Assert ($ran -or $def -or $gap) ('the {0} walk stated what it did on a standard-user token' -f $c.Name) ('the {0} walk printed neither a result, a deferral nor a gap' -f $c.Name)
+        $rows = @($ledger1 | Where-Object { $_ -match $c.Row }).Count
+        if ($gap) { Assert ($rows -gt 0) ('the {0} gap has its ledger row' -f $c.Name) ('a {0} NOT-performed line was printed with no ledger row' -f $c.Name) }
+        Assert (-not $def) ('the {0} walk did not defer: a denial in the user''s own folder is a gap' -f $c.Name) ('the {0} walk deferred a folder in the user''s own profile' -f $c.Name)
+    }
+    Assert ($text1 -notmatch '\[SKIPPED\] TEMP path unavailable') 'no unraised [SKIPPED] for the stream check' 'the old unraised ADS [SKIPPED] line is back'
     # Winlogon/AppInit (Section 5), Script Block Logging (11) and UAC (13):
     # HKLM is readable from this token, so each must be GRADED -- no gap row,
     # no unraised [SKIPPED], and no "NOT graded" tile.

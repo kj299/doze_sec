@@ -6,6 +6,32 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### RDP and the three file walks: a key or folder that could not be read is no longer an answer
+These were the last four rows of the silent all-clear table in `docs/design/backlog.md`.
+
+**Before.**
+- **Section 10, RDP:** a failed read of `fDenyTSConnections` fell through to the NLA read and could print `[OK] RDP enabled with NLA.` without knowing whether RDP was on. Only the local setting was read; a Group Policy value, which is the one in force, was ignored. The tile re-read the registry and the fix keyed off the tile's text.
+- **Section 14, alternate data streams in TEMP, and Section 17, large HTML/HTA in TEMP and recent Outlook `.msg`/`.oft`:** each walk silenced its errors, so a folder or file that could not be read was dropped and the block printed `[OK]`.
+
+**Now.**
+- **RDP:** `tools/reg_policy_check.ps1 -Check Rdp`.
+  - The Group Policy value decides when it is set, otherwise the local value. The line names which one answered, and says when the two differ.
+  - A key that could not be read, or a value Windows does not define, is a raised `NOT performed` row. A missing `fDenyTSConnections` is its own WARNING.
+  - The service state and a listener on 3389 are printed as context and never decide.
+  - The tile reads Section 10's verdict. The NLA fix triggers off the ledger, and is not queued when Group Policy is what switches NLA off: a local change would have no effect.
+- **The walks:** `tools/file_walk_check.ps1 -Check TempAds|TempHtml|OutlookMsg`.
+  - Findings keep their wording and rows.
+  - Folders or files that could not be read are counted, named and raised as a `NOT performed in full` row, beside a finding or alone, on either token. These are the user's own folders, so a denial there is never deferred as "needs administrator".
+  - A folder or file that "was not found" a moment after it was listed counts as ordinary churn only when its parent no longer lists it. A name Windows lists but will not open (a trailing dot or space) is raised as unread.
+  - A missing TEMP folder is a gap. A missing Outlook folder is `[OK] No Outlook data folder for this user`.
+  - A run that never reaches its end raises a `produced no verdict` row.
+  - A path too long to print whole keeps its start and its end, so the file name is never the part cut off.
+
+**Behaviour changes to know about.**
+- Each walk has a time budget: 180 seconds for the stream check, 60 for the other two. Running out is a raised `NOT performed in full` row, never `[OK]`. Before, a very large TEMP had no limit and no statement.
+- Junctions and symbolic links are not followed. Each one skipped is counted and named in an `[INFO]` line. The old walk followed them.
+- Hidden and system files are now included.
+
 ### Winlogon, AppInit_DLLs, Script Block Logging and UAC: a failed read is no longer an answer
 The retrospective's backlog listed five dashboard tiles that re-read the registry. The section lines behind them had the same hole. The backlog missed those because each is a two-line block, with the silenced read on one line and the verdict on the next, and the search was per line.
 

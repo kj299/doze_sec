@@ -51,12 +51,32 @@
 #                       Policies\System missing or unreadable, or either
 #                       value not a defined number -> a raised gap
 #                       (dz_uac_gap).
+#   -Check Rdp          Section 10 (T1021.001). fDenyTSConnections and
+#                       UserAuthentication each live in two places: the local
+#                       setting (Control\Terminal Server, ...\RDP-Tcp) and the
+#                       Group Policy copy (Policies\...\Terminal Services),
+#                       which is the one in force when present. The policy
+#                       value decides when set, else the local one, and the
+#                       line names which answered. The old inline line read
+#                       only the local setting, and a failed fDenyTSConnections
+#                       read fell through to "[OK] RDP enabled with NLA".
+#                       deny=1 -> [OK] disabled; deny=0 with NLA 1 -> [OK];
+#                       deny=0 with NLA 0 or unset -> the WARNING (wording
+#                       kept, dz_rdpnla_hit, or dz_rdpnla_pol when Group
+#                       Policy is what switches NLA off); fDenyTSConnections absent in both
+#                       places -> WARNING, value missing (dz_rdp_missing); a
+#                       key that could not be read, the Terminal Server key
+#                       missing, or a value Windows does not define -> a
+#                       raised gap (dz_rdp_gap). The service state and a
+#                       listener on 3389 are [INFO] context: a stopped service
+#                       set to Manual starts on demand, so they never decide.
 # HKLM is readable by a standard user, so a failed read is a gap on either
 # token, never a deferral.
 # State lines (commas only: the dashboard pastes them into a cmd echo):
 #   dz_winlogon_state.txt  userinit=<ok|modified|missing|gap>,shell=<same>,appinit=<empty|set|gap>
 #   dz_sbl_state.txt       sbl=<on|off|gap>
 #   dz_uac_state.txt       uac=<on|off|noprompt|missing|gap>,cpb=<0-5|->
+#   dz_rdp_state.txt       rdp=<off|nla|nonla|nonla-policy|missing|gap>
 #
 # Usage:
 #   powershell -File tools\reg_policy_check.ps1 -Check <Winlogon|ScriptBlockLogging|Uac> [-MarkerDir <dir>] [-StateFile <path>]
@@ -66,7 +86,7 @@
 
 [CmdletBinding()]
 param(
-    [ValidateSet('Winlogon', 'ScriptBlockLogging', 'Uac')]
+    [ValidateSet('Winlogon', 'ScriptBlockLogging', 'Uac', 'Rdp')]
     [string]$Check,
     [string]$MarkerDir = $env:TEMP,
     [string]$StateFile,
@@ -274,6 +294,73 @@ function Read-RegValueState {
     } catch { return @{ State = 'unreadable'; Value = $null; Kind = ''; Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message) } }
 }
 
+# PURE. Each of $PolDeny/$LocDeny/$PolNla/$LocNla is a reader state. $Context:
+# optional @{ Service; Listening; Error } for the [INFO] lines.
+# Returns @{ Lines; Hit; Missing; Gap; State }.
+function Get-RdpVerdict {
+    param($PolDeny, $LocDeny, $PolNla, $LocNla, $Context = $null)
+    $out = New-Object System.Collections.ArrayList
+    $r = @{ Hit = $false; PolicyNla = $false; Missing = $false; Gap = $false }
+    $gap = { param([string]$why)
+        [void]$out.Add(('[WARNING] RDP check NOT performed -- ' + $why + ', so an RDP service open without Network Level Authentication would go unseen (T1021.001).'))
+        $r.Gap = $true; $r.Lines = @($out.ToArray()); $r.State = 'rdp=gap'; return $r }
+    # A policy key that does not exist is the ordinary unmanaged machine.
+    # Only what decides whether RDP is ON gates here. The NLA values matter
+    # only once RDP is on, and are checked there: an unreadable RDP-Tcp key
+    # on a machine with RDP off is not a gap in this check.
+    $unread = { param($pairs) foreach ($x in $pairs) { if ([string]$x[1].State -eq 'unreadable' -or -not [string]$x[1].State) { return ($x[0] + ' could not be read (' + (ConvertTo-PrintableText ([string]$x[1].Error)) + ')') } }; return '' }
+    foreach ($x in @(@('the Group Policy Terminal Services key', $PolDeny), @('the Terminal Server key', $LocDeny))) {
+        if ([string]$x[1].State -eq 'unreadable' -or -not [string]$x[1].State) { return (& $gap ($x[0] + ' could not be read (' + (ConvertTo-PrintableText ([string]$x[1].Error)) + ')')) }
+    }
+    if ([string]$LocDeny.State -eq 'nokey') { return (& $gap 'the Terminal Server registry key was not found, and it exists on every Windows') }
+    $src = ''; $deny = $null
+    if ([string]$PolDeny.State -eq 'present') { $deny = $PolDeny; $src = 'Group Policy' }
+    elseif ([string]$LocDeny.State -eq 'present') { $deny = $LocDeny; $src = 'the local setting' }
+    if ($null -eq $deny) {
+        [void]$out.Add('[WARNING] fDenyTSConnections registry value is MISSING -- it exists on every Windows, so whether RDP is on cannot be read from it; investigate for tampering (T1021.001).')
+        $r.Missing = $true; $r.Lines = @($out.ToArray()); $r.State = 'rdp=missing'; return $r
+    }
+    $d = ConvertTo-RegNumber $deny.Value
+    if ($null -eq $d -or ($d -ne 0 -and $d -ne 1)) { return (& $gap ('fDenyTSConnections (' + $src + ') holds a value Windows does not define (' + (ConvertTo-PrintableText ([string]$deny.Value)) + ')')) }
+    $state = ''
+    if ($d -eq 1) {
+        [void]$out.Add(('[OK] RDP disabled. (fDenyTSConnections=1, from ' + $src + ')'))
+        $state = 'rdp=off'
+    } else {
+        $why = & $unread @(@('the Group Policy Terminal Services key', $PolNla), @('the RDP-Tcp key', $LocNla))
+        if ($why) { return (& $gap ('RDP is on (' + $src + ') and ' + $why)) }
+        $nsrc = ''; $nla = $null
+        if ([string]$PolNla.State -eq 'present') { $nla = $PolNla; $nsrc = 'Group Policy' }
+        elseif ([string]$LocNla.State -eq 'present') { $nla = $LocNla; $nsrc = 'the local setting' }
+        $n = if ($null -ne $nla) { ConvertTo-RegNumber $nla.Value } else { $null }
+        # A value Windows does not define is not 'NLA off': the tool did not observe that.
+        if ($null -ne $nla -and ($null -eq $n -or ($n -ne 0 -and $n -ne 1))) { return (& $gap ('RDP is on (' + $src + ') and UserAuthentication (' + $nsrc + ') holds a value Windows does not define (' + (ConvertTo-PrintableText ([string]$nla.Value)) + ')')) }
+        if ($n -eq 1) {
+            [void]$out.Add(('[OK] RDP enabled with NLA. (RDP on from ' + $src + '; UserAuthentication=1 from ' + $nsrc + ')'))
+            $state = 'rdp=nla'
+        } else {
+            [void]$out.Add('[WARNING] RDP enabled WITHOUT NLA')
+            if ($null -eq $nla) { [void]$out.Add(('[INFO] RDP is on (' + $src + ') and UserAuthentication is not set in policy or on the RDP-Tcp listener, so Network Level Authentication is not being required by either.')) }
+            else { [void]$out.Add(('[INFO] RDP is on (' + $src + '); UserAuthentication=' + (ConvertTo-PrintableText ([string]$nla.Value)) + ' from ' + $nsrc + '.')) }
+            $r.Hit = $true; $state = 'rdp=nonla'
+            if ($null -ne $nla -and $nsrc -eq 'Group Policy') {
+                # The local value cannot fix this one, so no fix is queued for it.
+                $r.PolicyNla = $true; $state = 'rdp=nonla-policy'
+                [void]$out.Add('[INFO] Group Policy is what switches Network Level Authentication off here. Changing the local setting would have no effect; the policy itself has to change.')
+            }
+        }
+    }
+    if ([string]$PolDeny.State -eq 'present' -and [string]$LocDeny.State -eq 'present' -and (ConvertTo-RegNumber $PolDeny.Value) -ne (ConvertTo-RegNumber $LocDeny.Value)) {
+        [void]$out.Add(('[INFO] The local setting (fDenyTSConnections=' + (ConvertTo-PrintableText ([string]$LocDeny.Value)) + ') differs from Group Policy. Policy is the one in force, so the local value is not graded.'))
+    }
+    if ($null -ne $Context) {
+        if ($Context.Error) { [void]$out.Add(('[INFO] The Remote Desktop service state or its listener could not be read (' + (ConvertTo-PrintableText ([string]$Context.Error)) + ').')) }
+        else { [void]$out.Add(('[INFO] Remote Desktop service (TermService): ' + (ConvertTo-PrintableText ([string]$Context.Service)) + '; TCP 3389 ' + $(if ($null -eq $Context.Listening) { 'listener state could not be read' } elseif ($Context.Listening) { 'is listening' } else { 'is not listening' }) + '. Context only: a stopped service set to Manual starts on demand.')) }
+    }
+    $r.Lines = @($out.ToArray()); $r.State = $state
+    return $r
+}
+
 if ($SelfTest) {
     $fails = 0
     function T { param([string]$Name, [bool]$Ok, [string]$Got)
@@ -364,13 +451,54 @@ if ($SelfTest) {
     T 'EnableLUA 0 with an undefined prompt value: still the CRITICAL (state off)' ($v.Hit -and $v.State -like 'uac=off,*') ($v.Lines -join ' | ')
     $v = Get-UacVerdict -Lua (D 1) -Cpb (D 5) -Latfp (D 1)
     T 'LocalAccountTokenFilterPolicy=1 is said as INFO' (($v.Lines -join "`n") -match '\[INFO\] LocalAccountTokenFilterPolicy=1') ($v.Lines -join ' | ')
+
+    # --- RDP ---
+    $v = Get-RdpVerdict -PolDeny $nok -LocDeny (D 1) -PolNla $nok -LocNla (D 1); $t = $v.Lines -join "`n"
+    T 'RDP off (the client default), no policy key: [OK] naming the local setting, nothing raised' ((-not ($v.Hit -or $v.Gap -or $v.Missing)) -and $v.State -eq 'rdp=off' -and $t -match '(?m)^\[OK\] RDP disabled\. \(fDenyTSConnections=1, from the local setting\)$') $t
+    $v = Get-RdpVerdict -PolDeny $nok -LocDeny (D 0) -PolNla $nok -LocNla (D 1); $t = $v.Lines -join "`n"
+    T 'RDP on with NLA: [OK]' ((-not $v.Hit) -and $v.State -eq 'rdp=nla' -and $t -match '(?m)^\[OK\] RDP enabled with NLA\.') $t
+    $v = Get-RdpVerdict -PolDeny $nok -LocDeny (D 0) -PolNla $nok -LocNla (D 0); $t = $v.Lines -join "`n"
+    T 'RDP on, NLA 0: the WARNING wording the bats always printed, and a hit' ($v.Hit -and $v.State -eq 'rdp=nonla' -and $t -match '(?m)^\[WARNING\] RDP enabled WITHOUT NLA$') $t
+    $v = Get-RdpVerdict -PolDeny $nok -LocDeny (D 0) -PolNla $nok -LocNla $abs; $t = $v.Lines -join "`n"
+    T 'RDP on, NLA value not set anywhere: the WARNING, with the reason as INFO' ($v.Hit -and $t -match 'UserAuthentication is not set in policy or on the RDP-Tcp listener') $t
+    $v = Get-RdpVerdict -PolDeny (D 0) -LocDeny (D 1) -PolNla (D 1) -LocNla (D 0); $t = $v.Lines -join "`n"
+    T 'Group Policy turns RDP ON with NLA while the local setting says off: graded from policy, the difference said' ((-not $v.Hit) -and $v.State -eq 'rdp=nla' -and $t -match 'RDP on from Group Policy; UserAuthentication=1 from Group Policy' -and $t -match 'differs from Group Policy') $t
+    $v = Get-RdpVerdict -PolDeny (D 0) -LocDeny (D 1) -PolNla (D 0) -LocNla (D 1)
+    T 'Group Policy turns RDP ON without NLA while the local settings look safe: the WARNING -- the local value cannot clear it' ($v.Hit -and $v.State -eq 'rdp=nonla-policy') ($v.Lines -join ' | ')
+    T 'NLA switched off BY POLICY is marked as such, so no local fix is queued for it' ($v.PolicyNla -and ($v.Lines -join "`n") -match 'Changing the local setting would have no effect') ($v.Lines -join ' | ')
+    $v = Get-RdpVerdict -PolDeny (D 0) -LocDeny (D 1) -PolNla $abs -LocNla (D 0)
+    T 'policy turns RDP on but says nothing about NLA: the local NLA value is the one in force, and a local fix works' ($v.Hit -and -not $v.PolicyNla) ($v.Lines -join ' | ')
+    $v = Get-RdpVerdict -PolDeny (D 1) -LocDeny (D 0) -PolNla $abs -LocNla (D 0)
+    T 'Group Policy turns RDP OFF while the local setting says on without NLA: [OK] -- the local value cannot raise it' ((-not $v.Hit) -and $v.State -eq 'rdp=off' -and ($v.Lines -join "`n") -match 'from Group Policy') ($v.Lines -join ' | ')
+    $v = Get-RdpVerdict -PolDeny $nok -LocDeny $bad -PolNla $nok -LocNla (D 1); $t = $v.Lines -join "`n"
+    T 'the Terminal Server key could not be read: a raised gap, never "[OK] RDP enabled with NLA" (the old fall-through)' ($v.Gap -and (-not $v.Hit) -and $v.State -eq 'rdp=gap' -and $t -match '(?m)^\[WARNING\] RDP check NOT performed' -and $t -notmatch '\[OK\]') $t
+    $v = Get-RdpVerdict -PolDeny $bad -LocDeny (D 1) -PolNla $bad -LocNla (D 1)
+    T 'the policy key could not be read: a gap -- the local "off" cannot be trusted as the effect' ($v.Gap -and ($v.Lines -join "`n") -notmatch '\[OK\]') ($v.Lines -join ' | ')
+    $v = Get-RdpVerdict -PolDeny $nok -LocDeny $nok -PolNla $nok -LocNla $nok
+    T 'the Terminal Server key missing altogether: a gap (it exists on every Windows)' ($v.Gap -and ($v.Lines -join "`n") -match 'exists on every Windows') ($v.Lines -join ' | ')
+    $v = Get-RdpVerdict -PolDeny $nok -LocDeny $abs -PolNla $nok -LocNla (D 1); $t = $v.Lines -join "`n"
+    T 'fDenyTSConnections absent in both places: a WARNING that it is missing, never "enabled with NLA"' ($v.Missing -and (-not $v.Hit) -and $v.State -eq 'rdp=missing' -and $t -match 'fDenyTSConnections registry value is MISSING' -and $t -notmatch '\[OK\]') $t
+    $v = Get-RdpVerdict -PolDeny $nok -LocDeny (D 7) -PolNla $nok -LocNla (D 1)
+    T 'fDenyTSConnections 7 (undefined): a gap, neither off nor on' ($v.Gap -and ($v.Lines -join "`n") -match 'does not define \(7\)') ($v.Lines -join ' | ')
+    $v = Get-RdpVerdict -PolDeny $nok -LocDeny (D 0) -PolNla $nok -LocNla $nok
+    T 'RDP on and no RDP-Tcp listener key: NLA is not required by anything -- the WARNING' ($v.Hit) ($v.Lines -join ' | ')
+    $v = Get-RdpVerdict -PolDeny $nok -LocDeny (D 0) -PolNla $nok -LocNla (D 0) -Context @{ Service = 'Stopped, startup Disabled'; Listening = $false; Error = '' }; $t = $v.Lines -join "`n"
+    T 'a stopped service is context: the WARNING stands, and the context is one INFO line' ($v.Hit -and $t -match '\[INFO\] Remote Desktop service \(TermService\): Stopped, startup Disabled; TCP 3389 is not listening') $t
+    $v = Get-RdpVerdict -PolDeny $nok -LocDeny (D 1) -PolNla $nok -LocNla (D 1) -Context @{ Service = 'Stopped, startup Manual'; Listening = $null; Error = '' }
+    T 'a listener list that could not be read is said, never "is not listening"' (($v.Lines -join "`n") -match 'TCP 3389 listener state could not be read' -and ($v.Lines -join "`n") -notmatch 'is not listening') ($v.Lines -join ' | ')
+    $v = Get-RdpVerdict -PolDeny $nok -LocDeny (D 1) -PolNla $nok -LocNla $bad
+    T 'RDP off and the RDP-Tcp key unreadable: [OK] -- the value that decides was read, NLA does not matter with RDP off' ((-not $v.Gap) -and $v.State -eq 'rdp=off') ($v.Lines -join ' | ')
+    $v = Get-RdpVerdict -PolDeny $nok -LocDeny (D 0) -PolNla $nok -LocNla $bad
+    T 'RDP ON and the RDP-Tcp key unreadable: a raised gap, never the finding and never [OK]' ($v.Gap -and (-not $v.Hit) -and $v.State -eq 'rdp=gap') ($v.Lines -join ' | ')
+    $v = Get-RdpVerdict -PolDeny $nok -LocDeny (D 0) -PolNla $nok -LocNla (D 2)
+    T 'RDP on and UserAuthentication holds an undefined value: a gap, not "WITHOUT NLA" (the tool did not observe that)' ($v.Gap -and (-not $v.Hit)) ($v.Lines -join ' | ')
     if ($fails) { Write-Output "[FAIL] $fails reg_policy_check self-test expectation(s) unmet"; exit 1 }
-    Write-Output '[OK] reg_policy_check self-test: the existing findings keep their wording; what an absent value means is decided per value; and a key that could not be read is a raised gap for Winlogon, AppInit_DLLs, Script Block Logging and UAC, never an all-clear and never a finding the tool did not observe.'
+    Write-Output '[OK] reg_policy_check self-test: the existing findings keep their wording; what an absent value means is decided per value; and a key that could not be read is a raised gap for Winlogon, AppInit_DLLs, Script Block Logging, UAC and RDP, never an all-clear and never a finding the tool did not observe.'
     exit 0
 }
 
 # --- live ---------------------------------------------------------------------
-if (-not $Check) { 'reg_policy_check: -Check is required (Winlogon, ScriptBlockLogging or Uac).'; exit 1 }
+if (-not $Check) { 'reg_policy_check: -Check is required (Winlogon, ScriptBlockLogging, Uac or Rdp).'; exit 1 }
 $root = $KeyRoot.TrimEnd('\')
 $v = $null; $stateRx = ''; $stateName = ''
 try {
@@ -384,6 +512,24 @@ try {
     } elseif ($Check -eq 'ScriptBlockLogging') {
         $stateName = 'dz_sbl_state.txt'; $stateRx = '^sbl=(on|off|gap)$'
         $v = Get-SblVerdict -S (Read-RegValueState -KeyPath "$root\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging" -Name 'EnableScriptBlockLogging')
+    } elseif ($Check -eq 'Rdp') {
+        $stateName = 'dz_rdp_state.txt'; $stateRx = '^rdp=(off|nla|nonla|nonla-policy|missing|gap)$'
+        $ts = "$root\SYSTEM\CurrentControlSet\Control\Terminal Server"
+        $tcp = "$ts\WinStations\RDP-Tcp"
+        $gp = "$root\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services"
+        $ctx = $null
+        if ($root -ieq 'HKLM:') {
+            # Context only, and only for the real machine.
+            try {
+                $svc = Get-Service -Name 'TermService' -ErrorAction Stop
+                $st = ''; try { $st = [string]$svc.StartType } catch {}
+                # $null = the listener list could not be read: said, never 'not listening'.
+                $lsn = $null
+                try { $lsn = (@(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object { [int]$_.LocalPort -eq 3389 }).Count -gt 0) } catch {}
+                $ctx = @{ Service = ([string]$svc.Status + $(if ($st) { ', startup ' + $st } else { '' })); Listening = $lsn; Error = '' }
+            } catch { $ctx = @{ Service = ''; Listening = $false; Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message) } }
+        }
+        $v = Get-RdpVerdict -PolDeny (Read-RegValueState -KeyPath $gp -Name 'fDenyTSConnections') -LocDeny (Read-RegValueState -KeyPath $ts -Name 'fDenyTSConnections') -PolNla (Read-RegValueState -KeyPath $gp -Name 'UserAuthentication') -LocNla (Read-RegValueState -KeyPath $tcp -Name 'UserAuthentication') -Context $ctx
     } else {
         $stateName = 'dz_uac_state.txt'; $stateRx = '^uac=(on|off|noprompt|missing|gap),cpb=([0-5]|-)$'
         $pol = "$root\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"
@@ -407,6 +553,11 @@ if ($Check -eq 'Winlogon') {
 } elseif ($Check -eq 'ScriptBlockLogging') {
     if ($v.Hit) { Write-Marker -Name 'sbl_hit' -Sev 'hit' }
     if ($v.Gap) { Write-Marker -Name 'sbl_gap' -Sev 'WARNING' }
+} elseif ($Check -eq 'Rdp') {
+    # Two markers, one finding: which one says whether a local fix can work.
+    if ($v.Hit -and $v.PolicyNla) { Write-Marker -Name 'rdpnla_pol' -Sev 'hit' } elseif ($v.Hit) { Write-Marker -Name 'rdpnla_hit' -Sev 'hit' }
+    if ($v.Missing) { Write-Marker -Name 'rdp_missing' -Sev 'WARNING' }
+    if ($v.Gap) { Write-Marker -Name 'rdp_gap' -Sev 'WARNING' }
 } else {
     if ($v.Hit) { Write-Marker -Name 'uac_hit' -Sev 'hit' }
     if ($v.Prompt) { Write-Marker -Name 'uacprompt_hit' -Sev 'hit' }

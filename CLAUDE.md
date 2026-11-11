@@ -675,6 +675,26 @@ A section-wide deferral hides everything in the section the token could have
 answered. When a tool is added to a section, read the section's non-admin
 branch; `lint.yml` pins this one.
 
+**A walk has three ways to read clean without looking, and a review found
+all three in one tool before it shipped.** `tools/file_walk_check.ps1`
+replaced three silenced walks, and its first draft still had: (1) *any*
+"not found" after a listing counted as a file that vanished, so a folder
+Windows lists but will not open by name (a trailing dot or space, the classic
+hiding trick) was skipped as "ordinary churn" -- a not-found is churn only
+when the parent no longer lists the name; (2) a denial on a standard-user
+token was a deferral, in the user's OWN TEMP, where the token explains
+nothing and a deny ACE on a staging folder looks exactly like that -- **a
+deferral needs the token to be the explanation, so ask whose folder it is**;
+(3) one hit suppressed the gap, so a benign stream on an installer hid that
+the budget ran out after 5% of the tree -- **a hit and a gap are independent
+facts; raise both.** The same review caught the RDP tile advising the local
+fix that Section 10 had just said cannot work under Group Policy: when a
+check learns WHY, the state it hands the tile must carry it. And the first
+Windows run caught what no reading did: a long path was shortened from the
+start, so the finding printed the folders and dropped the file name. It was
+caught only because the CI case asserted on the file's NAME, not on "a
+finding appeared". **Assert on the part the reader needs.**
+
 **A branch whose PR has merged is not that PR any more.** The WinRM commit
 was pushed to the #271 branch moments after #271 was merged: it never reached
 main, it had never run in CI, and #271's description -- updated to announce

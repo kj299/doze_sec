@@ -2500,6 +2500,12 @@ jobs:
           & .\.github\ci\reg_policy_states.ps1
           exit $LASTEXITCODE
 
+      - name: file_walk_check.ps1 -SelfTest + every state through the real walker (TEMP streams, large HTML, Outlook items; a folder that cannot be read is a raised gap)
+        shell: powershell
+        run: |
+          & .\.github\ci\file_walk_states.ps1
+          exit $LASTEXITCODE
+
       - name: named_pipe_check.ps1 -SelfTest + live (a C2 pipe list that could not be read is a raised gap, never an all-clear)
         shell: powershell
         run: |
@@ -4187,6 +4193,12 @@ jobs:
             $global:LASTEXITCODE = 0
             return ((.\tools\masquerade_check.ps1 -Path $d -MarkerFile (Join-Path $md 'm1.txt') -TreePath $t -ParentMarkerFile (Join-Path $md 'm2.txt') -CountMarkerFile (Join-Path $md 'm3.txt') -LsassCopyMarkerFile (Join-Path $md 'm4.txt') -CopyMarkerFile (Join-Path $md 'm5.txt')) -join "`n")
           }
+          # The daemon is not always up on a fresh runner (seen: 'failed to
+          # connect to the docker API'). Start it and wait; say so if it will not.
+          $sv = Get-Service docker -EA SilentlyContinue
+          if ($sv -and $sv.Status -ne 'Running') { Write-Host "MEASURED: the docker service was $($sv.Status); starting it"; Start-Service docker -EA SilentlyContinue }
+          for ($i = 0; $i -lt 30; $i++) { & docker version 2>&1 | Out-Null; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 2 }
+          if ($LASTEXITCODE -ne 0) { throw 'the docker daemon did not answer within 60 s: the container proof did not run' }
           try {
             & docker pull $img 2>&1 | Select-Object -Last 2 | Write-Host
             & docker rm -f dz_ci_ctr 2>&1 | Out-Null
