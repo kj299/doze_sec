@@ -728,10 +728,22 @@ jobs:
             sz=$(wc -c < "$w")
             [ "$sz" -le 505000 ] || { echo "$w is $sz bytes -- over 505,000, too close to the size at which GitHub silently refuses to run it (a 510,010-byte file ran, a 518,967-byte one did not). Move a step's body into .github/ci/ and call it from the step."; exit 1; }
           done
-          for f in cred_settings_states.ps1 reg_policy_states.ps1 file_walk_states.ps1; do
-            [ -s ".github/ci/$f" ] || { echo ".github/ci/$f is missing -- its step in windows-smoke.yml would run nothing"; exit 1; }
-            grep -qF ".github\\ci\\$f" .github/workflows/windows-smoke.yml || { echo "windows-smoke.yml no longer calls .github/ci/$f"; exit 1; }
-          done
+          # windows-smoke.yml was brought down to about 284,000 bytes by moving
+          # its large step bodies out. Fail well before the limit, so the room
+          # cannot be spent without anyone noticing a second time.
+          sz=$(wc -c < .github/workflows/windows-smoke.yml)
+          [ "$sz" -le 400000 ] || { echo "windows-smoke.yml is $sz bytes -- over 400,000. Move a step's body into .github/ci/ and call it from the step."; exit 1; }
+          # Every script a step calls must exist, and every script in
+          # .github/ci/ must be called by exactly one step: a missing file
+          # runs nothing, an orphan is a test nobody runs, and a body called
+          # twice plants twice.
+          # Only call lines count ("& .\..." or ". .\..."), never a comment that names a script.
+          called=$(grep -E '^ +[&.] \.\\\.github\\ci\\[a-z0-9_]+\.ps1$' .github/workflows/windows-smoke.yml | sed 's/.*\\//' | sort)
+          [ -n "$called" ] || { echo 'no .github/ci call parsed from windows-smoke.yml -- this check is broken, not the code'; exit 1; }
+          dup=$(echo "$called" | uniq -d); [ -z "$dup" ] || { echo "called by more than one step: $dup"; exit 1; }
+          for f in $called; do [ -s ".github/ci/$f" ] || { echo ".github/ci/$f is missing or empty -- its step would run nothing"; exit 1; }; done
+          for f in .github/ci/*.ps1; do echo "$called" | grep -qxF "$(basename "$f")" || { echo "$f is called by no step in windows-smoke.yml"; exit 1; }; done
+          n=$(echo "$called" | wc -l); [ "$n" -ge 21 ] || { echo "only $n step(s) call a .github/ci script; 21 were moved there"; exit 1; }
           # cmd reads a bare < or > in an echo as a file redirection, quoted or
           # not by PowerShell's single quotes: 'Expected: <Windows>\system32...'
           # in a tile's help text made the whole line vanish from the dashboard
