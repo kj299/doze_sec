@@ -213,6 +213,9 @@ set "WINLOGON_STATE=ungraded"
 set "SBL_STATE=ungraded"
 set "UAC_STATE=ungraded"
 set "RDP_STATE=ungraded"
+set "ACCIFEO_STATE=ungraded"
+set "ACCBIN_STATE=ungraded"
+set "SSHD_STATE=ungraded"
 set "REBOOT_AGE=unknown"
 set "BITLOCKER_STATE=ungraded"
 set "EXEC_BLOCKED=0"
@@ -3036,14 +3039,9 @@ echo.>> "%REPORT%"
 echo --- WinRM and SSH Status --->> "%REPORT%"
 echo  Command: sc query WinRM>> "%REPORT%"
 sc query WinRM>> "%REPORT%" 2>nul
-set "_SSHD_HIT="
-sc query sshd >nul 2>nul && set "_SSHD_HIT=1"
-if defined _SSHD_HIT (
-    sc query sshd>> "%REPORT%" 2>nul
-) else (
-    echo [OK] OpenSSH Server ^(sshd^) not installed.>> "%REPORT%"
-)
-set "_SSHD_HIT="
+echo  Command: sc query sshd>> "%REPORT%"
+sc query sshd>> "%REPORT%" 2>&1
+echo [INFO] The lines above are sc.exe output as it came. The verdict on OpenSSH Server is in Section 18.>> "%REPORT%"
 echo.>> "%REPORT%"
 echo --- Remote-Access Exposure (evaluated) --->> "%REPORT%"
 echo  Command: powershell -File tools\smb1_check.ps1>> "%REPORT%"
@@ -3794,17 +3792,33 @@ echo Works via WinRE file swap (BitLocker stops this) or IFEO registry Debugger 
 echo MITRE ATT^&CK: T1546.008 ^| Nation-state: Linen Typhoon, Violet Typhoon (MSTIC 2025)>> "%REPORT%"
 echo.>> "%REPORT%"
 echo --- [T1546.008] IFEO Debugger Hijack on Accessibility Binaries --->> "%REPORT%"
-echo  Command: powershell -Command "Get-ItemProperty $key -Name Debugger -EA SilentlyContinue">> "%REPORT%"
-echo $accBins = @('sethc.exe','utilman.exe','osk.exe','Magnify.exe','Narrator.exe','DisplaySwitch.exe','AtBroker.exe') > "%PSRUN%"
-echo $ifeoBase = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options' >> "%PSRUN%"
-echo $hits = @() >> "%PSRUN%"
-echo foreach ($b in $accBins) { >> "%PSRUN%"
-echo   $key = Join-Path $ifeoBase $b >> "%PSRUN%"
-echo   $d = Get-ItemProperty $key -Name Debugger -EA SilentlyContinue >> "%PSRUN%"
-echo   if ($d) { $hits += '[CRITICAL] IFEO Debugger hijack: '+$b+' -^> '+$d.Debugger } >> "%PSRUN%"
-echo } >> "%PSRUN%"
-echo if ($hits) { $hits; Write-Output '[^^!^^!] Accessibility IFEO hijack = SYSTEM-level login-screen backdoor. Remove Debugger value immediately.' } else { '[OK] No IFEO Debugger hijacks on accessibility binaries.' } >> "%PSRUN%"
-call :dz_ps_scan 13 T1546.008 "IFEO Debugger hijack on an accessibility binary - SYSTEM login-screen backdoor"
+del "%TEMP%\dz_accifeo_hit.txt" 2>nul
+del "%TEMP%\dz_accifeo_gap.txt" 2>nul
+del "%TEMP%\dz_accifeo_state.txt" 2>nul
+echo  Command: powershell -File tools\accessibility_backdoor_check.ps1 -Part Ifeo>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\accessibility_backdoor_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\accessibility_backdoor_check.ps1" -Part Ifeo>> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\accessibility_backdoor_check.ps1 not found -- accessibility IFEO check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 13 T1546.008 "Accessibility IFEO check NOT performed - tool missing"
+)
+if exist "%TEMP%\dz_accifeo_hit.txt" (
+    call :dz_finding CRITICAL 13 T1546.008 "IFEO Debugger hijack on an accessibility binary - SYSTEM login-screen backdoor"
+    del "%TEMP%\dz_accifeo_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_accifeo_gap.txt" (
+    rem A gap is its own row, beside a hit or alone: a Debugger there would go unseen.
+    call :dz_finding WARNING 13 T1546.008 "Accessibility IFEO check NOT performed - a registry key could not be read"
+    del "%TEMP%\dz_accifeo_gap.txt" 2>nul
+)
+set "_TS="
+if exist "%TEMP%\dz_accifeo_state.txt" set /p _TS=<"%TEMP%\dz_accifeo_state.txt"
+del "%TEMP%\dz_accifeo_state.txt" 2>nul
+if defined _TS if "!_TS:~0,5!"=="ifeo=" set "ACCIFEO_STATE=!_TS!"
+if not "!ACCIFEO_STATE:~0,5!"=="ifeo=" if exist "%SCRIPT_DIR%tools\accessibility_backdoor_check.ps1" (
+    echo [WARNING] Accessibility IFEO check produced no verdict -- NOT performed: tools\accessibility_backdoor_check.ps1 ran but wrote no usable verdict.>> "%REPORT%"
+    call :dz_finding WARNING 13 T1546.008 "Accessibility IFEO check produced no verdict - NOT performed"
+)
 
 echo.>> "%REPORT%"
 echo --- [T1546.008] Accessibility Binary File Signature Check --->> "%REPORT%"
@@ -4433,21 +4447,31 @@ del "%TEMP%\dz_pipe.tmp" 2>nul
 
 echo.>> "%REPORT%"
 echo --- PS Script Block Executions - Event 4104 --->> "%REPORT%"
-echo  Command: powershell -Command "Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-PowerShell/Operational';Id=4104} -MaxEvents 200 -EA SilentlyContinue">> "%REPORT%"
-echo $evts = Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-PowerShell/Operational';Id=4104} -MaxEvents 200 -EA SilentlyContinue > "%PSRUN%"
-echo $skip = 'AuditPS_\d{8}_\d{6}\.ps1^|doze_sec_noAdmin\.bat^|doze_sec\.bat' >> "%PSRUN%"
-echo if($evts){ >> "%PSRUN%"
-echo   $shown = @($evts ^| Where-Object { $p = if($_.Properties.Count -ge 5){[string]$_.Properties[4].Value}else{''}; $p -notmatch $skip }) ^| Select-Object -First 30 >> "%PSRUN%"
-echo   if($shown){ >> "%PSRUN%"
-echo     foreach($e in $shown){ >> "%PSRUN%"
-echo       Write-Output ('TimeCreated: '+$e.TimeCreated.ToString('s')) >> "%PSRUN%"
-echo       $msg = $e.Message -split "`n" >> "%PSRUN%"
-echo       $msg ^| Where-Object { $_ -match '^^ScriptBlock ID:^|^^Path:' } ^| ForEach-Object { Write-Output ('  ' + $_.Trim()) } >> "%PSRUN%"
-echo       Write-Output '' >> "%PSRUN%"
-echo     } >> "%PSRUN%"
-echo   } else { Write-Output '[OK] No external PS Script Block events (audit-self events filtered).' } >> "%PSRUN%"
-echo } else { Write-Output '[OK] No PS Script Block events found.' } >> "%PSRUN%"
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+del "%TEMP%\dz_sblist_gap.txt" 2>nul
+del "%TEMP%\dz_sblist_deferred.txt" 2>nul
+del "%TEMP%\dz_sblist_done.txt" 2>nul
+echo  Command: powershell -File tools\event_scan_check.ps1 -Check ScriptBlockList>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\event_scan_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\event_scan_check.ps1" -Check ScriptBlockList>> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\event_scan_check.ps1 not found -- Script Block event listing NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 16 T1059.001 "Script Block event listing NOT performed - tool missing"
+)
+if exist "%TEMP%\dz_sblist_gap.txt" (
+    call :dz_finding WARNING 16 T1059.001 "Script Block event listing NOT performed - the PowerShell log could not be read"
+    del "%TEMP%\dz_sblist_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_sblist_deferred.txt" (
+    set "_SLDEF=0"
+    set /p _SLDEF=<"%TEMP%\dz_sblist_deferred.txt"
+    set /a DEFERRED_COUNT+=!_SLDEF!
+    del "%TEMP%\dz_sblist_deferred.txt" 2>nul
+)
+if not exist "%TEMP%\dz_sblist_done.txt" if exist "%SCRIPT_DIR%tools\event_scan_check.ps1" (
+    echo [WARNING] Script Block event listing produced no verdict -- NOT performed: tools\event_scan_check.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 16 T1059.001 "Script Block event listing produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_sblist_done.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- Defender Alerts: 1116=Detected, 1117=Action --->> "%REPORT%"
@@ -4773,7 +4797,6 @@ set "_ENUMVPN="
 echo.>> "%REPORT%"
 
 echo --- [LINEN/VIOLET TYPHOON] Accessibility Login-Screen Backdoor (T1546.008) --->> "%REPORT%"
-echo  Command: powershell -Command "Get-ItemProperty (Join-Path $base $b) -Name Debugger -EA SilentlyContinue">> "%REPORT%"
 echo MITRE T1546.008: Chinese nation-state actors Linen Typhoon and Violet Typhoon were>> "%REPORT%"
 echo observed using accessibility binary hijacking alongside SharePoint CVE exploitation.>> "%REPORT%"
 echo Two methods: (1) WinRE file swap of sethc.exe/utilman.exe with cmd.exe (BitLocker>> "%REPORT%"
@@ -4782,36 +4805,46 @@ echo Windows Resource Protection). Pressing Shift x5 or Win+U at login screen th
 echo an unauthenticated SYSTEM-level command prompt. Effective against RDP connections too.>> "%REPORT%"
 echo.>> "%REPORT%"
 echo Check IFEO Debugger entries for all 7 known accessibility targets: >> "%REPORT%"
-echo $accBins = @('sethc.exe','utilman.exe','osk.exe','Magnify.exe','Narrator.exe','DisplaySwitch.exe','AtBroker.exe') > "%PSRUN%"
-echo $base = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options' >> "%PSRUN%"
-echo $any = $false >> "%PSRUN%"
-echo foreach ($b in $accBins) { >> "%PSRUN%"
-echo   $d = Get-ItemProperty (Join-Path $base $b) -Name Debugger -EA SilentlyContinue >> "%PSRUN%"
-echo   if ($d) { $any = $true; Write-Output ('[CRITICAL][T1546.008] '+$b+' IFEO Debugger = '+$d.Debugger) } >> "%PSRUN%"
-echo } >> "%PSRUN%"
-echo if (-not $any) { Write-Output '[OK] No IFEO accessibility backdoor entries found (Linen/Violet Typhoon check).' } >> "%PSRUN%"
-echo Write-Output '' >> "%PSRUN%"
-echo # Check whether Defender has logged Win32/AccessibilityEscalation detection >> "%PSRUN%"
-if "%IS_ADMIN%"=="0" goto :sec17_mpdet_noadmin
-echo $det = Get-MpThreatDetection -EA SilentlyContinue ^| Where-Object { $_.ThreatName -match 'AccessibilityEscalation' } >> "%PSRUN%"
-echo if ($det) { Write-Output ('[CRITICAL] Defender previously detected Win32/AccessibilityEscalation on this system.'); $det ^| Select-Object ThreatName,ActionSuccess,InitialDetectionTime ^| Format-Table -AutoSize } else { Write-Output '[OK] No Win32/AccessibilityEscalation Defender detections on record.' } >> "%PSRUN%"
-goto :sec17_mpdet_done
-:sec17_mpdet_noadmin
-echo Write-Output '[DEFERRED - ADMIN REQUIRED] Get-MpThreatDetection requires admin.' >> "%PSRUN%"
-:sec17_mpdet_done
-echo Write-Output '' >> "%PSRUN%"
-echo # Check file hashes for sethc.exe and utilman.exe (most commonly replaced) >> "%PSRUN%"
-echo foreach ($b in @('sethc.exe','utilman.exe')) { >> "%PSRUN%"
-echo   $f = "$env:SystemRoot\System32\$b" >> "%PSRUN%"
-echo   if (Test-Path $f) { >> "%PSRUN%"
-echo     $h = (Get-FileHash $f -Algorithm SHA256).Hash >> "%PSRUN%"
-echo     $sig = Get-AuthenticodeSignature $f >> "%PSRUN%"
-echo     Write-Output ($b+' SHA256: '+$h) >> "%PSRUN%"
-echo     Write-Output ($b+' Signature: '+$sig.Status+' / '+$sig.SignerCertificate.Subject) >> "%PSRUN%"
-echo     if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'Microsoft') { Write-Output ('[CRITICAL] '+$b+' may have been replaced with a non-Microsoft binary^^!') } >> "%PSRUN%"
-echo   } >> "%PSRUN%"
-echo } >> "%PSRUN%"
-call :dz_ps_scan 17 T1546.008 "Accessibility binary hijack, tampering or prior Defender detection"
+echo  (the registry was read once, in Section 13; this states that verdict)>> "%REPORT%"
+del "%TEMP%\dz_accbin_hit.txt" 2>nul
+del "%TEMP%\dz_accbin_missing.txt" 2>nul
+del "%TEMP%\dz_accbin_gap.txt" 2>nul
+del "%TEMP%\dz_accbin_deferred.txt" 2>nul
+del "%TEMP%\dz_accbin_state.txt" 2>nul
+echo  Command: powershell -File tools\accessibility_backdoor_check.ps1 -Part Binaries>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\accessibility_backdoor_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\accessibility_backdoor_check.ps1" -Part Binaries -IfeoState "%ACCIFEO_STATE%" -DefenderMode "%DEFCORE_MODE%">> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\accessibility_backdoor_check.ps1 not found -- accessibility binary and Defender-history checks NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 17 T1546.008 "Accessibility binary check NOT performed - tool missing"
+)
+if exist "%TEMP%\dz_accbin_hit.txt" (
+    call :dz_finding CRITICAL 17 T1546.008 "Accessibility binary hijack, tampering or prior Defender detection"
+    del "%TEMP%\dz_accbin_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_accbin_missing.txt" (
+    call :dz_finding WARNING 17 T1546.008 "Accessibility binary missing from the system directory"
+    del "%TEMP%\dz_accbin_missing.txt" 2>nul
+)
+if exist "%TEMP%\dz_accbin_gap.txt" (
+    rem A gap is its own row, beside a hit or alone.
+    call :dz_finding WARNING 17 T1546.008 "Accessibility binary or Defender-history check NOT performed - could not be read"
+    del "%TEMP%\dz_accbin_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_accbin_deferred.txt" (
+    set "_ABDEF=0"
+    set /p _ABDEF=<"%TEMP%\dz_accbin_deferred.txt"
+    set /a DEFERRED_COUNT+=!_ABDEF!
+    del "%TEMP%\dz_accbin_deferred.txt" 2>nul
+)
+set "_TS="
+if exist "%TEMP%\dz_accbin_state.txt" set /p _TS=<"%TEMP%\dz_accbin_state.txt"
+del "%TEMP%\dz_accbin_state.txt" 2>nul
+if defined _TS if "!_TS:~0,5!"=="bins=" set "ACCBIN_STATE=!_TS!"
+if not "!ACCBIN_STATE:~0,5!"=="bins=" if exist "%SCRIPT_DIR%tools\accessibility_backdoor_check.ps1" (
+    echo [WARNING] Accessibility binary check produced no verdict -- NOT performed: tools\accessibility_backdoor_check.ps1 ran but wrote no usable verdict.>> "%REPORT%"
+    call :dz_finding WARNING 17 T1546.008 "Accessibility binary check produced no verdict - NOT performed"
+)
 echo.>> "%REPORT%"
 
 
@@ -5440,21 +5473,36 @@ set /a DEFERRED_COUNT+=1
 :: --- [CTI] AMSI Bypass Artifacts in PowerShell Logs (T1562.001) ---
 echo.>> "%REPORT%"
 echo --- [CTI][T1562.001] AMSI Bypass Patterns in PowerShell Event 4104 --->> "%REPORT%"
-echo  Command: powershell -Command "Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-PowerShell/Operational';Id=4104} -MaxEvents 500 -EA SilentlyContinue">> "%REPORT%"
-echo $evts = Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-PowerShell/Operational';Id=4104} -MaxEvents 500 -EA SilentlyContinue > "%PSRUN%"
-echo $skip = 'AuditPS_\d{8}_\d{6}\.ps1^|doze_sec_noAdmin\.bat^|doze_sec\.bat' >> "%PSRUN%"
-echo if ($evts) { $evts = @($evts ^| Where-Object { $pth = if($_.Properties.Count -ge 5){[string]$_.Properties[4].Value}else{''}; $pth -notmatch $skip }) } >> "%PSRUN%"
-echo $amsi = @('AmsiUtils','amsiInitFailed','AmsiScanBuffer','SetProtectedState','Reflection.Assembly','System.Management.Automation.AmsiUtils','amsiscanbuffer','amsi.dll','Unmanaged.*amsi') >> "%PSRUN%"
-echo $hits = @() >> "%PSRUN%"
-echo if ($evts) { >> "%PSRUN%"
-echo   foreach ($e in $evts) { >> "%PSRUN%"
-echo     foreach ($p in $amsi) { >> "%PSRUN%"
-echo       if ($e.Message -match $p) { $hits += ('['+$e.TimeCreated+'] Pattern: '+$p); break } >> "%PSRUN%"
-echo     } >> "%PSRUN%"
-echo   } >> "%PSRUN%"
-echo } >> "%PSRUN%"
-echo if ($hits.Count -gt 0) { '[WARNING][T1562.001] AMSI bypass attempts detected in PS logs:'; $hits ^| Select-Object -First 10 ^| ForEach-Object { '  '+$_ } } else { '[OK] No AMSI bypass patterns in recent PowerShell Script Block logs (audit-self events filtered).' } >> "%PSRUN%"
-call :dz_ps_scan 18 T1562.001 "AMSI bypass patterns in PowerShell Script Block logs"
+del "%TEMP%\dz_amsiev_hit.txt" 2>nul
+del "%TEMP%\dz_amsiev_gap.txt" 2>nul
+del "%TEMP%\dz_amsiev_deferred.txt" 2>nul
+del "%TEMP%\dz_amsiev_done.txt" 2>nul
+echo  Command: powershell -File tools\event_scan_check.ps1 -Check AmsiBypass>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\event_scan_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\event_scan_check.ps1" -Check AmsiBypass -SblState "%SBL_STATE%">> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\event_scan_check.ps1 not found -- AMSI-bypass check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 18 T1562.001 "AMSI-bypass check NOT performed - tool missing"
+)
+if exist "%TEMP%\dz_amsiev_hit.txt" (
+    call :dz_finding WARNING 18 T1562.001 "AMSI bypass patterns in PowerShell Script Block logs"
+    del "%TEMP%\dz_amsiev_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_amsiev_gap.txt" (
+    call :dz_finding WARNING 18 T1562.001 "AMSI-bypass check NOT performed - the PowerShell log could not be read"
+    del "%TEMP%\dz_amsiev_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_amsiev_deferred.txt" (
+    set "_AMDEF=0"
+    set /p _AMDEF=<"%TEMP%\dz_amsiev_deferred.txt"
+    set /a DEFERRED_COUNT+=!_AMDEF!
+    del "%TEMP%\dz_amsiev_deferred.txt" 2>nul
+)
+if not exist "%TEMP%\dz_amsiev_done.txt" if exist "%SCRIPT_DIR%tools\event_scan_check.ps1" (
+    echo [WARNING] AMSI-bypass check produced no verdict -- NOT performed: tools\event_scan_check.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 18 T1562.001 "AMSI-bypass check produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_amsiev_done.txt" 2>nul
 
 :: --- [CTI] Credential Access via DPAPI (T1555.003 / T1555.004) ---
 echo.>> "%REPORT%"
@@ -5558,21 +5606,36 @@ if exist "%TEMP%\dz_driver_gap.txt" (
 :: --- [CTI] Suspicious Service Creation - Event 7045 Anomalies ---
 echo.>> "%REPORT%"
 echo --- [CTI][T1543.003] Suspicious Service Installs (Event 7045 from Temp/Public) --->> "%REPORT%"
-echo  Command: powershell -Command "Get-WinEvent -FilterHashtable @{LogName='System';Id=7045} -MaxEvents 50 -EA SilentlyContinue">> "%REPORT%"
-echo $evts = Get-WinEvent -FilterHashtable @{LogName='System';Id=7045} -MaxEvents 50 -EA SilentlyContinue > "%PSRUN%"
-echo $hits = @(); $ours = 0 >> "%PSRUN%"
-echo if ($evts) { >> "%PSRUN%"
-echo   foreach ($e in $evts) { >> "%PSRUN%"
-echo     $msg = $e.Message >> "%PSRUN%"
-echo     if ($msg -match 'dz_selftest^|dz_evil^|dzsmoke^|dz_probe') { $ours++; continue } >> "%PSRUN%"
-echo     if ($msg -match '\\Temp\\^|\\AppData\\^|\\Users\\Public\\^|\\Downloads\\^|cmd\.exe^|powershell^|mshta^|regsvr32') { >> "%PSRUN%"
-echo       $hits += '['+$e.TimeCreated+'] '+($msg -replace '[\r\n]+',' ' ^| Select-Object -First 1) >> "%PSRUN%"
-echo     } >> "%PSRUN%"
-echo   } >> "%PSRUN%"
-echo } >> "%PSRUN%"
-echo if ($ours -gt 0) { '[INFO] '+$ours+' service-install event(s) were doze_sec''s own test harness (dz_selftest/dzsmoke/dz_probe) and were excluded. Cleanup removes the service; it cannot remove the Security log record of installing it.' } >> "%PSRUN%"
-echo if ($hits.Count -gt 0) { '[WARNING][T1543.003] Suspicious service installations found:'; $hits ^| Select-Object -First 10 ^| ForEach-Object { '  '+$_ } } else { '[OK] No suspicious service installations in recent Event 7045 logs.' } >> "%PSRUN%"
-call :dz_ps_scan 18 T1543.003 "Suspicious service installation in Event 7045"
+del "%TEMP%\dz_svc7045_hit.txt" 2>nul
+del "%TEMP%\dz_svc7045_gap.txt" 2>nul
+del "%TEMP%\dz_svc7045_deferred.txt" 2>nul
+del "%TEMP%\dz_svc7045_done.txt" 2>nul
+echo  Command: powershell -File tools\event_scan_check.ps1 -Check ServiceInstalls>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\event_scan_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\event_scan_check.ps1" -Check ServiceInstalls>> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\event_scan_check.ps1 not found -- service-install check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 18 T1543.003 "Service-install check NOT performed - tool missing"
+)
+if exist "%TEMP%\dz_svc7045_hit.txt" (
+    call :dz_finding WARNING 18 T1543.003 "Suspicious service installation in Event 7045"
+    del "%TEMP%\dz_svc7045_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_svc7045_gap.txt" (
+    call :dz_finding WARNING 18 T1543.003 "Service-install check NOT performed - the System log could not be read"
+    del "%TEMP%\dz_svc7045_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_svc7045_deferred.txt" (
+    set "_S7DEF=0"
+    set /p _S7DEF=<"%TEMP%\dz_svc7045_deferred.txt"
+    set /a DEFERRED_COUNT+=!_S7DEF!
+    del "%TEMP%\dz_svc7045_deferred.txt" 2>nul
+)
+if not exist "%TEMP%\dz_svc7045_done.txt" if exist "%SCRIPT_DIR%tools\event_scan_check.ps1" (
+    echo [WARNING] Service-install check produced no verdict -- NOT performed: tools\event_scan_check.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 18 T1543.003 "Service-install check produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_svc7045_done.txt" 2>nul
 
 :: --- [CTI] COM Object Hijacking (T1546.015) ---
 echo.>> "%REPORT%"
@@ -5628,21 +5691,39 @@ set /a DEFERRED_COUNT+=1
 :: --- [CTI] SSH Server (OpenSSH) Enabled Check ---
 echo.>> "%REPORT%"
 echo --- [CTI] OpenSSH Server Lateral Movement Surface --->> "%REPORT%"
-echo  Command: powershell -Command "Get-Service sshd -EA SilentlyContinue">> "%REPORT%"
-echo $ssh = Get-Service sshd -EA SilentlyContinue > "%PSRUN%"
-echo if ($ssh -and $ssh.Status -eq 'Running') { >> "%PSRUN%"
-echo   $authKeys = "$env:ProgramData\ssh\administrators_authorized_keys" >> "%PSRUN%"
-echo   '[WARNING] OpenSSH Server (sshd) is RUNNING' >> "%PSRUN%"
-echo   if (Test-Path $authKeys) { >> "%PSRUN%"
-echo     $lines = (Get-Content $authKeys -EA SilentlyContinue).Count >> "%PSRUN%"
-echo     '[INFO] administrators_authorized_keys has ' + $lines + ' key(s) - verify each is legitimate' >> "%PSRUN%"
-echo   } >> "%PSRUN%"
-echo } elseif ($ssh) { >> "%PSRUN%"
-echo   '[OK] OpenSSH Server installed but not running.' >> "%PSRUN%"
-echo } else { >> "%PSRUN%"
-echo   '[OK] OpenSSH Server not installed.' >> "%PSRUN%"
-echo } >> "%PSRUN%"
-call :dz_ps_scan 18 T1021.004 "OpenSSH Server (sshd) is running"
+del "%TEMP%\dz_sshd_hit.txt" 2>nul
+del "%TEMP%\dz_sshd_gap.txt" 2>nul
+del "%TEMP%\dz_sshd_deferred.txt" 2>nul
+del "%TEMP%\dz_sshd_state.txt" 2>nul
+echo  Command: powershell -File tools\sshd_check.ps1>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\sshd_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\sshd_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\sshd_check.ps1 not found -- OpenSSH Server check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 18 T1021.004 "OpenSSH Server check NOT performed - tool missing"
+)
+if exist "%TEMP%\dz_sshd_hit.txt" (
+    call :dz_finding WARNING 18 T1021.004 "OpenSSH Server (sshd) is running"
+    del "%TEMP%\dz_sshd_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_sshd_gap.txt" (
+    call :dz_finding WARNING 18 T1021.004 "OpenSSH Server check NOT performed - the sshd service could not be queried"
+    del "%TEMP%\dz_sshd_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_sshd_deferred.txt" (
+    set "_SHDEF=0"
+    set /p _SHDEF=<"%TEMP%\dz_sshd_deferred.txt"
+    set /a DEFERRED_COUNT+=!_SHDEF!
+    del "%TEMP%\dz_sshd_deferred.txt" 2>nul
+)
+set "_TS="
+if exist "%TEMP%\dz_sshd_state.txt" set /p _TS=<"%TEMP%\dz_sshd_state.txt"
+del "%TEMP%\dz_sshd_state.txt" 2>nul
+if defined _TS if "!_TS:~0,5!"=="sshd=" set "SSHD_STATE=!_TS!"
+if not "!SSHD_STATE:~0,5!"=="sshd=" if exist "%SCRIPT_DIR%tools\sshd_check.ps1" (
+    echo [WARNING] OpenSSH Server check produced no verdict -- NOT performed: tools\sshd_check.ps1 ran but wrote no usable verdict.>> "%REPORT%"
+    call :dz_finding WARNING 18 T1021.004 "OpenSSH Server check produced no verdict - NOT performed"
+)
 echo.>> "%REPORT%"
 
 :: --- [CTI-AUTO] Execute auto-generated TTP blocks from -updateTTP ---
@@ -5863,13 +5944,8 @@ echo. >> "%PSRUN%"
 
 :: ===== ACCESSIBILITY BINARY INTEGRITY (T1546.008) ====================
 echo sec 'ACCESSIBILITY BINARY INTEGRITY  T1546.008  (Section 13)' >> "%PSRUN%"
-echo $accBins = @('sethc.exe','utilman.exe','osk.exe','Magnify.exe','Narrator.exe','DisplaySwitch.exe','AtBroker.exe') >> "%PSRUN%"
-echo $ifeoBase = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options' >> "%PSRUN%"
-echo $ifeoHits = @(); foreach ($b in $accBins) { $d = Get-ItemProperty (Join-Path $ifeoBase $b) -Name Debugger -EA SilentlyContinue; if ($d) { $ifeoHits += $b+' -^> '+$d.Debugger } } >> "%PSRUN%"
-echo if ($ifeoHits.Count -gt 0) { ck 'CRIT' "IFEO Debugger hijack on $($ifeoHits.Count) accessibility binaries" "Affected: $($ifeoHits -join '; '). Pressing Shift x5 or Win+U at login = SYSTEM shell. Delete Debugger value in HKLM\...\IFEO\[binary]" } else { ck 'PASS' 'No IFEO Debugger hijacks on accessibility binaries - T1546.008' } >> "%PSRUN%"
-echo $sysDir = "$env:SystemRoot\System32"; $badSig = @() >> "%PSRUN%"
-echo foreach ($b in $accBins) { $f = Join-Path $sysDir $b; if (Test-Path $f) { $sig = Get-AuthenticodeSignature $f; if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'Microsoft') { $badSig += $b } } } >> "%PSRUN%"
-echo if ($badSig.Count -gt 0) { ck 'CRIT' ('Accessibility binary signature INVALID: '+($badSig -join ', ')) 'Binaries may have been replaced with cmd.exe. Run: sfc /scannow or restore from WinRE.' } else { ck 'PASS' 'All 7 accessibility binaries carry valid Microsoft signatures' } >> "%PSRUN%"
+echo $ai='%ACCIFEO_STATE%';if($ai -match '^ifeo=hijack'){ck 'CRIT' 'IFEO Debugger hijack on an accessibility binary' 'Pressing Shift x5 or Win+U at login = SYSTEM shell. Section 13 lists the binary and the value. Delete the Debugger value in HKLM\...\IFEO\[binary]'}elseif($ai -eq 'ifeo=clean'){ck 'PASS' 'No IFEO Debugger hijacks on accessibility binaries - T1546.008'}else{ck 'INFO' 'Accessibility IFEO Debugger: NOT graded -- Section 13 could not read it'} >> "%PSRUN%"
+echo $ab='%ACCBIN_STATE%';if($ab -match '^bins=bad'){ck 'CRIT' 'Accessibility binary signature INVALID (Section 17)' 'Binaries may have been replaced with cmd.exe. Run: sfc /scannow or restore from WinRE.'}elseif($ab -match '^bins=missing'){ck 'WARN' 'Accessibility binary MISSING (Section 17)' 'Windows ships it. Run: sfc /scannow'}elseif($ab -match '^bins=ok'){ck 'PASS' 'All accessibility binaries present carry valid Microsoft signatures'}else{ck 'INFO' 'Accessibility binary signatures: NOT graded -- Section 17 could not read them'} >> "%PSRUN%"
 echo $sf = (Get-ItemProperty 'HKCU:\Control Panel\Accessibility\StickyKeys' -Name Flags -EA SilentlyContinue).Flags >> "%PSRUN%"
 echo if ($null -ne $sf -and ($sf -band 0x04) -gt 0) { ck 'WARN' 'Sticky Keys shortcut enabled (Shift x5 triggers at login screen)' 'Reduces attack surface: Settings ^> Accessibility ^> Keyboard ^> Sticky Keys shortcut OFF' } else { ck 'PASS' 'Sticky Keys shortcut disabled (no unauthenticated login-screen trigger)' } >> "%PSRUN%"
 echo. >> "%PSRUN%"

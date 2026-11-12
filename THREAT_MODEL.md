@@ -411,6 +411,17 @@ Found during the v7.1 coverage review; tracked for future work:
   17 RMM running/installed checks (`Get-Process`/Uninstall-key empties
   mean "not present"). Probes elsewhere may still degrade silently, but
   the high-value verdict checks across Sections 4-18 now fail visibly.
+- ~~The AMSI-bypass and Event 7045 checks (Section 18), the Script Block
+  listing (Section 16), the accessibility IFEO checks (Sections 13 and 17)
+  and the OpenSSH Server check (Sections 10 and 18) printed `[OK]` when the
+  event log, registry key or service manager did not answer.~~ **Closed:**
+  `tools/event_scan_check.ps1`, `tools/accessibility_backdoor_check.ps1` and
+  `tools/sshd_check.ps1` separate "answered: nothing there" from "did not
+  answer" and raise the second. Residual: the AMSI check matches text
+  patterns in Script Block events, so it sees only what PowerShell logged
+  (little, when Script Block Logging is off -- the line says so), and nine
+  further blocks of the same class are still open
+  (`docs/design/backlog.md`, "The per-block search").
 - ~~Section 10 (RDP/NLA) fell through a failed read to `[OK] RDP enabled
   with NLA.` and read only the local setting; the Section 14 and 17 file
   walks (alternate data streams, large HTML/HTA, Outlook `.msg`/`.oft`)

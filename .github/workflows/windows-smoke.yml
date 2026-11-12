@@ -1400,6 +1400,24 @@ jobs:
           & .\.github\ci\file_walk_states.ps1
           exit $LASTEXITCODE
 
+      - name: event_scan_check.ps1 -SelfTest + the runner's real logs, a log that cannot be read, and a real Event 7045 in both directions
+        shell: powershell
+        run: |
+          & .\.github\ci\event_scan_states.ps1
+          exit $LASTEXITCODE
+
+      - name: accessibility_backdoor_check.ps1 -SelfTest + every IFEO state and the binaries through the real readers (a key that cannot be read is a raised gap)
+        shell: powershell
+        run: |
+          & .\.github\ci\accessibility_backdoor_states.ps1
+          exit $LASTEXITCODE
+
+      - name: sshd_check.ps1 -SelfTest + the runner's real service state; only the service manager's own 'does not exist' reads as not installed
+        shell: powershell
+        run: |
+          & .\.github\ci\sshd_states.ps1
+          exit $LASTEXITCODE
+
       - name: named_pipe_check.ps1 -SelfTest + live (a C2 pipe list that could not be read is a raised gap, never an all-clear)
         shell: powershell
         run: |
