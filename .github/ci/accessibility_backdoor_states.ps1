@@ -25,9 +25,12 @@ $b = RunA 'Binaries' @{ IfeoState = $i.State; DefenderMode = 'unknown' }
 Write-Host "MEASURED: the runner's accessibility binaries and Defender history: $($b.State) [$($b.Markers)]"
 if ($b.State -notmatch '^bins=ok,def=(none|na|gap)$') { throw "a clean runner's accessibility binaries did not read clean: $($b.State) [$($b.Markers)] $($b.Out)" }
 if ($b.Out -notmatch '(?m)^sethc\.exe SHA256: [0-9A-F]{64}$') { throw "the sethc.exe hash line is gone: $($b.Out)" }
-# Another antivirus owns protection: Defender history is not applicable, not a gap and not an all-clear.
+# Defender is ASKED whatever the mode (it keeps its history in passive mode);
+# the mode only decides what a FAILED query means. So the answer here must be
+# the same as the run above, never 'not consulted' because of the mode alone.
 $r = RunA 'Binaries' @{ IfeoState = 'ifeo=clean'; DefenderMode = 'Passive Mode' }
-if ($r.State -ne 'bins=ok,def=na' -or $r.Out -match 'detections on record') { throw "passive-mode Defender was not 'not applicable': $($r.State) $($r.Out)" }
+if ($b.State -match 'def=none' -and $r.State -ne 'bins=ok,def=none') { throw "Defender answered under 'unknown' but was not asked under 'Passive Mode': $($r.State) $($r.Out)" }
+if ($r.State -match 'def=gap') { throw "a failed Defender query was a raised gap although Defender is not the active antivirus: $($r.State)" }
 # EVERY IFEO STATE through the real reader, on throwaway HKCU keys.
 # Touches: registry:HKCU:\Software\dz_ci_accbd_<pid> (removed in finally).
 $root = "HKCU:\Software\dz_ci_accbd_$PID"; $k = @{ KeyRoot = $root }

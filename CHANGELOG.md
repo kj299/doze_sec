@@ -16,9 +16,10 @@ A search of every staged PowerShell block in the scripts found 15 where a failed
 
 **Now.**
 - **`tools/event_scan_check.ps1`** reads the three event checks. "No matching events" is an answer; anything else is a raised `NOT performed` row. `[OK]` says how many events were read, and the AMSI check adds that an empty log is weak evidence when Script Block Logging is off.
-- **`tools/accessibility_backdoor_check.ps1`** reads the IFEO keys once, in Section 13. Section 17 and the dashboard state that verdict. A key that could not be read is raised beside any finding. Defender's history is asked only when Defender is the active antivirus; a missing accessibility binary is a WARNING; a signature that could not be read is a gap.
+- **`tools/accessibility_backdoor_check.ps1`** reads the IFEO keys once, in Section 13. Section 17 and the dashboard state that verdict. A key that could not be read is raised beside any finding. Defender's history is always asked; a failed query is a gap when Defender is the active antivirus and is said as "not consulted" otherwise. A missing accessibility binary is a WARNING; a signature that could not be read is a gap.
 - **`tools/sshd_check.ps1`**: only the service manager's own "does not exist" (`sc.exe` exit 1060) reads as not installed. Section 10's raw dump no longer prints a verdict.
 - Existing findings keep their wording and ledger rows.
+- The AMSI check sets aside its own script block by exact path. The tool file holds every pattern it searches for, and PowerShell logs a script as it starts.
 
 **Behaviour changes to know about.**
 - On a standard-user token, a denied event log or service query is counted as deferred, as other system-level reads already are.

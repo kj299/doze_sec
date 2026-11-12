@@ -639,11 +639,12 @@ jobs:
       - name: Event logs, accessibility IFEO and OpenSSH -- a log, key or service that did not answer is a raised gap, never an all-clear
         run: |
           out=$(pwsh -NoProfile -File tools/event_scan_check.ps1 -SelfTest); echo "$out"
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 22 ] || { echo "only $n event-scan case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 24 ] || { echo "only $n event-scan case(s)"; exit 1; }
           for n in 'AMSI, the log could not be read: a raised gap, never "[OK] No AMSI bypass patterns"' \
                    '7045, the System log could not be read: a raised gap, never "[OK] No suspicious service installations"' \
                    '7045, the same service NAME without the marker is the finding (a name is not an exclusion)' \
                    'listing, the log could not be read: a raised gap, never "[OK] No PS Script Block events found."' \
+                   'AMSI, this tool'"'"'s own script block (it holds every pattern, and is logged as it starts) is the audit'"'"'s own, never a bypass' \
                    'an event Windows could not render is counted and said, never silently passed'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
@@ -680,6 +681,7 @@ jobs:
             for w in 'Accessibility IFEO check produced no verdict' 'Accessibility binary check produced no verdict' 'OpenSSH Server check produced no verdict'; do
               grep -qF "$w" "$b" || { echo "$b: lost its no-verdict backstop: $w"; exit 1; }
             done
+            grep -qE "echo \\\$a[ib]=.*-match '\\^" "$b" && { echo "$b: a tile regex starts with a caret outside double quotes -- cmd eats it; use -like"; exit 1; }
             grep -qF "echo \$ai='%ACCIFEO_STATE%'" "$b" || { echo "$b: the IFEO tile no longer reads Section 13's verdict"; exit 1; }
             grep -qF "echo \$ab='%ACCBIN_STATE%'" "$b" || { echo "$b: the binary-signature tile no longer reads Section 17's verdict"; exit 1; }
             grep -qF -- '-Part Binaries -IfeoState "%ACCIFEO_STATE%"' "$b" || { echo "$b: Section 17 no longer states Section 13's IFEO verdict"; exit 1; }

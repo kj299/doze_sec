@@ -24,9 +24,9 @@
 #     A hit and a gap are independent: both are raised;
 #   * the registry is read ONCE (Section 13). Section 17 and the dashboard
 #     state that verdict from its state line; they do not measure again;
-#   * Defender's history: asked only when Defender is the active antivirus
-#     (Section 9's mode). Not active -> [INFO] not applicable. Active and the
-#     query fails -> a raised gap. A standard-user token cannot ask at all:
+#   * Defender's history: always asked (it keeps its record in passive
+#     mode). A failed query is a raised gap when Section 9 found Defender to
+#     be the active antivirus, and [INFO] not consulted otherwise. A standard-user token cannot ask at all:
 #     [DEFERRED - ADMIN REQUIRED], counted, never a row;
 #   * a binary whose signature is not valid Microsoft -> CRITICAL (kept).
 #     A binary MISSING -> WARNING (as Section 13's signature check grades
@@ -150,7 +150,7 @@ function Get-BinariesVerdict {
         [void]$out.Add('[OK] No Win32/AccessibilityEscalation Defender detections on record.')
     } elseif ($ds -eq 'na') {
         $defState = 'na'
-        [void]$out.Add('[INFO] Defender detection history not consulted: Defender is not the active antivirus on this PC (Section 9), so it holds no record either way.')
+        [void]$out.Add(('[INFO] Defender detection history not consulted: Defender would not answer' + $(if ($null -ne $Def -and [string]$Def.Error) { ' (' + (ConvertTo-PrintableText ([string]$Def.Error)) + ')' } else { '' }) + ', and Section 9 did not find it to be the active antivirus on this PC. A past detection, if there was one, is NOT shown here.'))
     } elseif ($ds -eq 'deferred') {
         $defState = 'deferred'; $r.Deferred = 1
         [void]$out.Add('[DEFERRED - ADMIN REQUIRED] Get-MpThreatDetection requires admin.')
@@ -258,7 +258,7 @@ if ($SelfTest) {
     $v = Get-BinariesVerdict -Ifeo 'ifeo=clean' -Def @{ State = 'failed'; Rows = @(); Error = 'CimException: provider load failure' } -Bins (BinList); $t = $v.Lines -join "`n"
     T 'Defender is the active antivirus and could not be asked: a raised gap, never "[OK] No ... detections on record"' ($v.Gap -and $v.State -eq 'bins=ok,def=gap' -and $t -match '(?m)^\[WARNING\] Defender detection-history check NOT performed -- ' -and $t -notmatch 'detections on record') $t
     $v = Get-BinariesVerdict -Ifeo 'ifeo=clean' -Def @{ State = 'na'; Rows = @(); Error = '' } -Bins (BinList); $t = $v.Lines -join "`n"
-    T 'another antivirus owns protection: Defender history is [INFO] not applicable -- neither a gap nor an all-clear' ((-not $v.Gap) -and $v.State -eq 'bins=ok,def=na' -and $t -match '\[INFO\] Defender detection history not consulted' -and $t -notmatch 'detections on record') $t
+    T 'Defender would not answer and is not the active antivirus: [INFO] not consulted -- neither a gap nor an all-clear' ((-not $v.Gap) -and $v.State -eq 'bins=ok,def=na' -and $t -match '\[INFO\] Defender detection history not consulted' -and $t -match 'NOT shown here' -and $t -notmatch 'detections on record') $t
     $v = Get-BinariesVerdict -Ifeo 'ifeo=clean' -Def @{ State = 'deferred'; Rows = @(); Error = '' } -Bins (BinList); $t = $v.Lines -join "`n"
     T 'a standard-user token cannot ask Defender: the deferral line the noAdmin bat always printed, counted, never a row' ((-not $v.Gap) -and $v.Deferred -eq 1 -and $t -match '(?m)^\[DEFERRED - ADMIN REQUIRED\] Get-MpThreatDetection requires admin\.$') $t
     $v = Get-BinariesVerdict -Ifeo 'ifeo=clean' -Def $none -Bins (BinList @{ 'sethc.exe' = @{ Name = 'sethc.exe'; Exists = $true; Status = 'NotSigned'; Signer = ''; Hash = 'CD34'; Error = '' } }); $t = $v.Lines -join "`n"
@@ -297,13 +297,22 @@ try {
         $stateName = 'dz_accbin_state.txt'; $stateRx = '^bins=(ok|bad|missing|gap),def=(none|found|na|gap|deferred)$'
         $def = $null
         if ($Elevated -ne 1) { $def = @{ State = 'deferred'; Rows = @(); Error = '' } }
-        elseif ($DefenderMode -and $DefenderMode -notmatch '^(Normal|unknown)$') { $def = @{ State = 'na'; Rows = @(); Error = '' } }
         else {
+            # Always ASKED: Defender keeps its history in passive mode, and a
+            # detection from before another antivirus took over is exactly
+            # the evidence wanted. Only a FAILED query looks at the mode.
             try {
                 $d = @(Get-MpThreatDetection -ErrorAction Stop | Where-Object { [string]$_.ThreatName -match 'AccessibilityEscalation' })
                 if ($d.Count -gt 0) { $def = @{ State = 'found'; Rows = @($d | ForEach-Object { ([string]$_.ThreatName + '  action succeeded: ' + [string]$_.ActionSuccess + '  first seen: ' + [string]$_.InitialDetectionTime) }); Error = '' } }
                 else { $def = @{ State = 'none'; Rows = @(); Error = '' } }
-            } catch { $def = @{ State = 'failed'; Rows = @(); Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message) } }
+            } catch {
+                $err = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message)
+                # Section 9 said Defender is the active antivirus: it should
+                # have answered, so this is a gap. Anything else (another
+                # antivirus, or a mode Section 9 could not establish): said
+                # as not consulted, never as a clean history.
+                $def = @{ State = $(if ($DefenderMode -eq 'Normal') { 'failed' } else { 'na' }); Rows = @(); Error = $err }
+            }
         }
         $sys = $SystemDir; if (-not $sys) { $sys = Join-Path $env:SystemRoot 'System32' }
         $bins = @()

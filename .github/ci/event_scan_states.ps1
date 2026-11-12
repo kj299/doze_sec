@@ -6,7 +6,7 @@ $ErrorActionPreference = 'Stop'
 $st = (.\tools\event_scan_check.ps1 -SelfTest) -join "`n"
 if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'event_scan_check -SelfTest failed' }
 $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-if ($n -lt 22) { throw "event_scan_check self-test ran only $n case(s)" }
+if ($n -lt 24) { throw "event_scan_check self-test ran only $n case(s)" }
 function RunE([string]$Check, [hashtable]$Extra) {
   $md = Join-Path $env:TEMP ("dz_ci_evscan_{0}_{1}" -f $PID, [guid]::NewGuid().ToString('N').Substring(0, 6)); New-Item -ItemType Directory -Path $md -Force | Out-Null
   try {
@@ -24,6 +24,18 @@ foreach ($c in 'AmsiBypass', 'ServiceInstalls', 'ScriptBlockList') {
   if ($r.Markers -match '_gap|_deferred' -or $r.Out -match 'NOT performed') { throw "$c could not read a log an administrator can read: $($r.Out)" }
   if ($r.Out -notmatch '(?m)^\[INFO\] \d+ event\(s\) read from the ') { throw "$c did not say how many events it read: $($r.Out)" }
 }
+# THE AUDIT MUST NOT REPORT ITSELF. This tool's file holds every pattern it
+# searches for, and PowerShell logs a script as it starts. Count the Script
+# Block events that name this file; the tool must have set aside at least
+# that many as its own.
+$toolPath = (Resolve-Path .\tools\event_scan_check.ps1).Path
+$r = RunE 'AmsiBypass' @{}
+$mine = 0
+try { $mine = @(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-PowerShell/Operational'; Id = 4104 } -MaxEvents 500 -ErrorAction Stop | Where-Object { $_.Properties.Count -ge 5 -and [string]$_.Properties[4].Value -ieq $toolPath }).Count } catch { if ($_.FullyQualifiedErrorId -notmatch 'NoMatchingEventsFound') { throw } }
+$ownSaid = if ($r.Out -match '(?m); (\d+) were the audit''s own') { [int]$Matches[1] } else { -1 }
+Write-Host "MEASURED: Script Block events naming this tool's own file: $mine ; set aside by the tool as its own: $ownSaid"
+if ($ownSaid -lt 0) { throw "the AMSI check did not say how many events were its own: $($r.Out)" }
+if ($mine -gt 0 -and $ownSaid -lt 1) { throw "PowerShell logged this tool's own script block and the tool did not set it aside: it would report itself as an AMSI bypass" }
 # THE READ THAT FAILS, through the real reader: a log that does not exist.
 foreach ($c in @(@('AmsiBypass', 'dz_amsiev_gap'), @('ServiceInstalls', 'dz_svc7045_gap'), @('ScriptBlockList', 'dz_sblist_gap'))) {
   $r = RunE $c[0] @{ LogName = 'dz-ci-no-such-log/Operational' }

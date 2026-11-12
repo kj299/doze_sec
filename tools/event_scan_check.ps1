@@ -82,6 +82,12 @@ $script:Checks = @{
 }
 # The audit's own script blocks, by the path the event records.
 $script:SelfPath = 'AuditPS_\d{8}_\d{6}\.ps1|doze_sec_noAdmin\.bat|doze_sec\.bat'
+# ...and THIS file, by its exact path. It holds every pattern it searches
+# for, and PowerShell logs a script as it starts -- before the query below
+# runs. The inline block this replaced ran as AuditPS_<ts>.ps1 and was
+# covered by the line above; a tool file is not, and without this the audit
+# reports itself as an AMSI bypass on every machine that logs script blocks.
+$script:OwnScript = [string]$PSCommandPath
 $script:AmsiPatterns = @('AmsiUtils', 'amsiInitFailed', 'AmsiScanBuffer', 'SetProtectedState', 'Reflection.Assembly', 'System.Management.Automation.AmsiUtils', 'amsiscanbuffer', 'amsi.dll', 'Unmanaged.*amsi')
 # The harness's own plants, by the MARKER in the image path -- never by a
 # service name, which an attacker could borrow.
@@ -103,7 +109,7 @@ function Get-EventScan {
             if ([string]$msg -match $script:SuspInstall) { [void]$scan.Hits.Add(('[' + [string]$r.Time + '] ' + (ConvertTo-PrintableText (([string]$msg) -replace '[\r\n]+', ' ')))) }
             continue
         }
-        if ([string]$r.Path -match $script:SelfPath) { $scan.Own++; continue }
+        if ([string]$r.Path -match $script:SelfPath -or ($script:OwnScript -and [string]$r.Path -ieq $script:OwnScript)) { $scan.Own++; continue }
         if ($Check -eq 'ScriptBlockList') { [void]$scan.Shown.Add($r); continue }
         if ($null -eq $msg -or -not [string]$msg) { $scan.NoText++; continue }
         foreach ($p in $script:AmsiPatterns) {
@@ -219,6 +225,11 @@ if ($SelfTest) {
     T 'AMSI, a bypass in the log: the WARNING wording the harness greps, and a hit' ($v.Hit -and $t -match '(?m)^\[WARNING\]\[T1562\.001\] AMSI bypass attempts detected in PS logs:$' -and $t -match 'Pattern: AmsiUtils') $t
     $v = V 'AmsiBypass' @($own); $t = $v.Lines -join "`n"
     T 'AMSI, the audit''s own script block is not a bypass (it names the patterns it searches for)' ((-not $v.Hit) -and $t -match '1 were the audit''s own') $t
+    $me = @{ Time = '2026-11-12T10:03:00'; Message = $bad.Message; Path = [string]$PSCommandPath }
+    $v = V 'AmsiBypass' @($me); $t = $v.Lines -join "`n"
+    T 'AMSI, this tool''s own script block (it holds every pattern, and is logged as it starts) is the audit''s own, never a bypass' ((-not $v.Hit) -and $t -match '1 were the audit''s own') $t
+    $v = V 'AmsiBypass' @(@{ Time = 't'; Message = $bad.Message; Path = 'C:\Users\Public\event_scan_check.ps1' })
+    T 'AMSI, a script with this tool''s NAME somewhere else is still the finding (the exact path is the exclusion, not the name)' ($v.Hit) ($v.Lines -join ' | ')
     $v = V 'AmsiBypass' @() @{ Error = 'EventLogNotFoundException: There is not an event log on the localhost computer that matches "X"'; Denied = $false }; $t = $v.Lines -join "`n"
     T 'AMSI, the log could not be read: a raised gap, never "[OK] No AMSI bypass patterns"' ($v.Gap -and (-not $v.Hit) -and $t -match '(?m)^\[WARNING\] AMSI-bypass check \(Script Block events\) NOT performed -- ' -and $t -notmatch '\[OK\]') $t
     $v = V 'AmsiBypass' @() @{ Error = 'UnauthorizedAccessException: denied'; Denied = $true } $false; $t = $v.Lines -join "`n"

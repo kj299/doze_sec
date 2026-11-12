@@ -695,6 +695,24 @@ start, so the finding printed the folders and dropped the file name. It was
 caught only because the CI case asserted on the file's NAME, not on "a
 finding appeared". **Assert on the part the reader needs.**
 
+**Moving an inline block into a tool file changes what it is called in the
+logs.** The AMSI-bypass check excludes the audit's own script blocks by the
+path the event records, and the list held `AuditPS_<ts>.ps1` and the two
+bats -- which covered the check itself while it was an inline block. Moved to
+`tools\event_scan_check.ps1`, it ran under a path the list did not hold, and
+its source carries every pattern it searches for. PowerShell logs a script as
+it starts, before the query runs: the audit would have reported itself as an
+AMSI bypass on every machine that logs script blocks. Every self-test passed,
+because none of them was the tool reading a log that contained the tool. A
+review of the final tree caught it before any push to a pull request. So:
+**when a check that searches for X moves into a file, ask whether that file
+now contains X and where it will show up in what the check reads** -- and
+exclude it by exact path, never by name (a name is something an attacker can
+borrow). The same review found the Defender detection history had become
+"not consulted" in passive mode, where Defender still holds the record of
+what it caught before another antivirus took over: **a mode is a reason to
+reinterpret a failed query, never a reason not to ask.**
+
 **A branch whose PR has merged is not that PR any more.** The WinRM commit
 was pushed to the #271 branch moments after #271 was merged: it never reached
 main, it had never run in CI, and #271's description -- updated to announce
