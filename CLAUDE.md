@@ -156,6 +156,10 @@ marker, and on any direct `echo [CRITICAL]/[WARNING] ... >> "%REPORT%"` with no
 raise nearby. CI runs it on Linux (`lint.yml`) and again on Windows PowerShell
 5.1 (`windows-smoke.yml`), where the Windows job also asserts the lint actually
 scanned the blocks — a parser regression must not turn into a vacuous pass.
+That floor is derived from the bats (an independent count of block starts,
+and the lint must have scanned 90% of them), never a constant: it was a fixed
+100, and the first change that moved six inline blocks into tools -- the work
+this whole section asks for -- failed it at 96. Both jobs carry the guard.
 `tests/detection_selftest.ps1` closes the loop at runtime: any section whose
 body prints a finding must declare `ISSUES FOUND`.
 

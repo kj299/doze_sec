@@ -35,7 +35,18 @@ jobs:
       # never heard about it. Structural, so a check written next year is
       # covered the day it is added.
       - name: Run lint_unraised_findings.ps1
-        run: pwsh -NoProfile -File tools/lint_unraised_findings.ps1
+        run: |
+          out=$(pwsh -NoProfile -File tools/lint_unraised_findings.ps1); rc=$?; echo "$out"; [ $rc -eq 0 ] || exit $rc
+          # Guard the guard, here as well as on Windows (a gate that lives only
+          # in the Windows suite costs a Windows round to fail). The floor is
+          # derived from the bats: count the block starts independently and
+          # require the lint to have scanned at least 90% of them.
+          starts=$(cat doze_sec.bat doze_sec_noAdmin.bat | grep -cE '^\s*echo .*[^>]> "%PSRUN%"\s*$')
+          [ "$starts" -ge 40 ] || { echo "only $starts staged-block start(s) counted in the two bats -- this guard is broken, or the bats are"; exit 1; }
+          scanned=$(echo "$out" | sed -n 's/^Scanned \([0-9][0-9]*\) staged PowerShell block.*/\1/p' | head -1)
+          [ -n "$scanned" ] || { echo 'the lint did not report how many staged blocks it scanned'; exit 1; }
+          [ "$scanned" -ge $(( starts * 9 / 10 )) ] || { echo "lint scanned only $scanned of about $starts staged blocks -- the parser regressed, so a clean result means nothing"; exit 1; }
+          echo "MEASURED: $starts block start(s) counted in the bats; the lint scanned $scanned"
 
   marker-selftest:
     name: "Marker selftest: a finding actually reaches the ledger"

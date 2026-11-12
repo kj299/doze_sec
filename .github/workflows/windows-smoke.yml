@@ -2458,8 +2458,16 @@ jobs:
           if ($out -notmatch 'routed through :dz_ps_scan') { throw 'lint did not report block routing -- staged-block scan regressed' }
           # Guard the guard: if the block scanner ever stops finding blocks, the
           # lint would pass vacuously and the whole class could return.
+          # The floor comes from the bats, not from a number: count the block
+          # starts independently (an echo that opens %PSRUN% with a single >)
+          # and require the lint to have scanned at least 90% of them. A fixed
+          # 100 failed the first PR that moved six inline blocks into tools.
+          $starts = 0
+          foreach ($bat in 'doze_sec.bat', 'doze_sec_noAdmin.bat') { $starts += @(Get-Content -LiteralPath $bat | Where-Object { $_ -match '^\s*echo .*[^>]> "%PSRUN%"\s*$' }).Count }
+          if ($starts -lt 40) { throw "only $starts staged-block start(s) counted in the two bats -- this guard is broken, or the bats are" }
           $m = [regex]::Match($out, 'Scanned (\d+) staged PowerShell block')
-          if (-not $m.Success -or [int]$m.Groups[1].Value -lt 100) { throw "lint scanned only $($m.Groups[1].Value) blocks -- the parser regressed, so a clean result means nothing" }
+          if (-not $m.Success -or [int]$m.Groups[1].Value -lt [int][math]::Floor($starts * 0.9)) { throw "lint scanned only $($m.Groups[1].Value) of about $starts staged blocks -- the parser regressed, so a clean result means nothing" }
+          Write-Host "MEASURED: $starts block start(s) counted in the bats; the lint scanned $($m.Groups[1].Value)"
           Write-Host "lint_unraised_findings.ps1 OK"
           exit 0
 
