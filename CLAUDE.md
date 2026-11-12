@@ -986,7 +986,12 @@ not 34. So: after every push that touches a workflow, count the checks, and
 treat a missing job as a failure, never as "still queued". New CI step bodies
 go in `.github/ci/*.ps1` (excluded from the USB stick, like the rest of
 `.github`) and are called from the step; `lint.yml` fails when a workflow
-file passes 505,000 bytes. Step NAMES stay in the workflow -- the benign
+file passes 505,000 bytes. Eighteen more bodies were moved in 2026-11 (the
+file had 409 bytes left); it is now about 284,000 bytes, and lint fails it
+at 400,000 so the room cannot be spent unnoticed again. A body that uses
+`$PSScriptRoot`, `$PSCommandPath`, `$MyInvocation`, a `${{ }}` expression or
+a non-ASCII character stays inline: each means something else in a file.
+Step NAMES stay in the workflow -- the benign
 corpus resolves its `ci:` proofs against them.
 
 ## INIT-path PowerShell: prefer tools/*.ps1 over inline echo-built PSRUN
