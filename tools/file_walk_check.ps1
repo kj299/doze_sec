@@ -61,6 +61,9 @@ param(
     # Only CI changes these: a scratch root, so every state runs through the
     # real walker, and a budget of 0 to drive the out-of-time path.
     [string]$Root,
+    # CI only: several scratch folders in place of a multi-folder check's
+    # real ones, so the merge of several walks runs through the real walker.
+    [string[]]$RootList,
     # -1 = this check's own default (see $script:Checks).
     [int]$BudgetSeconds = -1,
     [switch]$SelfTest
@@ -100,7 +103,9 @@ $script:Checks = @{
     TempAds    = @{ What = 'Alternate-data-stream check'; Where = 'TEMP'; Tech = 'T1564.004'; Budget = 180; Miss = 'content hidden in a stream there would go unseen'; Ok = '[OK] No suspicious ADS in Temp.' }
     TempHtml   = @{ What = 'Oversized HTML/HTA check'; Where = 'TEMP'; Tech = 'T1027.006'; Budget = 60; Miss = 'an HTML-smuggling payload staged there would go unseen'; Ok = '[OK] No oversized HTML/HTA files in user TEMP.' }
     OutlookMsg = @{ What = 'Outlook .msg/.oft check'; Where = 'the Outlook data folder'; Tech = 'T1566.001'; Budget = 60; Miss = 'a recent message file there would go unseen'; Ok = '[OK] No recent Outlook .msg/.oft artefacts.' }
-    # Three folders, three levels deep, as the inline block searched them.
+    # Three folders, three levels deep, as the inline block searched them --
+    # and, unlike it, hidden folders too (AppData): the old Get-ChildItem had
+    # no -Force, so it never looked inside the profile's AppData.
     RansomExt  = @{ What = 'Ransomware-extension check'; Where = 'the user profile, Users\Public and TEMP'; Tech = 'T1486'; Budget = 120; Depth = 3; Miss = 'files encrypted by ransomware there would go unseen'; Ok = '[OK] No files with known ransomware extensions in user directories.'; Header = '[CRITICAL][T1486] Files with ransomware-associated extensions found:' }
     # Listings, not findings: a hit is [INFO] for the reader to correlate.
     TokenCache = @{ What = 'Token cache activity check'; Where = 'the AAD token and credential caches'; Tech = 'T1557.001'; Budget = 60; Miss = 'recent token-cache activity is not shown'; Ok = '[OK] No unusual recent token cache modifications.'; Header = '[INFO] Recent AAD/token cache activity (correlate with login events):'; InfoOnly = $true }
@@ -197,6 +202,19 @@ function Test-StillListed {
         return $false
     } catch { return $true }
 }
+function Test-AbsentForSure {
+    # A path is absent only when its parent ANSWERS without it, or the parent
+    # itself does not exist (a browser that is not installed). A parent that
+    # refuses to list is not an answer.
+    param([string]$Path)
+    $parent = [IO.Path]::GetDirectoryName($Path); $leaf = [IO.Path]::GetFileName($Path)
+    if (-not $parent -or -not $leaf) { return $false }
+    try { $names = @([IO.Directory]::GetFileSystemEntries($parent)) }
+    catch [System.IO.DirectoryNotFoundException] { return $true }
+    catch { return $false }
+    foreach ($n in $names) { if ([IO.Path]::GetFileName($n) -eq $leaf) { return $false } }
+    return $true
+}
 function Test-TooLong {
     param($Err)
     $x = $Err.Exception
@@ -290,7 +308,8 @@ function Merge-WalkScans {
     foreach ($x in @($Scans)) {
         if ($null -eq $x) { continue }
         [void]$paths.Add([string]$x.RootPath)
-        $m.Budget = [math]::Max([int]$m.Budget, [int]$x.Budget)
+        # The walks share one budget: the line names the whole of it.
+        $m.Budget = [int]$m.Budget + [int]$x.Budget
         $m.Seconds = [math]::Round([double]$m.Seconds + [double]$x.Seconds, 1)
         if ([string]$x.RootState -eq 'missing') {
             if ($Optional -notcontains [string]$x.RootPath) { [void]$m.Unreadable.Add(@{ Path = ([string]$x.RootPath + ' (not found)'); Denied = $false }) }
@@ -298,7 +317,8 @@ function Merge-WalkScans {
         }
         if ([string]$x.RootState -ne 'ok') { [void]$m.Unreadable.Add(@{ Path = ([string]$x.RootPath + ' (' + [string]$x.RootError + ')'); Denied = [bool]$x.RootDenied }); continue }
         $answered++
-        foreach ($h in @($x.Hits)) { [void]$m.Hits.Add($h) }
+        # TEMP sits under the profile: a file both walks reach is listed once.
+        foreach ($h in @($x.Hits)) { if (-not $m.Hits.Contains($h)) { [void]$m.Hits.Add($h) } }
         foreach ($u in @($x.Unreadable)) { [void]$m.Unreadable.Add($u) }
         foreach ($l in @($x.Links)) { [void]$m.Links.Add($l) }
         $m.Examined += [int]$x.Examined; $m.Vanished += [int]$x.Vanished
@@ -339,6 +359,8 @@ if ($SelfTest) {
     $m = Merge-WalkScans -Scans @((S @{ RootPath = 'C:\Users\alice' }), (S @{ RootPath = 'C:\Users\Public'; RootState = 'unreadable'; RootError = 'UnauthorizedAccessException: denied'; RootDenied = $true }), (S @{ RootPath = 'C:\T'; RootState = 'missing' }))
     $v = Get-WalkVerdict -Check 'RansomExt' -Scan $m; $t = $v.Lines -join "`n"
     T 'one of the three folders unreadable and one missing: a raised gap that names both, never "[OK] No files with known ransomware extensions" (the old block printed [OK])' ($v.Gap -and $t -match 'C:\\Users\\Public \(UnauthorizedAccessException' -and $t -match 'C:\\T \(not found\)' -and $t -notmatch 'No files with known ransomware') $t
+    $m = Merge-WalkScans -Scans @((S @{ RootPath = 'C:\U'; Hits = @('C:\U\AppData\Local\Temp\x.akira  t') }), (S @{ RootPath = 'C:\U\AppData\Local\Temp'; Hits = @('C:\U\AppData\Local\Temp\x.akira  t') }))
+    T 'a file both the profile walk and the TEMP walk reach is listed once' (@($m.Hits).Count -eq 1) ''
     $m = Merge-WalkScans -Scans @((S @{ RootPath = 'C:\a'; Hits = @('C:\a\x.akira') }), (S @{ RootPath = 'C:\b'; RootState = 'unreadable'; RootError = 'IOException: x' }))
     $v = Get-WalkVerdict -Check 'RansomExt' -Scan $m
     T 'a hit in one folder and another folder unreadable: both raised' ($v.Hit -and $v.Gap) ($v.Lines -join ' | ')
@@ -349,6 +371,14 @@ if ($SelfTest) {
     T 'recent token-cache activity is an [INFO] listing to correlate, never a counted finding' ((-not $v.Hit) -and $t -match '(?m)^\[INFO\] Recent AAD/token cache activity' -and $t -notmatch '\[WARNING\]|\[CRITICAL\]') $t
     $v = Get-WalkVerdict -Check 'CredStores' -Scan (S @{ Unreadable = @(@{ Path = 'C:\x\Login Data'; Denied = $true }) }); $t = $v.Lines -join "`n"
     T 'a browser credential store that is there and cannot be read: a raised gap, never "[OK] No unusual recent access"' ($v.Gap -and $t -match '(?m)^\[WARNING\] Browser credential store check NOT performed in full' -and $t -notmatch 'No unusual recent access') $t
+    $tmpA = Join-Path ([IO.Path]::GetTempPath()) ('dz_fwc_' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    T 'a store whose whole folder does not exist is absent (no browser installed), never a gap' (Test-AbsentForSure (Join-Path $tmpA 'Google\Chrome\User Data\Default\Login Data')) ''
+    $null = New-Item -ItemType Directory -Path $tmpA -Force
+    try {
+        T 'a store its parent lists without it is absent' (Test-AbsentForSure (Join-Path $tmpA 'Login Data')) ''
+        Set-Content -LiteralPath (Join-Path $tmpA 'Login Data') -Value 'x'
+        T 'a store its parent DOES list is not absent, so a failed read of it is a gap' (-not (Test-AbsentForSure (Join-Path $tmpA 'Login Data'))) ''
+    } finally { Remove-Item -LiteralPath $tmpA -Recurse -Force -EA SilentlyContinue }
     $den = @{ Path = 'C:\Users\alice\AppData\Local\Temp\locked'; Denied = $true }
     $io = @{ Path = 'C:\Users\alice\AppData\Local\Temp\broken'; Denied = $false }
 
@@ -460,7 +490,8 @@ if ($BudgetSeconds -lt 0) { $BudgetSeconds = [int]$script:Checks[$Check].Budget 
 # Several roots for the checks that read more than one folder. -Root (CI)
 # replaces all of them with one scratch folder.
 $roots = @($rootPath); $optional = @()
-if (-not $Root) {
+if ($RootList -and $RootList.Count -gt 0) { $roots = @($RootList) }
+elseif (-not $Root) {
     $lad = [Environment]::GetFolderPath('LocalApplicationData'); $rad = [Environment]::GetFolderPath('ApplicationData')
     if ($Check -eq 'RansomExt') { $roots = @($env:USERPROFILE, (Join-Path ([string]$env:SystemDrive + '\') 'Users\Public'), $env:TEMP) }
     elseif ($Check -eq 'TokenCache') {
@@ -480,14 +511,17 @@ try {
         $scan = @{ RootState = 'ok'; RootDenied = $false; RootError = ''; RootPath = (@($roots) -join ', '); Hits = (New-Object System.Collections.ArrayList); Examined = 0; Unreadable = (New-Object System.Collections.ArrayList); Vanished = 0; OutOfTime = $false; Seconds = 0; Budget = $BudgetSeconds; Links = @() }
         foreach ($p in $roots) {
             if (-not $p) { continue }
-            $present = $true
-            try { $present = [IO.File]::Exists($p) -or [IO.Directory]::Exists($p) } catch { $present = $true }
-            if (-not $present) { continue }
+            # Asked directly: File.Exists and Directory.Exists answer "no"
+            # for a path this account may not read, so they cannot tell a
+            # browser that is not installed from a store that refused us.
             try {
                 $it = Get-Item -LiteralPath $p -Force -ErrorAction Stop
                 $scan.Examined++
                 if ($it.LastAccessTime -gt $acut) { [void]$scan.Hits.Add(($p + ' accessed ' + $it.LastAccessTime.ToString('yyyy-MM-dd HH:mm', [Globalization.CultureInfo]::InvariantCulture))) }
-            } catch { [void]$scan.Unreadable.Add(@{ Path = $p; Denied = (Test-Denied $_) }) }
+            } catch {
+                if ((Test-Vanished $_) -and (Test-AbsentForSure $p)) { continue }
+                [void]$scan.Unreadable.Add(@{ Path = $p; Denied = (Test-Denied $_) })
+            }
         }
         $v = Get-WalkVerdict -Check $Check -Scan $scan -IsElevated ($Elevated -eq 1)
     } elseif ($roots.Count -gt 1) {

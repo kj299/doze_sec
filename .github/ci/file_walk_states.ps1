@@ -8,7 +8,7 @@ $ErrorActionPreference = 'Stop'
 $st = (.\tools\file_walk_check.ps1 -SelfTest) -join "`n"
 if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'file_walk_check -SelfTest failed' }
 $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-if ($n -lt 36) { throw "file_walk_check self-test ran only $n case(s)" }
+if ($n -lt 40) { throw "file_walk_check self-test ran only $n case(s)" }
 function RunW([string]$Check, [hashtable]$Extra) {
   $md = Join-Path $env:TEMP ("dz_ci_walk_{0}_{1}" -f $PID, [guid]::NewGuid().ToString('N').Substring(0, 6)); New-Item -ItemType Directory -Path $md -Force | Out-Null
   try {
@@ -122,7 +122,9 @@ foreach ($c in 'RansomExt', 'TokenCache', 'CredStores') {
   if ($r.Out -notmatch '(?m)^\[(OK|INFO|WARNING|CRITICAL)') { throw "$c printed no verdict on the runner: $($r.Out)" }
 }
 $r = RunW 'RansomExt' @{}
-if ($r.Markers -match 'ransom_hit') { throw "a clean runner raised the ransomware finding: $($r.Out)" }
+# A clean runner's result is a claim to pin: no hit, and no gap -- an
+# administrator can read its own profile, Public and TEMP inside the budget.
+if ($r.Markers -match 'ransom_hit|ransom_gap') { throw "a clean runner did not read clean for ransomware extensions: [$($r.Markers)] $($r.Out)" }
 # THE RANSOMWARE WALK, both directions, on a scratch tree.
 # Touches: file:%RUNNER_TEMP%\dz_ci_ransom_<pid> (removed in finally).
 $rr = Join-Path $base "dz_ci_ransom_$PID"
@@ -143,6 +145,10 @@ try {
   if ($r.Out -notmatch 'budget\.xlsx\.akira') { throw "the encrypted file was not listed by name: $($r.Out)" }
   # The read that fails: TEMP-style missing root.
   Expect (RunW 'RansomExt' @{ Root = (Join-Path $rr 'no_such_folder') }) 'dz_ransom_gap' '(?m)^\[WARNING\] Ransomware-extension check NOT performed -- ' 'the folder not found'
+  # SEVERAL folders through the real walker and the real merge: one has the
+  # file, one does not exist. Both raised: the finding AND the named gap.
+  $r = RunW 'RansomExt' @{ RootList = @($rr, (Join-Path $rr 'no_such_folder')) }
+  if ($r.Markers -ne 'dz_ransom_gap,dz_ransom_hit' -or $r.Out -notmatch 'no_such_folder \(not found\)') { throw "a finding beside a missing folder was not both raised: [$($r.Markers)] $($r.Out)" }
   # Token cache: recent activity is an INFO listing, never a counted finding.
   Set-Content -LiteralPath (Join-Path $rr 'a\cache.dat') -Value 'x'
   $r = RunW 'TokenCache' @{ Root = $rr }

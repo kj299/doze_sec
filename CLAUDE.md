@@ -717,6 +717,18 @@ borrow). The same review found the Defender detection history had become
 what it caught before another antivirus took over: **a mode is a reason to
 reinterpret a failed query, never a reason not to ask.**
 
+**`File.Exists` is not "not installed".** `[IO.File]::Exists` and
+`[IO.Directory]::Exists` return `false` for a path this account may not
+read, and never throw, so a store that refused us read as a browser that is
+not installed and printed `[OK]` -- the silent shape again, in the fix for
+it. Ask for the item with `-ErrorAction Stop`, and call it absent only when
+its parent ANSWERS without it or the parent itself does not exist
+(`Test-AbsentForSure` in `file_walk_check`); a parent that refuses to list
+is a gap. The same review round caught a CI parameter named `$Roots` in a
+script with a `$roots` variable: PowerShell names are case-insensitive, so
+the parameter was overwritten before it was read and the test hook did
+nothing.
+
 **A branch whose PR has merged is not that PR any more.** The WinRM commit
 was pushed to the #271 branch moments after #271 was merged: it never reached
 main, it had never run in CI, and #271's description -- updated to announce

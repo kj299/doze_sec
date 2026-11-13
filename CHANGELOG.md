@@ -13,6 +13,7 @@ are a separate, machine-specific record of changes each audit made.
 - Each of the three ransomware folders is walked on its own; a folder that is missing or could not be read is named and raised as `NOT performed in full`, beside any finding.
 - The finding keeps its wording and CRITICAL row, and lists the files by name. A file is matched by its extension, so a name that only contains a ransomware word ("lockbit-report.txt") is not.
 - The walk goes three folder levels deep, as before, and now says so: deeper files were never examined, and the line no longer lets that pass unsaid.
+- It now also looks inside hidden folders, including the profile's `AppData`, which the old walk never entered. Links in the profile (the legacy `Application Data`-style junctions) are not followed, and one `[INFO]` line names them.
 - The two listings stay `[INFO]` (context to correlate, not findings). A store or cache that is there and cannot be read is a raised gap; one that does not exist on the PC is an answer.
 
 ### Remote-access tools are now findings
