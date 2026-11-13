@@ -5519,42 +5519,48 @@ del "%TEMP%\dz_amsiev_done.txt" 2>nul
 :: --- [CTI] Credential Access via DPAPI (T1555.003 / T1555.004) ---
 echo.>> "%REPORT%"
 echo --- [CTI][T1555.003] Browser Credential Store Access (DPAPI) --->> "%REPORT%"
-echo  Command: powershell -Command "($env:LOCALAPPDATA+'\Google\Chrome\User Data\Default\Login Data'),($env:LOCALAPPDATA+'\Microsoft\Edge\User Data\Default\Login Data'),($env:APPDATA+'\Mozilla\Firefox\Profiles') | Get-Item -EA SilentlyContinue | Select-Object FullName,LastWriteTime">> "%REPORT%"
-echo $paths = @( > "%PSRUN%"
-echo   "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Login Data", >> "%PSRUN%"
-echo   "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Login Data", >> "%PSRUN%"
-echo   "$env:APPDATA\Mozilla\Firefox\Profiles" >> "%PSRUN%"
-echo ) >> "%PSRUN%"
-echo $recent = @() >> "%PSRUN%"
-echo foreach ($p in $paths) { >> "%PSRUN%"
-echo   if (Test-Path $p) { >> "%PSRUN%"
-echo     $item = Get-Item $p -EA SilentlyContinue >> "%PSRUN%"
-echo     if ($item.LastAccessTime -gt (Get-Date).AddHours(-24)) { >> "%PSRUN%"
-echo       $recent += $p + ' accessed ' + $item.LastAccessTime >> "%PSRUN%"
-echo     } >> "%PSRUN%"
-echo   } >> "%PSRUN%"
-echo } >> "%PSRUN%"
-echo if ($recent.Count -gt 0) { '[INFO] Browser credential stores accessed in last 24h (may be normal browser activity):'; $recent ^| ForEach-Object { '  '+$_ } } else { '[OK] No unusual recent access to browser credential stores.' } >> "%PSRUN%"
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+del "%TEMP%\dz_credstore_done.txt" 2>nul
+del "%TEMP%\dz_credstore_gap.txt" 2>nul
+echo  Command: powershell -File tools\file_walk_check.ps1 -Check CredStores>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\file_walk_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\file_walk_check.ps1" -Check CredStores>> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\file_walk_check.ps1 not found -- Browser credential store check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 18 T1555.003 "Browser credential store check NOT performed - tool missing"
+)
+if exist "%TEMP%\dz_credstore_gap.txt" (
+    rem A gap is its own row, beside a finding or alone.
+    call :dz_finding WARNING 18 T1555.003 "Browser credential store check NOT performed in full - folders or files could not be read, or the time budget ran out"
+    del "%TEMP%\dz_credstore_gap.txt" 2>nul
+)
+if not exist "%TEMP%\dz_credstore_done.txt" if exist "%SCRIPT_DIR%tools\file_walk_check.ps1" (
+    echo [WARNING] Browser credential store check produced no verdict -- NOT performed: tools\file_walk_check.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 18 T1555.003 "Browser credential store check produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_credstore_done.txt" 2>nul
 
 :: --- [CTI] AiTM Phishing / Token Theft Artifacts (T1557.001) ---
 echo.>> "%REPORT%"
 echo --- [CTI][T1557.001] AiTM Phishing - Suspicious AAD Token Cache --->> "%REPORT%"
-echo  Command: powershell -Command "($env:LOCALAPPDATA+'\Microsoft\TokenBroker\Cache'),($env:LOCALAPPDATA+'\Microsoft\Credentials'),($env:LOCALAPPDATA+'\.IdentityService') | Get-Item -EA SilentlyContinue | Select-Object FullName,LastWriteTime">> "%REPORT%"
-echo $tokenPaths = @( > "%PSRUN%"
-echo   "$env:LOCALAPPDATA\Microsoft\TokenBroker\Cache", >> "%PSRUN%"
-echo   "$env:LOCALAPPDATA\Microsoft\Credentials", >> "%PSRUN%"
-echo   "$env:LOCALAPPDATA\.IdentityService" >> "%PSRUN%"
-echo ) >> "%PSRUN%"
-echo $hits = @() >> "%PSRUN%"
-echo foreach ($tp in $tokenPaths) { >> "%PSRUN%"
-echo   if (Test-Path $tp) { >> "%PSRUN%"
-echo     $files = Get-ChildItem $tp -Recurse -EA SilentlyContinue ^| Where-Object { $_.LastWriteTime -gt (Get-Date).AddHours(-2) } >> "%PSRUN%"
-echo     if ($files) { $hits += $tp + ': ' + $files.Count + ' file(s) modified in last 2h' } >> "%PSRUN%"
-echo   } >> "%PSRUN%"
-echo } >> "%PSRUN%"
-echo if ($hits.Count -gt 0) { '[INFO] Recent AAD/token cache activity (correlate with login events):'; $hits ^| ForEach-Object { '  '+$_ } } else { '[OK] No unusual recent token cache modifications.' } >> "%PSRUN%"
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+del "%TEMP%\dz_tokencache_done.txt" 2>nul
+del "%TEMP%\dz_tokencache_gap.txt" 2>nul
+echo  Command: powershell -File tools\file_walk_check.ps1 -Check TokenCache>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\file_walk_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\file_walk_check.ps1" -Check TokenCache>> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\file_walk_check.ps1 not found -- Token cache activity check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 18 T1557.001 "Token cache activity check NOT performed - tool missing"
+)
+if exist "%TEMP%\dz_tokencache_gap.txt" (
+    rem A gap is its own row, beside a finding or alone.
+    call :dz_finding WARNING 18 T1557.001 "Token cache activity check NOT performed in full - folders or files could not be read, or the time budget ran out"
+    del "%TEMP%\dz_tokencache_gap.txt" 2>nul
+)
+if not exist "%TEMP%\dz_tokencache_done.txt" if exist "%SCRIPT_DIR%tools\file_walk_check.ps1" (
+    echo [WARNING] Token cache activity check produced no verdict -- NOT performed: tools\file_walk_check.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 18 T1557.001 "Token cache activity check produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_tokencache_done.txt" 2>nul
 
 :: --- [CTI] Ransomware Precursors (T1490) ---
 echo.>> "%REPORT%"
@@ -5573,19 +5579,30 @@ set /a DEFERRED_COUNT+=1
 :: --- [CTI] Ransomware File Extension Survey (T1486) ---
 echo.>> "%REPORT%"
 echo --- [CTI][T1486] Ransomware File Extension Survey --->> "%REPORT%"
-echo  Command: powershell -Command "Get-ChildItem $env:USERPROFILE,$env:SystemDrive\Users\Public,$env:TEMP -Recurse -Depth 3 -EA SilentlyContinue -Include '*.encrypted','*.locked','*.crypt','*.locky','*.WNCRY','*.lockbit','*.akira','*.basta'"   [full list: 18 known ransomware extensions]>> "%REPORT%"
-echo $exts = @('.encrypted','.locked','.crypt','.locky','.cerber','.zepto','.thor','.aesir','.zzzzz','.WNCRY','.wcry','.rdmk','.PLAY','.black','.basta','.royal','.akira','.lockbit','.clop') > "%PSRUN%"
-echo $hits = @() >> "%PSRUN%"
-echo foreach ($d in @($env:USERPROFILE,"$env:SystemDrive\Users\Public",$env:TEMP)) { >> "%PSRUN%"
-echo   if (Test-Path $d) { >> "%PSRUN%"
-echo     foreach ($ext in $exts) { >> "%PSRUN%"
-echo       $f = Get-ChildItem $d -Filter "*$ext" -Recurse -EA SilentlyContinue -Depth 3 ^| Select-Object -First 3 >> "%PSRUN%"
-echo       if ($f) { $hits += $f ^| ForEach-Object { $_.FullName } } >> "%PSRUN%"
-echo     } >> "%PSRUN%"
-echo   } >> "%PSRUN%"
-echo } >> "%PSRUN%"
-echo if ($hits.Count -gt 0) { '[CRITICAL][T1486] Files with ransomware-associated extensions found:'; $hits ^| Select-Object -First 20 ^| ForEach-Object { '  '+$_ } } else { '[OK] No files with known ransomware extensions in user directories.' } >> "%PSRUN%"
-call :dz_ps_scan 18 T1486 "Files with ransomware-associated extensions present"
+del "%TEMP%\dz_ransom_done.txt" 2>nul
+del "%TEMP%\dz_ransom_gap.txt" 2>nul
+del "%TEMP%\dz_ransom_hit.txt" 2>nul
+echo  Command: powershell -File tools\file_walk_check.ps1 -Check RansomExt>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\file_walk_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\file_walk_check.ps1" -Check RansomExt>> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\file_walk_check.ps1 not found -- Ransomware-extension check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 18 T1486 "Ransomware-extension check NOT performed - tool missing"
+)
+if exist "%TEMP%\dz_ransom_hit.txt" (
+    call :dz_finding CRITICAL 18 T1486 "Files with ransomware-associated extensions present"
+    del "%TEMP%\dz_ransom_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_ransom_gap.txt" (
+    rem A gap is its own row, beside a finding or alone.
+    call :dz_finding WARNING 18 T1486 "Ransomware-extension check NOT performed in full - folders or files could not be read, or the time budget ran out"
+    del "%TEMP%\dz_ransom_gap.txt" 2>nul
+)
+if not exist "%TEMP%\dz_ransom_done.txt" if exist "%SCRIPT_DIR%tools\file_walk_check.ps1" (
+    echo [WARNING] Ransomware-extension check produced no verdict -- NOT performed: tools\file_walk_check.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 18 T1486 "Ransomware-extension check produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_ransom_done.txt" 2>nul
 
 :: --- [CTI] EDR/AV Tampering via Driver Load (T1562.001) ---
 echo.>> "%REPORT%"

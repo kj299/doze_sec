@@ -412,6 +412,13 @@ Found during the v7.1 coverage review; tracked for future work:
   read printed `[OK]` -- and they are now `tools/rmm_check.ps1`, below.)
   Probes elsewhere may still degrade silently, but
   the high-value verdict checks across Sections 4-18 now fail visibly.
+- ~~The Section 18 ransomware-extension walk, and the browser credential-store
+  and token-cache listings, silenced their errors and printed `[OK]` past
+  folders they could not read.~~ **Closed:** `tools/file_walk_check.ps1
+  -Check RansomExt|TokenCache|CredStores`. Residual: the ransomware walk
+  looks three folder levels into the profile, Public and TEMP (the line says
+  so), matches a fixed list of extensions, and does not see ransomware that
+  keeps the original extension or encrypts other drives.
 - ~~A running or installed remote-access tool (AnyDesk, TeamViewer,
   ScreenConnect and others) was printed and counted nowhere: three checks
   (Sections 4 and 17) used tags outside the severity vocabulary, a substring

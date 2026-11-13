@@ -6,6 +6,15 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### The ransomware-extension walk and two file listings: a folder that could not be read is no longer an all-clear
+**Before.** Section 18's ransomware-extension check, a CRITICAL finding, walked the user profile, `Users\Public` and TEMP with errors silenced: a folder it could not read was dropped and the block printed `[OK] No files with known ransomware extensions`. The browser credential-store and token-cache listings did the same.
+
+**Now.** `tools/file_walk_check.ps1 -Check RansomExt|TokenCache|CredStores`, the walker already used for the TEMP checks.
+- Each of the three ransomware folders is walked on its own; a folder that is missing or could not be read is named and raised as `NOT performed in full`, beside any finding.
+- The finding keeps its wording and CRITICAL row, and lists the files by name. A file is matched by its extension, so a name that only contains a ransomware word ("lockbit-report.txt") is not.
+- The walk goes three folder levels deep, as before, and now says so: deeper files were never examined, and the line no longer lets that pass unsaid.
+- The two listings stay `[INFO]` (context to correlate, not findings). A store or cache that is there and cannot be read is a raised gap; one that does not exist on the PC is an answer.
+
 ### Remote-access tools are now findings
 A running or installed remote-access tool (AnyDesk, TeamViewer, ScreenConnect, RustDesk, Splashtop and others) was printed and counted nowhere.
 

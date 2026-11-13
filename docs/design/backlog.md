@@ -859,12 +859,12 @@ Class A -- a failed read reaches `[OK]` (15 blocks):
 | Accessibility IFEO debugger (Section 13) | `[OK] No IFEO Debugger hijacks` | DONE 2026-11-12, `tools/accessibility_backdoor_check.ps1` |
 | Accessibility backdoor (Section 17): the same registry read again, Defender history, binary signatures | `[OK]` for the registry and for Defender; nothing for a missing binary | DONE 2026-11-12, same tool; Section 17 states Section 13's verdict |
 | OpenSSH Server (Section 18, and the cmd dump in Section 10) | `[OK] OpenSSH Server not installed.` | DONE 2026-11-12, `tools/sshd_check.ps1` |
-| Ransomware extensions (Section 18, CRITICAL finding) | `[OK] No files with known ransomware extensions` | open; the walker in `tools/file_walk_check.ps1` fits |
+| Ransomware extensions (Section 18, CRITICAL finding) | `[OK] No files with known ransomware extensions` | DONE 2026-11-13, `tools/file_walk_check.ps1 -Check RansomExt` |
 | Office macro policy (Section 13) | `[INFO] No explicit per-app macro settings ... defaults apply` | open |
 | Proxy settings, two blocks (Section 3) | `[OK] No proxy settings in registry` / `Not configured` | open |
 | RMM software installed (Section 17) | `[OK] No unexpected RMM software found.` | DONE 2026-11-13, `tools/rmm_check.ps1` (Section 4) |
 | Run/RunOnce in other users' hives (Section 5) | `[OK] No Run/RunOnce entries in other-user hives.` | open |
-| Browser credential stores; token cache (Section 18) | `[OK] No unusual recent access` / `modifications` | open |
+| Browser credential stores; token cache (Section 18) | `[OK] No unusual recent access` / `modifications` | DONE 2026-11-13, `tools/file_walk_check.ps1 -Check CredStores` / `TokenCache` |
 | Registry IOC match (Section 18h) | has a NOT-performed branch, but one entry whose key is denied is swallowed by `catch{}` and not named | open |
 
 Class B -- fails loud or to `[INFO]` (2): unsigned DLLs in system paths (a

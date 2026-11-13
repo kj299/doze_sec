@@ -661,6 +661,17 @@ jobs:
                    'the process snapshot could not be read: a raised gap, never "[OK] No known remote-access tool running"'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
+          out=$(pwsh -NoProfile -File tools/file_walk_check.ps1 -SelfTest)
+          for n in 'one of the three folders unreadable and one missing: a raised gap that names both, never "[OK] No files with known ransomware extensions" (the old block printed [OK])' \
+                   'a browser credential store that is there and cannot be read: a raised gap, never "[OK] No unusual recent access"' \
+                   'recent token-cache activity is an [INFO] listing to correlate, never a counted finding'; do
+            echo "$out" | grep -qF "$n" || { echo "walk case gone: $n"; exit 1; }
+          done
+          for b in doze_sec.bat doze_sec_noAdmin.bat; do
+            grep -qF -- '-Recurse -EA SilentlyContinue -Depth 3' "$b" && { echo "$b: the silenced ransomware walk is back"; exit 1; }
+            for c in RansomExt TokenCache CredStores; do grep -qF "file_walk_check.ps1\" -Check $c>>" "$b" || { echo "$b: no longer runs file_walk_check -Check $c"; exit 1; }; done
+            for m in ransom_hit ransom_gap tokencache_gap credstore_gap; do grep -qF "if exist \"%TEMP%\\dz_$m.txt\" (" "$b" || { echo "$b: the dz_$m marker is never read"; exit 1; }; done
+          done
           for b in doze_sec.bat doze_sec_noAdmin.bat; do
             grep -qF '[RMM RUNNING]' "$b" && { echo "$b: the untagged [RMM RUNNING] line is back"; exit 1; }
             grep -qF '[RMM INSTALLED]' "$b" && { echo "$b: the untagged [RMM INSTALLED] line is back"; exit 1; }
@@ -738,7 +749,7 @@ jobs:
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
           out=$(pwsh -NoProfile -File tools/file_walk_check.ps1 -SelfTest); echo "$out"
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 29 ] || { echo "only $n walk case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 36 ] || { echo "only $n walk case(s)"; exit 1; }
           echo "$out" | grep -q '^\[FAIL\]' && { echo 'a walk case failed'; exit 1; }
           for n in 'a stream read refused with Win32 error 5 is access denied' \
                    'a junction that was not followed is said and named beside the [OK], never silent' \

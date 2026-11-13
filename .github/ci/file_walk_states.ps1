@@ -8,7 +8,7 @@ $ErrorActionPreference = 'Stop'
 $st = (.\tools\file_walk_check.ps1 -SelfTest) -join "`n"
 if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'file_walk_check -SelfTest failed' }
 $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-if ($n -lt 29) { throw "file_walk_check self-test ran only $n case(s)" }
+if ($n -lt 36) { throw "file_walk_check self-test ran only $n case(s)" }
 function RunW([string]$Check, [hashtable]$Extra) {
   $md = Join-Path $env:TEMP ("dz_ci_walk_{0}_{1}" -f $PID, [guid]::NewGuid().ToString('N').Substring(0, 6)); New-Item -ItemType Directory -Path $md -Force | Out-Null
   try {
@@ -114,4 +114,42 @@ try {
   if (Test-Path -LiteralPath $root) { throw "the CI scratch folder $root could not be removed" }
 }
 Write-Host 'file walk: every state read through the real walker for all three checks'
+# LIVE, the three later checks on the runner's own folders, MEASURED: each
+# must state a verdict, and the ransomware walk must not raise on a clean image.
+foreach ($c in 'RansomExt', 'TokenCache', 'CredStores') {
+  $sw = [Diagnostics.Stopwatch]::StartNew(); $r = RunW $c @{}
+  Write-Host ("MEASURED: {0} on the runner's own folders: markers [{1}] in {2:N1}s" -f $c, $r.Markers, $sw.Elapsed.TotalSeconds)
+  if ($r.Out -notmatch '(?m)^\[(OK|INFO|WARNING|CRITICAL)') { throw "$c printed no verdict on the runner: $($r.Out)" }
+}
+$r = RunW 'RansomExt' @{}
+if ($r.Markers -match 'ransom_hit') { throw "a clean runner raised the ransomware finding: $($r.Out)" }
+# THE RANSOMWARE WALK, both directions, on a scratch tree.
+# Touches: file:%RUNNER_TEMP%\dz_ci_ransom_<pid> (removed in finally).
+$rr = Join-Path $base "dz_ci_ransom_$PID"
+try {
+  New-Item -ItemType Directory -Path (Join-Path $rr 'a\b\c\d') -Force | Out-Null
+  # The benign twins: a name that holds a ransomware word but not as the extension.
+  Set-Content -LiteralPath (Join-Path $rr 'a\lockbit-report.txt') -Value 'x'
+  Set-Content -LiteralPath (Join-Path $rr 'a\b\black.pdf') -Value 'x'
+  Expect (RunW 'RansomExt' @{ Root = $rr }) '' '(?m)^\[OK\] No files with known ransomware extensions in user directories\.' 'benign: ransomware words that are not the extension'
+  # Deeper than the walk looks: said, never silently examined or passed.
+  Set-Content -LiteralPath (Join-Path $rr 'a\b\c\d\deep.akira') -Value 'x'
+  $r = RunW 'RansomExt' @{ Root = $rr }
+  if ($r.Markers -or $r.Out -notmatch '3 folder levels deep; deeper files were not examined') { throw "the depth limit was not stated, or a file below it was graded: [$($r.Markers)] $($r.Out)" }
+  # The malign twin, three levels down.
+  Set-Content -LiteralPath (Join-Path $rr 'a\b\c\budget.xlsx.akira') -Value 'x'
+  $r = RunW 'RansomExt' @{ Root = $rr }
+  Expect $r 'dz_ransom_hit' '(?m)^\[CRITICAL\]\[T1486\] Files with ransomware-associated extensions found:' 'an .akira file three levels down'
+  if ($r.Out -notmatch 'budget\.xlsx\.akira') { throw "the encrypted file was not listed by name: $($r.Out)" }
+  # The read that fails: TEMP-style missing root.
+  Expect (RunW 'RansomExt' @{ Root = (Join-Path $rr 'no_such_folder') }) 'dz_ransom_gap' '(?m)^\[WARNING\] Ransomware-extension check NOT performed -- ' 'the folder not found'
+  # Token cache: recent activity is an INFO listing, never a counted finding.
+  Set-Content -LiteralPath (Join-Path $rr 'a\cache.dat') -Value 'x'
+  $r = RunW 'TokenCache' @{ Root = $rr }
+  if ($r.Markers -or $r.Out -notmatch '(?m)^\[INFO\] Recent AAD/token cache activity') { throw "recent token-cache activity was not an INFO listing: [$($r.Markers)] $($r.Out)" }
+} finally {
+  Remove-Item -LiteralPath $rr -Recurse -Force -EA SilentlyContinue
+  if (Test-Path -LiteralPath $rr) { throw "the CI scratch folder $rr could not be removed" }
+}
+Write-Host 'file walk: ransomware extensions found by extension at the stated depth; words that are not the extension are not'
 exit 0
