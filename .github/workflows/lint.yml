@@ -647,6 +647,29 @@ jobs:
             grep -qF 'NTLM partially hardened' "$b" && { echo "$b: level 3-4 is graded WARN or queues a fix again, against Section 12"; exit 1; }
           done
           echo 'WDigest and NTLM: absent is the default, unreadable is a gap; the tiles and fixes read the section and the ledger'
+      - name: Remote-access tools -- running or installed is a counted WARNING; names match whole, never as substrings
+        run: |
+          out=$(pwsh -NoProfile -File tools/rmm_check.ps1 -SelfTest); echo "$out"
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 27 ] || { echo "only $n rmm case(s)"; exit 1; }
+          for n in 'LateralHelper.exe is NOT Atera (the old substring match said it was)' \
+                   '"Collateral Manager" and "Lateral Tools" are NOT Atera (word edges, not substrings)' \
+                   'SRService.exe is Splashtop, which no product-name search finds' \
+                   'a validly signed tool is still the finding: the signature is context, never an excuse' \
+                   'the Uninstall key could not be read: a raised gap, never "[OK] No known remote-access tool installed" (the old block printed [OK])' \
+                   'the process snapshot could not be read: a raised gap, never "[OK] No known remote-access tool running"'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          for b in doze_sec.bat doze_sec_noAdmin.bat; do
+            grep -qF '[RMM RUNNING]' "$b" && { echo "$b: the untagged [RMM RUNNING] line is back"; exit 1; }
+            grep -qF '[RMM INSTALLED]' "$b" && { echo "$b: the untagged [RMM INSTALLED] line is back"; exit 1; }
+            grep -qF '"ScreenConnect" "AnyDesk" "TeamViewer"' "$b" && { echo "$b: the substring RMM match over the process dump is back"; exit 1; }
+            for m in rmm_run_hit rmm_inst_hit rmm_gap; do
+              grep -qF "if exist \"%TEMP%\\dz_$m.txt\" (" "$b" || { echo "$b: the dz_$m marker is never read -- that verdict would reach no ledger row"; exit 1; }
+            done
+            grep -qF 'Remote-access tool check produced no verdict' "$b" || { echo "$b: lost the RMM no-verdict backstop"; exit 1; }
+            grep -qF -- '-TreePath "%TEMP%\dz_proc4_tree.tmp"' "$b" || { echo "$b: the RMM check no longer reads Section 4's own snapshot"; exit 1; }
+          done
+
       - name: Event logs, accessibility IFEO and OpenSSH -- a log, key or service that did not answer is a raised gap, never an all-clear
         run: |
           out=$(pwsh -NoProfile -File tools/event_scan_check.ps1 -SelfTest); echo "$out"
@@ -805,7 +828,7 @@ jobs:
           dup=$(echo "$called" | uniq -d); [ -z "$dup" ] || { echo "called by more than one step: $dup"; exit 1; }
           for f in $called; do [ -s ".github/ci/$f" ] || { echo ".github/ci/$f is missing or empty -- its step would run nothing"; exit 1; }; done
           for f in .github/ci/*.ps1; do echo "$called" | grep -qxF "$(basename "$f")" || { echo "$f is called by no step in windows-smoke.yml"; exit 1; }; done
-          n=$(echo "$called" | wc -l); [ "$n" -ge 24 ] || { echo "only $n step(s) call a .github/ci script; 24 are expected"; exit 1; }
+          n=$(echo "$called" | wc -l); [ "$n" -ge 25 ] || { echo "only $n step(s) call a .github/ci script; 25 are expected"; exit 1; }
           # cmd reads a bare < or > in an echo as a file redirection, quoted or
           # not by PowerShell's single quotes: 'Expected: <Windows>\system32...'
           # in a tile's help text made the whole line vanish from the dashboard

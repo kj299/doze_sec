@@ -1418,6 +1418,12 @@ jobs:
           & .\.github\ci\sshd_states.ps1
           exit $LASTEXITCODE
 
+      - name: rmm_check.ps1 -SelfTest + the runner's real process snapshot and Uninstall keys; a running look-alike and a twin named inside a word
+        shell: powershell
+        run: |
+          & .\.github\ci\rmm_states.ps1
+          exit $LASTEXITCODE
+
       - name: named_pipe_check.ps1 -SelfTest + live (a C2 pipe list that could not be read is a raised gap, never an all-clear)
         shell: powershell
         run: |
