@@ -35,7 +35,18 @@ jobs:
       # never heard about it. Structural, so a check written next year is
       # covered the day it is added.
       - name: Run lint_unraised_findings.ps1
-        run: pwsh -NoProfile -File tools/lint_unraised_findings.ps1
+        run: |
+          out=$(pwsh -NoProfile -File tools/lint_unraised_findings.ps1); rc=$?; echo "$out"; [ $rc -eq 0 ] || exit $rc
+          # Guard the guard, here as well as on Windows (a gate that lives only
+          # in the Windows suite costs a Windows round to fail). The floor is
+          # derived from the bats: count the block starts independently and
+          # require the lint to have scanned at least 90% of them.
+          starts=$(cat doze_sec.bat doze_sec_noAdmin.bat | grep -cE '^\s*echo .*[^>]> "%PSRUN%"\s*$')
+          [ "$starts" -ge 40 ] || { echo "only $starts staged-block start(s) counted in the two bats -- this guard is broken, or the bats are"; exit 1; }
+          scanned=$(echo "$out" | sed -n 's/^Scanned \([0-9][0-9]*\) staged PowerShell block.*/\1/p' | head -1)
+          [ -n "$scanned" ] || { echo 'the lint did not report how many staged blocks it scanned'; exit 1; }
+          [ "$scanned" -ge $(( starts * 9 / 10 )) ] || { echo "lint scanned only $scanned of about $starts staged blocks -- the parser regressed, so a clean result means nothing"; exit 1; }
+          echo "MEASURED: $starts block start(s) counted in the bats; the lint scanned $scanned"
 
   marker-selftest:
     name: "Marker selftest: a finding actually reaches the ledger"
@@ -636,6 +647,57 @@ jobs:
             grep -qF 'NTLM partially hardened' "$b" && { echo "$b: level 3-4 is graded WARN or queues a fix again, against Section 12"; exit 1; }
           done
           echo 'WDigest and NTLM: absent is the default, unreadable is a gap; the tiles and fixes read the section and the ledger'
+      - name: Event logs, accessibility IFEO and OpenSSH -- a log, key or service that did not answer is a raised gap, never an all-clear
+        run: |
+          out=$(pwsh -NoProfile -File tools/event_scan_check.ps1 -SelfTest); echo "$out"
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 24 ] || { echo "only $n event-scan case(s)"; exit 1; }
+          for n in 'AMSI, the log could not be read: a raised gap, never "[OK] No AMSI bypass patterns"' \
+                   '7045, the System log could not be read: a raised gap, never "[OK] No suspicious service installations"' \
+                   '7045, the same service NAME without the marker is the finding (a name is not an exclusion)' \
+                   'listing, the log could not be read: a raised gap, never "[OK] No PS Script Block events found."' \
+                   'AMSI, this tool'"'"'s own script block (it holds every pattern, and is logged as it starts) is the audit'"'"'s own, never a bypass' \
+                   'an event Windows could not render is counted and said, never silently passed'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          out=$(pwsh -NoProfile -File tools/accessibility_backdoor_check.ps1 -SelfTest); echo "$out"
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 23 ] || { echo "only $n accessibility case(s)"; exit 1; }
+          for n in 'a key that could not be read: a raised gap that names it, never "[OK] No IFEO Debugger hijacks"' \
+                   'a hijack AND an unreadable key: both raised -- one finding cannot hide what was not read' \
+                   'Section 13 could not read the keys: Section 17 says NOT graded, never "[OK] No IFEO accessibility backdoor"' \
+                   'Defender is the active antivirus and could not be asked: a raised gap, never "[OK] No ... detections on record"' \
+                   'utilman.exe MISSING: a WARNING of its own -- the old block printed nothing' \
+                   'a signature that could not be read is a raised gap, never a pass'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          out=$(pwsh -NoProfile -File tools/sshd_check.ps1 -SelfTest); echo "$out"
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 12 ] || { echo "only $n sshd case(s)"; exit 1; }
+          for n in 'Get-Service failed and the service manager was never asked: a raised gap, never "[OK] OpenSSH Server not installed"' \
+                   'sshd running and the keys file unreadable: said as NOT counted, never "0 key(s)"'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          for b in doze_sec.bat doze_sec_noAdmin.bat; do
+            grep -qF "Id=4104} -MaxEvents 500 -EA SilentlyContinue > " "$b" && { echo "$b: the silenced AMSI event read is back"; exit 1; }
+            grep -qF "Id=4104} -MaxEvents 200 -EA SilentlyContinue > " "$b" && { echo "$b: the silenced Script Block listing is back"; exit 1; }
+            grep -qF "Id=7045} -MaxEvents 50 -EA SilentlyContinue > " "$b" && { echo "$b: the silenced Event 7045 read is back"; exit 1; }
+            grep -qF -- "-Name Debugger -EA SilentlyContinue" "$b" && { echo "$b: a silenced IFEO Debugger read is back (in a section or a re-measuring tile)"; exit 1; }
+            grep -qF "Get-MpThreatDetection -EA SilentlyContinue" "$b" && { echo "$b: the silenced Defender detection query is back"; exit 1; }
+            grep -qF "Get-Service sshd -EA SilentlyContinue >" "$b" && { echo "$b: the silenced sshd query is back"; exit 1; }
+            grep -qF 'echo [OK] OpenSSH Server ^(sshd^) not installed.' "$b" && { echo "$b: cmd prints [OK] on any sc.exe failure again"; exit 1; }
+            for m in accifeo_hit accifeo_gap accbin_hit accbin_missing accbin_gap accbin_deferred sblist_gap sblist_deferred amsiev_hit amsiev_gap amsiev_deferred svc7045_hit svc7045_gap svc7045_deferred sshd_hit sshd_gap sshd_deferred; do
+              grep -qF "if exist \"%TEMP%\\dz_$m.txt\" (" "$b" || { echo "$b: the dz_$m marker is never read -- that verdict would reach no ledger row"; exit 1; }
+            done
+            for d in sblist amsiev svc7045; do
+              grep -qF "if not exist \"%TEMP%\\dz_${d}_done.txt\" if exist" "$b" || { echo "$b: the $d check lost its no-verdict backstop"; exit 1; }
+            done
+            for w in 'Accessibility IFEO check produced no verdict' 'Accessibility binary check produced no verdict' 'OpenSSH Server check produced no verdict'; do
+              grep -qF "$w" "$b" || { echo "$b: lost its no-verdict backstop: $w"; exit 1; }
+            done
+            grep -qE "echo \\\$a[ib]=.*-match '\\^" "$b" && { echo "$b: a tile regex starts with a caret outside double quotes -- cmd eats it; use -like"; exit 1; }
+            grep -qF "echo \$ai='%ACCIFEO_STATE%'" "$b" || { echo "$b: the IFEO tile no longer reads Section 13's verdict"; exit 1; }
+            grep -qF "echo \$ab='%ACCBIN_STATE%'" "$b" || { echo "$b: the binary-signature tile no longer reads Section 17's verdict"; exit 1; }
+            grep -qF -- '-Part Binaries -IfeoState "%ACCIFEO_STATE%"' "$b" || { echo "$b: Section 17 no longer states Section 13's IFEO verdict"; exit 1; }
+          done
+
       - name: RDP and the three file walks -- a key or folder that could not be read is a raised gap, never an all-clear
         run: |
           out=$(pwsh -NoProfile -File tools/reg_policy_check.ps1 -SelfTest); echo "$out" | grep -i 'rdp\|policy' || true
@@ -743,7 +805,7 @@ jobs:
           dup=$(echo "$called" | uniq -d); [ -z "$dup" ] || { echo "called by more than one step: $dup"; exit 1; }
           for f in $called; do [ -s ".github/ci/$f" ] || { echo ".github/ci/$f is missing or empty -- its step would run nothing"; exit 1; }; done
           for f in .github/ci/*.ps1; do echo "$called" | grep -qxF "$(basename "$f")" || { echo "$f is called by no step in windows-smoke.yml"; exit 1; }; done
-          n=$(echo "$called" | wc -l); [ "$n" -ge 21 ] || { echo "only $n step(s) call a .github/ci script; 21 were moved there"; exit 1; }
+          n=$(echo "$called" | wc -l); [ "$n" -ge 24 ] || { echo "only $n step(s) call a .github/ci script; 24 are expected"; exit 1; }
           # cmd reads a bare < or > in an echo as a file redirection, quoted or
           # not by PowerShell's single quotes: 'Expected: <Windows>\system32...'
           # in a tile's help text made the whole line vanish from the dashboard

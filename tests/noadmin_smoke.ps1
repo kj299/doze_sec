@@ -482,6 +482,27 @@ try {
         Assert (-not $def) ('the {0} walk did not defer: a denial in the user''s own folder is a gap' -f $c.Name) ('the {0} walk deferred a folder in the user''s own profile' -f $c.Name)
     }
     Assert ($text1 -notmatch '\[SKIPPED\] TEMP path unavailable') 'no unraised [SKIPPED] for the stream check' 'the old unraised ADS [SKIPPED] line is back'
+    # The event-log checks, the accessibility checks and OpenSSH Server: each
+    # must say what it did on this token -- ran, deferred (the token is the
+    # explanation) or a raised gap with its row. Never silence.
+    foreach ($c in @(
+        @{ Name = 'AMSI-bypass'; Ran = '(?m)^\[OK\] No AMSI bypass patterns in recent|(?m)^\[WARNING\]\[T1562\.001\] AMSI bypass attempts'; Def = '(?m)^\[DEFERRED - ADMIN REQUIRED\] AMSI-bypass check'; Gap = '(?m)^\[WARNING\] AMSI-bypass check .*(NOT performed|produced no verdict)'; Row = '\|18\|T1562\.001\|AMSI-bypass check ' },
+        @{ Name = 'service-install (7045)'; Ran = '(?m)^\[OK\] No suspicious service installations in recent|(?m)^\[WARNING\]\[T1543\.003\] Suspicious service installations'; Def = '(?m)^\[DEFERRED - ADMIN REQUIRED\] Service-install check'; Gap = '(?m)^\[WARNING\] Service-install check .*(NOT performed|produced no verdict)'; Row = '\|18\|T1543\.003\|Service-install check ' },
+        @{ Name = 'accessibility IFEO'; Ran = '(?m)^\[OK\] No IFEO Debugger hijacks on accessibility binaries\.|(?m)^\[CRITICAL\] IFEO Debugger hijack: '; Def = '(?m)^\[DEFERRED - ADMIN REQUIRED\] Accessibility IFEO'; Gap = '(?m)^\[WARNING\] Accessibility IFEO check (NOT performed|produced no verdict)'; Row = '\|13\|T1546\.008\|Accessibility IFEO check ' },
+        @{ Name = 'OpenSSH Server'; Ran = '(?m)^\[OK\] OpenSSH Server (not installed|installed but not running)\.|(?m)^\[WARNING\] OpenSSH Server \(sshd\) is RUNNING'; Def = '(?m)^\[DEFERRED - ADMIN REQUIRED\] OpenSSH Server check'; Gap = '(?m)^\[WARNING\] OpenSSH Server check (NOT performed|produced no verdict)'; Row = '\|18\|T1021\.004\|OpenSSH Server check ' })) {
+        $ran = $text1 -match $c.Ran; $def = $text1 -match $c.Def; $gap = $text1 -match $c.Gap
+        Write-Host ("  MEASURED: the {0} check on a standard-user token: ran={1} deferred={2} gap={3}" -f $c.Name, $ran, $def, $gap)
+        Assert ($ran -or $def -or $gap) ('the {0} check stated what it did on a standard-user token' -f $c.Name) ('the {0} check printed neither a result, a deferral nor a gap' -f $c.Name)
+        $rows = @($ledger1 | Where-Object { $_ -match $c.Row }).Count
+        if ($gap) { Assert ($rows -gt 0) ('the {0} gap has its ledger row' -f $c.Name) ('a {0} NOT-performed line was printed with no ledger row' -f $c.Name) }
+        if ($def -and -not $gap) { Assert ($rows -eq 0) ('a {0} deferral is not a ledger row' -f $c.Name) ('a {0} deferral was raised as a ledger row' -f $c.Name) }
+    }
+    # Defender's detection history needs administrator: the deferral line the
+    # bat always printed, and never "[OK] No ... detections on record".
+    Assert ($text1 -match '(?m)^\[DEFERRED - ADMIN REQUIRED\] Get-MpThreatDetection requires admin\.' -and $text1 -notmatch 'No Win32/AccessibilityEscalation Defender detections on record') `
+        'the Defender detection-history query is deferred on a standard-user token, not read as clean' `
+        'the Defender detection-history query was not deferred on a standard-user token'
+    Assert ($text1 -match '(?m)^sethc\.exe SHA256: [0-9A-F]{64}') 'Section 17 still prints the sethc.exe hash on a standard-user token' 'the sethc.exe hash line is missing on a standard-user token'
     # Winlogon/AppInit (Section 5), Script Block Logging (11) and UAC (13):
     # HKLM is readable from this token, so each must be GRADED -- no gap row,
     # no unraised [SKIPPED], and no "NOT graded" tile.

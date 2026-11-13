@@ -6,6 +6,25 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Event logs, the accessibility backdoor checks and OpenSSH: a log, key or service that did not answer is no longer an all-clear
+A search of every staged PowerShell block in the scripts found 15 where a failed read still printed `[OK]`. This fixes the six where a miss costs most; the rest are listed in `docs/design/backlog.md`.
+
+**Before.**
+- **AMSI-bypass traces and Event 7045 service installs (Section 18), and the Script Block listing (Section 16):** an event log that could not be read printed `[OK] No AMSI bypass patterns`, `[OK] No suspicious service installations` or `[OK] No PS Script Block events found.`
+- **Accessibility IFEO debugger (Section 13, read again in Section 17 and a third time by the dashboard):** a registry key that could not be read printed `[OK] No IFEO Debugger hijacks`. Section 17 also printed `[OK] No ... detections on record` when Defender could not be asked, and printed nothing when `sethc.exe` or `utilman.exe` was missing.
+- **OpenSSH Server (Section 18, and a raw dump in Section 10):** a service manager that did not answer printed `[OK] OpenSSH Server not installed.`
+
+**Now.**
+- **`tools/event_scan_check.ps1`** reads the three event checks. "No matching events" is an answer; anything else is a raised `NOT performed` row. `[OK]` says how many events were read, and the AMSI check adds that an empty log is weak evidence when Script Block Logging is off.
+- **`tools/accessibility_backdoor_check.ps1`** reads the IFEO keys once, in Section 13. Section 17 and the dashboard state that verdict. A key that could not be read is raised beside any finding. Defender's history is always asked; a failed query is a gap when Defender is the active antivirus and is said as "not consulted" otherwise. A missing accessibility binary is a WARNING; a signature that could not be read is a gap.
+- **`tools/sshd_check.ps1`**: only the service manager's own "does not exist" (`sc.exe` exit 1060) reads as not installed. Section 10's raw dump no longer prints a verdict.
+- Existing findings keep their wording and ledger rows.
+- The AMSI check sets aside its own script block by exact path. The tool file holds every pattern it searches for, and PowerShell logs a script as it starts.
+
+**Behaviour changes to know about.**
+- On a standard-user token, a denied event log or service query is counted as deferred, as other system-level reads already are.
+- Section 17 no longer prints the IFEO value itself; it points to Section 13, which lists it.
+
 ### RDP and the three file walks: a key or folder that could not be read is no longer an answer
 These were the last four rows of the silent all-clear table in `docs/design/backlog.md`.
 

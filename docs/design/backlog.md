@@ -840,3 +840,51 @@ been run. Two things the last four rows left open, on purpose:
 - The three walks do not follow junctions or symbolic links (a link can loop
   or lead to a whole drive). Each link skipped is counted and named in an
   `[INFO]` line. The old inline walk followed them on Windows PowerShell 5.1.
+
+### The per-block search (run 2026-11-11)
+
+The search the paragraph above asked for: every staged PowerShell block (lines
+echoed into `%PSRUN%`) that silences an error (`-EA SilentlyContinue`, an empty
+`catch{}`, `2>$null`) AND can print `[OK]`. `doze_sec.bat` has 54 staged
+blocks; 22 matched. Each was read and classed by one question: **if the
+silenced call fails, which line prints?**
+
+Class A -- a failed read reaches `[OK]` (15 blocks):
+
+| Block | What a failed read printed | State |
+|---|---|---|
+| AMSI-bypass traces in Script Block events (Section 18) | `[OK] No AMSI bypass patterns` | DONE 2026-11-12, `tools/event_scan_check.ps1` |
+| Event 7045 service installs (Section 18) | `[OK] No suspicious service installations` | DONE 2026-11-12, `tools/event_scan_check.ps1` |
+| Script Block event listing (Section 16) | `[OK] No PS Script Block events found.` | DONE 2026-11-12, `tools/event_scan_check.ps1` |
+| Accessibility IFEO debugger (Section 13) | `[OK] No IFEO Debugger hijacks` | DONE 2026-11-12, `tools/accessibility_backdoor_check.ps1` |
+| Accessibility backdoor (Section 17): the same registry read again, Defender history, binary signatures | `[OK]` for the registry and for Defender; nothing for a missing binary | DONE 2026-11-12, same tool; Section 17 states Section 13's verdict |
+| OpenSSH Server (Section 18, and the cmd dump in Section 10) | `[OK] OpenSSH Server not installed.` | DONE 2026-11-12, `tools/sshd_check.ps1` |
+| Ransomware extensions (Section 18, CRITICAL finding) | `[OK] No files with known ransomware extensions` | open; the walker in `tools/file_walk_check.ps1` fits |
+| Office macro policy (Section 13) | `[INFO] No explicit per-app macro settings ... defaults apply` | open |
+| Proxy settings, two blocks (Section 3) | `[OK] No proxy settings in registry` / `Not configured` | open |
+| RMM software installed (Section 17) | `[OK] No unexpected RMM software found.` | open; see the RMM note below |
+| Run/RunOnce in other users' hives (Section 5) | `[OK] No Run/RunOnce entries in other-user hives.` | open |
+| Browser credential stores; token cache (Section 18) | `[OK] No unusual recent access` / `modifications` | open |
+| Registry IOC match (Section 18h) | has a NOT-performed branch, but one entry whose key is denied is swallowed by `catch{}` and not named | open |
+
+Class B -- fails loud or to `[INFO]` (2): unsigned DLLs in system paths (a
+failed signature read counts as unsigned); Sticky Keys (a failed read prints
+`[INFO] ... not set`).
+
+Class C -- not a defect (5): the named-pipe, service and scheduled-task IOC
+matches (each already has a NOT-performed branch); module logging and
+transcription (prints `[OK]` either way; no judgement rests on it); RMM
+processes (`Get-Process -Name` not finding a name IS the answer).
+
+**RMM tools reach no ledger row.** The same search showed that Section 17
+prints `[RMM RUNNING] <tool> PID:<n>` and `[RMM INSTALLED] <name>` under tags
+outside the severity vocabulary, with no raise: a running remote-access tool
+is counted nowhere. The owner decided 2026-11-11: both running and installed
+become a counted WARNING. Not yet done; it needs word-bounded name matching
+first (`Atera` matches inside "Lateral" today).
+
+**Still a second measurement.** Section 13's "Accessibility Binary File
+Signature Check" block reads the same seven signatures that
+`accessibility_backdoor_check -Part Binaries` reads in Section 17. They grade
+alike (a missing binary is a WARNING in both), but they are two reads; fold
+the Section 13 block into the tool.

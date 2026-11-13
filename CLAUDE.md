@@ -156,6 +156,10 @@ marker, and on any direct `echo [CRITICAL]/[WARNING] ... >> "%REPORT%"` with no
 raise nearby. CI runs it on Linux (`lint.yml`) and again on Windows PowerShell
 5.1 (`windows-smoke.yml`), where the Windows job also asserts the lint actually
 scanned the blocks — a parser regression must not turn into a vacuous pass.
+That floor is derived from the bats (an independent count of block starts,
+and the lint must have scanned 90% of them), never a constant: it was a fixed
+100, and the first change that moved six inline blocks into tools -- the work
+this whole section asks for -- failed it at 96. Both jobs carry the guard.
 `tests/detection_selftest.ps1` closes the loop at runtime: any section whose
 body prints a finding must declare `ISSUES FOUND`.
 
@@ -694,6 +698,24 @@ Windows run caught what no reading did: a long path was shortened from the
 start, so the finding printed the folders and dropped the file name. It was
 caught only because the CI case asserted on the file's NAME, not on "a
 finding appeared". **Assert on the part the reader needs.**
+
+**Moving an inline block into a tool file changes what it is called in the
+logs.** The AMSI-bypass check excludes the audit's own script blocks by the
+path the event records, and the list held `AuditPS_<ts>.ps1` and the two
+bats -- which covered the check itself while it was an inline block. Moved to
+`tools\event_scan_check.ps1`, it ran under a path the list did not hold, and
+its source carries every pattern it searches for. PowerShell logs a script as
+it starts, before the query runs: the audit would have reported itself as an
+AMSI bypass on every machine that logs script blocks. Every self-test passed,
+because none of them was the tool reading a log that contained the tool. A
+review of the final tree caught it before any push to a pull request. So:
+**when a check that searches for X moves into a file, ask whether that file
+now contains X and where it will show up in what the check reads** -- and
+exclude it by exact path, never by name (a name is something an attacker can
+borrow). The same review found the Defender detection history had become
+"not consulted" in passive mode, where Defender still holds the record of
+what it caught before another antivirus took over: **a mode is a reason to
+reinterpret a failed query, never a reason not to ask.**
 
 **A branch whose PR has merged is not that PR any more.** The WinRM commit
 was pushed to the #271 branch moments after #271 was merged: it never reached
