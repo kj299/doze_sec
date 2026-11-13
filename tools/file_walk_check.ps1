@@ -236,6 +236,69 @@ function Test-Vanished {
     return $false
 }
 
+# PURE. Whether a folder the listing returned is walked, or named as a link
+# and not followed. Every user profile holds about 19 compatibility junctions
+# (Start Menu, SendTo, Templates, My Documents, Application Data...) that
+# Windows gives a deny-List ACE for Everyone; Windows PowerShell 5.1 could not
+# tell their LinkType, so they were walked, denied, and counted as unreadable
+# -- a false gap on every machine. When LinkType is empty for a reparse point
+# the reparse TAG decides (read from the parent's listing, which never opens
+# the junction). A tag that cannot be read is 'unknown': a named gap, never
+# silence. Only LINKS are skipped: a cloud-synced folder is a reparse point too.
+function Get-DirKind {
+    param([bool]$IsReparse, [string]$LinkType, $Tag)
+    if ($LinkType -eq 'Junction' -or $LinkType -eq 'SymbolicLink') { return 'link' }
+    if (-not $IsReparse) { return 'walk' }
+    if ($null -eq $Tag) { return 'unknown' }
+    $t = [uint32]$Tag
+    if ($t -eq [uint32]2684354563 -or $t -eq [uint32]2684354572) { return 'link' }   # 0xA0000003 mount point / junction, 0xA000000C symlink
+    return 'walk'
+}
+
+# Live. The reparse tag of one directory entry, from FindFirstFileW on the
+# entry itself: the tag comes back in dwReserved0 of the PARENT's listing, so
+# the junction's own ACL is never consulted. $null when it cannot be read.
+function Get-ReparseTag {
+    param([string]$Path)
+    try {
+        if (-not ('DozeSec.ReparseTag' -as [type])) {
+            Add-Type -ErrorAction Stop -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace DozeSec {
+    public static class ReparseTag {
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        struct WIN32_FIND_DATAW {
+            public uint dwFileAttributes;
+            public System.Runtime.InteropServices.ComTypes.FILETIME c, a, w;
+            public uint nFileSizeHigh, nFileSizeLow, dwReserved0, dwReserved1;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string cFileName;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 14)] public string cAlternateFileName;
+        }
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern IntPtr FindFirstFileW(string name, out WIN32_FIND_DATAW data);
+        [DllImport("kernel32.dll")]
+        static extern bool FindClose(IntPtr h);
+        public static long Get(string path) {
+            WIN32_FIND_DATAW d;
+            IntPtr h = FindFirstFileW(path, out d);
+            if (h == new IntPtr(-1)) { return -1; }
+            FindClose(h);
+            if ((d.dwFileAttributes & 0x400) == 0) { return 0; }
+            return (long)d.dwReserved0;
+        }
+    }
+}
+'@
+        }
+        $p = $Path
+        if ($p.Length -ge 248 -and -not $p.StartsWith('\\')) { $p = '\\?\' + $p }
+        $r = [DozeSec.ReparseTag]::Get($p)
+        if ($r -lt 0) { return $null }
+        return [uint32]$r
+    } catch { return $null }
+}
+
 # Live. Walks $RootPath one folder at a time so each failure is caught and
 # named, never silenced; $Select decides, per file, whether it is a hit and
 # returns the text to list (or $null). Returns the $Scan shape above.
@@ -278,8 +341,14 @@ function Invoke-Walk {
                 # folder to a whole drive. Counted and named, never silent.
                 # Only LINKS: a cloud-synced folder is a reparse point too.
                 $lt = ''; try { $lt = [string]$it.LinkType } catch {}
-                if ($lt -eq 'Junction' -or $lt -eq 'SymbolicLink') { [void]$scan.Links.Add($it.FullName) }
-                elseif ($MaxDepth -lt 0 -or $depth + 1 -le $MaxDepth) { $stack.Push(@($it.FullName, ($depth + 1))) }
+                $rp = [bool]([int]$it.Attributes -band 0x400)
+                $tag = $null
+                if ($rp -and $lt -ne 'Junction' -and $lt -ne 'SymbolicLink') { $tag = Get-ReparseTag $it.FullName }
+                $kind = Get-DirKind -IsReparse $rp -LinkType $lt -Tag $tag
+                if ($kind -eq 'link') { [void]$scan.Links.Add($it.FullName) }
+                elseif (-not ($MaxDepth -lt 0 -or $depth + 1 -le $MaxDepth)) { }
+                elseif ($kind -eq 'unknown') { [void]$scan.Unreadable.Add(@{ Path = ($it.FullName + ' (a reparse point Windows would not say the kind of)'); Denied = $false }) }
+                else { $stack.Push(@($it.FullName, ($depth + 1))) }
                 continue
             }
             if ($clock.Elapsed.TotalSeconds -ge $Budget) { $scan.OutOfTime = $true; break }
@@ -341,6 +410,12 @@ if ($SelfTest) {
     $w5 = New-Object System.Management.Automation.ErrorRecord((New-Object System.ComponentModel.Win32Exception(5)), 'x', 'NotSpecified', $null)
     $w2 = New-Object System.Management.Automation.ErrorRecord((New-Object System.ComponentModel.Win32Exception(2)), 'x', 'NotSpecified', $null)
     $w32 = New-Object System.Management.Automation.ErrorRecord((New-Object System.ComponentModel.Win32Exception(32)), 'x', 'NotSpecified', $null)
+    T 'a folder PowerShell names a Junction is a link, not walked' ((Get-DirKind -IsReparse $true -LinkType 'Junction' -Tag $null) -eq 'link') ''
+    T 'a profile junction whose LinkType PowerShell could not tell (Start Menu, deny-List ACE) is a link by its tag 0xA0000003, never an unreadable folder' ((Get-DirKind -IsReparse $true -LinkType '' -Tag ([uint32]2684354563)) -eq 'link') ''
+    T 'a symbolic link known only by its tag 0xA000000C is a link' ((Get-DirKind -IsReparse $true -LinkType '' -Tag ([uint32]2684354572)) -eq 'link') ''
+    T 'a OneDrive cloud folder (tag 0x9000601A) is walked: only links are skipped' ((Get-DirKind -IsReparse $true -LinkType '' -Tag ([uint32]2415944730)) -eq 'walk') ''
+    T 'a reparse point whose tag could not be read is unknown (a named gap), never quietly skipped or walked' ((Get-DirKind -IsReparse $true -LinkType '' -Tag $null) -eq 'unknown') ''
+    T 'an ordinary folder is walked' ((Get-DirKind -IsReparse $false -LinkType '' -Tag $null) -eq 'walk') ''
     T 'a stream read refused with Win32 error 5 is access denied (Get-Item -Stream says it no other way)' ((Test-Denied $w5) -and -not (Test-Vanished $w5)) ''
     T 'a file gone between the listing and the stream read (Win32 error 2) is churn, never an unreadable file' ((Test-Vanished $w2) -and -not (Test-Denied $w2)) ''
     T 'a sharing violation (Win32 error 32) is neither: it stays an unreadable file, and a gap' ((-not (Test-Denied $w32)) -and -not (Test-Vanished $w32)) ''

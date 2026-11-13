@@ -628,7 +628,12 @@ must clear it (threat_list_seed does). And
 OneDrive Files On-Demand marks ordinary synced files as reparse points, so a
 walk that refuses "any reparse point" refuses the owner's checkout -- refuse
 LINKS (`LinkType` SymbolicLink/Junction) in the source, every reparse point on
-the stick. Every text file goes onto the stick with CRLF whatever the source
+the stick. And `LinkType` is not always an answer: every user profile holds about
+19 compatibility junctions (`Start Menu`, `SendTo`, `My Documents`...) that
+deny their own listing to Everyone, and on 5.1 `LinkType` came back empty for
+all of them. The ransomware walk then listed each one, was denied, and raised
+a false gap on every PC. `file_walk_check` reads the reparse TAG from the
+parent's listing (`FindFirstFileW`), which never opens the junction. Every text file goes onto the stick with CRLF whatever the source
 (a GitHub ZIP is LF-only, and CI had only ever built a stick from a CRLF
 checkout), and a stick Windows has re-identified is matched by content --
 every file AND the stick's own copy of its manifest, byte for byte, which is

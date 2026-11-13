@@ -749,9 +749,12 @@ jobs:
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
           out=$(pwsh -NoProfile -File tools/file_walk_check.ps1 -SelfTest); echo "$out"
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 40 ] || { echo "only $n walk case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 46 ] || { echo "only $n walk case(s)"; exit 1; }
           echo "$out" | grep -q '^\[FAIL\]' && { echo 'a walk case failed'; exit 1; }
-          for n in 'a stream read refused with Win32 error 5 is access denied' \
+          for n in 'a profile junction whose LinkType PowerShell could not tell (Start Menu, deny-List ACE) is a link by its tag 0xA0000003' \
+                   'a reparse point whose tag could not be read is unknown (a named gap)' \
+                   'a OneDrive cloud folder (tag 0x9000601A) is walked: only links are skipped' \
+                   'a stream read refused with Win32 error 5 is access denied' \
                    'a junction that was not followed is said and named beside the [OK], never silent' \
                    'a path too long to print whole keeps its drive AND its file name' \
                    'ADS, a hit AND an unreadable folder: BOTH the finding and the gap -- one hit cannot hide an incomplete walk' \

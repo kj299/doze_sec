@@ -8,7 +8,7 @@ $ErrorActionPreference = 'Stop'
 $st = (.\tools\file_walk_check.ps1 -SelfTest) -join "`n"
 if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'file_walk_check -SelfTest failed' }
 $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-if ($n -lt 40) { throw "file_walk_check self-test ran only $n case(s)" }
+if ($n -lt 46) { throw "file_walk_check self-test ran only $n case(s)" }
 function RunW([string]$Check, [hashtable]$Extra) {
   $md = Join-Path $env:TEMP ("dz_ci_walk_{0}_{1}" -f $PID, [guid]::NewGuid().ToString('N').Substring(0, 6)); New-Item -ItemType Directory -Path $md -Force | Out-Null
   try {
@@ -114,6 +114,10 @@ try {
   if (Test-Path -LiteralPath $root) { throw "the CI scratch folder $root could not be removed" }
 }
 Write-Host 'file walk: every state read through the real walker for all three checks'
+# MEASURED: what Windows PowerShell 5.1 says about one of the compatibility
+# junctions every profile holds (a deny-List ACE for Everyone, by design).
+$sm = Get-Item -LiteralPath (Join-Path $env:USERPROFILE 'Start Menu') -Force -EA SilentlyContinue
+if ($sm) { $lt = '<threw>'; try { $lt = [string]$sm.LinkType } catch {}; Write-Host ("MEASURED: profile junction 'Start Menu': LinkType [{0}], Attributes [{1}]" -f $lt, $sm.Attributes) } else { Write-Host "MEASURED: this profile has no 'Start Menu' entry" }
 # LIVE, the three later checks on the runner's own folders, MEASURED: each
 # must state a verdict, and the ransomware walk must not raise on a clean image.
 foreach ($c in 'RansomExt', 'TokenCache', 'CredStores') {
@@ -125,6 +129,35 @@ $r = RunW 'RansomExt' @{}
 # A clean runner's result is a claim to pin: no hit, and no gap -- an
 # administrator can read its own profile, Public and TEMP inside the budget.
 if ($r.Markers -match 'ransom_hit|ransom_gap') { throw "a clean runner did not read clean for ransomware extensions: [$($r.Markers)] $($r.Out)" }
+# Every profile's compatibility junctions are links, named and not followed --
+# never 19 unreadable folders (the first Windows run of this walk read them so).
+if ($sm -and $r.Out -notmatch 'were NOT followed[^\r\n]*Start Menu|were NOT followed[^\r\n]*and \d+ more') { throw "the profile's compatibility junctions were not named as links: $($r.Out)" }
+# A junction carrying Windows' own deny-List ACE, beside an ordinary folder
+# with the same ACE: the junction is a link (not followed, no gap); the folder
+# is a gap. Touches: file:%RUNNER_TEMP%\dz_ci_junc_<pid> (removed in finally).
+$rj = Join-Path $base "dz_ci_junc_$PID"
+try {
+  New-Item -ItemType Directory -Path (Join-Path $rj 'target') -Force | Out-Null
+  & cmd.exe /c mklink /J (Join-Path $rj 'Start Menu') (Join-Path $rj 'target') | Out-Null
+  & icacls.exe (Join-Path $rj 'Start Menu') /deny '*S-1-1-0:(RD)' /L /Q | Out-Null
+  $ji = Get-Item -LiteralPath (Join-Path $rj 'Start Menu') -Force; $jlt = '<threw>'; try { $jlt = [string]$ji.LinkType } catch {}
+  Write-Host ("MEASURED: a planted junction with a deny-List ACE: LinkType [{0}], Attributes [{1}]" -f $jlt, $ji.Attributes)
+  $r = RunW 'RansomExt' @{ Root = $rj }
+  Expect $r '' '(?m)^\[OK\] No files with known ransomware extensions' 'a junction with a deny-List ACE is a link, not an unreadable folder'
+  if ($r.Out -notmatch 'were NOT followed[^\r\n]*Start Menu') { throw "the planted junction was not named as a link: $($r.Out)" }
+  $od = Join-Path $rj 'plain'; New-Item -ItemType Directory -Path $od -Force | Out-Null
+  & icacls.exe $od /deny '*S-1-1-0:(RD)' /Q | Out-Null
+  $listed = $true; try { Get-ChildItem -LiteralPath $od -Force -ErrorAction Stop | Out-Null } catch { $listed = $false }
+  if ($listed) { Write-Host '[ SKIP ] plain-folder twin not run: this account can still list it through the deny rule; the self-test pins the judgement' }
+  else { Expect (RunW 'RansomExt' @{ Root = $rj }) 'dz_ransom_gap' '(?m)^\[WARNING\] Ransomware-extension check NOT performed in full -- ' 'an ordinary folder with the same deny-List ACE is still a gap' }
+} finally {
+  $ErrorActionPreference = 'Continue'
+  if (Test-Path -LiteralPath (Join-Path $rj 'plain')) { & icacls.exe (Join-Path $rj 'plain') /reset /C /Q | Out-Null }
+  if (Test-Path -LiteralPath (Join-Path $rj 'Start Menu')) { & icacls.exe (Join-Path $rj 'Start Menu') /reset /L /C /Q | Out-Null; & cmd.exe /c rmdir (Join-Path $rj 'Start Menu') | Out-Null }
+  Remove-Item -LiteralPath $rj -Recurse -Force -EA SilentlyContinue
+  $ErrorActionPreference = 'Stop'
+  if (Test-Path -LiteralPath $rj) { throw "the CI scratch folder $rj could not be removed" }
+}
 # THE RANSOMWARE WALK, both directions, on a scratch tree.
 # Touches: file:%RUNNER_TEMP%\dz_ci_ransom_<pid> (removed in finally).
 $rr = Join-Path $base "dz_ci_ransom_$PID"
