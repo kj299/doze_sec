@@ -650,10 +650,12 @@ jobs:
       - name: Remote-access tools -- running or installed is a counted WARNING; names match whole, never as substrings
         run: |
           out=$(pwsh -NoProfile -File tools/rmm_check.ps1 -SelfTest); echo "$out"
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 27 ] || { echo "only $n rmm case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 32 ] || { echo "only $n rmm case(s)"; exit 1; }
           for n in 'LateralHelper.exe is NOT Atera (the old substring match said it was)' \
                    '"Collateral Manager" and "Lateral Tools" are NOT Atera (word edges, not substrings)' \
                    'SRService.exe is Splashtop, which no product-name search finds' \
+                   'the portable and quick-support forms are found: AnyDesk (1).exe, TeamViewerQS.exe, rustdesk-1.3.2-x86_64.exe, SplashtopSOS.exe' \
+                   'srtasks.exe (System Restore) is not Splashtop, and Hamachi'"'"'s folder is not LogMeIn remote control' \
                    'a validly signed tool is still the finding: the signature is context, never an excuse' \
                    'the Uninstall key could not be read: a raised gap, never "[OK] No known remote-access tool installed" (the old block printed [OK])' \
                    'the process snapshot could not be read: a raised gap, never "[OK] No known remote-access tool running"'; do

@@ -24,8 +24,9 @@
 # case is catalogued in tests\benign_corpus.txt.
 #
 # THE RULE (pure, pinned by -SelfTest):
-#   * one product table. Process names are matched WHOLE (anchored), display
-#     names at WORD EDGES. A substring is never a match: "Lateral" is not
+#   * one product table. Process names are matched from their START, plus
+#     the product's own install folder; display names at WORD EDGES. A name
+#     that only contains a product name is never a match: "Lateral" is not
 #     Atera and "Collateral Manager" is not either;
 #   * the table is NAMES, not proof. A renamed binary is not caught here
 #     (THREAT_MODEL residual); a signed binary under a product's name is
@@ -82,29 +83,40 @@ function ConvertTo-PrintableText {
     return $t
 }
 
-# Proc: the process name WITHOUT .exe, matched whole. Disp: the Uninstall
-# DisplayName, matched at word edges. Names, not proof.
+# Proc: the process name WITHOUT .exe, anchored at its START and ended at a
+# word edge or the end -- the portable and quick-support forms are how these
+# tools usually arrive in a scam, and nothing is installed then: a browser
+# saves a second download as "AnyDesk (1).exe", TeamViewer's quick support is
+# TeamViewerQS.exe, RustDesk's portable runs under its download name
+# (rustdesk-1.3.2-x86_64.exe). A name that only CONTAINS a product name
+# ("MyAnyDeskNotes", "LateralHelper") is not a match. Dir: the product's own
+# install folder in the path, the second criterion, for a helper binary under
+# a name the table does not list. Disp: the Uninstall DisplayName, at word
+# edges. All three are names, not proof.
 $script:Products = @(
-    @{ Name = 'ScreenConnect (ConnectWise Control)'; Proc = '^ScreenConnect\.'; Disp = '\bScreenConnect\b|\bConnectWise Control\b' },
-    @{ Name = 'AnyDesk'; Proc = '^AnyDesk$'; Disp = '\bAnyDesk\b' },
-    @{ Name = 'TeamViewer'; Proc = '^TeamViewer(_Service|_Desktop)?$|^tv_(w32|x64)$'; Disp = '\bTeamViewer\b' },
-    @{ Name = 'Ammyy Admin'; Proc = '^AA_v3$|^Ammyy'; Disp = '\bAmmyy\b' },
-    @{ Name = 'RustDesk'; Proc = '^rustdesk$'; Disp = '\bRustDesk\b' },
-    @{ Name = 'Splashtop'; Proc = '^SR(Service|Manager|Agent|Server|Feature)$|^strwinclt$'; Disp = '\bSplashtop\b' },
-    @{ Name = 'Atera'; Proc = '^AteraAgent$'; Disp = '\bAtera\b' },
-    @{ Name = 'Kaseya'; Proc = '^AgentMon$'; Disp = '\bKaseya\b' },
-    @{ Name = 'ConnectWise Automate (LabTech)'; Proc = '^LT(SVC|SvcMon|Tray)$'; Disp = '\bConnectWise Automate\b|\bLabTech\b' },
-    @{ Name = 'BeyondTrust Remote Support (Bomgar)'; Proc = '^bomgar-(scc|rep)$'; Disp = '\bBomgar\b|\bBeyondTrust Remote Support\b' },
-    @{ Name = 'LogMeIn'; Proc = '^LogMeIn(Systray)?$|^LMIGuardianSvc$'; Disp = '\bLogMeIn\b|\bGoToAssist\b' },
-    @{ Name = 'RemotePC'; Proc = '^RemotePC(Service|UIU)?$'; Disp = '\bRemotePC\b' }
+    @{ Name = 'ScreenConnect (ConnectWise Control)'; Proc = '^ScreenConnect\.'; Dir = '\\ScreenConnect Client( \(|\\)'; Disp = '\bScreenConnect\b|\bConnectWise Control\b' },
+    @{ Name = 'AnyDesk'; Proc = '^AnyDesk\b'; Dir = '\\AnyDesk\\'; Disp = '\bAnyDesk\b' },
+    @{ Name = 'TeamViewer'; Proc = '^TeamViewer|^tv_(w32|x64)$'; Dir = '\\TeamViewer\\'; Disp = '\bTeamViewer\b' },
+    @{ Name = 'Ammyy Admin'; Proc = '^AA_v3\b|^Ammyy'; Dir = '\\Ammyy\\'; Disp = '\bAmmyy\b' },
+    @{ Name = 'RustDesk'; Proc = '^rustdesk\b'; Dir = '\\RustDesk\\'; Disp = '\bRustDesk\b' },
+    @{ Name = 'Splashtop'; Proc = '^SR(Service|Manager|Agent|Server|Feature|AppPB)$|^strwinclt$|^Splashtop'; Dir = '\\Splashtop\\'; Disp = '\bSplashtop\b' },
+    @{ Name = 'Atera'; Proc = '^AteraAgent$|^AgentPackage'; Dir = '\\ATERA Networks\\'; Disp = '\bAtera\b' },
+    @{ Name = 'Kaseya'; Proc = '^AgentMon$|^Kaseya'; Dir = '\\Kaseya\\'; Disp = '\bKaseya\b' },
+    @{ Name = 'ConnectWise Automate (LabTech)'; Proc = '^LT(SVC|SvcMon|Tray)$'; Dir = '\\LabTech\\'; Disp = '\bConnectWise Automate\b|\bLabTech\b' },
+    @{ Name = 'BeyondTrust Remote Support (Bomgar)'; Proc = '^bomgar-'; Dir = '\\Bomgar\\|\\BeyondTrust\\Remote Support'; Disp = '\bBomgar\b|\bBeyondTrust Remote Support\b' },
+    # Hamachi is LogMeIn's VPN, not its remote-control product, and installs
+    # under "LogMeIn Hamachi\", which the Dir pattern does not match.
+    @{ Name = 'LogMeIn / GoTo'; Proc = '^LogMeIn|^LMIGuardianSvc$|^lmi_rescue|^g2ax_'; Dir = '\\LogMeIn\\|\\LogMeIn Rescue'; Disp = '\bLogMeIn\b(?! Hamachi)|\bGoToAssist\b' },
+    @{ Name = 'RemotePC'; Proc = '^RemotePC'; Dir = '\\RemotePC\\'; Disp = '\bRemotePC\b' }
 )
 
 # PURE. The product a process name belongs to, or ''.
 function Get-RmmProductForProcess {
-    param([string]$ProcessName)
+    param([string]$ProcessName, [string]$Path = '')
     $n = ([string]$ProcessName).Trim() -replace '\.exe$', ''
     if (-not $n) { return '' }
     foreach ($p in $script:Products) { if ($n -match $p.Proc) { return [string]$p.Name } }
+    if ($Path) { foreach ($p in $script:Products) { if ([string]$Path -match $p.Dir) { return [string]$p.Name } } }
     return ''
 }
 # PURE. The product an Uninstall DisplayName belongs to, or ''.
@@ -140,7 +152,7 @@ function Get-RmmVerdict {
             [void]$out.Add(('[WARNING] Remote-access tool RUNNING: ' + [string]$x.Product + ' -- ' + (ConvertTo-PrintableText ([string]$x.Name)) + ' (PID ' + [string]$x.Pid + '), ' + $where + '; ' + $sig + ' (T1219)'))
         }
         if ($run.Count -gt 0) { $r.RunHit = $true }
-        else { [void]$out.Add(('[OK] No known remote-access tool running (' + [string]$Proc.Count + ' process(es) in Section 4''s snapshot, matched by whole name).')) }
+        else { [void]$out.Add(('[OK] No known remote-access tool running (' + [string]$Proc.Count + ' process(es) in Section 4''s snapshot, matched from the start of the name, or by the product''s install folder).')) }
         $runState = [string]$run.Count
     }
     # --- installed ---
@@ -242,12 +254,17 @@ if ($SelfTest) {
     T 'SRService.exe is Splashtop, which no product-name search finds' ((Get-RmmProductForProcess 'SRService.exe') -eq 'Splashtop') ''
     T 'TeamViewer_Service.exe and tv_x64.exe are TeamViewer' (((Get-RmmProductForProcess 'TeamViewer_Service.exe') -eq 'TeamViewer') -and ((Get-RmmProductForProcess 'tv_x64.exe') -eq 'TeamViewer')) ''
     T 'LateralHelper.exe is NOT Atera (the old substring match said it was)' ((Get-RmmProductForProcess 'LateralHelper.exe') -eq '') (Get-RmmProductForProcess 'LateralHelper.exe')
-    T 'AnyDeskHelperTool.exe is not matched: process names are matched whole, and the table is names, not proof' ((Get-RmmProductForProcess 'MyAnyDeskNotes.exe') -eq '') ''
+    T 'a name that only CONTAINS a product name is not matched (MyAnyDeskNotes.exe, AnyDeskHelperTool.exe)' (((Get-RmmProductForProcess 'MyAnyDeskNotes.exe') -eq '') -and ((Get-RmmProductForProcess 'AnyDeskHelperTool.exe') -eq '')) ''
+    T 'the portable and quick-support forms are found: AnyDesk (1).exe, TeamViewerQS.exe, rustdesk-1.3.2-x86_64.exe, SplashtopSOS.exe' (((Get-RmmProductForProcess 'AnyDesk (1).exe') -eq 'AnyDesk') -and ((Get-RmmProductForProcess 'TeamViewerQS_x64.exe') -eq 'TeamViewer') -and ((Get-RmmProductForProcess 'rustdesk-1.3.2-x86_64.exe') -eq 'RustDesk') -and ((Get-RmmProductForProcess 'SplashtopSOS.exe') -eq 'Splashtop')) ''
+    T 'Kaseya VSA 10, LogMeIn Rescue, GoToAssist, Bomgar and Atera''s package names are found' (((Get-RmmProductForProcess 'Kaseya.AgentEndpoint.exe') -eq 'Kaseya') -and ((Get-RmmProductForProcess 'lmi_rescue_srv.exe') -like 'LogMeIn*') -and ((Get-RmmProductForProcess 'g2ax_comm_expert.exe') -like 'LogMeIn*') -and ((Get-RmmProductForProcess 'bomgar-pac.exe') -like 'BeyondTrust*') -and ((Get-RmmProductForProcess 'AgentPackageHeartbeat.exe') -eq 'Atera')) ''
+    T 'a helper under an unlisted name is found by the product''s own install folder' ((Get-RmmProductForProcess -ProcessName 'gcapi.exe' -Path 'C:\Program Files (x86)\AnyDesk\gcapi.exe') -eq 'AnyDesk') ''
+    T 'srtasks.exe (System Restore) is not Splashtop, and Hamachi''s folder is not LogMeIn remote control' (((Get-RmmProductForProcess -ProcessName 'srtasks.exe' -Path 'C:\Windows\System32\srtasks.exe') -eq '') -and ((Get-RmmProductForProcess -ProcessName 'hamachi-2.exe' -Path 'C:\Program Files (x86)\LogMeIn Hamachi\hamachi-2.exe') -eq '')) ''
     T 'svchost.exe, explorer.exe and an empty name are nothing' (((Get-RmmProductForProcess 'svchost.exe') -eq '') -and ((Get-RmmProductForProcess 'explorer.exe') -eq '') -and ((Get-RmmProductForProcess '') -eq '')) ''
     T 'the match ignores letter case' ((Get-RmmProductForProcess 'ANYDESK.EXE') -eq 'AnyDesk') ''
     T '"AnyDesk" and "TeamViewer 15" in the installed list are found' (((Get-RmmProductForDisplay 'AnyDesk') -eq 'AnyDesk') -and ((Get-RmmProductForDisplay 'TeamViewer 15') -eq 'TeamViewer')) ''
     T '"Collateral Manager" and "Lateral Tools" are NOT Atera (word edges, not substrings)' (((Get-RmmProductForDisplay 'Collateral Manager') -eq '') -and ((Get-RmmProductForDisplay 'Lateral Tools') -eq '')) ''
     T '"Atera Agent" is Atera' ((Get-RmmProductForDisplay 'Atera Agent') -eq 'Atera') ''
+    T '"LogMeIn Hamachi" is LogMeIn''s VPN, not its remote-control product; "LogMeIn Rescue Technician Console" is' (((Get-RmmProductForDisplay 'LogMeIn Hamachi') -eq '') -and ((Get-RmmProductForDisplay 'LogMeIn Rescue Technician Console') -like 'LogMeIn*')) ''
     T '"BeyondTrust Privilege Management" is not a remote-access tool; "BeyondTrust Remote Support Jump Client" is' (((Get-RmmProductForDisplay 'BeyondTrust Privilege Management') -eq '') -and ((Get-RmmProductForDisplay 'BeyondTrust Remote Support Jump Client') -like 'BeyondTrust*')) ''
 
     # --- verdicts ---
@@ -287,7 +304,7 @@ if ($SelfTest) {
     $v = Get-RmmVerdict -Proc $pOk -Running @() -Roots @($rootOk) -Installed @(@{ Product = 'AnyDesk'; Display = ('AnyDesk' + [char]10 + '[OK] fine'); Version = ''; Publisher = '' })
     T 'a line break inside a DisplayName cannot forge an [OK] line' (@($v.Lines | Where-Object { $_ -match '^\[OK\] fine' }).Count -eq 0) ($v.Lines -join ' | ')
     if ($fails) { Write-Output "[FAIL] $fails rmm_check self-test expectation(s) unmet"; exit 1 }
-    Write-Output '[OK] rmm_check self-test: a remote-access tool running or installed is a WARNING that names the file and its signer; names match whole or at word edges, never as substrings; and a snapshot or Uninstall key that could not be read is a raised gap, never an all-clear.'
+    Write-Output '[OK] rmm_check self-test: a remote-access tool running or installed is a WARNING that names the file and its signer; process names match from their start or by the product''s install folder, program names at word edges, never as substrings; and a snapshot or Uninstall key that could not be read is a raised gap, never an all-clear.'
     exit 0
 }
 
@@ -297,7 +314,7 @@ try {
     $tree = Read-ProcessTree -File $TreePath
     $running = @()
     foreach ($p in @($tree.Items)) {
-        $prod = Get-RmmProductForProcess ([string]$p.Name)
+        $prod = Get-RmmProductForProcess -ProcessName ([string]$p.Name) -Path ([string]$p.Path)
         if ($prod) { $running += @{ Product = $prod; Name = [string]$p.Name; Pid = [string]$p.Pid; Path = [string]$p.Path; Sig = (Read-Signature ([string]$p.Path)) } }
     }
     $rootSpec = @()

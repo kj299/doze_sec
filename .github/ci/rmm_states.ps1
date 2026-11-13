@@ -6,7 +6,7 @@ $ErrorActionPreference = 'Stop'
 $st = (.\tools\rmm_check.ps1 -SelfTest) -join "`n"
 if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'rmm_check -SelfTest failed' }
 $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-if ($n -lt 27) { throw "rmm_check self-test ran only $n case(s)" }
+if ($n -lt 32) { throw "rmm_check self-test ran only $n case(s)" }
 function Snap {
   $t = Join-Path $env:TEMP ("dz_ci_rmm_tree_{0}.tmp" -f [guid]::NewGuid().ToString('N').Substring(0, 6))
   & powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\tools\proc_snapshot.ps1 -TreePath $t | Out-Null

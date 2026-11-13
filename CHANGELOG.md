@@ -16,7 +16,7 @@ A running or installed remote-access tool (AnyDesk, TeamViewer, ScreenConnect, R
 
 **Now.** `tools/rmm_check.ps1` runs once, in Section 4, from that section's own process snapshot and the Uninstall registry keys.
 - A running tool and an installed tool are each a counted WARNING (the owner's decision). The line names the product, the file, its PID and who signed it; an installed copy names its version and publisher.
-- Process names are matched whole and program names at word edges, never as substrings.
+- Process names are matched from their start, so the portable and quick-support forms (`AnyDesk (1).exe`, `TeamViewerQS.exe`, RustDesk under its download name) are found, and also by the product's own install folder. Program names are matched at word edges. A name that only contains a product name ("Lateral") is never a match. LogMeIn Hamachi, a VPN, is not graded as remote control.
 - A snapshot or an Uninstall key that could not be read is a raised `NOT performed` row, beside any finding.
 - Section 17 states Section 4's result instead of measuring again.
 
