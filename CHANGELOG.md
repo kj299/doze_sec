@@ -6,6 +6,22 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Remote-access tools are now findings
+A running or installed remote-access tool (AnyDesk, TeamViewer, ScreenConnect, RustDesk, Splashtop and others) was printed and counted nowhere.
+
+**Before.** Three checks did this job, and none reached the findings count or the exit code:
+- **Section 4** matched nine product names as substrings anywhere in the process list, so "Atera" matched a process or path containing "Lateral". Matches were printed untagged.
+- **Section 17** asked for processes by product name. ScreenConnect runs as `ScreenConnect.ClientService` and Splashtop as `SRService`, so most products were missed. A hit printed `[RMM RUNNING]`.
+- **Section 17** searched the installed-programs list with errors silenced. A failed read printed `[OK] No unexpected RMM software found.`; a hit printed `[RMM INSTALLED]`.
+
+**Now.** `tools/rmm_check.ps1` runs once, in Section 4, from that section's own process snapshot and the Uninstall registry keys.
+- A running tool and an installed tool are each a counted WARNING (the owner's decision). The line names the product, the file, its PID and who signed it; an installed copy names its version and publisher.
+- Process names are matched from their start, so the portable and quick-support forms (`AnyDesk (1).exe`, `TeamViewerQS.exe`, RustDesk under its download name) are found, and also by the product's own install folder. Program names are matched at word edges. A name that only contains a product name ("Lateral") is never a match. LogMeIn Hamachi, a VPN, is not graded as remote control.
+- A snapshot or an Uninstall key that could not be read is a raised `NOT performed` row, beside any finding.
+- Section 17 states Section 4's result instead of measuring again.
+
+**Behaviour change to know about.** Someone who installed one of these tools on purpose now sees a WARNING on every audit. The line says these are legitimate products, and `tests/benign_corpus.txt` catalogues the case.
+
 ### Event logs, the accessibility backdoor checks and OpenSSH: a log, key or service that did not answer is no longer an all-clear
 A search of every staged PowerShell block in the scripts found 15 where a failed read still printed `[OK]`. This fixes the six where a miss costs most; the rest are listed in `docs/design/backlog.md`.
 

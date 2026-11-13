@@ -228,6 +228,7 @@ set "RDP_STATE=ungraded"
 set "ACCIFEO_STATE=ungraded"
 set "ACCBIN_STATE=ungraded"
 set "SSHD_STATE=ungraded"
+set "RMM_STATE=ungraded"
 set "REBOOT_AGE=unknown"
 set "BITLOCKER_STATE=ungraded"
 set "EXEC_BLOCKED=0"
@@ -2389,16 +2390,38 @@ echo [SKIPPED] Process enumeration failed -- LOLBin process check NOT performed.
 
 echo.>> "%REPORT%"
 echo --- Remote Monitoring and Management Tools (DPRK/Iran C2 vector) [T1219] --->> "%REPORT%"
-echo  Command: Get-CimInstance Win32_Process ^| select_lines.ps1 ScreenConnect AnyDesk TeamViewer ...>> "%REPORT%"
-if not defined _ENUM4 goto :sec4_rmm_skip
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_proc4.tmp" "ScreenConnect" "AnyDesk" "TeamViewer" "Ammyy" "RustDesk" "Splashtop" "Atera" "Kaseya" "ConnectWise">> "%REPORT%" 2>&1
-if errorlevel 2 (
-    echo [SKIPPED] select_lines.ps1 helper error -- RMM tool check NOT performed.>> "%REPORT%"
-) else if errorlevel 1 echo [OK] No common RMM tools running.>> "%REPORT%"
-goto :sec4_rmm_done
-:sec4_rmm_skip
-echo [SKIPPED] Process enumeration failed -- RMM tool check NOT performed.>> "%REPORT%"
-:sec4_rmm_done
+del "%TEMP%\dz_rmm_run_hit.txt" 2>nul
+del "%TEMP%\dz_rmm_inst_hit.txt" 2>nul
+del "%TEMP%\dz_rmm_gap.txt" 2>nul
+del "%TEMP%\dz_rmm_state.txt" 2>nul
+echo  Command: powershell -File tools\rmm_check.ps1   [running: from this section's process snapshot; installed: from the Uninstall registry keys]>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\rmm_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\rmm_check.ps1" -TreePath "%TEMP%\dz_proc4_tree.tmp">> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\rmm_check.ps1 not found -- remote-access tool check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 4 T1219 "Remote-access tool check NOT performed - tool missing"
+)
+if exist "%TEMP%\dz_rmm_run_hit.txt" (
+    call :dz_finding WARNING 4 T1219 "Remote-access tool running"
+    del "%TEMP%\dz_rmm_run_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_rmm_inst_hit.txt" (
+    call :dz_finding WARNING 4 T1219 "Remote-access tool installed"
+    del "%TEMP%\dz_rmm_inst_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_rmm_gap.txt" (
+    rem A gap is its own row, beside a finding or alone.
+    call :dz_finding WARNING 4 T1219 "Remote-access tool check NOT performed in full - the process snapshot or an Uninstall key could not be read"
+    del "%TEMP%\dz_rmm_gap.txt" 2>nul
+)
+set "_RMST="
+if exist "%TEMP%\dz_rmm_state.txt" set /p _RMST=<"%TEMP%\dz_rmm_state.txt"
+del "%TEMP%\dz_rmm_state.txt" 2>nul
+if defined _RMST if "!_RMST:~0,4!"=="run=" set "RMM_STATE=!_RMST!"
+if not "!RMM_STATE:~0,4!"=="run=" if exist "%SCRIPT_DIR%tools\rmm_check.ps1" (
+    echo [WARNING] Remote-access tool check produced no verdict -- NOT performed: tools\rmm_check.ps1 ran but wrote no usable verdict.>> "%REPORT%"
+    call :dz_finding WARNING 4 T1219 "Remote-access tool check produced no verdict - NOT performed"
+)
 echo.>> "%REPORT%"
 echo --- System-Process Name Masquerading (T1036: a system name outside its directory, or started by the wrong parent) --->> "%REPORT%"
 echo  Command: powershell -File tools\masquerade_check.ps1>> "%REPORT%"
@@ -4810,22 +4833,11 @@ call :dz_ps_scan 17 T1110.003 "High unique account count in logon failures - pos
 
 echo.>> "%REPORT%"
 echo --- [DPRK] RMM Tool Processes (Diamond/Jade Sleet IOC) --->> "%REPORT%"
-echo  Command: powershell -Command "Get-Process -Name $t -EA SilentlyContinue">> "%REPORT%"
-echo $rmm=@('ScreenConnect','AnyDesk','TeamViewer','Ammyy','RustDesk','Splashtop','Atera','Kaseya','ConnectWise','BeyondTrust','Bomgar','LogMeIn','RemotePC') > "%PSRUN%"
-echo $found=$false >> "%PSRUN%"
-echo foreach($t in $rmm){$p=Get-Process -Name $t -EA SilentlyContinue; if($p){$found=$true;'[RMM RUNNING] '+$t+' PID:'+$p.Id}} >> "%PSRUN%"
-echo if(-not $found){'[OK] No unexpected RMM tool processes.'} >> "%PSRUN%"
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+echo [INFO] Remote-access tools are graded once, in Section 4, from the same process snapshot its other checks read. Result there: !RMM_STATE!   [run = tools found running, inst = tools found installed]>> "%REPORT%"
 
 echo.>> "%REPORT%"
 echo --- [DPRK] RMM Software Installed --->> "%REPORT%"
-echo  Command: powershell -Command "Get-ItemProperty $r -EA SilentlyContinue">> "%REPORT%"
-echo $rmm=@('ScreenConnect','AnyDesk','TeamViewer','Ammyy','RustDesk','Splashtop','Atera','Kaseya','ConnectWise','BeyondTrust','Bomgar','LogMeIn','RemotePC') > "%PSRUN%"
-echo $regs=@('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*','HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*') >> "%PSRUN%"
-echo $found=$false >> "%PSRUN%"
-echo foreach($r in $regs){Get-ItemProperty $r -EA SilentlyContinue ^| ForEach-Object {$n=$_.DisplayName; foreach($t in $rmm){if($n -and $n -match $t){$found=$true;'[RMM INSTALLED] '+$n}}}} >> "%PSRUN%"
-echo if(-not $found){'[OK] No unexpected RMM software found.'} >> "%PSRUN%"
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+echo [INFO] Installed remote-access tools are listed in Section 4 with the running ones. Result there: !RMM_STATE!>> "%REPORT%"
 
 echo.>> "%REPORT%"
 echo --- [ALL ACTORS] Cobalt Strike Named Pipes (MDDR: most abused C2 tool) --->> "%REPORT%"

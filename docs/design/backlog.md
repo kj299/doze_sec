@@ -862,7 +862,7 @@ Class A -- a failed read reaches `[OK]` (15 blocks):
 | Ransomware extensions (Section 18, CRITICAL finding) | `[OK] No files with known ransomware extensions` | open; the walker in `tools/file_walk_check.ps1` fits |
 | Office macro policy (Section 13) | `[INFO] No explicit per-app macro settings ... defaults apply` | open |
 | Proxy settings, two blocks (Section 3) | `[OK] No proxy settings in registry` / `Not configured` | open |
-| RMM software installed (Section 17) | `[OK] No unexpected RMM software found.` | open; see the RMM note below |
+| RMM software installed (Section 17) | `[OK] No unexpected RMM software found.` | DONE 2026-11-13, `tools/rmm_check.ps1` (Section 4) |
 | Run/RunOnce in other users' hives (Section 5) | `[OK] No Run/RunOnce entries in other-user hives.` | open |
 | Browser credential stores; token cache (Section 18) | `[OK] No unusual recent access` / `modifications` | open |
 | Registry IOC match (Section 18h) | has a NOT-performed branch, but one entry whose key is denied is swallowed by `catch{}` and not named | open |
@@ -876,7 +876,7 @@ matches (each already has a NOT-performed branch); module logging and
 transcription (prints `[OK]` either way; no judgement rests on it); RMM
 processes (`Get-Process -Name` not finding a name IS the answer).
 
-**RMM tools reach no ledger row.** The same search showed that Section 17
+**RMM tools reach no ledger row (DONE 2026-11-13: `tools/rmm_check.ps1`).** The same search showed that Section 17
 prints `[RMM RUNNING] <tool> PID:<n>` and `[RMM INSTALLED] <name>` under tags
 outside the severity vocabulary, with no raise: a running remote-access tool
 is counted nowhere. The owner decided 2026-11-11: both running and installed

@@ -1,4 +1,4 @@
-# Last verified by doze_sec: 2026-10-15 21:18:10 sha256:E0D3529E00CB3C2F
+# Last verified by doze_sec: 2026-11-13 03:09:35 sha256:5E335F0A6F3708E1
 # SENTINEL-X CTI -- TTP Manifest (MITRE ATT&CK v14+)
 # Updated: 2026-03-29
 # Source: MDDR 2024-2025, CISA KEV, Mandiant M-Trends 2025, CrowdStrike Threat Report 2025
@@ -67,7 +67,7 @@ T1071.001|C2|Web Protocols|All groups|Sec 3 ESTABLISHED connections
 T1572|C2|Protocol Tunneling|Volt Typhoon|Sec 17 portproxy
 T1090.001|C2|Internal Proxy|Volt Typhoon,Salt Typhoon|Sec 17 portproxy
 T1105|C2|Ingress Tool Transfer|All groups|Sec 18 LOLBin certutil/bitsadmin
-T1219|C2|Remote Access Software|DPRK,Scattered Spider|Sec 4,17 RMM tools
+T1219|C2|Remote Access Software|DPRK,Scattered Spider|Sec 4 RMM tools
 #
 # === EXFILTRATION ===
 T1567|Exfiltration|Exfil Over Web Service|All groups|Sec 18 process IOCs (rclone)

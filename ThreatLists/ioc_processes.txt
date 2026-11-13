@@ -91,5 +91,7 @@ dcomexec
 # for commercially-licensed RMM products used by tens of thousands of
 # MSPs. Distinguishing attacker use from legitimate IT use requires
 # context (process tree, install path, signing cert) not visible to a
-# bare process-name findstr. RMM tool RUNNING/INSTALLED status is
-# already surfaced in Section 17's enumeration.
+# bare process-name findstr. A running or installed remote-access tool
+# is graded instead by tools\rmm_check.ps1 in Section 4 -- a counted
+# WARNING that names the file and its signer (owner's decision,
+# 2026-11-11), matched by whole process name, not as a substring.

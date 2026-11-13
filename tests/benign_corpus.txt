@@ -803,3 +803,10 @@ class     = ADVISE
 proof     = harness:Run value whose name only contains a listed name
 signature = Suspicious registry IOCs found
 note      = Section 18h looks each ioc_registry.txt entry up by exact key and exact value name (Get-ItemProperty -Name), and where the entry gives a bad value, the value must equal it (UAC on, EnableLUA=1, is not the listed EnableLUA=0). A vendor value whose name merely contains a listed name is not a match; the harness plants ChromeUpdateHelper_dz_selftest under HKCU Run and asserts it stays out of 18h, beside a ChromeUpdate value that must be matched. Listed Run value names (ChromeUpdate, AdobeUpdater, OneDriveUpdate) are names attackers borrow from real updaters, so a hit can be the genuine product; read the data. Verify a hit: reg query "<key>" /v <value>, then Get-AuthenticodeSignature on the program the data points at.
+
+[rmm-installed-on-purpose]
+class     = ADVISE
+maxsev    = WARNING
+proof     = ci:rmm_check.ps1 -SelfTest + the runner's real process snapshot and Uninstall keys; a running look-alike and a twin named inside a word; field:a remote-access tool a person installed themselves, or one their IT department or a relative set up for support, is a state only a real machine produces
+signature = Remote-access tool (RUNNING|INSTALLED):
+note      = AnyDesk, TeamViewer, ScreenConnect, RustDesk, Splashtop and the rest are legitimate products: many people install one to help a relative, and every MSP-managed PC carries one. They are also what an intruder or a controlling partner installs to come back later, and the audit cannot tell which. The owner decided (2026-11-11) that running and installed are each a counted WARNING, so the line names the product, the file, its signer, and the version and publisher of an installed copy. Verify: ask whether you, your IT department or someone you trust installed it; open it and check which accounts or devices are allowed to connect. Uninstalling removes the program but not an account someone else already holds on the vendor side.

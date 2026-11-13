@@ -407,10 +407,21 @@ Found during the v7.1 coverage review; tracked for future work:
   7). Checks intentionally left as plain `[OK]` because an empty result
   is genuinely correct, not a masked failure: Section 3 proxy (Internet
   Settings keys are always present), the Section 5 HKEY_USERS Run-key
-  walk (informational, per-subkey `Test-Path` guarded), and the Section
-  17 RMM running/installed checks (`Get-Process`/Uninstall-key empties
-  mean "not present"). Probes elsewhere may still degrade silently, but
+  walk (informational, per-subkey `Test-Path` guarded). (The Section 17
+  RMM checks were listed here too; that was wrong -- a silenced Uninstall
+  read printed `[OK]` -- and they are now `tools/rmm_check.ps1`, below.)
+  Probes elsewhere may still degrade silently, but
   the high-value verdict checks across Sections 4-18 now fail visibly.
+- ~~A running or installed remote-access tool (AnyDesk, TeamViewer,
+  ScreenConnect and others) was printed and counted nowhere: three checks
+  (Sections 4 and 17) used tags outside the severity vocabulary, a substring
+  match ("Atera" inside "Lateral"), product names that are not process names,
+  and a silenced registry read.~~ **Closed:** `tools/rmm_check.ps1`, in
+  Section 4, from that section's own process snapshot and the Uninstall
+  keys. Running and installed are each a counted WARNING (owner's decision)
+  that names the file and its signer. Residual: the product table is names,
+  not proof -- a renamed binary or an unlisted product is not caught, and a
+  portable copy that was never installed is seen only while it runs.
 - ~~The AMSI-bypass and Event 7045 checks (Section 18), the Script Block
   listing (Section 16), the accessibility IFEO checks (Sections 13 and 17)
   and the OpenSSH Server check (Sections 10 and 18) printed `[OK]` when the

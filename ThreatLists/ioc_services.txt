@@ -12,8 +12,10 @@
 # enterprise endpoint. RMM detection that distinguishes attacker
 # from defender requires context (install signature, process tree,
 # install date) -- service-name matching alone produces near-100%
-# false positives. Section 17's RMM enumeration emits these as
-# context lines for an analyst to evaluate.
+# false positives. A running or installed remote-access tool is
+# graded instead by tools\rmm_check.ps1 in Section 4: a counted
+# WARNING that names the file and its signer (owner's decision,
+# 2026-11-11).
 #
 # === C2 IMPLANT SERVICES ===
 WinDefendUpdate

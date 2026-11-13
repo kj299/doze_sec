@@ -110,6 +110,11 @@ if (-not (Test-Path -LiteralPath $dir)) { Write-Host ("[FAIL] no ThreatLists dir
 $lists = @(Get-ChildItem -LiteralPath $dir -File -Filter *.txt | Sort-Object Name)
 if ($lists.Count -lt 5) { Write-Host ("[FAIL] only {0} list(s) under ThreatLists -- this lint is broken, not the lists" -f $lists.Count); exit 1 }
 
+function Join-CrlfLines {
+    param([string[]]$Lines)
+    return ((@($Lines) -join "`r`n") + "`r`n")
+}
+
 if ($SelfTest) {
     $fails = @()
     $today = Get-Date '2026-10-03'
@@ -141,6 +146,8 @@ if ($SelfTest) {
     if (@(Get-ListDefects -Lines $kd -Name 'kept.txt' -Today $today).Count -ne 0 -or $kd[0] -notmatch '^# Last verified by doze_sec: 2026-06-06 10:20:38 sha256:') { $fails += ("-Stamp -KeepDate did not keep the date: " + $kd[0]) }
     $nh = Set-ListHeader -Lines @('# Format: X', 'a|b') -KeepExistingDate $true -Now $today
     if ($nh[0] -notmatch '^# Last verified by doze_sec: 2026-10-03' -or $nh.Count -ne 3) { $fails += ("-Stamp on a list with no header did not prepend one: " + ($nh -join ' / ')) }
+    $jt = Join-CrlfLines @('# a', 'b|c')
+    if ($jt -ne ("# a`r`nb|c`r`n")) { $fails += ('a stamped list is not written with CRLF on every line: ' + ($jt -replace "`r", '\r' -replace "`n", '\n')) }
     # The digest rule must be THE SAME rule the sync tool writes with. Extract
     # Get-NormalizedHash from threat_list_sync.ps1 by AST and compare on a
     # fixture; two hand copies of a rule drift apart unnoticed otherwise.
@@ -189,7 +196,11 @@ if ($Stamp) {
         $lines = [IO.File]::ReadAllLines($f.FullName)
         if (@(Get-ListDefects -Lines $lines -Name $f.Name).Count -eq 0) { continue }
         $new = Set-ListHeader -Lines $lines -KeepExistingDate ([bool]$KeepDate)
-        [IO.File]::WriteAllLines($f.FullName, [string[]]$new, (New-Object System.Text.UTF8Encoding($false)))
+        # CRLF on every line, whatever machine stamps: the lists are STORED
+        # with CRLF (.gitattributes) so a ZIP or raw download carries them.
+        # WriteAllLines used the platform's newline, so a stamp run on
+        # Linux rewrote every line of the list with LF.
+        [IO.File]::WriteAllText($f.FullName, (Join-CrlfLines $new), (New-Object System.Text.UTF8Encoding($false)))
         Write-Host ("stamped {0}: {1}" -f $f.Name, $new[0])
         $n++
     }

@@ -919,7 +919,10 @@ IOC. Reconcile on every run and print what was replaced. **And a shipped list's
 content change is a new verification**: `ttp_manifest.txt` changed entries in
 three commits while its date never moved, so the header now carries a digest
 of the entries and `tools/lint_threat_list_dates.ps1` fails when they drift
-(`-Stamp` re-verifies, deliberately). **And a technique id inside a regex is
+(`-Stamp` re-verifies, deliberately). `-Stamp` writes CRLF on every
+line whatever machine runs it: it used `WriteAllLines`, whose newline is the
+platform's, and its first run on Linux rewrote all 143 lines of a list with
+LF -- the format the stored-CRLF rule below exists to prevent. **And a technique id inside a regex is
 not that technique.** A self-test asserting on a printed line escapes the dot,
 so a scanner matching ids over raw source reads the PARENT id -- which no
 manifest line maps. `lint_docs_drift` had learned to drop backslashes before
