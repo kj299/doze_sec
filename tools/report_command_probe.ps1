@@ -91,7 +91,6 @@ $script:KnownMutating = @(
 # Printed lines that describe a check rather than invoke it. Legitimate prose;
 # each must match something, or the entry is stale and this fails.
 $script:KnownDescriptive = @(
-    @{ Match = 'powershell reads VBAWarnings';Why = 'prose: names the values read per Office application' },
     @{ Match = 'select_lines.ps1';            Why = 'abbreviated pipeline: the printed pattern list ends in an ellipsis' },
     @{ Match = 'findstr /i vpn-client-names'; Why = 'abbreviated: stands in for the generated VPN name list' }
 )
@@ -347,7 +346,6 @@ if ($SelfTest) {
         ' Command: powershell -Command "Remove-Item C:\important"',
         ' Command: reg add "HKCU\Software\Zzz" /v x /t REG_SZ /d y /f',
         ' Command: powershell evaluates Get-MpComputerStatus + Get-MpPreference',
-        ' Command: powershell reads VBAWarnings + blockcontentexecutionfrominternet per Office app',
         ' Command: Get-CimInstance Win32_Process | select_lines.ps1 mshta ...',
         ' Command: Get-CimInstance Win32_Process | findstr /i vpn-client-names',
         ' Command: ping -n 1 -w 2000 8.8.8.8',
@@ -380,7 +378,7 @@ if ($SelfTest) {
         }
     }
     # The mutating and descriptive lines must have been skipped, not run.
-    if ($r.Skip -lt 6) { Write-Output "[FAIL] expected >= 6 skips (mutating + descriptive); got $($r.Skip)"; $fail++ }
+    if ($r.Skip -lt 5) { Write-Output "[FAIL] expected >= 5 skips (mutating + descriptive); got $($r.Skip)"; $fail++ }
     else { Write-Output "[OK]   $($r.Skip) line(s) skipped without execution (mutating + descriptive)" }
     if ($r.Exec -lt 1) { Write-Output "[FAIL] the good command never executed -- the probe is vacuous"; $fail++ }
     else { Write-Output "[OK]   $($r.Exec) command(s) actually executed" }

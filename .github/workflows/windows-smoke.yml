@@ -1424,6 +1424,12 @@ jobs:
           & .\.github\ci\rmm_states.ps1
           exit $LASTEXITCODE
 
+      - name: office_macro_check.ps1 -SelfTest + the runner's own Office settings and every source through the real reader (Cloud Policy over Group Policy over the user; a policy key that cannot be read is a raised gap)
+        shell: powershell
+        run: |
+          & .\.github\ci\office_macro_states.ps1
+          exit $LASTEXITCODE
+
       - name: named_pipe_check.ps1 -SelfTest + live (a C2 pipe list that could not be read is a raised gap, never an all-clear)
         shell: powershell
         run: |
