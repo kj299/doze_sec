@@ -183,7 +183,7 @@ Reads structured IOC files from `ThreatLists/` and matches against the live syst
 | 18e | Scheduled task IOC match | `Get-ScheduledTask` vs `ioc_scheduled_tasks.txt` -- task path and every action's full command line, the same in every Windows language |
 | 18f | DNS cache C2 domains | `ipconfig /displaydns` vs `ioc_domains.txt` |
 | 18g | LOLBin command patterns | `Get-CimInstance Win32_Process` command lines vs `ioc_lolbins.txt` (`select_lines`) |
-| 18h | Registry IOC check | `Get-ItemProperty` vs `ioc_registry.txt` |
+| 18h | Registry IOC check | exact key and value name vs `ioc_registry.txt` |
 | 18i | TTP coverage summary | `ttp_manifest.txt` dump |
 | 18j | VirusTotal hash reputation (opt-in via `-vt`) | `Get-FileHash` SHA256 -> VT API; capped at 20 priority files; rate-limited for free tier |
 | 18k | Local hash IOC match (always-on) | `Get-FileHash` SHA256 vs `ioc_hashes.txt`; offline complement to 18j |
@@ -215,7 +215,7 @@ Plain-text IOC files. One entry per line. `#` = comment.
 | `ioc_processes.txt` | 54 | Process name | Ransomware, C2, cred tools, recon (FP-prone RMM/admin-tool entries removed) |
 | `ioc_named_pipes.txt` | 32 | Pipe name | Cobalt Strike, Sliver, Havoc, Mythic, PsExec |
 | `ioc_services.txt` | 24 | Service name | C2 implants, BYOVD, ransomware (legitimate RMM/HWMonitor entries removed) |
-| `ioc_registry.txt` | 25 | `HIVE\Path\|Value\|BadVal` | Persistence, COM hijack, defense evasion (value-state entries gated on the malicious value) |
+| `ioc_registry.txt` | 24 | `HIVE\Path\|Value\|BadVal` | Persistence, COM hijack, defense evasion (value-state entries gated on the malicious value) |
 | `ioc_file_paths.txt` | 44 | File path | Staging dirs, webshells, driver drops |
 | `ioc_scheduled_tasks.txt` | 19 | Task name/path | Fake updates, APT persistence, ransomware pre-staging |
 | `ioc_domains.txt` | 21 | Domain fragment | C2 infra, tunneling (bare TLDs and legit DoH endpoints removed) |

@@ -158,7 +158,7 @@ function Get-AccountProxy {
     }
     if ($ks -eq 'nokey' -and $null -eq $Api) {
         # The key Windows keeps the setting in does not exist: an answer.
-        $a.Read = $true; $a.From = 'no Internet Settings key: Windows defaults apply'
+        $a.Read = $true; $a.From = 'the registry: there is no Internet Settings key, so Windows defaults apply'
         return $a
     }
     # --- the registry stores ---
@@ -202,7 +202,7 @@ function Get-AccountProxy {
         $a.Pac = ([string]$Api.Pac).Trim() -ne ''
         $a.Server = ([string]$Api.Proxy).Trim(); $a.PacUrl = ([string]$Api.Pac).Trim(); $a.Bypass = [string]$Api.Bypass
         $a.AutoDetect = [bool]$Api.AutoDetect
-        $a.From = 'as Windows reports it for this account'
+        $a.From = 'what Windows reports for this account'
         if ($a.Proxy -ne $regProxy -or $a.Pac -ne $regPac) {
             [void]$a.Info.Add(('the registry ' + $(if ($regProxy -or $regPac) { 'names ' + $(if ($regProxy) { 'proxy server ' + (ConvertTo-PrintableText $regServer) } else { 'auto-config script ' + (ConvertTo-PrintableText $regPacUrl) }) } else { 'no proxy' }) + ', but Windows reports ' + $(if ($a.Proxy -or $a.Pac) { 'one in force' } else { 'none in force' }) + '; what Windows reports is graded'))
         }
@@ -243,11 +243,11 @@ function Get-ProxyAccountVerdict {
         $r.Lines = @($out.ToArray()); return $r
     }
     if ($what.Count) {
-        [void]$out.Add(('[WARNING] Web proxy in effect for ' + $who + ': ' + ($what -join ' and ') + ' (set by ' + $Acct.From + ') -- this account''s web traffic goes through it, so whoever runs it can read or redirect that traffic (T1090).'))
+        [void]$out.Add(('[WARNING] Web proxy in effect for ' + $who + ': ' + ($what -join ' and ') + ' (read from ' + $Acct.From + ') -- this account''s web traffic goes through it, so whoever runs it can read or redirect that traffic (T1090).'))
         $r.Hit = $true
         if ([string]$Acct.Bypass) { [void]$out.Add(('[INFO] ' + $who + ': addresses that bypass the proxy: ' + (ConvertTo-PrintableText ([string]$Acct.Bypass)) + '.')) }
     } elseif ($Acct.Read) {
-        [void]$out.Add(('[OK] No web proxy in effect for ' + $who + ' (' + $Acct.From + ').'))
+        [void]$out.Add(('[OK] No web proxy in effect for ' + $who + ' (read from ' + $Acct.From + ').'))
         if ($Acct.AutoDetect) { [void]$out.Add(('[INFO] ' + $who + ': automatic proxy detection is on, the Windows default; no proxy was found configured.')) }
     }
     foreach ($i in @($Acct.Info)) { [void]$out.Add(('[INFO] ' + $who + ': ' + $i + '.')) }
@@ -306,7 +306,9 @@ function Get-WinHttpVerdict {
     return $r
 }
 
-# PURE. Everything together. $Context: @{ Account; Others; Unresolved } or
+# PURE. Everything together. $Context: @{ Account; Others; Unresolved;
+# ListError (the signed-in accounts could not be listed); UserApiError (why
+# Windows was not asked for this account) } or
 # $null. $Accounts: @( @{ Label; Owner; Acct } ). $Policy: the
 # ProxySettingsPerUser reader state. $Machine: the machine account's
 # Get-AccountProxy result (read only when Group Policy makes it apply).
@@ -323,6 +325,10 @@ function Get-ProxyVerdict {
     $unres = $(if ($Context) { [int]$Context.Unresolved } else { 0 })
     if ($unres -gt 0 -and $IsElevated) { [void]$gaps.Add(([string]$unres + ' desktop session(s) at this PC belong to an account that could not be identified, so their proxy settings were not read')) }
     elseif ($unres -gt 0) { [void]$out.Add(('[INFO] ' + $unres + ' desktop session(s) at this PC belong to an account this token could not identify, so their proxy settings were not read. An audit run as administrator reads them.')) }
+    # The process list failing is not the token (any account may list
+    # processes): the other signed-in accounts are unknown, a gap.
+    if ($Context -and [string]$Context.ListError) { [void]$gaps.Add(('the accounts signed in at this PC could not be listed (' + (ConvertTo-PrintableText ([string]$Context.ListError)) + '), so only this account''s proxy settings were read')) }
+    if ($Context -and [string]$Context.UserApiError) { [void]$out.Add(('[INFO] Windows could not be asked which proxy is in force for this account (' + (ConvertTo-PrintableText ([string]$Context.UserApiError)) + '); its registry settings are graded instead.')) }
     $machineWide = $false
     $ps = [string]$Policy.State
     if ($ps -eq 'unreadable') { [void]$gaps.Add(('the Group Policy key that decides whether the proxy is per user or machine-wide could not be read (' + (ConvertTo-PrintableText ([string]$Policy.Error)) + '), so which setting is in force is unknown')) }
@@ -483,6 +489,9 @@ if ($SelfTest) {
     T 'record: flags, proxy and bypass list read' ($p.Ok -and $p.Flags -eq 3 -and $p.Proxy -eq 'proxy.example:8080' -and $p.Bypass -eq '<local>') ("{0} {1} {2}" -f $p.Ok, $p.Flags, $p.Error)
     $p = ConvertFrom-ConnectionBlob -Bytes (Blob 5 '' '' 'http://wpad.example/proxy.pac')
     T 'record: an auto-config script address read' ($p.Ok -and $p.Pac -eq 'http://wpad.example/proxy.pac') $p.Error
+    $tb = [byte[]]((Blob 9) + [byte[]](1, 0, 0, 0, 2, 0, 0, 0, 192, 168, 1, 5) + (New-Object byte[] 32))
+    $p = ConvertFrom-ConnectionBlob -Bytes $tb
+    T 'record: the automatic-detection data Windows keeps after the PAC field is ignored, not an error' ($p.Ok -and $p.Flags -eq 9 -and $p.Proxy -eq '' -and $p.Pac -eq '') $p.Error
     $p = ConvertFrom-ConnectionBlob -Bytes ([byte[]](0x46, 0, 0, 0, 1, 0, 0, 0))
     T 'record: cut short is an error, never "no proxy"' ((-not $p.Ok) -and $p.Error -match 'too short') $p.Error
     $b = Blob 3 'proxy.example:8080'; $b[12] = 0xFF; $b[13] = 0xFF
@@ -495,19 +504,21 @@ if ($SelfTest) {
 
     # --- one account, from the registry ---
     $v = V (Me (NewRead -Blob $direct))
-    T 'direct access only: [OK], nothing raised' ((-not $v.Hit) -and (-not $v.Gap) -and $v.Text -match '(?m)^\[OK\] No web proxy in effect for this account \(the connection settings record\)\.$') $v.Text
+    T 'direct access only: [OK], nothing raised' ((-not $v.Hit) -and (-not $v.Gap) -and $v.Text -match '(?m)^\[OK\] No web proxy in effect for this account \(read from the connection settings record\)\.$') $v.Text
     $v = V (Me (NewRead -Blob $auto))
     T 'automatic detection only (the Windows default): [OK] plus INFO, never a WARNING' ((-not $v.Hit) -and $v.Text -match 'automatic proxy detection is on, the Windows default' -and $v.Text -notmatch '\[WARNING\]') $v.Text
     $v = V (Me (NewRead -Blob (PB (Blob 3 '127.0.0.1:8888' '<local>'))))
-    T 'a proxy server in the record: the WARNING, naming it and the store, plus the bypass list and the who-sets-one INFO' ($v.Hit -and $v.Text -match '(?m)^\[WARNING\] Web proxy in effect for this account: proxy server 127\.0\.0\.1:8888 \(set by the connection settings record\)' -and $v.Text -match 'bypass the proxy: <local>' -and $v.Text -match 'Fiddler, Burp') $v.Text
+    T 'a proxy server in the record: the WARNING, naming it and the store, plus the bypass list and the who-sets-one INFO' ($v.Hit -and $v.Text -match '(?m)^\[WARNING\] Web proxy in effect for this account: proxy server 127\.0\.0\.1:8888 \(read from the connection settings record\)' -and $v.Text -match 'bypass the proxy: <local>' -and $v.Text -match 'Fiddler, Burp') $v.Text
     $v = V (Me (NewRead -Blob (PB (Blob 5 '' '' 'http://evil.example/p.pac'))))
     T 'an auto-config (PAC) script: the WARNING' ($v.Hit -and $v.Text -match 'auto-config script http://evil\.example/p\.pac') $v.Text
     $v = V (Me (NewRead -Blob $direct -Enable (P 1 'DWord') -Server (P 'evil.example:3128')))
-    T 'the values switch a proxy on while the record says direct: graded, the disagreement said' ($v.Hit -and $v.Text -match 'set by the ProxyEnable/ProxyServer/AutoConfigURL values' -and $v.Text -match 'disagree') $v.Text
+    T 'the values switch a proxy on while the record says direct: graded, the disagreement said' ($v.Hit -and $v.Text -match 'read from the ProxyEnable/ProxyServer/AutoConfigURL values' -and $v.Text -match 'disagree') $v.Text
     $v = V (Me (NewRead -Blob $direct -Pac (P 'http://evil.example/x.pac')))
     T 'AutoConfigURL alone (the value adware sets): the WARNING' ($v.Hit -and $v.Text -match 'auto-config script http://evil\.example/x\.pac') $v.Text
     $v = V (Me (NewRead -Blob $direct -Enable (P 0 'DWord') -Server (P 'old.example:80')))
     T 'a ProxyServer that is not switched on: [OK] plus INFO dormant, no WARNING' ((-not $v.Hit) -and $v.Text -match 'not switched on \(dormant\)' -and $v.Text -match '\[OK\] No web proxy') $v.Text
+    $v = V (Me (NewRead -Blob (PB (Blob 1 'old.example:8080' '<local>')) -Enable (P 0 'DWord') -Server (P 'old.example:8080')))
+    T 'a proxy switched OFF in Settings (the record keeps the address, flag 0x02 cleared): [OK] plus dormant INFO, no WARNING' ((-not $v.Hit) -and $v.Text -match 'dormant') $v.Text
     $v = V (Me (NewRead -Enable (P 1 'DWord') -Server (P 'evil.example:3128')))
     T 'no record at all, the values switch a proxy on: the WARNING' ($v.Hit) $v.Text
     $v = V (Me (NewRead -Enable (P 0 'DWord')))
@@ -530,7 +541,7 @@ if ($SelfTest) {
     # --- the audit's own account, Windows asked ---
     $api = @{ Ok = $true; AutoDetect = $false; Pac = ''; Proxy = 'evil.example:3128'; Bypass = ''; Error = '' }
     $v = V (Me (NewRead -Blob $direct) $api)
-    T 'Windows reports a proxy the registry does not hold: the WARNING, the difference said' ($v.Hit -and $v.Text -match 'as Windows reports it' -and $v.Text -match 'Windows reports one in force') $v.Text
+    T 'Windows reports a proxy the registry does not hold: the WARNING, the difference said' ($v.Hit -and $v.Text -match 'read from what Windows reports for this account' -and $v.Text -match 'Windows reports one in force') $v.Text
     $api0 = @{ Ok = $true; AutoDetect = $true; Pac = ''; Proxy = ''; Bypass = ''; Error = '' }
     $v = V (Me (NewRead -Blob (PB (Blob 3 'stale.example:1'))) $api0)
     T 'Windows reports none while the registry holds one: [OK] -- the effect decides, the difference is INFO' ((-not $v.Hit) -and $v.Text -match 'names proxy server stale\.example:1, but Windows reports none in force') $v.Text
@@ -552,6 +563,10 @@ if ($SelfTest) {
     T 'desktop sessions whose account could not be told, elevated: a gap' ($v.Gap -and $v.Text -match '2 desktop session') $v.Text
     $v = V (Me (NewRead -Blob $direct)) -Ctx @{ Account = 'PC\u'; Others = @(); Unresolved = 2 } -El $false
     T 'the same on a standard-user token: INFO, no gap' ((-not $v.Gap) -and $v.Text -match '\[INFO\] 2 desktop session') $v.Text
+    $v = V (Me (NewRead -Blob $direct)) -Ctx @{ Account = 'PC\u'; Others = @(); Unresolved = 0; ListError = 'CimException: Invalid class' } -El $false
+    T 'the signed-in accounts could not be listed: a raised gap on any token, beside the [OK] for this account' ($v.Gap -and $v.Text -match 'accounts signed in at this PC could not be listed \(CimException: Invalid class\)' -and $v.Text -match '\[OK\] No web proxy in effect for this account') $v.Text
+    $v = V (Me (NewRead -Blob $direct)) -Ctx @{ Account = 'PC\u'; Others = @(); Unresolved = 0; UserApiError = 'WinHttpGetIEProxyConfigForCurrentUser failed, Win32 error 2' }
+    T 'Windows not asked for this account: the line says why, and the registry is graded' ((-not $v.Gap) -and $v.Text -match '\[INFO\] Windows could not be asked which proxy is in force for this account \(WinHttpGetIEProxyConfigForCurrentUser failed, Win32 error 2\)') $v.Text
 
     # --- Group Policy machine-wide ---
     $mach = Get-AccountProxy -Read (NewRead -Blob (PB (Blob 3 'corp.example:8080')))
@@ -612,7 +627,7 @@ try {
     if ($realUser) {
         $acct = ''; $mySid = ''
         try { $id = [Security.Principal.WindowsIdentity]::GetCurrent(); $acct = $id.Name; $mySid = $id.User.Value } catch {}
-        $unresolved = 0; $seen = @{}
+        $unresolved = 0; $seen = @{}; $listErr = ''
         try {
             foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" -ErrorAction Stop)) {
                 $sid = ''; $nm = ''
@@ -627,8 +642,8 @@ try {
                 $seen[$sid] = $true
                 [void]$others.Add(@{ Name = $(if ($nm) { $nm } else { $sid }); Root = ('Registry::HKEY_USERS\' + $sid + '\Software') })
             }
-        } catch {}
-        $ctx = @{ Account = $acct; Others = @($others | ForEach-Object { $_.Name }); Unresolved = $unresolved }
+        } catch { $listErr = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message) }
+        $ctx = @{ Account = $acct; Others = @($others | ForEach-Object { $_.Name }); Unresolved = $unresolved; ListError = $listErr; UserApiError = $(if ($api -and -not $api.User.Ok) { [string]$api.User.Error } else { '' }) }
     }
     $userApi = $(if ($realUser -and $api -and $api.User.Ok) { $api.User } else { $null })
     $accts = New-Object System.Collections.ArrayList

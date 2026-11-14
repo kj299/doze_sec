@@ -450,8 +450,12 @@ Found during the v7.1 coverage review; tracked for future work:
   registry refused to a standard-user token is a deferral. Residual: a proxy
   set inside a browser's own settings (Firefox keeps its own), a per-app
   proxy, an environment-variable proxy (`HTTP_PROXY`), and the proxy of a
-  signed-out account are not read; automatic detection (WPAD) is reported,
-  not followed, so a hostile WPAD answer on the network is not seen.
+  signed-out account are not read; for other accounts only the default
+  connection's record is read, so a proxy set only on a VPN or dial-up
+  connection of theirs is not seen; automatic detection (WPAD) is reported,
+  not followed, so a hostile WPAD answer on the network is not seen. Section
+  18h no longer lists `AutoConfigURL`: it raised the same value a second
+  time, and contradicted Section 3 under a machine-wide policy.
 - ~~Section 18h, the registry IOC match, wrapped every lookup in an empty
   `catch{}`, so a listed key this account could not read, or an entry under
   a hive it cannot read, was dropped and the block printed `[OK]`.~~

@@ -13,7 +13,11 @@
 #   * a record that does not parse, and a key this account is denied, are a
 #     raised gap, never "no proxy";
 #   * Group Policy ProxySettingsPerUser=0 grades the machine setting instead;
-#   * a real WinHTTP proxy, set with netsh, is found by asking Windows.
+#   * a real WinHTTP proxy, set with netsh, is found by asking Windows;
+#   * a real per-user proxy in the runner's OWN HKCU (backed up and restored
+#     in finally) is found by asking Windows, and the record Settings leaves
+#     when a proxy is switched off (address kept, flag cleared) is not one;
+#   * the record parser reads the runner's REAL records without a gap.
 $ErrorActionPreference = 'Stop'
 $st = (.\tools\proxy_check.ps1 -SelfTest) -join "`n"
 if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'proxy_check -SelfTest failed' }
@@ -48,6 +52,15 @@ if ($live.Out -notmatch '(?m)^\[(OK|WARNING)\] (No web proxy in effect for this 
 if ($live.Out -notmatch '(?m)^\[(OK|WARNING)\] (WinHTTP \(machine-wide\)|Machine-wide WinHTTP proxy)') { throw "WinHTTP was not graded: $($live.Out)" }
 if ($live.Out -notmatch 'read by WinHttpGetDefaultProxyConfiguration') { throw "Windows was not asked for the WinHTTP proxy (the API path did not run on 5.1): $($live.Out)" }
 if ($live.Markers) { throw "a clean runner did not read clean for proxy settings: [$($live.Markers)] $($live.Out)" }
+if ($live.Out -notmatch 'what Windows reports for this account' -and $live.Out -notmatch '(?m)^\[INFO\] Windows could not be asked which proxy is in force for this account \(') { throw "the audit's own account was graded from the registry without saying why Windows was not asked: $($live.Out)" }
+# The parser on the runner's REAL records, Windows not asked: no gap.
+$isKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings\Connections'
+foreach ($rk in @(@{ K = $isKey; N = 'DefaultConnectionSettings' }, @{ K = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings\Connections'; N = 'WinHttpSettings' })) {
+  $b = $null; try { $b = (Get-ItemProperty -LiteralPath $rk.K -Name $rk.N -ErrorAction Stop).($rk.N) } catch {}
+  Write-Host ("MEASURED: the runner's real {0}: {1}" -f $rk.N, $(if ($b -is [byte[]]) { '{0} bytes, flags 0x{1:X}' -f $b.Length, $(if ($b.Length -ge 12) { [BitConverter]::ToUInt32($b, 8) } else { 0 }) } else { 'not present' }))
+}
+$real = RunP @{ NoApi = $true }
+if ($real.Markers -match 'dz_proxy_gap') { throw "the record parser could not read the runner's real records: $($real.Out)" }
 
 # EVERY STATE through the real reader, on throwaway HKCU keys.
 # Touches: registry:HKCU:\Software\dz_ci_proxy_<pid> (removed in finally).
@@ -56,18 +69,26 @@ $user = "$root\u"; $mach = "$root\m"
 $uis = "$user\Microsoft\Windows\CurrentVersion\Internet Settings"
 $k = @{ KeyRoot = $user; MachineRoot = $mach; NoApi = $true }
 $winSet = $false
+# The runner's own HKCU proxy values, backed up before the real-HKCU plant.
+$hk = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+$saved = @{}
+foreach ($pair in @(@($hk, 'ProxyEnable'), @($hk, 'ProxyServer'), @("$hk\Connections", 'DefaultConnectionSettings'))) {
+  $kk = $pair[0]; $nn = $pair[1]; $item = Get-Item -LiteralPath $kk -EA SilentlyContinue
+  $saved["$kk|$nn"] = $(if ($item -and (@($item.GetValueNames()) -contains $nn)) { @{ Had = $true; Value = $item.GetValue($nn, $null, 'DoNotExpandEnvironmentNames'); Kind = [string]$item.GetValueKind($nn) } } else { @{ Had = $false } })
+}
+$hkcuPlanted = $false
 try {
   New-Item -Path "$uis\Connections" -Force | Out-Null
   New-Item -Path "$mach\Microsoft\Windows\CurrentVersion\Internet Settings\Connections" -Force | Out-Null
   # The benign twin: automatic detection only, the Windows default.
   Set-ItemProperty -Path "$uis\Connections" -Name DefaultConnectionSettings -Value (Blob 9) -Type Binary
-  Expect (RunP $k) '' '(?m)^\[OK\] No web proxy in effect for this account \(the connection settings record\)\.' 'automatic detection only'
+  Expect (RunP $k) '' '(?m)^\[OK\] No web proxy in effect for this account \(read from the connection settings record\)\.' 'automatic detection only'
   # A ProxyServer that is not switched on: dormant, no WARNING.
   Set-ItemProperty -Path $uis -Name ProxyEnable -Value 0 -Type DWord; Set-ItemProperty -Path $uis -Name ProxyServer -Value 'old.example:80'
   Expect (RunP $k) '' 'ProxyServer holds old\.example:80 but it is not switched on \(dormant\)' 'a dormant ProxyServer'
   # The malign twin: a proxy server in the record.
   Set-ItemProperty -Path "$uis\Connections" -Name DefaultConnectionSettings -Value (Blob 3 '127.0.0.1:8888' '<local>') -Type Binary
-  Expect (RunP $k) 'dz_proxy_hit' '(?m)^\[WARNING\] Web proxy in effect for this account: proxy server 127\.0\.0\.1:8888 \(set by the connection settings record\)' 'a proxy server in the record'
+  Expect (RunP $k) 'dz_proxy_hit' '(?m)^\[WARNING\] Web proxy in effect for this account: proxy server 127\.0\.0\.1:8888 \(read from the connection settings record\)' 'a proxy server in the record'
   # An auto-config script, set only in the AutoConfigURL value.
   Set-ItemProperty -Path "$uis\Connections" -Name DefaultConnectionSettings -Value (Blob 9) -Type Binary
   Set-ItemProperty -Path $uis -Name AutoConfigURL -Value 'http://dz-ci.invalid/p.pac'
@@ -116,12 +137,42 @@ try {
     Expect $r 'dz_winhttp_hit' '(?m)^\[WARNING\] Machine-wide WinHTTP proxy in effect: 127\.0\.0\.1:1 \(read by WinHttpGetDefaultProxyConfiguration\)' 'a real WinHTTP proxy set with netsh'
     Write-Host 'proxy: a real WinHTTP proxy is found by asking Windows'
   }
+  # A REAL per-user proxy in this account's own HKCU, Windows asked. Settings
+  # writes the record and the values together; so does this plant.
+  if ($live.Markers -match 'dz_proxy_hit') { Write-Host '[ SKIP ] the runner already has a per-user proxy; the plant would overwrite it' }
+  else {
+    $hkcuPlanted = $true
+    if (-not (Test-Path -LiteralPath "$hk\Connections")) { New-Item -Path "$hk\Connections" -Force | Out-Null }
+    Set-ItemProperty -Path "$hk\Connections" -Name DefaultConnectionSettings -Value (Blob 3 '127.0.0.1:1' '<local>') -Type Binary
+    Set-ItemProperty -Path $hk -Name ProxyEnable -Value 1 -Type DWord; Set-ItemProperty -Path $hk -Name ProxyServer -Value '127.0.0.1:1'
+    Expect (RunP @{}) 'dz_proxy_hit' '(?m)^\[WARNING\] Web proxy in effect for this account: proxy server 127\.0\.0\.1:1 \(read from what Windows reports for this account\)' 'a real per-user proxy, Windows asked'
+    # Its twin: what Settings leaves when the proxy is switched off -- the
+    # address kept, the proxy flag cleared, ProxyEnable 0. Not a proxy.
+    Set-ItemProperty -Path "$hk\Connections" -Name DefaultConnectionSettings -Value (Blob 1 '127.0.0.1:1' '<local>') -Type Binary
+    Set-ItemProperty -Path $hk -Name ProxyEnable -Value 0 -Type DWord
+    Expect (RunP @{}) '' '(?m)^\[OK\] No web proxy in effect for this account \(read from what Windows reports for this account\)' 'a per-user proxy switched off, Windows asked'
+    Write-Host 'proxy: a real per-user proxy is found by asking Windows, and one switched off is not'
+  }
   Write-Host 'proxy: a proxy in effect is the finding, automatic detection and a dormant value are not, an unread key is a gap'
 } finally {
   $ErrorActionPreference = 'Continue'
+  $restoreFail = @()
+  if ($hkcuPlanted) {
+    foreach ($key in $saved.Keys) {
+      $kk, $nn = $key -split '\|', 2; $sv = $saved[$key]
+      try {
+        if ($sv.Had) { Set-ItemProperty -LiteralPath $kk -Name $nn -Value $sv.Value -Type $sv.Kind -ErrorAction Stop }
+        elseif (Get-ItemProperty -LiteralPath $kk -Name $nn -EA SilentlyContinue) { Remove-ItemProperty -LiteralPath $kk -Name $nn -ErrorAction Stop }
+      } catch { $restoreFail += ("{0}\{1}: {2}" -f $kk, $nn, $_.Exception.Message) }
+    }
+  }
   if ($winSet) {
     & netsh.exe winhttp reset proxy | Out-Null
-    if ($LASTEXITCODE -ne 0) { Write-Host '::error::netsh winhttp reset proxy failed: the runner keeps a dead WinHTTP proxy' }
+    if ($LASTEXITCODE -ne 0) { $restoreFail += "netsh winhttp reset proxy exited $LASTEXITCODE" }
+  }
+  if ($hkcuPlanted -or $winSet) {
+    # Proven gone, by the same reader: a later step must not inherit a dead proxy.
+    try { $after = RunP @{}; if ($after.Markers -match 'dz_proxy_hit|dz_winhttp_hit') { $restoreFail += "a proxy is still in effect after the restore: [$($after.Markers)]" } } catch { $restoreFail += ("the post-restore check failed: " + $_.Exception.Message) }
   }
   try {
     $sk = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Software\dz_ci_proxy_$PID\u\Microsoft\Windows\CurrentVersion\Internet Settings", [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree, [Security.AccessControl.RegistryRights]::ChangePermissions)
@@ -129,5 +180,6 @@ try {
   } catch { Write-Host ("cleanup: could not reset the test key's ACL ({0})" -f $_.Exception.Message) }
   Remove-Item -Path $root -Recurse -Force -EA SilentlyContinue
   if (Test-Path $root) { throw "the CI test key $root could not be removed" }
+  if ($restoreFail.Count) { throw ("the runner's proxy settings were not restored -- later steps would run behind a dead proxy: " + ($restoreFail -join '; ')) }
 }
 exit 0

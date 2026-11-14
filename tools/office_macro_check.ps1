@@ -173,6 +173,9 @@ function Get-MacroVerdict {
     $unres = $(if ($Context) { [int]$Context.Unresolved } else { 0 })
     if ($unres -gt 0 -and $IsElevated) { [void]$gaps.Add(([string]$unres + ' desktop session(s) at this PC belong to an account that could not be identified, so their Office settings were not read')) }
     elseif ($unres -gt 0) { [void]$out.Add(('[INFO] ' + $unres + ' desktop session(s) at this PC belong to an account this token could not identify, so their Office settings were not read. An audit run as administrator reads them.')) }
+    # The process list failing is not the token (any account may list
+    # processes): the other signed-in accounts are unknown, a gap.
+    if ($Context -and [string]$Context.ListError) { [void]$gaps.Add(('the accounts signed in at this PC could not be listed (' + (ConvertTo-PrintableText ([string]$Context.ListError)) + '), so only this account''s Office settings were read')) }
     foreach ($x in @($Roots)) { if ([string]$x.State -ne 'ok' -and [string]$x.State -ne 'nokey') { [void]$gaps.Add(([string]$x.Name + ' could not be listed (' + (ConvertTo-PrintableText ([string]$x.Error)) + ')')) } }
     $explicit = 0
     $vers = New-Object System.Collections.ArrayList
@@ -319,6 +322,8 @@ if ($SelfTest) {
     T 'desktop sessions a standard-user token could not identify: said, as [INFO]' ((($o.Lines -join "`n") -match '(?m)^\[INFO\] 2 desktop session\(s\) at this PC belong to an account this token could not identify') -and -not $o.Gap) ($o.Lines -join ' | ')
     $o = Get-MacroVerdict -Reads @(One $none $none) -Roots $okRoots -Context @{ Account = 'PC\bob'; Others = @(); Unresolved = 1 } -IsElevated $true
     T 'a session an ADMINISTRATOR could not identify: a raised gap -- the token does not explain it' ($o.Gap -and (($o.Lines -join "`n") -match '(?m)^\[WARNING\] Office macro policy check NOT performed in full -- 1 desktop session\(s\) at this PC belong to an account that could not be identified') -and (($o.Lines -join "`n") -notmatch 'An audit run as administrator')) ($o.Lines -join ' | ')
+    $o = Get-MacroVerdict -Reads @(One $none $none) -Roots $okRoots -Context @{ Account = 'PC\bob'; Others = @(); Unresolved = 0; ListError = 'CimException: Invalid class' } -IsElevated $false
+    T 'the signed-in accounts could not be listed: a raised gap on any token, never only this account read in silence' ($o.Gap -and (($o.Lines -join "`n") -match 'accounts signed in at this PC could not be listed \(CimException: Invalid class\)')) ($o.Lines -join ' | ')
     $v = V @(One (Src $N $N (& $P ([long]4294967297))) $none)
     T 'a value too large for an Int32 is a value Office does not define, never a crash that voids the verdict' ($v.Hit -and $v.Text -match 'VBAWarnings holds a value Office does not define \(4294967297') $v.Text
     $v = V @((One (Src $N $N (& $P 2)) $none), (One (Src $N $U $N) $none '16.0' 'Excel'))
@@ -387,7 +392,7 @@ try {
     if ($KeyRoot -ieq 'HKCU:\Software') {
         $acct = ''; $mySid = ''
         try { $id = [Security.Principal.WindowsIdentity]::GetCurrent(); $acct = $id.Name; $mySid = $id.User.Value } catch {}
-        $unresolved = 0; $seen = @{}
+        $unresolved = 0; $seen = @{}; $listErr = ''
         try {
             foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" -ErrorAction Stop)) {
                 $sid = ''; $nm = ''
@@ -403,8 +408,8 @@ try {
                 $seen[$sid] = $true
                 [void]$others.Add(@{ Name = $(if ($nm) { $nm } else { $sid }); Root = ('Registry::HKEY_USERS\' + $sid + '\Software') })
             }
-        } catch {}
-        $ctx = @{ Account = $acct; Others = @($others | ForEach-Object { $_.Name }); Unresolved = $unresolved }
+        } catch { $listErr = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message) }
+        $ctx = @{ Account = $acct; Others = @($others | ForEach-Object { $_.Name }); Unresolved = $unresolved; ListError = $listErr }
     }
     $mine = Read-AccountSettings -Root $KeyRoot -Label 'this account' -MustExist $false
     $all = New-Object System.Collections.ArrayList
