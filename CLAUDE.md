@@ -53,6 +53,16 @@ So, for anything a user runs locally:
 - **Ask what happens if this is interrupted**, and ship the recovery: cleanup
   must be runnable standalone and cold (`tests\cleanup_selftest.ps1`), not only
   as an in-process `finally`.
+- **Mount a copy, never the original.** Section 5 reads a signed-out
+  account's Run keys by mounting its registry, and a hive left mounted from
+  the account's OWN `NTUSER.DAT` gives that person a temporary profile at
+  their next sign-in -- their desktop and files appear gone. So the audit
+  copies the file into TEMP and mounts the copy (`HKU\dz_sec_*`); an
+  interrupted run leaves only a copy, the next run unloads it first, and
+  `tools\unload_audit_hives.ps1` does it standalone. Never `-readonly`
+  (`lint_readonly` holds the gate). `RegLoadAppKey` is not the way out:
+  Microsoft documents it failing unless every key in the hive shares one
+  security descriptor, which a user hive never does.
 - **Test artifacts are quarantined and stamped.** A harness run passes
   `-selftest`: output goes under `…\SecurityAudit\selftest\` and the report
   opens with `*** TEST RUN -- every finding below was planted ***`. A report of

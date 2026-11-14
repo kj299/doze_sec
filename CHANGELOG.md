@@ -6,6 +6,15 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Other accounts' Run keys (Section 5): graded, a failed read is a gap, and signed-out accounts are read
+**Before.** Section 5 listed the Run/RunOnce values of the accounts loaded under HKEY_USERS as `[INFO]` and graded none of them, so an encoded-PowerShell autorun in a second account was never a finding. A failed read of HKEY_USERS or of a key printed `[OK] No Run/RunOnce entries in other-user hives.` A `-notmatch '^PS'` filter hid any value whose name starts with "PS". The audit's own account was counted as "another". An account that was not signed in was never seen, although its Run keys fire at its next sign-in.
+
+**Now.** `tools/persistence_eval.ps1 -Part OtherAccounts`, beside the existing HKCU/HKLM evaluation.
+- Every other account's Run, RunOnce and Wow6432Node twins are graded with the rule HKCU's are, and a hit is a counted WARNING that names the account. The values are still listed as context.
+- A key or an account's registry that could not be read is a raised `NOT performed` row, beside any finding. On a standard-user token, another account's registry refused is `[DEFERRED - ADMIN REQUIRED]` and counted: that registry denies other users by design.
+- **Signed-out accounts.** On an elevated run without `-readonly`, each signed-out account is read from a COPY of its `NTUSER.DAT` (and its two log files) in TEMP, mounted as `HKU\dz_sec_<pid>_<n>`, read and unmounted; the copy is deleted. The account's own file is only read, never mounted, so a run stopped halfway leaves a mounted copy that goes at reboot, and the account's next sign-in is unaffected. The next run unmounts any leftover first, and `tools\unload_audit_hives.ps1` does it on its own. On a `-readonly` or standard-user run, each signed-out account is named as not read.
+- The HKCU/HKLM Run-key loop no longer skips a key it could not read: that is a raised gap too.
+
 ### Registry IOC match (Section 18h): a key that could not be read is named and raised
 **Before.** Each `ioc_registry.txt` entry was looked up inside an empty `catch{}`. A listed key this account could not read, and an entry under a hive the check cannot read, were dropped without a word, and the block printed `[OK] No suspicious registry IOC matches.` On a machine with no registry at all (the Linux CI run), every lookup failed and the block still printed `[OK]`.
 

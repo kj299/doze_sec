@@ -73,11 +73,11 @@ if ($SelfTest) {
     exit 0
 }
 
-$siteRx = '\breg add\b|\breg delete\b|bcdedit /set|bcdedit /timeout|bcdedit /deletevalue|srp_check\.ps1|Checkpoint-Computer|\bping -n\b|self_update_check\.ps1|threat_list_sync\.ps1|vt_self_check\.ps1|vt_check\.ps1|vt_ip_check\.ps1|dns_probe\.ps1|claude -p|Invoke-WebRequest'
+$siteRx = '\breg add\b|\breg delete\b|bcdedit /set|bcdedit /timeout|bcdedit /deletevalue|srp_check\.ps1|Checkpoint-Computer|\bping -n\b|self_update_check\.ps1|threat_list_sync\.ps1|vt_self_check\.ps1|vt_check\.ps1|vt_ip_check\.ps1|dns_probe\.ps1|claude -p|Invoke-WebRequest|-LoadSignedOut'
 # skip_ttp_update: the -updateTTP block is one region gated at its top by
 # UPDATE_TTP; its internal error exits name the label and mark the region.
 $gateRx = 'READONLY_MODE|SKIP_SRP|SKIP_THREAT_UPDATE|VT_SELF_SKIP|NETWORK_AVAIL|VT_CHECK|DNS_PROBE|UPDATE_TTP|skip_ttp_update'
-$strictRx = '\breg add\b.*RunOnce|bcdedit /set|bcdedit /timeout'
+$strictRx = '\breg add\b.*RunOnce|bcdedit /set|bcdedit /timeout|-LoadSignedOut'
 $fail = @(); $total = 0
 foreach ($b in $bats) {
     $path = Join-Path $Root $b

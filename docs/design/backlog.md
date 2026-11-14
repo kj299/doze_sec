@@ -863,7 +863,7 @@ Class A -- a failed read reaches `[OK]` (15 blocks):
 | Office macro policy (Section 13) | `[INFO] No explicit per-app macro settings ... defaults apply` | DONE 2026-11-14, `tools/office_macro_check.ps1` |
 | Proxy settings, two blocks (Section 3) | `[OK] No proxy settings in registry` / `Not configured` | open |
 | RMM software installed (Section 17) | `[OK] No unexpected RMM software found.` | DONE 2026-11-13, `tools/rmm_check.ps1` (Section 4) |
-| Run/RunOnce in other users' hives (Section 5) | `[OK] No Run/RunOnce entries in other-user hives.` | open |
+| Run/RunOnce in other users' hives (Section 5) | `[OK] No Run/RunOnce entries in other-user hives.` | DONE 2026-11-14, `tools/persistence_eval.ps1 -Part OtherAccounts` (graded; signed-out accounts read from a copy) |
 | Browser credential stores; token cache (Section 18) | `[OK] No unusual recent access` / `modifications` | DONE 2026-11-13, `tools/file_walk_check.ps1 -Check CredStores` / `TokenCache` |
 | Registry IOC match (Section 18h) | has a NOT-performed branch, but one entry whose key is denied is swallowed by `catch{}` and not named | DONE 2026-11-14, same staged block: named and raised as `NOT performed in full` |
 

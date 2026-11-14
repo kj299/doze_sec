@@ -2558,14 +2558,19 @@ echo  Command: powershell -File tools\persistence_eval.ps1>> "%REPORT%"
 echo  Evaluates the raw autorun dumps above: flags encoded/hidden-window/>> "%REPORT%"
 echo  LOLBin-download autoruns and any IFEO Debugger hijack.>> "%REPORT%"
 del "%TEMP%\dz_persist_hit.txt" 2>nul
+del "%TEMP%\dz_persist_gap.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\persistence_eval.ps1" (
-    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\persistence_eval.ps1" -MarkerFile "%TEMP%\dz_persist_hit.txt">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\persistence_eval.ps1" -MarkerFile "%TEMP%\dz_persist_hit.txt" -GapFile "%TEMP%\dz_persist_gap.txt">> "%REPORT%" 2>&1
 ) else (
     echo  [INFO] tools\persistence_eval.ps1 not found -- autorun/IFEO evaluation skipped.>> "%REPORT%"
 )
 if exist "%TEMP%\dz_persist_hit.txt" (
     call :dz_finding WARNING 5 T1547 "Suspicious Run-key autorun or IFEO Debugger hijack"
     del "%TEMP%\dz_persist_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_persist_gap.txt" (
+    call :dz_finding WARNING 5 T1547.001 "Run-key evaluation NOT performed in full - a Run key could not be read"
+    del "%TEMP%\dz_persist_gap.txt" 2>nul
 )
 echo.>> "%REPORT%"
 echo --- Startup Folder / AppCert DLL Evaluation --->> "%REPORT%"
@@ -2823,25 +2828,44 @@ if exist "%TEMP%\dz_logon_logonscript.txt" (
 )
 
 echo.>> "%REPORT%"
-echo --- Other Users' Run Keys (HKU\^<SID^> enumeration) --->> "%REPORT%"
-echo  Command: powershell -Command "Get-ChildItem 'Registry::HKEY_USERS' -EA SilentlyContinue">> "%REPORT%"
-echo  Walks loaded user hives under HKEY_USERS for additional Run/RunOnce>> "%REPORT%"
-echo  persistence not visible from the current HKCU. Skips system SIDs>> "%REPORT%"
-echo  (S-1-5-18/19/20) and the .DEFAULT hive.>> "%REPORT%"
-echo $loadedHives = Get-ChildItem 'Registry::HKEY_USERS' -EA SilentlyContinue ^| Where-Object { $_.Name -match 'S-1-5-21-' } > "%PSRUN%"
-echo $hits = @() >> "%PSRUN%"
-echo foreach ($hive in $loadedHives) { >> "%PSRUN%"
-echo   $sid = $hive.PSChildName >> "%PSRUN%"
-echo   foreach ($sub in 'Software\Microsoft\Windows\CurrentVersion\Run','Software\Microsoft\Windows\CurrentVersion\RunOnce','Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Run','Software\Wow6432Node\Microsoft\Windows\CurrentVersion\RunOnce') { >> "%PSRUN%"
-echo     $path = "Registry::HKEY_USERS\$sid\$sub" >> "%PSRUN%"
-echo     if (Test-Path $path) { >> "%PSRUN%"
-echo       $values = Get-ItemProperty $path -EA SilentlyContinue >> "%PSRUN%"
-echo       if ($values) { $values.PSObject.Properties ^| Where-Object { $_.Name -notmatch '^^PS' } ^| ForEach-Object { $hits += "  HKU\$sid\$sub\$($_.Name) = $($_.Value)" } } >> "%PSRUN%"
-echo     } >> "%PSRUN%"
-echo   } >> "%PSRUN%"
-echo } >> "%PSRUN%"
-echo if ($hits.Count -gt 0) { '[INFO] Run/RunOnce entries in other-user hives:'; $hits } else { '[OK] No Run/RunOnce entries in other-user hives.' } >> "%PSRUN%"
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+echo --- Other Accounts' Run Keys (every other account on this PC, graded) --->> "%REPORT%"
+echo  Command: powershell -File tools\persistence_eval.ps1 -Part OtherAccounts>> "%REPORT%"
+echo  Grades the Run/RunOnce values of every OTHER account the way HKCU's are graded.>> "%REPORT%"
+echo  Signed-in accounts are read under HKEY_USERS. A signed-out account is read from a>> "%REPORT%"
+echo  COPY of its registry in TEMP, mounted and unmounted again; its own file is never>> "%REPORT%"
+echo  mounted. That needs an elevated run without -readonly; otherwise it is named, unread.>> "%REPORT%"
+del "%TEMP%\dz_persist_other_hit.txt" 2>nul
+del "%TEMP%\dz_persist_other_gap.txt" 2>nul
+del "%TEMP%\dz_persist_other_deferred.txt" 2>nul
+del "%TEMP%\dz_persist_other_done.txt" 2>nul
+set "_LSO="
+if "%READONLY_MODE%"=="0" set "_LSO=-LoadSignedOut"
+if exist "%SCRIPT_DIR%tools\persistence_eval.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\persistence_eval.ps1" -Part OtherAccounts -MarkerFile "%TEMP%\dz_persist_other_hit.txt" -GapFile "%TEMP%\dz_persist_other_gap.txt" -DeferredFile "%TEMP%\dz_persist_other_deferred.txt" -DoneFile "%TEMP%\dz_persist_other_done.txt" %_LSO%>> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\persistence_eval.ps1 not found -- Other accounts' Run-key check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 5 T1547.001 "Other accounts' Run-key check NOT performed - tool missing"
+)
+if exist "%TEMP%\dz_persist_other_hit.txt" (
+    call :dz_finding WARNING 5 T1547.001 "Suspicious Run-key autorun in another account"
+    del "%TEMP%\dz_persist_other_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_persist_other_gap.txt" (
+    rem A gap is its own row, beside a finding or alone.
+    call :dz_finding WARNING 5 T1547.001 "Other accounts' Run-key check NOT performed - an account's registry could not be read"
+    del "%TEMP%\dz_persist_other_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_persist_other_deferred.txt" (
+    set "_PODEF=0"
+    set /p _PODEF=<"%TEMP%\dz_persist_other_deferred.txt"
+    set /a DEFERRED_COUNT+=!_PODEF!
+    del "%TEMP%\dz_persist_other_deferred.txt" 2>nul
+)
+if not exist "%TEMP%\dz_persist_other_done.txt" if exist "%SCRIPT_DIR%tools\persistence_eval.ps1" (
+    echo [WARNING] Other accounts' Run-key check produced no verdict -- NOT performed: tools\persistence_eval.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 5 T1547.001 "Other accounts' Run-key check produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_persist_other_done.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- Startup Folders --->> "%REPORT%"

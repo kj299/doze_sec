@@ -418,6 +418,12 @@ jobs:
           $global:LASTEXITCODE = 0
           exit 0
 
+      - name: "Other accounts' Run keys: a signed-out account is read from a COPY of its registry, its autorun found and named, nothing left mounted"
+        shell: powershell
+        run: |
+          & .\.github\ci\other_accounts_run_states.ps1
+          exit $LASTEXITCODE
+
       - name: "Section 18h on 5.1: a registry key that cannot be read is named and raised beside a match, never swallowed"
         shell: powershell
         run: |
