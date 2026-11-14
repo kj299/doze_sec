@@ -354,6 +354,7 @@ try {
 foreach ($d in @(Get-ChildItem -LiteralPath ([IO.Path]::GetTempPath()) -Directory -Filter 'dz_hive_*' -EA SilentlyContinue)) {
     Remove-Item -LiteralPath $d.FullName -Recurse -Force -EA SilentlyContinue
     if (-not (Test-Path -LiteralPath $d.FullName)) { Report ('registry copy folder ' + $d.Name) 'REMOVED' }
+    else { $errors += ('could not remove the registry copy folder ' + $d.FullName + ' (a copy may still be mounted from it; restart, then re-run this)') }
 }
 
 Write-Host ''

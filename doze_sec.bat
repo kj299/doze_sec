@@ -2569,7 +2569,7 @@ if exist "%TEMP%\dz_persist_hit.txt" (
     del "%TEMP%\dz_persist_hit.txt" 2>nul
 )
 if exist "%TEMP%\dz_persist_gap.txt" (
-    call :dz_finding WARNING 5 T1547.001 "Run-key evaluation NOT performed in full - a Run key could not be read"
+    call :dz_finding WARNING 5 T1547.001 "Run-key or IFEO evaluation NOT performed in full - a key could not be read"
     del "%TEMP%\dz_persist_gap.txt" 2>nul
 )
 echo.>> "%REPORT%"
@@ -2832,16 +2832,18 @@ echo --- Other Accounts' Run Keys (every other account on this PC, graded) --->>
 echo  Command: powershell -File tools\persistence_eval.ps1 -Part OtherAccounts>> "%REPORT%"
 echo  Grades the Run/RunOnce values of every OTHER account the way HKCU's are graded.>> "%REPORT%"
 echo  Signed-in accounts are read under HKEY_USERS. A signed-out account is read from a>> "%REPORT%"
-echo  COPY of its registry in TEMP, mounted and unmounted again; its own file is never>> "%REPORT%"
-echo  mounted. That needs an elevated run without -readonly; otherwise it is named, unread.>> "%REPORT%"
+echo  COPY of its registry taken from a Volume Shadow Copy, so its own file is never>> "%REPORT%"
+echo  opened. That needs an elevated run without -readonly; otherwise it is named, unread.>> "%REPORT%"
 del "%TEMP%\dz_persist_other_hit.txt" 2>nul
 del "%TEMP%\dz_persist_other_gap.txt" 2>nul
 del "%TEMP%\dz_persist_other_deferred.txt" 2>nul
 del "%TEMP%\dz_persist_other_done.txt" 2>nul
 set "_LSO="
+set "_LRO="
 if "%READONLY_MODE%"=="0" set "_LSO=-LoadSignedOut"
+if "%READONLY_MODE%"=="1" set "_LRO=-ReadOnly"
 if exist "%SCRIPT_DIR%tools\persistence_eval.ps1" (
-    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\persistence_eval.ps1" -Part OtherAccounts -MarkerFile "%TEMP%\dz_persist_other_hit.txt" -GapFile "%TEMP%\dz_persist_other_gap.txt" -DeferredFile "%TEMP%\dz_persist_other_deferred.txt" -DoneFile "%TEMP%\dz_persist_other_done.txt" %_LSO%>> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\persistence_eval.ps1" -Part OtherAccounts -MarkerFile "%TEMP%\dz_persist_other_hit.txt" -GapFile "%TEMP%\dz_persist_other_gap.txt" -DeferredFile "%TEMP%\dz_persist_other_deferred.txt" -DoneFile "%TEMP%\dz_persist_other_done.txt" %_LSO% %_LRO%>> "%REPORT%" 2>&1
 ) else (
     echo [WARNING] tools\persistence_eval.ps1 not found -- Other accounts' Run-key check NOT performed.>> "%REPORT%"
     call :dz_finding WARNING 5 T1547.001 "Other accounts' Run-key check NOT performed - tool missing"

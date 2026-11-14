@@ -9,12 +9,15 @@
 #     from a COPY of its registry (-LoadSignedOut), and its benign twin is not;
 #   * without -LoadSignedOut the account is NAMED as not read, never silent;
 #   * afterwards no HKU\dz_sec_* mount and no dz_hive_<pid> copy remains, and
-#     the account's own NTUSER.DAT was never mounted (its hash is unchanged).
+#     the account's own NTUSER.DAT was never mounted or copied directly: it is
+#     held OPEN by this script while the tool runs, so a mount of it, or a
+#     plain copy of it, would fail -- only a copy from a snapshot succeeds --
+#     and its hash is unchanged afterwards.
 $ErrorActionPreference = 'Stop'
 $st = (.\tools\persistence_eval.ps1 -SelfTest) -join "`n"
 if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'persistence_eval -SelfTest failed' }
 $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-if ($n -lt 53) { throw "persistence_eval self-test ran only $n case(s)" }
+if ($n -lt 58) { throw "persistence_eval self-test ran only $n case(s)" }
 function RunO([hashtable]$Extra) {
   $md = Join-Path $env:TEMP ("dz_ci_oa_{0}_{1}" -f $PID, [guid]::NewGuid().ToString('N').Substring(0, 6)); New-Item -ItemType Directory -Path $md -Force | Out-Null
   try {
@@ -59,7 +62,9 @@ try {
   if (@([Microsoft.Win32.Registry]::Users.GetSubKeyNames()) -contains $sid) { throw "the throwaway account's registry stayed loaded after its sign-in ended" }
   $prof = [Environment]::ExpandEnvironmentVariables([string](Get-ItemProperty -LiteralPath ("HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\" + $sid)).ProfileImagePath)
   $hive = Join-Path $prof 'NTUSER.DAT'
-  & reg.exe load ("HKU\" + $plant) $hive | Out-Null
+  # Native tools write to stderr; under 'Stop' 5.1 would end a retry loop.
+  $ErrorActionPreference = 'Continue'
+  & reg.exe load ("HKU\" + $plant) $hive 2>&1 | Out-Null
   if ($LASTEXITCODE -ne 0) { throw "could not mount the throwaway account's registry to plant in it" }
   try {
     & reg.exe add ("HKU\$plant\Software\Microsoft\Windows\CurrentVersion\Run") /v 'DzCiUpdater' /t REG_SZ /d 'powershell.exe -w hidden -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQA' /f | Out-Null
@@ -68,15 +73,20 @@ try {
     [GC]::Collect(); [GC]::WaitForPendingFinalizers()
     for ($i = 0; $i -lt 5; $i++) { & reg.exe unload ("HKU\" + $plant) 2>&1 | Out-Null; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 }
   }
+  $ErrorActionPreference = 'Stop'
   $before = (Get-FileHash -LiteralPath $hive -Algorithm SHA256).Hash
   # Without -LoadSignedOut: named, not read.
   $r = RunO @{}
   if ($r.Hit -or $r.Out -notmatch ('signed-out account\(s\) not read: [^\r\n]*' + [regex]::Escape($user))) { throw "without -LoadSignedOut the signed-out account was not named as unread: $($r.Out)" }
-  # With it: the malign value is the finding, named by account; the twin is not.
-  $r = RunO @{ LoadSignedOut = $true }
+  # With it: the malign value is the finding, named by account; the twin is
+  # not. The account's own file is held open meanwhile (no sharing for
+  # writers or deleters, and Windows needs exclusive access to mount it), so
+  # the tool can succeed only by copying from a snapshot.
+  $hold = [IO.File]::Open($hive, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+  try { $r = RunO @{ LoadSignedOut = $true } } finally { $hold.Dispose() }
   if (-not $r.Hit -or $r.Out -notmatch ('(?m)^\[WARNING\] Suspicious Run-key autorun in another account \[[^\]]*' + [regex]::Escape($user) + '[^\]]*signed out, read from a copy\\Microsoft\\Windows\\CurrentVersion\\Run\\DzCiUpdater\]')) { throw "the planted autorun in the signed-out account was not found and named: $($r.Out)" }
   if ($r.Out -match 'WARNING[^\r\n]*DzCiOneDrive') { throw "the benign twin was graded as a finding: $($r.Out)" }
-  if ($r.Gap) { throw "reading the signed-out account raised a gap: $($r.Out)" }
+  if ($r.Out -match ('(?m)^\[WARNING\] Other accounts'' Run-key check NOT performed[^\r\n]*' + [regex]::Escape($user))) { throw "reading the signed-out account raised a gap for it: $($r.Out)" }
   Assert-NoLeftovers 'the planted run'
   if ((Get-FileHash -LiteralPath $hive -Algorithm SHA256).Hash -ne $before) { throw "the account's own NTUSER.DAT changed: the tool must read a COPY, never the file" }
   Write-Host 'other accounts: a signed-out account is read from a copy, its autorun found and named, its file untouched, nothing left mounted'
