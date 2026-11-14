@@ -512,11 +512,17 @@ function Read-TrustAccount {
             @{ Name = 'the machine setting (Click-to-Run, 32-bit)'; Path = ($M + '\Microsoft\Office\ClickToRun\REGISTRY\MACHINE\Software\Wow6432Node\Microsoft\Office'); Policy = $false; User = $false })
     }
     $gateSrc = @{}
-    $ulSrc = @{}
+    $ulSrc = @{}; $ulRootFail = $false
     foreach ($s in $srcs) {
         $vl = Read-VersionList $s.Path
         if ([string]$vl.State -eq 'nokey') { continue }
-        if ([string]$vl.State -ne 'ok') { [void]$res.Gaps.Add(($s.Name + ' (' + $s.Path + ') could not be listed (' + (ConvertTo-PrintableText ([string]$vl.Error)) + ')')); continue }
+        if ([string]$vl.State -ne 'ok') {
+            [void]$res.Gaps.Add(($s.Name + ' (' + $s.Path + ') could not be listed (' + (ConvertTo-PrintableText ([string]$vl.Error)) + ')'))
+            # A policy root that could not be listed may hold the policy-only
+            # switch for any version: no lower source may decide it.
+            if ($s.Policy) { $ulRootFail = $true }
+            continue
+        }
         foreach ($ver in @($vl.Names)) {
             if ($s.Name -eq 'Cloud Policy' -and $ver -ne '16.0') { continue }
             $res.OfficeSeen = $true
@@ -526,6 +532,12 @@ function Read-TrustAccount {
                 $ks = Open-KeyState $tlPath
                 $gk = ($(if ($app -eq 'Common') { 'all Office apps' } else { $app }) + '|' + $ver)
                 if (-not $gateSrc.ContainsKey($gk)) { $gateSrc[$gk] = @{ Net = (New-Object System.Collections.ArrayList); Off = (New-Object System.Collections.ArrayList) } }
+                if ($s.Policy -and $app -eq 'Common' -and $ks.State -ne 'ok') {
+                    # Same rows as the other gates: an unreadable source above
+                    # must stop a lower one deciding (Select-InForce gaps).
+                    if (-not $ulSrc.ContainsKey($ver)) { $ulSrc[$ver] = New-Object System.Collections.ArrayList }
+                    [void]$ulSrc[$ver].Add(@{ Name = $s.Name; S = $(if ($ks.State -eq 'nokey') { @{ State = 'nokey' } } else { @{ State = 'unreadable'; Error = $ks.Error } }) })
+                }
                 if ($ks.State -eq 'nokey') {
                     [void]$gateSrc[$gk].Net.Add(@{ Name = $s.Name; S = @{ State = 'nokey' } })
                     if ($s.Policy) { [void]$gateSrc[$gk].Off.Add(@{ Name = $s.Name; S = @{ State = 'nokey' } }) }
@@ -573,7 +585,7 @@ function Read-TrustAccount {
     }
     foreach ($gk in $gateSrc.Keys) { $res.Gates[$gk] = @{ Net = (Select-InForce @($gateSrc[$gk].Net.ToArray())); Off = (Select-InForce @($gateSrc[$gk].Off.ToArray())) } }
     $res.UserLocs = @{}
-    foreach ($ver in $ulSrc.Keys) { $res.UserLocs[$ver] = Select-InForce @($ulSrc[$ver].ToArray()) }
+    if (-not $ulRootFail) { foreach ($ver in $ulSrc.Keys) { $res.UserLocs[$ver] = Select-InForce @($ulSrc[$ver].ToArray()) } }
     return $res
 }
 
@@ -686,6 +698,9 @@ if ($SelfTest) {
     T 'the same policy leaves a Group Policy entry a WARNING' ($v.Hit) $v.Text
     $v = TV @(TE 'C:\Users\bob\Downloads' -Src 'the machine setting') -UL (TUL 0)
     T 'the same policy leaves a machine-setting entry a WARNING (undocumented either way: the safe direction)' ($v.Hit) $v.Text
+    $ulg = @{}; $ulg['16.0'] = (Select-InForce @(@{ Name = 'Cloud Policy'; S = @{ State = 'unreadable'; Error = 'SecurityException: x' } }, @{ Name = 'machine-wide Group Policy'; S = @{ State = 'present'; Value = 0 } }))
+    $v = TV @(TE 'C:\Users\bob\Downloads') -UL $ulg
+    T 'a higher policy source unreadable, a lower one 0: the user entry is still graded (the lower source does not decide)' ($v.Hit) $v.Text
     $v = TV @(TE 'C:\Users\bob\Downloads') -UL (TUL 1)
     T 'allow user locations=1: a user-set entry is graded' ($v.Hit) $v.Text
     $v = TV @(TE 'C:\Users\bob\Downloads' -App 'Word') -UL @{ '15.0' = @{ Decided = $true; From = 'Group Policy'; Value = 0; Gap = '' } }

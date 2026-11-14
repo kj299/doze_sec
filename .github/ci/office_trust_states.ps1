@@ -89,6 +89,9 @@ try {
   New-Item -Path "$tl\Location6" -Force | Out-Null
   New-ItemProperty -Path "$tl\Location6" -Name Path -Value 'C:\Users\dzci\Downloads' -PropertyType String -Force | Out-Null
   Expect (RunT $k) '' 'Downloads \(set by the user setting\) is not in force: Group Policy allows only Trusted Locations defined by policy' 'a user entry under the policy-only setting'
+  Set-ItemProperty -Path $cm -Name 'allow user locations' -Value 1
+  Expect (RunT $k) 'dz_trustloc_hit' 'Word 16\.0, set by the user setting\): C:\\Users\\dzci\\Downloads' 'the same user entry with user locations allowed'
+  Set-ItemProperty -Path $cm -Name 'allow user locations' -Value 0
   New-Item -Path "$gp\Location2" -Force | Out-Null
   New-ItemProperty -Path "$gp\Location2" -Name Path -Value 'C:\dz_ci_policy_only' -PropertyType String -Force | Out-Null
   Expect (RunT $k) 'dz_trustloc_hit' 'Word 16\.0, set by Group Policy\): C:\\dz_ci_policy_only' 'a policy entry under the policy-only setting'
