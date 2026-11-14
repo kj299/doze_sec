@@ -474,8 +474,31 @@ Found during the v7.1 coverage review; tracked for future work:
   signed in at the PC. Residual: an account that is not signed in is not read
   (its registry is not loaded); a standard-user token cannot read other
   accounts at all (it says how many sessions it saw). Outlook's own macro
-  setting is not graded, and Trusted Locations, which also let macros run in
-  files from the internet, are not checked.
+  setting is not graded. (Trusted Locations, once named here, are now read:
+  below.)
+- ~~Office Trusted Locations, folders whose macros Office runs with no prompt
+  even in files from the internet, were not checked, nor Office's record of
+  documents whose macros a person enabled.~~ **Closed:**
+  `tools/office_macro_check.ps1 -Part Trust` reads every Trusted Location from
+  Cloud Policy, Group Policy (per app and for all apps), the user's setting and
+  the machine-wide keys, for the audit's account and every other signed-in
+  account. Any entry that is not one of Office's own defaults (Microsoft's
+  published tables) is a counted WARNING naming the path, the source and a
+  risky shape (Downloads, Temp, a share, the profile, a drive). A network entry
+  Office ignores, and every entry under a policy that disables all trusted
+  locations, are said and not graded. Each Trusted Documents record whose
+  macros were enabled is listed; one for a file in Downloads, Temp or an email
+  attachment cache is a WARNING. Residual: the record layout is documented by
+  forensic practice, not by Microsoft; a Trusted Publisher certificate, an
+  add-in, and the contents of XLSTART and Word Startup are not read; a
+  signed-out account's settings are not read. A default is recognised only
+  under the account's own AppData and this PC's Program Files (never another
+  profile, another drive or a `..` path), so an 8.3 short path or an AppData
+  redirected where neither is read raises as non-default. Three things that
+  can put an entry out of force are not read, so such an entry is still
+  graded (the safe direction): the "Allow mix of policy and user locations"
+  policy, the user's own "disable all Trusted Locations" checkbox, and a
+  mapped drive (a network location Office may ignore).
 - ~~A running or installed remote-access tool (AnyDesk, TeamViewer,
   ScreenConnect and others) was printed and counted nowhere: three checks
   (Sections 4 and 17) used tags outside the severity vocabulary, a substring

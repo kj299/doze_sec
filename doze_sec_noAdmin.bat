@@ -3995,6 +3995,47 @@ if not exist "%TEMP%\dz_macro_done.txt" if exist "%SCRIPT_DIR%tools\office_macro
 )
 del "%TEMP%\dz_macro_done.txt" 2>nul
 
+echo --- Office Trusted Locations and Trusted Documents (T1204.002) --->> "%REPORT%"
+echo THREAT: Office runs every macro in a Trusted Location with no prompt, skipping the block>> "%REPORT%"
+echo on macros from the internet. A Trusted Documents record shows a document whose macros were enabled.>> "%REPORT%"
+del "%TEMP%\dz_trustloc_hit.txt" 2>nul
+del "%TEMP%\dz_trustdoc_hit.txt" 2>nul
+del "%TEMP%\dz_trustloc_gap.txt" 2>nul
+del "%TEMP%\dz_trustloc_done.txt" 2>nul
+del "%TEMP%\dz_trustloc_deferred.txt" 2>nul
+echo  Command: powershell -File tools\office_macro_check.ps1 -Part Trust>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\office_macro_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\office_macro_check.ps1" -Part Trust>> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\office_macro_check.ps1 not found -- Office Trusted Locations check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 13 T1204.002 "Office Trusted Locations check NOT performed - tool missing"
+)
+if exist "%TEMP%\dz_trustloc_hit.txt" (
+    call :dz_finding WARNING 13 T1204.002 "Office Trusted Location outside Office's defaults"
+    del "%TEMP%\dz_trustloc_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_trustdoc_hit.txt" (
+    call :dz_finding WARNING 13 T1204.002 "Macros enabled in a downloaded or attached document"
+    del "%TEMP%\dz_trustdoc_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_trustloc_gap.txt" (
+    rem A gap is its own row, beside a finding or alone.
+    call :dz_finding WARNING 13 T1204.002 "Office Trusted Locations check NOT performed - Office settings could not be read"
+    del "%TEMP%\dz_trustloc_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_trustloc_deferred.txt" (
+    rem Another signed-in account's registry, refused to a standard-user token.
+    set "_TLDEF=0"
+    set /p _TLDEF=<"%TEMP%\dz_trustloc_deferred.txt"
+    set /a DEFERRED_COUNT+=!_TLDEF!
+    del "%TEMP%\dz_trustloc_deferred.txt" 2>nul
+)
+if not exist "%TEMP%\dz_trustloc_done.txt" if exist "%SCRIPT_DIR%tools\office_macro_check.ps1" (
+    echo [WARNING] Office Trusted Locations check produced no verdict -- NOT performed: tools\office_macro_check.ps1 -Part Trust did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 13 T1204.002 "Office Trusted Locations check produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_trustloc_done.txt" 2>nul
+
 echo.>> "%REPORT%"
 echo --- Mark-of-the-Web Preservation: SAFE=SaveZoneInformation absent or 0x1 --->> "%REPORT%"
 echo  Command: reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Attachments" /v SaveZoneInformation   [also the HKLM\SOFTWARE twin]>> "%REPORT%"

@@ -804,6 +804,12 @@ proof     = harness:Run value whose name only contains a listed name
 signature = Suspicious registry IOCs found
 note      = Section 18h looks each ioc_registry.txt entry up by exact key and exact value name (the key's own value list, no wildcards), and where the entry gives a bad value, the value must equal it (UAC on, EnableLUA=1, is not the listed EnableLUA=0). A vendor value whose name merely contains a listed name is not a match; the harness plants ChromeUpdateHelper_dz_selftest under HKCU Run and asserts it stays out of 18h, beside a ChromeUpdate value that must be matched. Listed Run value names (ChromeUpdate, AdobeUpdater, OneDriveUpdate) are names attackers borrow from real updaters, so a hit can be the genuine product; read the data. Verify a hit: reg query "<key>" /v <value>, then Get-AuthenticodeSignature on the program the data points at.
 
+[office-trusted-location-on-purpose]
+class     = ADVISE
+maxsev    = WARNING
+proof     = ci:office_macro_check.ps1 -Part Trust + the runner's own settings and every state through the real reader (a non-default Trusted Location and macros enabled in a download are findings; Office's defaults and the person's own documents are not); field:a Trusted Location a workplace or the person set on purpose, and macros a person enabled in their own downloaded spreadsheet, are states only a real machine produces
+signature = (Office Trusted Location outside Office's defaults|Macros were enabled in a document from )
+note      = Office runs every macro in a Trusted Location with no prompt and skips its block on macros from the internet, so the audit cannot tell a shared finance folder a workplace trusts on purpose from one an intruder added. The owner decided (2026-11-14) that any entry outside Office's own defaults is a counted WARNING; Office's defaults (its Templates, Startup and XLSTART folders) are INFO, and CI pins that twin beside a planted Downloads entry. A Trusted Documents record with macros enabled is INFO for the person's own folders and a WARNING for Downloads, Temp or an attachment cache. Verify: File > Options > Trust Center > Trust Center Settings > Trusted Locations; ask whoever manages the PC whether they set it.
 [proxy-set-on-purpose]
 class     = ADVISE
 maxsev    = WARNING

@@ -6,6 +6,16 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Office Trusted Locations and Trusted Documents (Section 13): a folder whose macros run unprompted is a finding
+**Before.** The audit graded Office's macro settings but never read Trusted Locations. Microsoft documents that files in a Trusted Location skip Protected View, File Block and the block on macros from the internet, so a Trusted Location on Downloads defeated every setting the audit graded, unseen. Office's record of the documents whose macros a person enabled was not read either.
+
+**Now.** `tools/office_macro_check.ps1 -Part Trust`, a second block in Section 13.
+- Every Trusted Location is read from Cloud Policy, Group Policy, the user's setting and the machine-wide keys, for the audit's account and every other signed-in account.
+- Any entry that is not one of Office's own defaults (Microsoft's tables for Access, Excel, PowerPoint and Word) is a counted WARNING (T1204.002). The owner decided that any non-default entry counts. The line names the app, the path as written, whether subfolders are included, where it was set, and a risky shape (Downloads, Desktop, Temp, Public, the profile, a drive, a network share).
+- A network location while network locations are not allowed, and every entry under a policy that disables all trusted locations, are `[INFO]`, not in force.
+- Each Trusted Documents record whose macros were enabled is listed with its path and date. One for a file in Downloads, Temp or an email-attachment cache is a WARNING: that is how most macro attacks begin.
+- A key that cannot be read is a raised `NOT performed` row. Another account's registry refused to a standard-user token is a counted deferral.
+
 ### Proxy settings (Section 3): a proxy in effect is a finding, WinHTTP is read, and a failed read is a gap
 **Before.** Section 3 listed `ProxyEnable`, `ProxyServer` and `AutoConfigURL` with no severity, so a proxy carrying every web request through someone else's server reached no ledger row. A failed read of Internet Settings printed `[OK] No proxy settings in registry`, and the HKLM line printed `[OK] Not configured` for a key it had not opened. It read only the audit's own account (an administrator's, when the audit is run from a separate admin account) and never read the machine-wide WinHTTP proxy that Windows Update and Defender use.
 

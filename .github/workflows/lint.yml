@@ -679,6 +679,31 @@ jobs:
             grep -qF 'Office macro policy check produced no verdict' "$b" || { echo "$b: the macro check lost its no-verdict backstop"; exit 1; }
           done
           echo 'Office macro policy: three sources in Office order, an unread one is a gap'
+      - name: Office Trusted Locations and Trusted Documents -- a non-default location or macros enabled in a download is a counted WARNING
+        run: |
+          out=$(pwsh -NoProfile -File tools/office_macro_check.ps1 -SelfTest); echo "$out"
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 70 ] || { echo "only $n macro and trust case(s)"; exit 1; }
+          echo "$out" | grep -q '^\[FAIL\]' && { echo 'a case failed'; exit 1; }
+          for n in 'Downloads as a Trusted Location: the WARNING, the raw path, subfolders and the shape note' \
+                   'Office'"'"'s own defaults only: [OK] plus an INFO count, no WARNING' \
+                   'a network location while network locations are not allowed: INFO not in force, no WARNING' \
+                   'Group Policy disables all trusted locations: the entry is INFO not in force, no WARNING' \
+                   'a Trusted Locations key that could not be read: a raised gap, never [OK]' \
+                   'macros enabled in a document from Downloads: the WARNING with the path and the date' \
+                   'macros enabled in the person'"'"'s own Documents: INFO with the path, never a WARNING' \
+                   'a record without the macros flag, even from Downloads: counted, never a WARNING' \
+                   ': C:\Users\Public\AppData\Roaming\Microsoft\Templates' \
+                   ': C:\Users\..\AppData\Roaming\Microsoft\Word\Startup' \
+                   ': E:\Program Files\Microsoft Office\root\Templates' \
+                   'recognised (Microsoft'"'"'s table): C:\Program Files\Microsoft Office 15\root\Templates\'; do
+            echo "$out" | grep -qF "$n" || { echo "trust case gone: $n"; exit 1; }
+          done
+          for b in doze_sec.bat doze_sec_noAdmin.bat; do
+            grep -qF 'tools\office_macro_check.ps1" -Part Trust>> "%REPORT%" 2>&1' "$b" || { echo "$b: Section 13 no longer runs the Trusted Locations check"; exit 1; }
+            for m in dz_trustloc_hit dz_trustdoc_hit dz_trustloc_gap dz_trustloc_done dz_trustloc_deferred; do grep -qF "%TEMP%\\$m.txt" "$b" || { echo "$b: $m is never read"; exit 1; }; done
+            grep -qF 'Office Trusted Locations check produced no verdict' "$b" || { echo "$b: the trust check lost its no-verdict backstop"; exit 1; }
+          done
+          echo 'Office Trusted Locations and Trusted Documents: graded against Microsoft'"'"'s defaults; an unread key is a gap'
       - name: Proxy settings -- a proxy in effect is a counted WARNING, WinHTTP is read, an unread key is a gap
         run: |
           out=$(pwsh -NoProfile -File tools/proxy_check.ps1 -SelfTest); echo "$out"
@@ -901,7 +926,7 @@ jobs:
           dup=$(echo "$called" | uniq -d); [ -z "$dup" ] || { echo "called by more than one step: $dup"; exit 1; }
           for f in $called; do [ -s ".github/ci/$f" ] || { echo ".github/ci/$f is missing or empty -- its step would run nothing"; exit 1; }; done
           for f in .github/ci/*.ps1; do echo "$called" | grep -qxF "$(basename "$f")" || { echo "$f is called by no step in windows-smoke.yml"; exit 1; }; done
-          n=$(echo "$called" | wc -l); [ "$n" -ge 29 ] || { echo "only $n step(s) call a .github/ci script; 29 are expected"; exit 1; }
+          n=$(echo "$called" | wc -l); [ "$n" -ge 30 ] || { echo "only $n step(s) call a .github/ci script; 30 are expected"; exit 1; }
           # cmd reads a bare < or > in an echo as a file redirection, quoted or
           # not by PowerShell's single quotes: 'Expected: <Windows>\system32...'
           # in a tile's help text made the whole line vanish from the dashboard

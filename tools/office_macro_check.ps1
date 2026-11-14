@@ -57,6 +57,12 @@
 [CmdletBinding()]
 param(
     [string]$MarkerDir = $env:TEMP,
+    # Policy: the macro settings (the default, Section 13's first block).
+    # Trust: Trusted Locations and Trusted Documents.
+    [ValidateSet('Policy', 'Trust')]
+    [string]$Part = 'Policy',
+    # Only CI changes it: the machine-wide keys -Part Trust reads.
+    [string]$MachineRoot = 'HKLM:\SOFTWARE',
     # Only CI changes it, to a throwaway key, so every state runs through the
     # real reader. The three roots hang off it.
     [string]$KeyRoot = 'HKCU:\Software',
@@ -256,6 +262,304 @@ function Read-VersionList {
     catch { return @{ State = 'unreadable'; Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message); Names = @() } }
 }
 
+# ===== -Part Trust: Trusted Locations and Trusted Documents (T1204.002) =====
+#
+# A Trusted Location is a folder Office runs every macro in with no prompt.
+# Microsoft ("Trusted Locations for Office files"): files there "bypass threat
+# protection services, bypass file block settings, and all active content is
+# enabled", and the check for Mark of the Web is skipped. So a Trusted Location
+# on Downloads defeats every protection -Part Policy grades.
+#   DEFAULTS, from Microsoft's tables on that page (Access, Excel, PowerPoint,
+#   Word; Project and Visio have none): the Templates, Startup, XLSTART, Addins
+#   and Document Themes folders under %APPDATA%\Microsoft and under the Office
+#   install directory. A default is [INFO]. ANY other entry is a counted
+#   WARNING (the owner decided: any non-default entry), with a note when its
+#   shape is one an attacker or a careless install uses -- Downloads, Desktop,
+#   Temp, Public, the profile itself, a drive root, a network share.
+#   NOT IN FORCE, said and not graded: a network (\\ or http) entry while no
+#   source allows network locations (Microsoft: Office ignores it), and every
+#   entry when Group Policy disables all trusted locations. The ADMX value
+#   names are allownetworklocations and alllocationsdisabled; Microsoft's page
+#   names the policies, not the values. If a name were wrong, the value would
+#   never be read as set and every entry would be graded -- the safe direction.
+# Trusted Documents (Security\Trusted Documents\TrustRecords) is Office's record
+# of each document whose content the person enabled: the value NAME is the
+# document's path or URL, the data starts with a FILETIME (when it was trusted)
+# and ends with a DWORD that is 0x7FFFFFFF when macros were enabled. That
+# layout is documented by forensic practice, not by Microsoft, and the lines
+# say "as the record says". Macros enabled -> [INFO] with the path and date;
+# in a document under Downloads, Temp or an email-attachment cache -> WARNING
+# (the owner decided), the usual first step of a macro attack. A record this
+# tool cannot read the layout of is named, never guessed.
+$script:TrustApps = @('Word', 'Excel', 'PowerPoint', 'Access', 'Visio', 'MS Project')
+$script:RecordApps = @('Word', 'Excel', 'PowerPoint', 'Access', 'Visio')
+
+# PURE. Is this path one of Office's own default Trusted Locations? Read on
+# the raw value AND its expansion, with no environment needed, so another
+# account's %APPDATA% is recognised without expanding it as ours.
+function Test-OfficeDefaultLocation {
+    # $AppDataRoots: the account's Roaming AppData folder(s), as paths;
+    # $ProgramRoots: this PC's Program Files folders. A default must sit under
+    # one of THOSE -- never any drive or any user name: C:\Users\Public\AppData
+    # \Roaming\Microsoft\Templates and D:\Program Files\Microsoft Office\root\
+    # Templates are not Office's defaults, and either one would hide a
+    # planted Trusted Location as "as installed". A . or .. segment is never a
+    # default. The literal %APPDATA% / %ProgramFiles% forms are what Office
+    # writes, and Windows expands them to exactly those roots.
+    param([string]$Path, [string[]]$AppDataRoots = @(), [string[]]$ProgramRoots = @())
+    $p = ([string]$Path).Trim().Replace('/', '\').TrimEnd('\')
+    if (-not $p) { return $false }
+    if (@($p -split '\\' | Where-Object { $_ -eq '.' -or $_ -eq '..' }).Count) { return $false }
+    $ad = @('%appdata%') + @($AppDataRoots | Where-Object { [string]$_ } | ForEach-Object { ([string]$_).TrimEnd('\') })
+    $pf = @('%programfiles%', '%programfiles(x86)%', '%programw6432%') + @($ProgramRoots | Where-Object { [string]$_ } | ForEach-Object { ([string]$_).TrimEnd('\') })
+    foreach ($r in $ad) {
+        if ($p -imatch ('^' + [regex]::Escape($r) + '\\microsoft\\(templates|word\\startup|excel\\xlstart|addins)$')) { return $true }
+    }
+    foreach ($r in $pf) {
+        # Office 2013 Click-to-Run installs under "Microsoft Office 15".
+        if ($p -imatch ('^' + [regex]::Escape($r) + '\\microsoft office( 15)?\\(root\\)?(templates|document themes 1[4-6]|office1[4-6]\\(xlstart|startup|library|accwiz))$')) { return $true }
+    }
+    return $false
+}
+
+# PURE. The shape note for a non-default location, or '' when it has none.
+function Get-LocationShape {
+    param([string]$Path)
+    $p = ([string]$Path).Trim().Replace('/', '\')
+    if ($p -match '^\\\\' -or $p -imatch '^https?:') { return 'a network location, which anyone who can write to it controls' }
+    if ($p -imatch '^[a-z]:\\?$') { return 'a whole drive' }
+    if ($p -imatch '^(%userprofile%|[a-z]:\\users\\[^\\]+)\\?$') { return 'the whole user profile' }
+    if ($p -imatch '\\downloads(\\|$)') { return 'Downloads, where browsers save every file' }
+    if ($p -imatch '\\desktop(\\|$)') { return 'the Desktop, where downloads and attachments are often saved' }
+    if ($p -imatch '(^%temp%|^%tmp%|\\temp(\\|$)|\\windows\\temp)') { return 'a Temp folder, where any program writes' }
+    if ($p -imatch '\\users\\public(\\|$)') { return 'the Public folder, which every account can write' }
+    if ($p -imatch 'inetcache|content\.outlook|\\olk\\') { return 'an email-attachment or browser cache' }
+    return ''
+}
+
+# PURE. Where a Trusted Documents record's path says the document came from,
+# when that is a download or an attachment; '' otherwise.
+function Get-RecordRisk {
+    param([string]$Name)
+    $p = ([string]$Name).Replace('/', '\')
+    if ($p -imatch '\\downloads\\') { return 'Downloads' }
+    if ($p -imatch 'content\.outlook\\|\\olk\\attachments\\|\\outlook temp\\') { return 'an email attachment' }
+    if ($p -imatch 'inetcache\\|content\.mso\\|temporary internet files\\') { return 'a browser or Office download cache' }
+    if ($p -imatch '(%temp%|\\temp\\|\\tmp\\)') { return 'a Temp folder' }
+    return ''
+}
+
+# PURE. One Trusted Documents record. Returns @{ Ok; Macros; When; Why }.
+function ConvertFrom-TrustRecord {
+    param($Bytes)
+    $r = @{ Ok = $false; Macros = $false; When = ''; Why = '' }
+    if ($null -eq $Bytes -or -not ($Bytes -is [byte[]])) { $r.Why = 'its data is not binary'; return $r }
+    $b = [byte[]]$Bytes
+    if ($b.Length -lt 12) { $r.Why = ('its data is ' + $b.Length + ' bytes, shorter than the layout this tool knows'); return $r }
+    try { $r.When = [DateTime]::FromFileTimeUtc([BitConverter]::ToInt64($b, 0)).ToString('yyyy-MM-dd HH:mm') + ' UTC' } catch { $r.When = 'an unreadable date' }
+    $r.Macros = ([BitConverter]::ToUInt32($b, $b.Length - 4) -eq 0x7FFFFFFF)
+    $r.Ok = $true
+    return $r
+}
+
+# PURE. One account's Trusted Locations and Trusted Documents.
+# $Entries: @( @{ App; Ver; Source; Raw; Path; Sub } ) -- Sub $true/$false/$null.
+# $Gates: @{ '<App>|<Ver>' = @{ Net = <Select-InForce result>; Off = <Select-InForce result> } }.
+# $Records: @( @{ App; Ver; Name; Bytes } ). $Gaps: @( '<what could not be read>' ).
+# Returns @{ Lines; Hit; DocHit; Gap; Deferred; Gaps }.
+function Get-TrustVerdict {
+    param($Entries, $Gates, $Records, $Gaps, [string]$Owner = '', [bool]$IsElevated = $true, [bool]$Denied = $false, [bool]$OfficeSeen = $true, [string[]]$AppDataRoots = @(), [string[]]$ProgramRoots = @())
+    $out = New-Object System.Collections.ArrayList
+    $r = @{ Lines = @(); Hit = $false; DocHit = $false; Gap = $false; Deferred = 0; Gaps = @() }
+    $who = $(if ($Owner) { ' (settings of ' + (ConvertTo-PrintableText $Owner) + ')' } else { '' })
+    if ($Owner -and $Denied -and -not $IsElevated) {
+        [void]$out.Add(('[DEFERRED - ADMIN REQUIRED] Office Trusted Locations of ' + (ConvertTo-PrintableText $Owner) + ', also signed in at this PC, not read: another account''s registry needs administrator.'))
+        $r.Deferred = 1; $r.Lines = @($out.ToArray()); return $r
+    }
+    $gapList = New-Object System.Collections.ArrayList
+    foreach ($g in @($Gaps)) { if ([string]$g) { [void]$gapList.Add([string]$g) } }
+    $defaults = @{}; $nonDefault = 0
+    foreach ($e in @($Entries)) {
+        $tag = ([string]$e.App + ' ' + [string]$e.Ver + $who)
+        $shown = ConvertTo-PrintableText $(if ([string]$e.Raw) { [string]$e.Raw } else { [string]$e.Path })
+        if ((Test-OfficeDefaultLocation $e.Raw $AppDataRoots $ProgramRoots) -or (Test-OfficeDefaultLocation $e.Path $AppDataRoots $ProgramRoots)) {
+            $defaults[$tag] = 1 + [int]$defaults[$tag]; continue
+        }
+        $nonDefault++
+        $gate = $Gates[([string]$e.App + '|' + [string]$e.Ver)]
+        $off = $gate -and $gate.Off -and $gate.Off.Decided -and (ConvertTo-RegNumber $gate.Off.Value) -eq 1
+        $isNet = (([string]$e.Path -match '^\\\\') -or ([string]$e.Raw -match '^\\\\') -or ([string]$e.Path -imatch '^https?:'))
+        $netOn = $gate -and $gate.Net -and $gate.Net.Decided -and (ConvertTo-RegNumber $gate.Net.Value) -eq 1
+        $netGap = $gate -and $gate.Net -and [string]$gate.Net.Gap
+        if ($off) { [void]$out.Add(('[INFO] ' + $tag + ': Trusted Location ' + $shown + ' (set by ' + [string]$e.Source + ') is not in force: ' + [string]$gate.Off.From + ' disables all trusted locations.')); continue }
+        if ($isNet -and -not $netOn -and -not $netGap) { [void]$out.Add(('[INFO] ' + $tag + ': Trusted Location ' + $shown + ' (set by ' + [string]$e.Source + ') is a network location, which Office ignores while network locations are not allowed (the default).')); continue }
+        $shape = Get-LocationShape $(if ([string]$e.Path) { [string]$e.Path } else { [string]$e.Raw })
+        $sub = $(if ($e.Sub -eq $true) { ' (subfolders included)' } else { '' })
+        [void]$out.Add(('[WARNING] Office Trusted Location outside Office''s defaults (' + $tag + ', set by ' + [string]$e.Source + '): ' + $shown + $sub + $(if ($shape) { ' -- ' + $shape } else { '' }) + ' -- every document saved there runs its macros with no prompt (T1204.002).'))
+        $r.Hit = $true
+    }
+    foreach ($k in @($Gates.Keys)) {
+        $g = $Gates[$k]
+        if ($g.Net -and $g.Net.Decided -and (ConvertTo-RegNumber $g.Net.Value) -eq 1) { [void]$out.Add(('[INFO] ' + ($k -replace '\|', ' ') + $who + ': network locations are allowed as Trusted Locations (set by ' + [string]$g.Net.From + '; Microsoft recommends against it).')) }
+        # A gate that could not be read is already a gap from the reader (its
+        # key could not be opened); its entries are graded, the safe direction.
+    }
+    foreach ($k in @($defaults.Keys | Sort-Object)) { [void]$out.Add(('[INFO] ' + $k + ': ' + $defaults[$k] + ' of Office''s own default Trusted Location(s), as installed.')) }
+    # --- Trusted Documents ---
+    $macroDocs = 0; $otherDocs = 0
+    foreach ($d in @($Records)) {
+        $tag = ([string]$d.App + ' ' + [string]$d.Ver + $who)
+        $name = ConvertTo-PrintableText ([string]$d.Name)
+        $p = ConvertFrom-TrustRecord $d.Bytes
+        if (-not $p.Ok) { [void]$out.Add(('[INFO] ' + $tag + ': a Trusted Documents record for ' + $name + ' could not be read (' + $p.Why + ').')); continue }
+        if (-not $p.Macros) { $otherDocs++; continue }
+        $macroDocs++
+        $risk = Get-RecordRisk ([string]$d.Name)
+        if ($risk) {
+            [void]$out.Add(('[WARNING] Macros were enabled in a document from ' + $risk + ' (' + $tag + '): ' + $name + ' (trusted ' + $p.When + ', as the record says) -- its macros run every time it is opened, with no prompt (T1204.002).'))
+            $r.DocHit = $true
+        } else {
+            [void]$out.Add(('[INFO] ' + $tag + ': macros were enabled in ' + $name + ' (trusted ' + $p.When + ', as the record says).'))
+        }
+    }
+    if ($otherDocs -gt 0) { [void]$out.Add(('[INFO] ' + $otherDocs + ' other Trusted Documents record(s)' + $who + ' enable editing or other content, not macros.')) }
+    if ($gapList.Count -gt 0) {
+        $names = (@($gapList | Select-Object -First 3) -join '; ') + $(if ($gapList.Count -gt 3) { ('; and ' + ($gapList.Count - 3) + ' more') } else { '' })
+        $some = (@($Entries).Count + @($Records).Count) -gt 0 -or $OfficeSeen
+        [void]$out.Add(('[WARNING] Office Trusted Locations check NOT performed' + $(if ($some) { ' in full' } else { '' }) + ' -- ' + $names + ', so a Trusted Location that runs macros with no prompt, or a record of macros enabled in a downloaded document, would go unseen (T1204.002).'))
+        $r.Gap = $true
+    }
+    if (-not $r.Hit -and -not $r.DocHit) {
+        if (-not $OfficeSeen -and $nonDefault -eq 0 -and @($Records).Count -eq 0 -and -not $r.Gap) {
+            [void]$out.Add($(if ($Owner) { ('[OK] No Office settings for ' + (ConvertTo-PrintableText $Owner) + ': no Trusted Location and no Trusted Documents record.') } else { '[OK] No Office settings for this account: no Trusted Location and no Trusted Documents record.' }))
+        } elseif ($r.Gap) {
+            # A gap is never an all-clear: what was read is said, as [INFO].
+            [void]$out.Add(('[INFO] Nothing outside Office''s defaults was found in what could be read' + $who + ': ' + @($Entries).Count + ' location(s) and ' + @($Records).Count + ' record(s).'))
+        } else {
+            [void]$out.Add(('[OK] No Office Trusted Location outside Office''s defaults, and no macros enabled in a downloaded or attached document' + $(if ($Owner) { ' for ' + (ConvertTo-PrintableText $Owner) } else { ' for this account' }) + ' (' + @($Entries).Count + ' location(s) and ' + @($Records).Count + ' record(s) read).'))
+            if ($macroDocs -eq 0 -and @($Records).Count -gt 0) { [void]$out.Add(('[INFO] No Trusted Documents record' + $who + ' has its macros enabled.')) }
+        }
+    }
+    $r.Gaps = @($gapList.ToArray())
+    $r.Lines = @($out.ToArray())
+    return $r
+}
+
+# Live. One key, told apart: @{ State = ok|nokey|denied|unreadable; Error; Key }.
+function Open-KeyState {
+    param([string]$Path)
+    try { return @{ State = 'ok'; Error = ''; Key = (Get-Item -LiteralPath $Path -ErrorAction Stop) } }
+    catch {
+        if ($_.Exception -is [System.Management.Automation.ItemNotFoundException]) { return @{ State = 'nokey'; Error = ''; Key = $null } }
+        $den = ($_.Exception -is [System.Security.SecurityException] -or $_.Exception -is [System.UnauthorizedAccessException])
+        return @{ State = $(if ($den) { 'denied' } else { 'unreadable' }); Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message); Key = $null }
+    }
+}
+
+# Live. An account's Roaming AppData folder(s), for recognising Office's
+# defaults in its expanded form. The audit's own account asks Windows; another
+# account is read from its profile record and its Shell Folders, never from
+# our environment (its %APPDATA% is not ours).
+function Get-AccountAppData {
+    param([string]$Root, [bool]$Own)
+    $out = New-Object System.Collections.ArrayList
+    if ($Own) { try { $a = [Environment]::GetFolderPath('ApplicationData'); if ($a) { [void]$out.Add($a) } } catch {} ; return @($out.ToArray()) }
+    if ($Root -match '^Registry::HKEY_USERS\\(S-1-[0-9-]+)\\Software$') {
+        $sid = $Matches[1]
+        try { $pi = [string](Get-ItemProperty -LiteralPath ('HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\' + $sid) -Name ProfileImagePath -ErrorAction Stop).ProfileImagePath; if ($pi) { [void]$out.Add(([Environment]::ExpandEnvironmentVariables($pi).TrimEnd('\') + '\AppData\Roaming')) } } catch {}
+        try { $sf = [string](Get-ItemProperty -LiteralPath ($Root + '\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders') -Name AppData -ErrorAction Stop).AppData; if ($sf) { [void]$out.Add($sf) } } catch {}
+    }
+    return @($out.ToArray())
+}
+
+# Live. Every Trusted Location and Trusted Documents record under one account
+# (and, for the audit's own account, the machine-wide keys).
+function Read-TrustAccount {
+    param([string]$Root, [string]$MachineRoot, [string]$Label, [bool]$MustExist, [bool]$Expand)
+    $res = @{ Entries = (New-Object System.Collections.ArrayList); Gates = @{}; Records = (New-Object System.Collections.ArrayList); Gaps = (New-Object System.Collections.ArrayList); Denied = $false; OfficeSeen = $false }
+    if ($MustExist) {
+        $st = Read-VersionList $Root
+        if ([string]$st.State -ne 'ok') {
+            $res.Denied = ([string]$st.State -eq 'denied')
+            [void]$res.Gaps.Add(('the registry of ' + $Label + ' could not be listed (' + $(if ([string]$st.State -eq 'nokey') { 'it is not loaded' } else { ConvertTo-PrintableText ([string]$st.Error) }) + ')'))
+            return $res
+        }
+    }
+    $R = $Root.TrimEnd('\')
+    # Highest precedence first, for the two gate values.
+    $srcs = @(
+        @{ Name = 'Cloud Policy'; Path = ($R + '\Policies\Microsoft\Cloud\Office'); Policy = $true; User = $false },
+        @{ Name = 'Group Policy'; Path = ($R + '\Policies\Microsoft\Office'); Policy = $true; User = $false }
+    )
+    if ($MachineRoot) { $M = $MachineRoot.TrimEnd('\'); $srcs += @(@{ Name = 'machine-wide Group Policy'; Path = ($M + '\Policies\Microsoft\Office'); Policy = $true; User = $false }) }
+    $srcs += @(@{ Name = 'the user setting'; Path = ($R + '\Microsoft\Office'); Policy = $false; User = $true })
+    if ($MachineRoot) {
+        # 32-bit Office on 64-bit Windows keeps its machine keys under
+        # WOW6432Node, in both the MSI and the Click-to-Run layout.
+        $srcs += @(@{ Name = 'the machine setting'; Path = ($M + '\Microsoft\Office'); Policy = $false; User = $false },
+            @{ Name = 'the machine setting (32-bit)'; Path = ($M + '\WOW6432Node\Microsoft\Office'); Policy = $false; User = $false },
+            @{ Name = 'the machine setting (Click-to-Run)'; Path = ($M + '\Microsoft\Office\ClickToRun\REGISTRY\MACHINE\Software\Microsoft\Office'); Policy = $false; User = $false },
+            @{ Name = 'the machine setting (Click-to-Run, 32-bit)'; Path = ($M + '\Microsoft\Office\ClickToRun\REGISTRY\MACHINE\Software\Wow6432Node\Microsoft\Office'); Policy = $false; User = $false })
+    }
+    $gateSrc = @{}
+    foreach ($s in $srcs) {
+        $vl = Read-VersionList $s.Path
+        if ([string]$vl.State -eq 'nokey') { continue }
+        if ([string]$vl.State -ne 'ok') { [void]$res.Gaps.Add(($s.Name + ' (' + $s.Path + ') could not be listed (' + (ConvertTo-PrintableText ([string]$vl.Error)) + ')')); continue }
+        foreach ($ver in @($vl.Names)) {
+            if ($s.Name -eq 'Cloud Policy' -and $ver -ne '16.0') { continue }
+            $res.OfficeSeen = $true
+            $apps = @($script:TrustApps); if ($s.Policy) { $apps += 'Common' }
+            foreach ($app in $apps) {
+                $tlPath = ($s.Path + '\' + $ver + '\' + $app + '\Security\Trusted Locations')
+                $ks = Open-KeyState $tlPath
+                $gk = ($(if ($app -eq 'Common') { 'all Office apps' } else { $app }) + '|' + $ver)
+                if (-not $gateSrc.ContainsKey($gk)) { $gateSrc[$gk] = @{ Net = (New-Object System.Collections.ArrayList); Off = (New-Object System.Collections.ArrayList) } }
+                if ($ks.State -eq 'nokey') {
+                    [void]$gateSrc[$gk].Net.Add(@{ Name = $s.Name; S = @{ State = 'nokey' } })
+                    if ($s.Policy) { [void]$gateSrc[$gk].Off.Add(@{ Name = $s.Name; S = @{ State = 'nokey' } }) }
+                } elseif ($ks.State -ne 'ok') {
+                    [void]$res.Gaps.Add(($app + ' ' + $ver + ' Trusted Locations (' + $s.Name + ') could not be read (' + (ConvertTo-PrintableText $ks.Error) + ')'))
+                    [void]$gateSrc[$gk].Net.Add(@{ Name = $s.Name; S = @{ State = 'unreadable'; Error = $ks.Error } })
+                    if ($s.Policy) { [void]$gateSrc[$gk].Off.Add(@{ Name = $s.Name; S = @{ State = 'unreadable'; Error = $ks.Error } }) }
+                } else {
+                    [void]$gateSrc[$gk].Net.Add(@{ Name = $s.Name; S = (Read-RegValueState -KeyPath $tlPath -Name 'AllowNetworkLocations') })
+                    if ($s.Policy) { [void]$gateSrc[$gk].Off.Add(@{ Name = $s.Name; S = (Read-RegValueState -KeyPath $tlPath -Name 'AllLocationsDisabled') }) }
+                    $subs = @()
+                    try { $subs = @($ks.Key.GetSubKeyNames()) } catch { [void]$res.Gaps.Add(($app + ' ' + $ver + ' Trusted Locations (' + $s.Name + ') could not be listed (' + (ConvertTo-PrintableText $_.Exception.Message) + ')')) }
+                    foreach ($sn in $subs) {
+                        $sk = $null
+                        try {
+                            $sk = $ks.Key.OpenSubKey($sn)
+                            if ($null -eq $sk) { continue }
+                            $raw = [string]$sk.GetValue('Path', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+                            if (-not $raw) { continue }
+                            $exp = $(if ($Expand) { [Environment]::ExpandEnvironmentVariables($raw) } else { $raw })
+                            $subv = ConvertTo-RegNumber ($sk.GetValue('AllowSubfolders', $null))
+                            [void]$res.Entries.Add(@{ App = $(if ($app -eq 'Common') { 'all Office apps' } else { $app }); Ver = $ver; Source = $s.Name; Raw = $raw; Path = $exp; Sub = $(if ($null -eq $subv) { $null } else { $subv -eq 1 }) })
+                        } catch { [void]$res.Gaps.Add(($app + ' ' + $ver + ' Trusted Location ' + $sn + ' (' + $s.Name + ') could not be read (' + (ConvertTo-PrintableText $_.Exception.Message) + ')')) }
+                        finally { if ($sk) { $sk.Close() } }
+                    }
+                }
+                if ($s.User -and $script:RecordApps -contains $app) {
+                    $trPath = ($s.Path + '\' + $ver + '\' + $app + '\Security\Trusted Documents\TrustRecords')
+                    $tk = Open-KeyState $trPath
+                    if ($tk.State -eq 'ok') {
+                        try {
+                            foreach ($vn in @($tk.Key.GetValueNames())) {
+                                if (-not [string]$vn) { continue }
+                                [void]$res.Records.Add(@{ App = $app; Ver = $ver; Name = [string]$vn; Bytes = $tk.Key.GetValue($vn, $null) })
+                            }
+                        } catch { [void]$res.Gaps.Add(($app + ' ' + $ver + ' Trusted Documents could not be read (' + (ConvertTo-PrintableText $_.Exception.Message) + ')')) }
+                    } elseif ($tk.State -ne 'nokey') { [void]$res.Gaps.Add(($app + ' ' + $ver + ' Trusted Documents could not be read (' + (ConvertTo-PrintableText $tk.Error) + ')')) }
+                }
+            }
+        }
+    }
+    foreach ($gk in $gateSrc.Keys) { $res.Gates[$gk] = @{ Net = (Select-InForce @($gateSrc[$gk].Net.ToArray())); Off = (Select-InForce @($gateSrc[$gk].Off.ToArray())) } }
+    return $res
+}
+
 if ($SelfTest) {
     $fails = 0
     function T { param([string]$Name, [bool]$Ok, [string]$Got)
@@ -333,6 +637,68 @@ if ($SelfTest) {
     T 'control characters in a registry value cannot start a report line' ($v.Hit -and $v.Text -notmatch '(?m)^\[OK\] forged') $v.Text
     $v = V @(One (Src $N $U $N) $none)
     T 'no gap line ever carries [OK]' (@($v.Lines | Where-Object { $_ -match 'NOT performed' -and $_ -match '^\[OK\]' }).Count -eq 0 -and $v.Gap) $v.Text
+
+    # --- -Part Trust ---
+    function TE { param([string]$Raw, [string]$Path = '', [string]$App = 'Word', [string]$Src = 'the user setting', $Sub = $null) @{ App = $App; Ver = '16.0'; Source = $Src; Raw = $Raw; Path = $(if ($Path) { $Path } else { $Raw }); Sub = $Sub } }
+    function TG { param($Net = $null, $Off = $null) $g = @{}; $g['Word|16.0'] = @{ Net = $(if ($null -ne $Net) { @{ Decided = $true; From = 'the user setting'; Value = $Net; Gap = '' } } else { @{ Decided = $false; Gap = '' } }); Off = $(if ($null -ne $Off) { @{ Decided = $true; From = 'Group Policy'; Value = $Off; Gap = '' } } else { @{ Decided = $false; Gap = '' } }) }; return $g }
+    function TRec { param([string]$Name, [uint32]$Flag = 0x7FFFFFFF, [int]$Len = 24) $b = New-Object byte[] $Len; if ($Len -ge 12) { [BitConverter]::GetBytes([long]133400000000000000).CopyTo($b, 0); [BitConverter]::GetBytes($Flag).CopyTo($b, $Len - 4) }; @{ App = 'Word'; Ver = '16.0'; Name = $Name; Bytes = $b } }
+    $tAD = @('C:\Users\bob\AppData\Roaming'); $tPF = @('C:\Program Files', 'C:\Program Files (x86)')
+    function TV { param($E = @(), $G = (TG), $Rec = @(), $Gaps = @(), [string]$Owner = '', [bool]$El = $true, [bool]$Den = $false, [bool]$Seen = $true) $x = Get-TrustVerdict -Entries $E -Gates $G -Records $Rec -Gaps $Gaps -Owner $Owner -IsElevated $El -Denied $Den -OfficeSeen $Seen -AppDataRoots $tAD -ProgramRoots $tPF; $x.Text = ($x.Lines -join "`n"); return $x }
+    foreach ($d in @('%APPDATA%\Microsoft\Templates', 'C:\Users\bob\AppData\Roaming\Microsoft\Word\Startup\', '%appdata%\Microsoft\Excel\XLSTART', 'C:\Program Files\Microsoft Office\root\Templates\', 'C:\Program Files (x86)\Microsoft Office\root\Office16\STARTUP', 'C:\Program Files\Microsoft Office\Office15\XLSTART', 'C:\Program Files\Microsoft Office\root\Document Themes 16\', '%APPDATA%\Microsoft\Addins', 'C:\Program Files\Microsoft Office\root\Office16\ACCWIZ', 'C:\Program Files\Microsoft Office 15\root\Templates\', 'C:\Program Files\Microsoft Office 15\root\Office15\XLSTART', '%ProgramFiles%\Microsoft Office\root\Templates')) {
+        T ("default Trusted Location recognised (Microsoft's table): " + $d) (Test-OfficeDefaultLocation $d $tAD $tPF) ''
+    }
+    foreach ($nd in @('C:\Users\bob\Downloads', '%APPDATA%\Microsoft\Templates\Evil', 'C:\Users\bob\AppData\Roaming\Microsoft\Word', 'D:\Program Files\Microsoft Office\root\Templates\..\..\x', 'C:\Program Files\Microsoft Office\root\Office16', 'C:\', '\\server\share\Templates', 'C:\Users\Public\AppData\Roaming\Microsoft\Templates', 'C:\Users\..\AppData\Roaming\Microsoft\Word\Startup', 'D:\Users\x\AppData\Roaming\Microsoft\Templates', 'E:\Program Files\Microsoft Office\root\Templates', 'C:\Users\alice\AppData\Roaming\Microsoft\Templates')) {
+        T ("not a default (another account's or another drive's folder, or a .. segment): " + $nd) (-not (Test-OfficeDefaultLocation $nd $tAD $tPF)) ''
+    }
+    $v = TV @(TE '%APPDATA%\Microsoft\Templates' 'C:\Users\bob\AppData\Roaming\Microsoft\Templates')
+    T 'Office''s own defaults only: [OK] plus an INFO count, no WARNING' ((-not $v.Hit) -and (-not $v.Gap) -and $v.Text -match '\[INFO\] Word 16\.0: 1 of Office''s own default Trusted Location' -and $v.Text -match '(?m)^\[OK\] No Office Trusted Location outside Office''s defaults') $v.Text
+    $v = TV @(TE '%USERPROFILE%\Downloads' 'C:\Users\bob\Downloads' -Sub $true)
+    T 'Downloads as a Trusted Location: the WARNING, the raw path, subfolders and the shape note' ($v.Hit -and $v.Text -match '(?m)^\[WARNING\] Office Trusted Location outside Office''s defaults \(Word 16\.0, set by the user setting\): %USERPROFILE%\\Downloads \(subfolders included\) -- Downloads, where browsers save every file -- every document saved there runs its macros with no prompt \(T1204\.002\)\.$') $v.Text
+    $v = TV @(TE 'C:\Projects\Macros')
+    T 'any other non-default folder: the WARNING with no shape note (the owner''s "any non-default")' ($v.Hit -and $v.Text -match 'C:\\Projects\\Macros -- every document saved there' ) $v.Text
+    $v = TV @(TE '\\fileserver\finance')
+    T 'a network location while network locations are not allowed: INFO not in force, no WARNING' ((-not $v.Hit) -and $v.Text -match 'is a network location, which Office ignores') $v.Text
+    $v = TV @(TE '\\fileserver\finance') (TG 1)
+    T 'the same network location with network locations allowed: the WARNING, and the allowance said' ($v.Hit -and $v.Text -match 'a network location, which anyone who can write to it controls' -and $v.Text -match 'network locations are allowed as Trusted Locations') $v.Text
+    $v = TV @(TE 'C:\Users\bob\Downloads') (TG $null 1)
+    T 'Group Policy disables all trusted locations: the entry is INFO not in force, no WARNING' ((-not $v.Hit) -and $v.Text -match 'is not in force: Group Policy disables all trusted locations') $v.Text
+    $v = TV @(TE 'C:\Users\bob\Downloads') (TG $null 0)
+    T 'AllLocationsDisabled=0: the entry is graded' ($v.Hit) $v.Text
+    foreach ($c in @(@{ P = 'C:\'; S = 'a whole drive' }, @{ P = 'C:\Users\bob'; S = 'the whole user profile' }, @{ P = 'C:\Users\bob\AppData\Local\Temp'; S = 'a Temp folder' }, @{ P = 'C:\Users\Public\Documents'; S = 'the Public folder' }, @{ P = 'C:\Users\bob\Desktop'; S = 'the Desktop' })) {
+        $v = TV @(TE $c.P)
+        T ("shape note for " + $c.P + ": " + $c.S) ($v.Hit -and $v.Text -match [regex]::Escape($c.S)) $v.Text
+    }
+    $v = TV @() (TG) @() @('Word 16.0 Trusted Locations (the user setting) could not be read (SecurityException: x)')
+    T 'a Trusted Locations key that could not be read: a raised gap, never [OK]' ($v.Gap -and $v.Text -match '(?m)^\[WARNING\] Office Trusted Locations check NOT performed in full -- Word 16\.0 Trusted Locations' -and $v.Text -notmatch '\[OK\]') $v.Text
+    $v = TV @(TE 'C:\Users\bob\Downloads') (TG) @() @('x could not be read')
+    T 'a hit AND a gap: both raised' ($v.Hit -and $v.Gap) $v.Text
+    $v = TV @() (TG) @() @('the registry of PC\alice could not be listed (denied)') -Owner 'PC\alice' -El $false -Den $true
+    T 'another account refused to a standard-user token: DEFERRED and counted, no gap' ($v.Deferred -eq 1 -and (-not $v.Gap) -and $v.Text -match '\[DEFERRED - ADMIN REQUIRED\] Office Trusted Locations of PC\\alice') $v.Text
+    $v = TV @() (TG) @() @('the registry of PC\alice could not be listed (denied)') -Owner 'PC\alice' -El $true -Den $true
+    T 'the same refusal when elevated: a raised gap' ($v.Gap -and $v.Deferred -eq 0) $v.Text
+    $v = TV @(TE 'C:\Temp\x' -Src 'Group Policy') -Owner 'PC\alice'
+    T 'another account''s entry names the account and the source' ($v.Hit -and $v.Text -match 'Word 16\.0 \(settings of PC\\alice\), set by Group Policy') $v.Text
+    $v = TV -Seen $false
+    T 'no Office at all: [OK] no Office settings' ((-not $v.Hit) -and $v.Text -match '(?m)^\[OK\] No Office settings for this account') $v.Text
+    # --- Trusted Documents ---
+    $v = TV -Rec @(TRec '%USERPROFILE%/Downloads/invoice.docm')
+    T 'macros enabled in a document from Downloads: the WARNING with the path and the date' ($v.DocHit -and (-not $v.Hit) -and $v.Text -match '(?m)^\[WARNING\] Macros were enabled in a document from Downloads \(Word 16\.0\): %USERPROFILE%/Downloads/invoice\.docm \(trusted 20\d\d-\d\d-\d\d \d\d:\d\d UTC, as the record says\)') $v.Text
+    $v = TV -Rec @(TRec 'C:\Users\bob\AppData\Local\Microsoft\Windows\INetCache\Content.Outlook\AB12CD34\order.xlsm')
+    T 'macros enabled in an Outlook attachment: the WARNING' ($v.DocHit -and $v.Text -match 'from an email attachment') $v.Text
+    $v = TV -Rec @(TRec 'C:/Temp/run.docm')
+    T 'macros enabled in a document under C:\Temp: the WARNING' ($v.DocHit -and $v.Text -match 'from a Temp folder') $v.Text
+    $v = TV @(TE 'C:\Users\Public\AppData\Roaming\Microsoft\Templates')
+    T 'a Templates folder under the Public profile is NOT a default: the WARNING' ($v.Hit -and $v.Text -match 'the Public folder') $v.Text
+    $v = TV -Rec @(TRec '%USERPROFILE%/Documents/budget.xlsm')
+    T 'macros enabled in the person''s own Documents: INFO with the path, never a WARNING' ((-not $v.DocHit) -and $v.Text -match '\[INFO\] Word 16\.0: macros were enabled in %USERPROFILE%/Documents/budget\.xlsm') $v.Text
+    $v = TV -Rec @(TRec '%USERPROFILE%/Downloads/report.docx' -Flag 1)
+    T 'a record without the macros flag, even from Downloads: counted, never a WARNING' ((-not $v.DocHit) -and $v.Text -match '1 other Trusted Documents record\(s\) enable editing or other content, not macros') $v.Text
+    $v = TV -Rec @(TRec '%USERPROFILE%/Downloads/x.docm' -Len 5)
+    T 'a record too short for the known layout: named, never guessed' ((-not $v.DocHit) -and $v.Text -match 'could not be read \(its data is 5 bytes') $v.Text
+    $p = ConvertFrom-TrustRecord ([byte[]](1, 2, 3)) ; T 'a record of 3 bytes is not read' (-not $p.Ok) $p.Why
+    $p = ConvertFrom-TrustRecord 'text' ; T 'a record that is not binary is not read' (-not $p.Ok) $p.Why
+    $v = TV @(TE ('C:\x' + [char]13 + [char]10 + '[OK] No Office Trusted Location outside'))
+    T 'a line break inside a path cannot forge an [OK] line' ($v.Hit -and @($v.Lines | Where-Object { $_ -match '^\[OK\] No Office Trusted' }).Count -eq 0) $v.Text
     if ($fails) { Write-Output "[FAIL] $fails office_macro_check self-test expectation(s) unmet"; exit 1 }
     Write-Output '[OK] office_macro_check self-test passed'
     exit 0
@@ -381,8 +747,9 @@ if ($Elevated -lt 0) {
     $Elevated = 0
     try { if ((New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { $Elevated = 1 } } catch {}
 }
-$v = $null; $why = ''
-try {
+# Live. The other accounts signed in at this PC, and the context line data.
+function Get-SignedInAccounts {
+    $others = $null; $ctx = $null
     # The other accounts signed in at this PC: the owners of explorer.exe. An
     # elevated audit is often run from a separate administrator account, and
     # the settings that protect the person at this PC are theirs.
@@ -410,6 +777,47 @@ try {
             }
         } catch { $listErr = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message) }
         $ctx = @{ Account = $acct; Others = @($others | ForEach-Object { $_.Name }); Unresolved = $unresolved; ListError = $listErr }
+    }
+    return @{ Others = $others; Ctx = $ctx }
+}
+
+$v = $null; $why = ''
+try {
+    $sa = Get-SignedInAccounts
+    $others = $sa.Others; $ctx = $sa.Ctx
+    if ($Part -eq 'Trust') {
+        $own = ($KeyRoot -ieq 'HKCU:\Software')
+        $all = New-Object System.Collections.ArrayList
+        $mine = Read-TrustAccount -Root $KeyRoot -MachineRoot $MachineRoot -Label 'this account' -MustExist $false -Expand $own
+        $head = New-Object System.Collections.ArrayList
+        if ($ctx -and $ctx.Account) {
+            [void]$head.Add(('[INFO] These are the Office Trusted Locations and Trusted Documents of ' + (ConvertTo-PrintableText ([string]$ctx.Account)) + ', the account this audit ran as, and this PC''s machine-wide settings.'))
+            foreach ($o in @($ctx.Others | Where-Object { [string]$_ })) { [void]$head.Add(('[INFO] ' + (ConvertTo-PrintableText ([string]$o)) + ' is also signed in at this PC: its settings follow, on the lines that name it.')) }
+        }
+        $ctxGaps = New-Object System.Collections.ArrayList
+        if ($ctx) {
+            $unres = [int]$ctx.Unresolved
+            if ($unres -gt 0 -and $Elevated -eq 1) { [void]$ctxGaps.Add(([string]$unres + ' desktop session(s) at this PC belong to an account that could not be identified, so their settings were not read')) }
+            elseif ($unres -gt 0) { [void]$head.Add(('[INFO] ' + $unres + ' desktop session(s) at this PC belong to an account this token could not identify, so their settings were not read. An audit run as administrator reads them.')) }
+            if ([string]$ctx.ListError) { [void]$ctxGaps.Add(('not every account signed in at this PC could be listed (' + (ConvertTo-PrintableText ([string]$ctx.ListError)) + '), so some accounts'' settings may not have been read')) }
+        }
+        $pfRoots = @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:ProgramW6432 | Where-Object { [string]$_ })
+        [void]$all.Add((Get-TrustVerdict -Entries @($mine.Entries.ToArray()) -Gates $mine.Gates -Records @($mine.Records.ToArray()) -Gaps (@($mine.Gaps.ToArray()) + @($ctxGaps.ToArray())) -IsElevated ($Elevated -eq 1) -OfficeSeen $mine.OfficeSeen -AppDataRoots (Get-AccountAppData -Root $KeyRoot -Own $true) -ProgramRoots $pfRoots))
+        foreach ($o in $others) {
+            $t = Read-TrustAccount -Root $o.Root -MachineRoot '' -Label $o.Name -MustExist $true -Expand $false
+            [void]$all.Add((Get-TrustVerdict -Entries @($t.Entries.ToArray()) -Gates $t.Gates -Records @($t.Records.ToArray()) -Gaps @($t.Gaps.ToArray()) -Owner $o.Name -IsElevated ($Elevated -eq 1) -Denied $t.Denied -OfficeSeen $t.OfficeSeen -AppDataRoots (Get-AccountAppData -Root $o.Root -Own $false) -ProgramRoots $pfRoots))
+        }
+        $tv = @{ Lines = (New-Object System.Collections.ArrayList); Hit = $false; DocHit = $false; Gap = $false; Deferred = 0 }
+        foreach ($l in $head) { [void]$tv.Lines.Add($l) }
+        foreach ($x in $all) { foreach ($l in @($x.Lines)) { [void]$tv.Lines.Add($l) }; if ($x.Hit) { $tv.Hit = $true }; if ($x.DocHit) { $tv.DocHit = $true }; if ($x.Gap) { $tv.Gap = $true }; $tv.Deferred += [int]$x.Deferred }
+        if ($tv.Hit -or $tv.DocHit) { [void]$tv.Lines.Add('[INFO] A workplace sometimes trusts a shared folder on purpose, and people enable macros in their own spreadsheets. If neither you nor whoever manages this PC set the location, or you did not mean to enable that document''s macros, remove it: File > Options > Trust Center > Trust Center Settings > Trusted Locations (or Trusted Documents > Clear).') }
+        foreach ($l in $tv.Lines) { $l }
+        if ($tv.Hit) { Write-Marker -Name 'trustloc_hit' -Sev 'WARNING' }
+        if ($tv.DocHit) { Write-Marker -Name 'trustdoc_hit' -Sev 'WARNING' }
+        if ($tv.Gap) { Write-Marker -Name 'trustloc_gap' -Sev 'WARNING' }
+        if ([int]$tv.Deferred -gt 0) { Write-Marker -Name 'trustloc_deferred' -Sev ([string][int]$tv.Deferred) }
+        Write-Marker -Name 'trustloc_done' -Sev 'done'
+        exit 0
     }
     $mine = Read-AccountSettings -Root $KeyRoot -Label 'this account' -MustExist $false
     $all = New-Object System.Collections.ArrayList
