@@ -628,7 +628,12 @@ must clear it (threat_list_seed does). And
 OneDrive Files On-Demand marks ordinary synced files as reparse points, so a
 walk that refuses "any reparse point" refuses the owner's checkout -- refuse
 LINKS (`LinkType` SymbolicLink/Junction) in the source, every reparse point on
-the stick. Every text file goes onto the stick with CRLF whatever the source
+the stick. And `LinkType` is not always an answer: every user profile holds about
+19 compatibility junctions (`Start Menu`, `SendTo`, `My Documents`...) that
+deny their own listing to Everyone, and on 5.1 `LinkType` came back empty for
+all of them. The ransomware walk then listed each one, was denied, and raised
+a false gap on every PC. `file_walk_check` reads the reparse TAG from the
+parent's listing (`FindFirstFileW`), which never opens the junction. Every text file goes onto the stick with CRLF whatever the source
 (a GitHub ZIP is LF-only, and CI had only ever built a stick from a CRLF
 checkout), and a stick Windows has re-identified is matched by content --
 every file AND the stick's own copy of its manifest, byte for byte, which is
@@ -716,6 +721,18 @@ borrow). The same review found the Defender detection history had become
 "not consulted" in passive mode, where Defender still holds the record of
 what it caught before another antivirus took over: **a mode is a reason to
 reinterpret a failed query, never a reason not to ask.**
+
+**`File.Exists` is not "not installed".** `[IO.File]::Exists` and
+`[IO.Directory]::Exists` return `false` for a path this account may not
+read, and never throw, so a store that refused us read as a browser that is
+not installed and printed `[OK]` -- the silent shape again, in the fix for
+it. Ask for the item with `-ErrorAction Stop`, and call it absent only when
+its parent ANSWERS without it or the parent itself does not exist
+(`Test-AbsentForSure` in `file_walk_check`); a parent that refuses to list
+is a gap. The same review round caught a CI parameter named `$Roots` in a
+script with a `$roots` variable: PowerShell names are case-insensitive, so
+the parameter was overwritten before it was read and the test hook did
+nothing.
 
 **A branch whose PR has merged is not that PR any more.** The WinRM commit
 was pushed to the #271 branch moments after #271 was merged: it never reached

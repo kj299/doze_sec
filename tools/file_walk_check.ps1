@@ -54,13 +54,16 @@
 
 [CmdletBinding()]
 param(
-    [ValidateSet('TempAds', 'TempHtml', 'OutlookMsg')]
+    [ValidateSet('TempAds', 'TempHtml', 'OutlookMsg', 'RansomExt', 'TokenCache', 'CredStores')]
     [string]$Check,
     [string]$MarkerDir = $env:TEMP,
     [int]$Elevated = -1,
     # Only CI changes these: a scratch root, so every state runs through the
     # real walker, and a budget of 0 to drive the out-of-time path.
     [string]$Root,
+    # CI only: several scratch folders in place of a multi-folder check's
+    # real ones, so the merge of several walks runs through the real walker.
+    [string[]]$RootList,
     # -1 = this check's own default (see $script:Checks).
     [int]$BudgetSeconds = -1,
     [switch]$SelfTest
@@ -100,7 +103,16 @@ $script:Checks = @{
     TempAds    = @{ What = 'Alternate-data-stream check'; Where = 'TEMP'; Tech = 'T1564.004'; Budget = 180; Miss = 'content hidden in a stream there would go unseen'; Ok = '[OK] No suspicious ADS in Temp.' }
     TempHtml   = @{ What = 'Oversized HTML/HTA check'; Where = 'TEMP'; Tech = 'T1027.006'; Budget = 60; Miss = 'an HTML-smuggling payload staged there would go unseen'; Ok = '[OK] No oversized HTML/HTA files in user TEMP.' }
     OutlookMsg = @{ What = 'Outlook .msg/.oft check'; Where = 'the Outlook data folder'; Tech = 'T1566.001'; Budget = 60; Miss = 'a recent message file there would go unseen'; Ok = '[OK] No recent Outlook .msg/.oft artefacts.' }
+    # Three folders, three levels deep, as the inline block searched them --
+    # and, unlike it, hidden folders too (AppData): the old Get-ChildItem had
+    # no -Force, so it never looked inside the profile's AppData.
+    RansomExt  = @{ What = 'Ransomware-extension check'; Where = 'the user profile, Users\Public and TEMP'; Tech = 'T1486'; Budget = 120; Depth = 3; Miss = 'files encrypted by ransomware there would go unseen'; Ok = '[OK] No files with known ransomware extensions in user directories.'; Header = '[CRITICAL][T1486] Files with ransomware-associated extensions found:' }
+    # Listings, not findings: a hit is [INFO] for the reader to correlate.
+    TokenCache = @{ What = 'Token cache activity check'; Where = 'the AAD token and credential caches'; Tech = 'T1557.001'; Budget = 60; Miss = 'recent token-cache activity is not shown'; Ok = '[OK] No unusual recent token cache modifications.'; Header = '[INFO] Recent AAD/token cache activity (correlate with login events):'; InfoOnly = $true }
+    CredStores = @{ What = 'Browser credential store check'; Where = 'the Chrome, Edge and Firefox credential stores'; Tech = 'T1555.003'; Budget = 30; Miss = 'recent access to a browser credential store is not shown'; Ok = '[OK] No unusual recent access to browser credential stores.'; Header = '[INFO] Browser credential stores accessed in last 24h (may be normal browser activity):'; InfoOnly = $true }
 }
+# The extensions the inline block searched for, unchanged.
+$script:RansomExts = @('.encrypted', '.locked', '.crypt', '.locky', '.cerber', '.zepto', '.thor', '.aesir', '.zzzzz', '.wncry', '.wcry', '.rdmk', '.play', '.black', '.basta', '.royal', '.akira', '.lockbit', '.clop')
 
 # PURE. $Scan: @{ RootState = ok|missing|unreadable; RootDenied; RootError;
 # RootPath; Hits = @(strings, already formatted for the list); Examined;
@@ -133,12 +145,12 @@ function Get-WalkVerdict {
     $links = @($Scan.Links | Where-Object { [string]$_ })
     $linkLine = ''
     if ($links.Count -gt 0) { $linkLine = ('[INFO] ' + [string]$links.Count + ' link(s) to another folder (junction or symbolic link) were NOT followed, so what they point at was not checked here: ' + (@($links | Select-Object -First 3 | ForEach-Object { ConvertTo-PrintablePath ([string]$_) }) -join '; ') + $(if ($links.Count -gt 3) { ('; and ' + ($links.Count - 3) + ' more') } else { '' }) + '.') }
-    $scope = ([string]$Scan.Examined + ' file(s) examined under ' + $root + ' in ' + [string]$Scan.Seconds + ' s' + $(if ([int]$Scan.Vanished -gt 0) { ('; ' + [string]$Scan.Vanished + ' vanished while being read (ordinary churn)') } else { '' }))
+    $scope = ([string]$Scan.Examined + ' file(s) examined under ' + $root + $(if ($c.Depth) { (' (' + [string]$c.Depth + ' folder levels deep; deeper files were not examined)') } else { '' }) + ' in ' + [string]$Scan.Seconds + ' s' + $(if ([int]$Scan.Vanished -gt 0) { ('; ' + [string]$Scan.Vanished + ' vanished while being read (ordinary churn)') } else { '' }))
     if ($hits.Count -gt 0) {
         if ($Check -eq 'TempAds') {
             foreach ($h in @($hits | Select-Object -First $script:MaxListed)) { [void]$out.Add(('[WARNING] Alternate data stream (T1564.004): ' + (ConvertTo-PrintablePath $h))) }
         } else {
-            [void]$out.Add($(if ($Check -eq 'TempHtml') { '[WARNING] Large HTML/HTA files in Temp:' } else { '[WARNING] Recent Outlook .msg/.oft artefacts (review for CVE-2023-23397 NTLM relay):' }))
+            [void]$out.Add($(if ($c.Header) { [string]$c.Header } elseif ($Check -eq 'TempHtml') { '[WARNING] Large HTML/HTA files in Temp:' } else { '[WARNING] Recent Outlook .msg/.oft artefacts (review for CVE-2023-23397 NTLM relay):' }))
             foreach ($h in @($hits | Select-Object -First $script:MaxListed)) { [void]$out.Add(('    ' + (ConvertTo-PrintablePath $h))) }
         }
         if ($hits.Count -gt $script:MaxListed) { [void]$out.Add(('[INFO] ' + ($hits.Count - $script:MaxListed) + ' more not listed (' + $hits.Count + ' in all).')) }
@@ -148,7 +160,8 @@ function Get-WalkVerdict {
         if ($partial.Count -gt 0) { [void]$out.Add(('[WARNING] ' + $c.What + ' NOT performed in full -- ' + ($partial.ToArray() -join '; ') + ', so there may be more than is listed (' + $c.Tech + ').')) }
         [void]$out.Add(('[INFO] ' + $scope + '.'))
         if ($linkLine) { [void]$out.Add($linkLine) }
-        return @{ Lines = @($out.ToArray()); Hit = $true; Gap = ($partial.Count -gt 0); Deferred = 0 }
+        # A listing's hit is context for the reader, never a counted finding.
+        return @{ Lines = @($out.ToArray()); Hit = (-not $c.InfoOnly); Gap = ($partial.Count -gt 0); Deferred = 0 }
     }
     if ($partial.Count -gt 0) {
         [void]$out.Add(('[WARNING] ' + $c.What + ' NOT performed in full -- ' + ($partial.ToArray() -join '; ') + ', so ' + $c.Miss + ' (' + $c.Tech + ').'))
@@ -189,6 +202,19 @@ function Test-StillListed {
         return $false
     } catch { return $true }
 }
+function Test-AbsentForSure {
+    # A path is absent only when its parent ANSWERS without it, or the parent
+    # itself does not exist (a browser that is not installed). A parent that
+    # refuses to list is not an answer.
+    param([string]$Path)
+    $parent = [IO.Path]::GetDirectoryName($Path); $leaf = [IO.Path]::GetFileName($Path)
+    if (-not $parent -or -not $leaf) { return $false }
+    try { $names = @([IO.Directory]::GetFileSystemEntries($parent)) }
+    catch [System.IO.DirectoryNotFoundException] { return $true }
+    catch { return $false }
+    foreach ($n in $names) { if ([IO.Path]::GetFileName($n) -eq $leaf) { return $false } }
+    return $true
+}
 function Test-TooLong {
     param($Err)
     $x = $Err.Exception
@@ -210,11 +236,74 @@ function Test-Vanished {
     return $false
 }
 
+# PURE. Whether a folder the listing returned is walked, or named as a link
+# and not followed. Every user profile holds about 19 compatibility junctions
+# (Start Menu, SendTo, Templates, My Documents, Application Data...) that
+# Windows gives a deny-List ACE for Everyone; Windows PowerShell 5.1 could not
+# tell their LinkType, so they were walked, denied, and counted as unreadable
+# -- a false gap on every machine. When LinkType is empty for a reparse point
+# the reparse TAG decides (read from the parent's listing, which never opens
+# the junction). A tag that cannot be read is 'unknown': a named gap, never
+# silence. Only LINKS are skipped: a cloud-synced folder is a reparse point too.
+function Get-DirKind {
+    param([bool]$IsReparse, [string]$LinkType, $Tag)
+    if ($LinkType -eq 'Junction' -or $LinkType -eq 'SymbolicLink') { return 'link' }
+    if (-not $IsReparse) { return 'walk' }
+    if ($null -eq $Tag) { return 'unknown' }
+    $t = [uint32]$Tag
+    if ($t -eq [uint32]2684354563 -or $t -eq [uint32]2684354572) { return 'link' }   # 0xA0000003 mount point / junction, 0xA000000C symlink
+    return 'walk'
+}
+
+# Live. The reparse tag of one directory entry, from FindFirstFileW on the
+# entry itself: the tag comes back in dwReserved0 of the PARENT's listing, so
+# the junction's own ACL is never consulted. $null when it cannot be read.
+function Get-ReparseTag {
+    param([string]$Path)
+    try {
+        if (-not ('DozeSec.ReparseTag' -as [type])) {
+            Add-Type -ErrorAction Stop -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace DozeSec {
+    public static class ReparseTag {
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        struct WIN32_FIND_DATAW {
+            public uint dwFileAttributes;
+            public System.Runtime.InteropServices.ComTypes.FILETIME c, a, w;
+            public uint nFileSizeHigh, nFileSizeLow, dwReserved0, dwReserved1;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string cFileName;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 14)] public string cAlternateFileName;
+        }
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern IntPtr FindFirstFileW(string name, out WIN32_FIND_DATAW data);
+        [DllImport("kernel32.dll")]
+        static extern bool FindClose(IntPtr h);
+        public static long Get(string path) {
+            WIN32_FIND_DATAW d;
+            IntPtr h = FindFirstFileW(path, out d);
+            if (h == new IntPtr(-1)) { return -1; }
+            FindClose(h);
+            if ((d.dwFileAttributes & 0x400) == 0) { return 0; }
+            return (long)d.dwReserved0;
+        }
+    }
+}
+'@
+        }
+        $p = $Path
+        if ($p.Length -ge 248 -and -not $p.StartsWith('\\')) { $p = '\\?\' + $p }
+        $r = [DozeSec.ReparseTag]::Get($p)
+        if ($r -lt 0) { return $null }
+        return [uint32]$r
+    } catch { return $null }
+}
+
 # Live. Walks $RootPath one folder at a time so each failure is caught and
 # named, never silenced; $Select decides, per file, whether it is a hit and
 # returns the text to list (or $null). Returns the $Scan shape above.
 function Invoke-Walk {
-    param([string]$RootPath, [scriptblock]$Select, [int]$Budget)
+    param([string]$RootPath, [scriptblock]$Select, [int]$Budget, [int]$MaxDepth = -1)
     $clock = [Diagnostics.Stopwatch]::StartNew()
     $scan = @{ RootState = 'ok'; RootDenied = $false; RootError = ''; RootPath = $RootPath; Hits = (New-Object System.Collections.ArrayList); Examined = 0; Unreadable = (New-Object System.Collections.ArrayList); Vanished = 0; OutOfTime = $false; Seconds = 0; Budget = $Budget; Links = (New-Object System.Collections.ArrayList) }
     # No path at all is not 'the folder is absent': nothing was looked at.
@@ -225,11 +314,11 @@ function Invoke-Walk {
         return $scan
     }
     $stack = New-Object System.Collections.Stack
-    $stack.Push($rootItem.FullName)
+    $stack.Push(@($rootItem.FullName, 0))
     $first = $true
     while ($stack.Count -gt 0) {
         if ($clock.Elapsed.TotalSeconds -ge $Budget) { $scan.OutOfTime = $true; break }
-        $dir = [string]$stack.Pop()
+        $entry = $stack.Pop(); $dir = [string]$entry[0]; $depth = [int]$entry[1]
         $items = $null
         $err = $null
         try { $items = @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction Stop) } catch { $err = $_ }
@@ -252,7 +341,14 @@ function Invoke-Walk {
                 # folder to a whole drive. Counted and named, never silent.
                 # Only LINKS: a cloud-synced folder is a reparse point too.
                 $lt = ''; try { $lt = [string]$it.LinkType } catch {}
-                if ($lt -eq 'Junction' -or $lt -eq 'SymbolicLink') { [void]$scan.Links.Add($it.FullName) } else { $stack.Push($it.FullName) }
+                $rp = [bool]([int]$it.Attributes -band 0x400)
+                $tag = $null
+                if ($rp -and $lt -ne 'Junction' -and $lt -ne 'SymbolicLink') { $tag = Get-ReparseTag $it.FullName }
+                $kind = Get-DirKind -IsReparse $rp -LinkType $lt -Tag $tag
+                if ($kind -eq 'link') { [void]$scan.Links.Add($it.FullName) }
+                elseif (-not ($MaxDepth -lt 0 -or $depth + 1 -le $MaxDepth)) { }
+                elseif ($kind -eq 'unknown') { [void]$scan.Unreadable.Add(@{ Path = ($it.FullName + ' (a reparse point Windows would not say the kind of)'); Denied = $false }) }
+                else { $stack.Push(@($it.FullName, ($depth + 1))) }
                 continue
             }
             if ($clock.Elapsed.TotalSeconds -ge $Budget) { $scan.OutOfTime = $true; break }
@@ -270,6 +366,37 @@ function Invoke-Walk {
     return $scan
 }
 
+# PURE. Several roots, one verdict: each root is walked on its own, and a root
+# that is missing or could not be read becomes a named unread entry -- never a
+# reason to drop the others, never an all-clear. $Optional roots may be absent.
+function Merge-WalkScans {
+    param($Scans, [string[]]$Optional = @())
+    $m = @{ RootState = 'ok'; RootDenied = $false; RootError = ''; RootPath = ''; Hits = (New-Object System.Collections.ArrayList); Examined = 0; Unreadable = (New-Object System.Collections.ArrayList); Vanished = 0; OutOfTime = $false; Seconds = 0; Budget = 0; Links = (New-Object System.Collections.ArrayList) }
+    $paths = New-Object System.Collections.ArrayList
+    $answered = 0
+    foreach ($x in @($Scans)) {
+        if ($null -eq $x) { continue }
+        [void]$paths.Add([string]$x.RootPath)
+        # The walks share one budget: the line names the whole of it.
+        $m.Budget = [int]$m.Budget + [int]$x.Budget
+        $m.Seconds = [math]::Round([double]$m.Seconds + [double]$x.Seconds, 1)
+        if ([string]$x.RootState -eq 'missing') {
+            if ($Optional -notcontains [string]$x.RootPath) { [void]$m.Unreadable.Add(@{ Path = ([string]$x.RootPath + ' (not found)'); Denied = $false }) }
+            continue
+        }
+        if ([string]$x.RootState -ne 'ok') { [void]$m.Unreadable.Add(@{ Path = ([string]$x.RootPath + ' (' + [string]$x.RootError + ')'); Denied = [bool]$x.RootDenied }); continue }
+        $answered++
+        # TEMP sits under the profile: a file both walks reach is listed once.
+        foreach ($h in @($x.Hits)) { if (-not $m.Hits.Contains($h)) { [void]$m.Hits.Add($h) } }
+        foreach ($u in @($x.Unreadable)) { [void]$m.Unreadable.Add($u) }
+        foreach ($l in @($x.Links)) { [void]$m.Links.Add($l) }
+        $m.Examined += [int]$x.Examined; $m.Vanished += [int]$x.Vanished
+        if ($x.OutOfTime) { $m.OutOfTime = $true }
+    }
+    $m.RootPath = (@($paths.ToArray()) -join ', ')
+    return $m
+}
+
 if ($SelfTest) {
     $fails = 0
     function T { param([string]$Name, [bool]$Ok, [string]$Got)
@@ -283,6 +410,12 @@ if ($SelfTest) {
     $w5 = New-Object System.Management.Automation.ErrorRecord((New-Object System.ComponentModel.Win32Exception(5)), 'x', 'NotSpecified', $null)
     $w2 = New-Object System.Management.Automation.ErrorRecord((New-Object System.ComponentModel.Win32Exception(2)), 'x', 'NotSpecified', $null)
     $w32 = New-Object System.Management.Automation.ErrorRecord((New-Object System.ComponentModel.Win32Exception(32)), 'x', 'NotSpecified', $null)
+    T 'a folder PowerShell names a Junction is a link, not walked' ((Get-DirKind -IsReparse $true -LinkType 'Junction' -Tag $null) -eq 'link') ''
+    T 'a profile junction whose LinkType PowerShell could not tell (Start Menu, deny-List ACE) is a link by its tag 0xA0000003, never an unreadable folder' ((Get-DirKind -IsReparse $true -LinkType '' -Tag ([uint32]2684354563)) -eq 'link') ''
+    T 'a symbolic link known only by its tag 0xA000000C is a link' ((Get-DirKind -IsReparse $true -LinkType '' -Tag ([uint32]2684354572)) -eq 'link') ''
+    T 'a OneDrive cloud folder (tag 0x9000601A) is walked: only links are skipped' ((Get-DirKind -IsReparse $true -LinkType '' -Tag ([uint32]2415944730)) -eq 'walk') ''
+    T 'a reparse point whose tag could not be read is unknown (a named gap), never quietly skipped or walked' ((Get-DirKind -IsReparse $true -LinkType '' -Tag $null) -eq 'unknown') ''
+    T 'an ordinary folder is walked' ((Get-DirKind -IsReparse $false -LinkType '' -Tag $null) -eq 'walk') ''
     T 'a stream read refused with Win32 error 5 is access denied (Get-Item -Stream says it no other way)' ((Test-Denied $w5) -and -not (Test-Vanished $w5)) ''
     T 'a file gone between the listing and the stream read (Win32 error 2) is churn, never an unreadable file' ((Test-Vanished $w2) -and -not (Test-Denied $w2)) ''
     T 'a sharing violation (Win32 error 32) is neither: it stays an unreadable file, and a gap' ((-not (Test-Denied $w32)) -and -not (Test-Vanished $w32)) ''
@@ -294,6 +427,33 @@ if ($SelfTest) {
     $long = 'C:\Users\alice\AppData\Local\Temp\' + (('d' * 40 + '\') * 7) + 'deep.html'; $p = ConvertTo-PrintablePath $long
     T 'a path too long to print whole keeps its drive AND its file name' ($long.Length -gt 300 -and $p.Length -le 260 -and $p.StartsWith('C:\Users\alice') -and $p.EndsWith('deep.html')) $p
     T 'a name its parent still lists did not vanish (unknown counts as listed, never as churn)' ((Test-StillListed $PSCommandPath) -and (Test-StillListed 'Z:\dz_no_such_parent\x') -and -not (Test-StillListed (Join-Path $PSScriptRoot 'dz_no_such_file_here.tmp'))) ''
+    $v = Get-WalkVerdict -Check 'RansomExt' -Scan (S @{ Hits = @('C:\Users\alice\Documents\budget.xlsx.lockbit  2026-11-13 09:00') }); $t = $v.Lines -join "`n"
+    T 'ransomware extension found: the CRITICAL wording the bats always printed, the file listed, and a hit' ($v.Hit -and $t -match '(?m)^\[CRITICAL\]\[T1486\] Files with ransomware-associated extensions found:$' -and $t -match 'budget\.xlsx\.lockbit') $t
+    $v = Get-WalkVerdict -Check 'RansomExt' -Scan (S); $t = $v.Lines -join "`n"
+    T 'ransomware walk, nothing found: the [OK] wording kept, with how much was examined' ((-not ($v.Hit -or $v.Gap)) -and $t -match '(?m)^\[OK\] No files with known ransomware extensions in user directories\.$') $t
+    $m = Merge-WalkScans -Scans @((S @{ RootPath = 'C:\Users\alice' }), (S @{ RootPath = 'C:\Users\Public'; RootState = 'unreadable'; RootError = 'UnauthorizedAccessException: denied'; RootDenied = $true }), (S @{ RootPath = 'C:\T'; RootState = 'missing' }))
+    $v = Get-WalkVerdict -Check 'RansomExt' -Scan $m; $t = $v.Lines -join "`n"
+    T 'one of the three folders unreadable and one missing: a raised gap that names both, never "[OK] No files with known ransomware extensions" (the old block printed [OK])' ($v.Gap -and $t -match 'C:\\Users\\Public \(UnauthorizedAccessException' -and $t -match 'C:\\T \(not found\)' -and $t -notmatch 'No files with known ransomware') $t
+    $m = Merge-WalkScans -Scans @((S @{ RootPath = 'C:\U'; Hits = @('C:\U\AppData\Local\Temp\x.akira  t') }), (S @{ RootPath = 'C:\U\AppData\Local\Temp'; Hits = @('C:\U\AppData\Local\Temp\x.akira  t') }))
+    T 'a file both the profile walk and the TEMP walk reach is listed once' (@($m.Hits).Count -eq 1) ''
+    $m = Merge-WalkScans -Scans @((S @{ RootPath = 'C:\a'; Hits = @('C:\a\x.akira') }), (S @{ RootPath = 'C:\b'; RootState = 'unreadable'; RootError = 'IOException: x' }))
+    $v = Get-WalkVerdict -Check 'RansomExt' -Scan $m
+    T 'a hit in one folder and another folder unreadable: both raised' ($v.Hit -and $v.Gap) ($v.Lines -join ' | ')
+    $m = Merge-WalkScans -Scans @((S @{ RootPath = 'C:\t1'; RootState = 'missing' }), (S @{ RootPath = 'C:\t2'; RootState = 'missing' })) -Optional @('C:\t1', 'C:\t2')
+    $v = Get-WalkVerdict -Check 'TokenCache' -Scan $m; $t = $v.Lines -join "`n"
+    T 'token caches that do not exist on this PC are an answer, not a gap' ((-not $v.Gap) -and $t -match '(?m)^\[OK\] No unusual recent token cache modifications\.$') $t
+    $v = Get-WalkVerdict -Check 'TokenCache' -Scan (S @{ Hits = @('C:\x\cache.dat  modified 2026-11-13 09:00') }); $t = $v.Lines -join "`n"
+    T 'recent token-cache activity is an [INFO] listing to correlate, never a counted finding' ((-not $v.Hit) -and $t -match '(?m)^\[INFO\] Recent AAD/token cache activity' -and $t -notmatch '\[WARNING\]|\[CRITICAL\]') $t
+    $v = Get-WalkVerdict -Check 'CredStores' -Scan (S @{ Unreadable = @(@{ Path = 'C:\x\Login Data'; Denied = $true }) }); $t = $v.Lines -join "`n"
+    T 'a browser credential store that is there and cannot be read: a raised gap, never "[OK] No unusual recent access"' ($v.Gap -and $t -match '(?m)^\[WARNING\] Browser credential store check NOT performed in full' -and $t -notmatch 'No unusual recent access') $t
+    $tmpA = Join-Path ([IO.Path]::GetTempPath()) ('dz_fwc_' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    T 'a store whose whole folder does not exist is absent (no browser installed), never a gap' (Test-AbsentForSure (Join-Path $tmpA 'Google\Chrome\User Data\Default\Login Data')) ''
+    $null = New-Item -ItemType Directory -Path $tmpA -Force
+    try {
+        T 'a store its parent lists without it is absent' (Test-AbsentForSure (Join-Path $tmpA 'Login Data')) ''
+        Set-Content -LiteralPath (Join-Path $tmpA 'Login Data') -Value 'x'
+        T 'a store its parent DOES list is not absent, so a failed read of it is a gap' (-not (Test-AbsentForSure (Join-Path $tmpA 'Login Data'))) ''
+    } finally { Remove-Item -LiteralPath $tmpA -Recurse -Force -EA SilentlyContinue }
     $den = @{ Path = 'C:\Users\alice\AppData\Local\Temp\locked'; Denied = $true }
     $io = @{ Path = 'C:\Users\alice\AppData\Local\Temp\broken'; Denied = $false }
 
@@ -348,7 +508,7 @@ if ($SelfTest) {
 }
 
 # --- live ---------------------------------------------------------------------
-if (-not $Check) { 'file_walk_check: -Check is required (TempAds, TempHtml or OutlookMsg).'; exit 1 }
+if (-not $Check) { 'file_walk_check: -Check is required (TempAds, TempHtml, OutlookMsg, RansomExt, TokenCache or CredStores).'; exit 1 }
 if ($Elevated -lt 0) {
     $Elevated = 0
     try { if ((New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { $Elevated = 1 } } catch {}
@@ -376,7 +536,22 @@ if ($Check -eq 'TempAds') {
         }
         return $null
     }
-} else {
+} elseif ($Check -eq 'RansomExt') {
+    $select = {
+        param($f)
+        if ($script:RansomExts -contains ([string]$f.Extension).ToLowerInvariant()) {
+            return ($f.FullName + '  ' + $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm', [Globalization.CultureInfo]::InvariantCulture))
+        }
+        return $null
+    }
+} elseif ($Check -eq 'TokenCache') {
+    $tcut = (Get-Date).AddHours(-2)
+    $select = {
+        param($f)
+        if ($f.LastWriteTime -gt $tcut) { return ($f.FullName + '  modified ' + $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm', [Globalization.CultureInfo]::InvariantCulture)) }
+        return $null
+    }
+} elseif ($Check -eq 'OutlookMsg') {
     $cut = (Get-Date).AddDays(-$script:MsgDays)
     $select = {
         param($f)
@@ -387,8 +562,51 @@ if ($Check -eq 'TempAds') {
     }
 }
 if ($BudgetSeconds -lt 0) { $BudgetSeconds = [int]$script:Checks[$Check].Budget }
+# Several roots for the checks that read more than one folder. -Root (CI)
+# replaces all of them with one scratch folder.
+$roots = @($rootPath); $optional = @()
+if ($RootList -and $RootList.Count -gt 0) { $roots = @($RootList) }
+elseif (-not $Root) {
+    $lad = [Environment]::GetFolderPath('LocalApplicationData'); $rad = [Environment]::GetFolderPath('ApplicationData')
+    if ($Check -eq 'RansomExt') { $roots = @($env:USERPROFILE, (Join-Path ([string]$env:SystemDrive + '\') 'Users\Public'), $env:TEMP) }
+    elseif ($Check -eq 'TokenCache') {
+        # Not every PC has each cache: absent is an answer, not a gap.
+        $roots = @((Join-Path $lad 'Microsoft\TokenBroker\Cache'), (Join-Path $lad 'Microsoft\Credentials'), (Join-Path $lad '.IdentityService')); $optional = $roots
+    } elseif ($Check -eq 'CredStores') {
+        $roots = @((Join-Path $lad 'Google\Chrome\User Data\Default\Login Data'), (Join-Path $lad 'Microsoft\Edge\User Data\Default\Login Data'), (Join-Path $rad 'Mozilla\Firefox\Profiles')); $optional = $roots
+    }
+}
 $v = $null
-try { $v = Get-WalkVerdict -Check $Check -Scan (Invoke-Walk -RootPath $rootPath -Select $select -Budget $BudgetSeconds) -IsElevated ($Elevated -eq 1) } catch { $v = $null }
+try {
+    if ($Check -eq 'CredStores') {
+        # Not a walk: three named stores, each read by itself. A store that
+        # is not there is a browser that is not installed; one that is there
+        # and cannot be read is said, never passed as quiet.
+        $acut = (Get-Date).AddHours(-24)
+        $scan = @{ RootState = 'ok'; RootDenied = $false; RootError = ''; RootPath = (@($roots) -join ', '); Hits = (New-Object System.Collections.ArrayList); Examined = 0; Unreadable = (New-Object System.Collections.ArrayList); Vanished = 0; OutOfTime = $false; Seconds = 0; Budget = $BudgetSeconds; Links = @() }
+        foreach ($p in $roots) {
+            if (-not $p) { continue }
+            # Asked directly: File.Exists and Directory.Exists answer "no"
+            # for a path this account may not read, so they cannot tell a
+            # browser that is not installed from a store that refused us.
+            try {
+                $it = Get-Item -LiteralPath $p -Force -ErrorAction Stop
+                $scan.Examined++
+                if ($it.LastAccessTime -gt $acut) { [void]$scan.Hits.Add(($p + ' accessed ' + $it.LastAccessTime.ToString('yyyy-MM-dd HH:mm', [Globalization.CultureInfo]::InvariantCulture))) }
+            } catch {
+                if ((Test-Vanished $_) -and (Test-AbsentForSure $p)) { continue }
+                [void]$scan.Unreadable.Add(@{ Path = $p; Denied = (Test-Denied $_) })
+            }
+        }
+        $v = Get-WalkVerdict -Check $Check -Scan $scan -IsElevated ($Elevated -eq 1)
+    } elseif ($roots.Count -gt 1) {
+        $each = [math]::Max(1, [int][math]::Floor($BudgetSeconds / $roots.Count))
+        $scans = @(); foreach ($r in $roots) { $scans += (Invoke-Walk -RootPath $r -Select $select -Budget $each -MaxDepth $(if ($script:Checks[$Check].Depth) { [int]$script:Checks[$Check].Depth } else { -1 })) }
+        $v = Get-WalkVerdict -Check $Check -Scan (Merge-WalkScans -Scans $scans -Optional $optional) -IsElevated ($Elevated -eq 1)
+    } else {
+        $v = Get-WalkVerdict -Check $Check -Scan (Invoke-Walk -RootPath $rootPath -Select $select -Budget $BudgetSeconds -MaxDepth $(if ($script:Checks[$Check].Depth) { [int]$script:Checks[$Check].Depth } else { -1 })) -IsElevated ($Elevated -eq 1)
+    }
+} catch { $v = $null }
 if ($null -eq $v -or @($v.Lines).Count -eq 0) {
     # No verdict is never a verdict: say so and raise it as this check's gap.
     ('[WARNING] ' + $script:Checks[$Check].What + ' NOT performed -- the walk failed before it produced a verdict (' + $script:Checks[$Check].Tech + ').')
@@ -397,7 +615,7 @@ if ($null -eq $v -or @($v.Lines).Count -eq 0) {
 foreach ($l in $v.Lines) { $l }
 # The bat raises a row when this is absent: a helper that never got this far
 # printed no verdict, and no marker must not read as nothing found.
-Write-Marker -Name (@{ TempAds = 'ads'; TempHtml = 'htmltemp'; OutlookMsg = 'outlookmsg' }[$Check] + '_done') -Sev 'done'
+Write-Marker -Name (@{ TempAds = 'ads'; TempHtml = 'htmltemp'; OutlookMsg = 'outlookmsg'; RansomExt = 'ransom'; TokenCache = 'tokencache'; CredStores = 'credstore' }[$Check] + '_done') -Sev 'done'
 # Marker names are written out, not built: lint_unraised_findings reads them.
 if ($Check -eq 'TempAds') {
     if ($v.Hit) { Write-Marker -Name 'ads_hit' -Sev 'hit' }
@@ -405,8 +623,15 @@ if ($Check -eq 'TempAds') {
 } elseif ($Check -eq 'TempHtml') {
     if ($v.Hit) { Write-Marker -Name 'htmltemp_hit' -Sev 'hit' }
     if ($v.Gap) { Write-Marker -Name 'htmltemp_gap' -Sev 'WARNING' }
-} else {
+} elseif ($Check -eq 'OutlookMsg') {
     if ($v.Hit) { Write-Marker -Name 'outlookmsg_hit' -Sev 'hit' }
     if ($v.Gap) { Write-Marker -Name 'outlookmsg_gap' -Sev 'WARNING' }
+} elseif ($Check -eq 'RansomExt') {
+    if ($v.Hit) { Write-Marker -Name 'ransom_hit' -Sev 'CRITICAL' }
+    if ($v.Gap) { Write-Marker -Name 'ransom_gap' -Sev 'WARNING' }
+} elseif ($Check -eq 'TokenCache') {
+    if ($v.Gap) { Write-Marker -Name 'tokencache_gap' -Sev 'WARNING' }
+} else {
+    if ($v.Gap) { Write-Marker -Name 'credstore_gap' -Sev 'WARNING' }
 }
 exit 0
