@@ -1442,6 +1442,12 @@ jobs:
           & .\.github\ci\office_macro_states.ps1
           exit $LASTEXITCODE
 
+      - name: office_macro_check.ps1 -Part Trust + the runner's own settings and every state through the real reader (a non-default Trusted Location and macros enabled in a download are findings; Office's defaults and the person's own documents are not)
+        shell: powershell
+        run: |
+          & .\.github\ci\office_trust_states.ps1
+          exit $LASTEXITCODE
+
       - name: proxy_check.ps1 -SelfTest + the runner's own proxy settings, every state through the real reader, and a real WinHTTP proxy found by asking Windows (a key that cannot be read is a raised gap)
         shell: powershell
         run: |
