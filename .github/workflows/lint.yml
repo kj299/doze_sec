@@ -679,6 +679,31 @@ jobs:
             grep -qF 'Office macro policy check produced no verdict' "$b" || { echo "$b: the macro check lost its no-verdict backstop"; exit 1; }
           done
           echo 'Office macro policy: three sources in Office order, an unread one is a gap'
+      - name: Proxy settings -- a proxy in effect is a counted WARNING, WinHTTP is read, an unread key is a gap
+        run: |
+          out=$(pwsh -NoProfile -File tools/proxy_check.ps1 -SelfTest); echo "$out"
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 43 ] || { echo "only $n proxy case(s)"; exit 1; }
+          echo "$out" | grep -q '^\[FAIL\]' && { echo 'a proxy case failed'; exit 1; }
+          for n in 'the Internet Settings key could not be read: a raised gap, never "[OK] No proxy" (the old block)' \
+                   'automatic detection only (the Windows default): [OK] plus INFO, never a WARNING' \
+                   'AutoConfigURL alone (the value adware sets): the WARNING' \
+                   'Windows reports none while the registry holds one: [OK] -- the effect decides, the difference is INFO' \
+                   'another account refused to a standard-user token: DEFERRED and counted, no gap' \
+                   'ProxySettingsPerUser=0: the machine setting is graded, the account'"'"'s own is INFO not in force' \
+                   'WinHTTP asked, a named proxy: the WARNING naming it and what it reaches' \
+                   'the 32-bit WOW6432Node record holds a proxy: its own WARNING' \
+                   'record: cut short is an error, never "no proxy"' \
+                   'a proxy found AND a value unreadable: both raised'; do
+            echo "$out" | grep -qF "$n" || { echo "proxy case gone: $n"; exit 1; }
+          done
+          for b in doze_sec.bat doze_sec_noAdmin.bat; do
+            grep -qF "Internet Settings' -EA SilentlyContinue" "$b" && { echo "$b: the silenced proxy read is back"; exit 1; }
+            grep -qF '[OK] No proxy settings in registry' "$b" && { echo "$b: the old proxy all-clear is back"; exit 1; }
+            grep -qF 'tools\proxy_check.ps1">> "%REPORT%" 2>&1' "$b" || { echo "$b: Section 3 no longer runs proxy_check"; exit 1; }
+            for m in dz_proxy_hit dz_winhttp_hit dz_proxy_gap dz_proxy_done dz_proxy_deferred; do grep -qF "%TEMP%\\$m.txt" "$b" || { echo "$b: $m is never read"; exit 1; }; done
+            grep -qF 'Proxy-settings check produced no verdict' "$b" || { echo "$b: the proxy check lost its no-verdict backstop"; exit 1; }
+          done
+          echo 'Proxy settings: graded on what is in force, every signed-in account and WinHTTP; an unread key is a gap'
       - name: Remote-access tools -- running or installed is a counted WARNING; names match whole, never as substrings
         run: |
           out=$(pwsh -NoProfile -File tools/rmm_check.ps1 -SelfTest); echo "$out"
@@ -876,7 +901,7 @@ jobs:
           dup=$(echo "$called" | uniq -d); [ -z "$dup" ] || { echo "called by more than one step: $dup"; exit 1; }
           for f in $called; do [ -s ".github/ci/$f" ] || { echo ".github/ci/$f is missing or empty -- its step would run nothing"; exit 1; }; done
           for f in .github/ci/*.ps1; do echo "$called" | grep -qxF "$(basename "$f")" || { echo "$f is called by no step in windows-smoke.yml"; exit 1; }; done
-          n=$(echo "$called" | wc -l); [ "$n" -ge 28 ] || { echo "only $n step(s) call a .github/ci script; 28 are expected"; exit 1; }
+          n=$(echo "$called" | wc -l); [ "$n" -ge 29 ] || { echo "only $n step(s) call a .github/ci script; 29 are expected"; exit 1; }
           # cmd reads a bare < or > in an echo as a file redirection, quoted or
           # not by PowerShell's single quotes: 'Expected: <Windows>\system32...'
           # in a tile's help text made the whole line vanish from the dashboard

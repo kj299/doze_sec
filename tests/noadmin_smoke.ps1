@@ -493,6 +493,7 @@ try {
         @{ Name = 'remote-access tool'; Ran = '(?m)^\[OK\] No known remote-access tool (running|installed)|(?m)^\[WARNING\] Remote-access tool (RUNNING|INSTALLED): '; Def = '(?m)^\[DEFERRED - ADMIN REQUIRED\] Remote-access tool'; Gap = '(?m)^\[WARNING\] Remote-access tool check .*(NOT performed|produced no verdict)'; Row = '\|4\|T1219\|Remote-access tool check ' },
         @{ Name = 'Office macro policy'; Ran = '(?m)^\[OK\] No Office (settings for this account|macro setting weakens protection)|(?m)^\[WARNING\] .+ \d+\.0: (VBAWarnings|blockcontentexecutionfrominternet)'; Def = '(?m)^\[DEFERRED - ADMIN REQUIRED\] Office macro'; Gap = '(?m)^\[WARNING\] Office macro policy check (NOT performed|produced no verdict)'; Row = '\|13\|T1204\.002\|Office macro policy check ' },
         @{ Name = 'other accounts'' Run keys'; Ran = '(?m)^\[OK\] No (suspicious Run-key autorun in \d+ other account|other account on this PC has a profile)|(?m)^\[WARNING\] Suspicious Run-key autorun in another account|(?m)^\[INFO\] \d+ signed-out account\(s\) not read'; Def = '(?m)^\[DEFERRED - ADMIN REQUIRED\] Other accounts'' Run keys'; Gap = '(?m)^\[WARNING\] Other accounts'' Run-key check (NOT performed|produced no verdict)'; Row = '\|5\|T1547\.001\|Other accounts'' Run-key check ' },
+        @{ Name = 'proxy settings'; Ran = '(?m)^\[OK\] No web proxy in effect for this account|(?m)^\[WARNING\] Web proxy in effect for this account'; Def = '(?m)^\[DEFERRED - ADMIN REQUIRED\] Proxy settings of '; Gap = '(?m)^\[WARNING\] Proxy-settings check (NOT performed|produced no verdict)'; Row = '\|3\|T1090\|Proxy-settings check ' },
         @{ Name = 'OpenSSH Server'; Ran = '(?m)^\[OK\] OpenSSH Server (not installed|installed but not running)\.|(?m)^\[WARNING\] OpenSSH Server \(sshd\) is RUNNING'; Def = '(?m)^\[DEFERRED - ADMIN REQUIRED\] OpenSSH Server check'; Gap = '(?m)^\[WARNING\] OpenSSH Server check (NOT performed|produced no verdict)'; Row = '\|18\|T1021\.004\|OpenSSH Server check ' })) {
         $ran = $text1 -match $c.Ran; $def = $text1 -match $c.Def; $gap = $text1 -match $c.Gap
         Write-Host ("  MEASURED: the {0} check on a standard-user token: ran={1} deferred={2} gap={3}" -f $c.Name, $ran, $def, $gap)
@@ -501,6 +502,9 @@ try {
         if ($gap) { Assert ($rows -gt 0) ('the {0} gap has its ledger row' -f $c.Name) ('a {0} NOT-performed line was printed with no ledger row' -f $c.Name) }
         if ($def -and -not $gap) { Assert ($rows -eq 0) ('a {0} deferral is not a ledger row' -f $c.Name) ('a {0} deferral was raised as a ledger row' -f $c.Name) }
     }
+    # The proxy settings are this user's own (HKCU) and the machine's WinHTTP
+    # proxy (HKLM, and Windows answers any token): a gap here is a defect.
+    Assert ($text1 -notmatch '(?m)^\[WARNING\] Proxy-settings check (NOT performed|produced no verdict)') 'the proxy settings were read on a standard-user token, no gap' 'the proxy check raised a gap on a standard-user token'
     # The Office macro settings are this user's own (HKCU): a standard user reads
     # them, so a gap here is a defect, not the token.
     Assert ($text1 -notmatch '(?m)^\[WARNING\] Office macro policy check (NOT performed|produced no verdict)') 'the Office macro policy was read from the user''s own settings, no gap' 'the Office macro policy check raised a gap on the user''s own settings'

@@ -1,4 +1,4 @@
-# Last verified by doze_sec: 2026-06-06 10:20:38 sha256:72AD9F4D57ACC0B3
+# Last verified by doze_sec: 2026-11-14 15:49:35 sha256:4D5B8EE62FEA975C
 # SENTINEL-X CTI -- Suspicious Registry Keys/Values
 # Updated: 2026-03-29 | Source: MDDR 2024-2025, MITRE ATT&CK
 # Format: HIVE\KEY\PATH|ValueName|BadValue (pipe-delimited)
@@ -50,4 +50,6 @@ HKLM\SYSTEM\CurrentControlSet\Control\Lsa|RunAsPPL|0
 HKLM\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging|EnableScriptBlockLogging|0
 #
 # === NETWORK PROXY (MitM) ===
-HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings|AutoConfigURL
+# AutoConfigURL is graded by Section 3 (tools\proxy_check.ps1) for every
+# signed-in account, on what is in force; listing it here raised the same
+# value twice and contradicted Section 3 under a machine-wide policy.

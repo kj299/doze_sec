@@ -110,7 +110,7 @@ Temp path check, admin detection, OS version, OS compatibility, Safe Mode, log d
 |---|---------|:-:|----------------|
 | 1 | System identity and patch level | No | Unpatched OS, CVE exposure |
 | 2 | User accounts and privilege audit | No | Rogue accounts, SID anomalies |
-| 3 | Network configuration and connections | No | C2 callbacks, DNS anomalies, open shares |
+| 3 | Network configuration and connections | No | C2 callbacks, DNS anomalies, open shares; web proxy in effect for any signed-in account and the machine-wide WinHTTP proxy (T1090) |
 | 4 | Running processes | No | LOLBins, RMM tools, suspicious paths, system-process names outside their directory or started by the wrong parent (T1036), a system process that is a copy of its parent (an LSASS copy: T1003.001), loaded-module inspection (DLLs inside running processes: staging-path, unsigned, non-Microsoft in core security processes — T1055/T1574) |
 | 5 | Startup and persistence | No | Run keys, Startup folders, Winlogon, IFEO debuggers, AppInit/AppCert DLLs, logon/unlock vectors (Notify, Credential Providers, Network Provider DLLs), netsh helpers, print processors and port monitors, BITS jobs (including one queued to upload a file off the machine, T1048, and what BITS recorded about transfers that already finished), PowerShell profiles, time providers |
 | 6 | Scheduled tasks | No | Malicious tasks, action-path detection (PS CSV, Task-To-Run column only) |
@@ -183,7 +183,7 @@ Reads structured IOC files from `ThreatLists/` and matches against the live syst
 | 18e | Scheduled task IOC match | `Get-ScheduledTask` vs `ioc_scheduled_tasks.txt` -- task path and every action's full command line, the same in every Windows language |
 | 18f | DNS cache C2 domains | `ipconfig /displaydns` vs `ioc_domains.txt` |
 | 18g | LOLBin command patterns | `Get-CimInstance Win32_Process` command lines vs `ioc_lolbins.txt` (`select_lines`) |
-| 18h | Registry IOC check | `Get-ItemProperty` vs `ioc_registry.txt` |
+| 18h | Registry IOC check | exact key and value name vs `ioc_registry.txt` |
 | 18i | TTP coverage summary | `ttp_manifest.txt` dump |
 | 18j | VirusTotal hash reputation (opt-in via `-vt`) | `Get-FileHash` SHA256 -> VT API; capped at 20 priority files; rate-limited for free tier |
 | 18k | Local hash IOC match (always-on) | `Get-FileHash` SHA256 vs `ioc_hashes.txt`; offline complement to 18j |
@@ -215,7 +215,7 @@ Plain-text IOC files. One entry per line. `#` = comment.
 | `ioc_processes.txt` | 54 | Process name | Ransomware, C2, cred tools, recon (FP-prone RMM/admin-tool entries removed) |
 | `ioc_named_pipes.txt` | 32 | Pipe name | Cobalt Strike, Sliver, Havoc, Mythic, PsExec |
 | `ioc_services.txt` | 24 | Service name | C2 implants, BYOVD, ransomware (legitimate RMM/HWMonitor entries removed) |
-| `ioc_registry.txt` | 25 | `HIVE\Path\|Value\|BadVal` | Persistence, COM hijack, defense evasion (value-state entries gated on the malicious value) |
+| `ioc_registry.txt` | 24 | `HIVE\Path\|Value\|BadVal` | Persistence, COM hijack, defense evasion (value-state entries gated on the malicious value) |
 | `ioc_file_paths.txt` | 44 | File path | Staging dirs, webshells, driver drops |
 | `ioc_scheduled_tasks.txt` | 19 | Task name/path | Fake updates, APT persistence, ransomware pre-staging |
 | `ioc_domains.txt` | 21 | Domain fragment | C2 infra, tunneling (bare TLDs and legit DoH endpoints removed) |
