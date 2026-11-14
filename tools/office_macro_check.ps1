@@ -28,21 +28,25 @@
 #     block on macros in files from the internet is turned off; any other
 #     value -> WARNING.
 #   Nothing set anywhere -> Office's defaults: macros disabled with
-#   notification, and (Microsoft 365 Apps since 2022) macros in files from the
-#   internet blocked. Office 2013 and 2010 settings (15.0, 14.0) predate that
+#   notification, and macros in files from the internet blocked in Microsoft
+#   365 Apps (rolled out 2022-2024, by app and update channel). Office 2013 and 2010 settings (15.0, 14.0) predate that
 #   block, and the line says so.
 #   VERSIONS are those present under ANY of the three roots, so a policy
 #   written for an Office that has not been started yet is still read. A root
 #   that does not exist is an answer; one that could not be listed is a gap.
 #
-# The settings are per user (HKCU). The line names whose they are, and when a
-# different account is signed in at this PC it says that person's settings
-# were not read -- [INFO], since an audit run from a separate administrator
-# account is ordinary on a managed PC.
+# The settings are per user. The audit's own account is read through HKCU and
+# named. Every OTHER account signed in at this PC (the owners of explorer.exe)
+# is read through HKEY_USERS\<SID>, and its lines name it: an elevated audit is
+# often run from a separate administrator account, and the settings that
+# protect the person at this PC are theirs. A signed-in account whose registry
+# could not be opened is a raised gap; a desktop session whose account this
+# token cannot identify (a standard-user token cannot) is [INFO].
 #
-# Markers (in -MarkerDir): dz_macro_hit.txt, dz_macro_gap.txt, and
-# dz_macro_done.txt when the tool reached its end (the bat raises "produced no
-# verdict" without it).
+# Markers (in -MarkerDir): dz_macro_hit.txt, dz_macro_gap.txt,
+# dz_macro_deferred.txt (a count, for DEFERRED_COUNT: another account's
+# registry refused to a standard-user token), and dz_macro_done.txt when the
+# tool reached its end (the bat raises "produced no verdict" without it).
 #
 # Usage:
 #   powershell -File tools\office_macro_check.ps1 [-MarkerDir <dir>]
@@ -56,13 +60,21 @@ param(
     # Only CI changes it, to a throwaway key, so every state runs through the
     # real reader. The three roots hang off it.
     [string]$KeyRoot = 'HKCU:\Software',
+    # CI only: more roots read as if each were another signed-in account.
+    [string[]]$OtherKeyRoot = @(),
+    # 1/0 from the caller, or -1: ask the token.
+    [int]$Elevated = -1,
     [switch]$SelfTest
 )
 
 $ErrorActionPreference = 'Continue'
 if (-not $MarkerDir) { $MarkerDir = [IO.Path]::GetTempPath() }
 
-$script:Apps = @('Word', 'Excel', 'PowerPoint', 'Access', 'Publisher', 'Outlook', 'Visio', 'MS Project')
+# The seven applications Microsoft's internet-macro block covers ("Macros from
+# the internet are blocked by default in Office"). Outlook is not one of them,
+# and its own macro setting is a different value (Level) whose registry
+# meanings Microsoft does not document; grading it would be a guess.
+$script:Apps = @('Word', 'Excel', 'PowerPoint', 'Access', 'Publisher', 'Visio', 'MS Project')
 $script:Versions = @('16.0', '15.0', '14.0')
 $script:VbaText = @{ 2 = 'macros disabled with notification, the default'; 3 = 'only digitally signed macros run'; 4 = 'all macros disabled without notification' }
 
@@ -135,24 +147,40 @@ function Select-InForce {
 
 # PURE. $Reads: @( @{ App; Ver; Vba = <sources>; Blk = <sources> } ), one per
 # app and version. $Roots: @( @{ Name; State = ok|nokey|unreadable; Error } ).
-# $Context: @{ Account; Interactive = @(names) | $null }.
-# Returns @{ Lines; Hit; Gap; Examined }.
+# $Owner: '' for the account this audit ran as, else the other signed-in
+# account these settings belong to (named on every line that grades).
+# $Context (own account only): @{ Account; Others = @(names read too);
+# Unresolved = <desktop sessions whose account this token could not tell> }.
+# $IsElevated: another account's registry refused to a standard-user token is
+# the token's limit, not the machine's -- a deferral, never a gap or a row.
+# Returns @{ Lines; Hit; Gap; Deferred; Examined; Read }.
 function Get-MacroVerdict {
-    param($Reads, $Roots, $Context = $null)
+    param($Reads, $Roots, $Context = $null, [string]$Owner = '', [bool]$IsElevated = $true)
     $out = New-Object System.Collections.ArrayList
     $gaps = New-Object System.Collections.ArrayList
-    $r = @{ Hit = $false; Gap = $false; Examined = 0 }
+    $r = @{ Hit = $false; Gap = $false; Deferred = 0; Examined = 0; Read = 0 }
+    if ($Owner -and -not $IsElevated -and @($Roots | Where-Object { [string]$_.State -eq 'denied' }).Count) {
+        [void]$out.Add(('[DEFERRED - ADMIN REQUIRED] Office macro settings of ' + (ConvertTo-PrintableText $Owner) + ', also signed in at this PC, not read: another account''s registry needs administrator.'))
+        $r.Deferred = 1; $r.Lines = @($out.ToArray()); return $r
+    }
+    $who = $(if ($Owner) { ' (settings of ' + (ConvertTo-PrintableText $Owner) + ')' } else { '' })
+    if ($Context -and $Context.Account) {
+        [void]$out.Add(('[INFO] These are the Office settings of ' + (ConvertTo-PrintableText ([string]$Context.Account)) + ', the account this audit ran as.'))
+        foreach ($o in @($Context.Others | Where-Object { [string]$_ })) { [void]$out.Add(('[INFO] ' + (ConvertTo-PrintableText ([string]$o)) + ' is also signed in at this PC: its Office settings are read too, on the lines that name it.')) }
+        if ([int]$Context.Unresolved -gt 0) { [void]$out.Add(('[INFO] ' + [int]$Context.Unresolved + ' desktop session(s) at this PC belong to an account this token could not identify, so their Office settings were not read. An audit run as administrator reads them.')) }
+    }
     foreach ($x in @($Roots)) { if ([string]$x.State -ne 'ok' -and [string]$x.State -ne 'nokey') { [void]$gaps.Add(([string]$x.Name + ' could not be listed (' + (ConvertTo-PrintableText ([string]$x.Error)) + ')')) } }
     $explicit = 0
     $vers = New-Object System.Collections.ArrayList
     foreach ($a in @($Reads)) {
         if (-not $vers.Contains([string]$a.Ver)) { [void]$vers.Add([string]$a.Ver) }
-        $tag = ([string]$a.App + ' ' + [string]$a.Ver)
+        $tag = ([string]$a.App + ' ' + [string]$a.Ver + $who)
         foreach ($kind in 'Vba', 'Blk') {
             $r.Examined++
             $name = $(if ($kind -eq 'Vba') { 'VBAWarnings' } else { 'blockcontentexecutionfrominternet' })
             $p = Select-InForce $a[$kind]
             if ($p.Gap) { [void]$gaps.Add(($tag + ' ' + $name + ': ' + $p.Gap)); continue }
+            $r.Read++
             if (-not $p.Decided) { continue }
             $explicit++
             $n = ConvertTo-RegNumber $p.Value
@@ -160,7 +188,7 @@ function Get-MacroVerdict {
             $src = ('set by ' + $p.From)
             if ($kind -eq 'Vba') {
                 if ($n -eq 1) { [void]$out.Add(('[WARNING] ' + $tag + ': VBAWarnings=1 (' + $src + ') -- ALL macros run with no prompt, so a macro in any document runs the moment it is opened (T1204.002).')); $r.Hit = $true }
-                elseif ($null -ne $n -and $script:VbaText.ContainsKey([int]$n)) { [void]$out.Add(('[OK] ' + $tag + ': VBAWarnings=' + $n + ' (' + $src + ') -- ' + $script:VbaText[[int]$n] + '.')) }
+                elseif ($null -ne $n -and $n -ge 2 -and $n -le 4) { [void]$out.Add(('[OK] ' + $tag + ': VBAWarnings=' + $n + ' (' + $src + ') -- ' + $script:VbaText[[int]$n] + '.')) }
                 else { [void]$out.Add(('[WARNING] ' + $tag + ': VBAWarnings holds a value Office does not define (' + $shown + ', ' + $src + ') -- investigate for tampering (T1204.002).')); $r.Hit = $true }
             } else {
                 if ($n -eq 1) { [void]$out.Add(('[OK] ' + $tag + ': macros in files from the internet are blocked (blockcontentexecutionfrominternet=1, ' + $src + ').')) }
@@ -174,28 +202,38 @@ function Get-MacroVerdict {
         }
     }
     foreach ($old in @('15.0', '14.0')) {
-        if ($vers.Contains($old)) { [void]$out.Add(('[INFO] Office ' + $(if ($old -eq '15.0') { '2013' } else { '2010' }) + ' (' + $old + ') settings are present: that version predates Microsoft''s default block of macros in files from the internet, and no longer receives security updates.')) }
+        if ($vers.Contains($old)) { [void]$out.Add(('[INFO] Office ' + $(if ($old -eq '15.0') { '2013' } else { '2010' }) + ' (' + $old + ') settings are present' + $who + ': that version predates Microsoft''s default block of macros in files from the internet, and no longer receives security updates.')) }
     }
     if ($gaps.Count -gt 0) {
         $names = (@($gaps | Select-Object -First 3) -join '; ') + $(if ($gaps.Count -gt 3) { ('; and ' + ($gaps.Count - 3) + ' more') } else { '' })
-        [void]$out.Add(('[WARNING] Office macro policy check NOT performed' + $(if ($r.Examined -gt 0) { ' in full' } else { '' }) + ' -- ' + $names + ', so a setting that lets macros in malicious documents run would go unseen (T1204.002).'))
+        [void]$out.Add(('[WARNING] Office macro policy check NOT performed' + $(if ($r.Read -gt 0) { ' in full' } else { '' }) + ' -- ' + $names + ', so a setting that lets macros in malicious documents run would go unseen (T1204.002).'))
         $r.Gap = $true
     }
+    $vlist = (@($vers.ToArray()) -join ', ')
     if (-not $r.Hit -and -not $r.Gap) {
-        if ($vers.Count -eq 0) { [void]$out.Add('[OK] No Office settings for this account (Office is not installed, or has never been started by it): Office''s defaults apply.') }
-        else { [void]$out.Add(('[OK] No Office macro setting weakens protection: ' + $r.Examined + ' setting(s) read for Office ' + (@($vers.ToArray()) -join ', ') + ', ' + $explicit + ' set explicitly. Where nothing is set, Office''s defaults apply: macros disabled with notification, and (Microsoft 365 Apps since 2022) macros in files from the internet blocked.')) }
-    } elseif (-not $r.Hit -and $r.Examined -gt 0) {
-        [void]$out.Add(('[INFO] Nothing weakening was found in what could be read: ' + $r.Examined + ' setting(s) for Office ' + (@($vers.ToArray()) -join ', ') + '.'))
-    }
-    if ($Context -and $Context.Account) {
-        [void]$out.Add(('[INFO] These are the Office settings of ' + (ConvertTo-PrintableText ([string]$Context.Account)) + ', the account this audit ran as.'))
-        $int = @($Context.Interactive | Where-Object { [string]$_ })
-        if ($int.Count -gt 0 -and -not (@($int | Where-Object { [string]$_ -ieq [string]$Context.Account }).Count)) {
-            [void]$out.Add(('[INFO] The account signed in at this PC is ' + (ConvertTo-PrintableText ((@($int | Select-Object -First 3)) -join ', ')) + ': its Office settings were NOT read here. Run the audit from that account to check them.'))
-        }
+        if ($vers.Count -eq 0) { [void]$out.Add($(if ($Owner) { ('[OK] No Office settings for ' + (ConvertTo-PrintableText $Owner) + ' (Office has never been started by that account): Office''s defaults apply.') } else { '[OK] No Office settings for this account (Office is not installed, or has never been started by it): Office''s defaults apply.' })) }
+        else { [void]$out.Add(('[OK] No Office macro setting weakens protection' + $(if ($Owner) { ' for ' + (ConvertTo-PrintableText $Owner) } else { '' }) + ': ' + $r.Read + ' setting(s) read for Office ' + $vlist + ', ' + $explicit + ' set explicitly. Where nothing is set, Office''s defaults apply: macros disabled with notification, and, in Microsoft 365 Apps updated since 2022-2024 (the date depends on the app and update channel), macros in files from the internet blocked.')) }
+    } elseif (-not $r.Hit -and $r.Read -gt 0) {
+        [void]$out.Add(('[INFO] Nothing weakening was found in what could be read' + $who + ': ' + $r.Read + ' setting(s) for Office ' + $vlist + '.'))
     }
     $r.Lines = @($out.ToArray())
     return $r
+}
+
+# PURE. One verdict per account, merged: the lines in order, a hit or a gap
+# from any account raises.
+function Merge-AccountVerdicts {
+    param($Verdicts)
+    $m = @{ Lines = (New-Object System.Collections.ArrayList); Hit = $false; Gap = $false; Deferred = 0 }
+    foreach ($v in @($Verdicts)) {
+        if ($null -eq $v) { continue }
+        foreach ($l in @($v.Lines)) { [void]$m.Lines.Add($l) }
+        if ($v.Hit) { $m.Hit = $true }
+        if ($v.Gap) { $m.Gap = $true }
+        $m.Deferred += [int]$v.Deferred
+    }
+    $m.Lines = @($m.Lines.ToArray())
+    return $m
 }
 
 # Live. Which version keys exist under one root. @{ State = ok|nokey|unreadable; Error; Names }.
@@ -204,7 +242,8 @@ function Read-VersionList {
     try { $k = Get-Item -LiteralPath $Path -ErrorAction Stop }
     catch {
         if ($_.Exception -is [System.Management.Automation.ItemNotFoundException]) { return @{ State = 'nokey'; Error = ''; Names = @() } }
-        return @{ State = 'unreadable'; Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message); Names = @() }
+        $den = ($_.Exception -is [System.Security.SecurityException] -or $_.Exception -is [System.UnauthorizedAccessException])
+        return @{ State = $(if ($den) { 'denied' } else { 'unreadable' }); Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message); Names = @() }
     }
     try { return @{ State = 'ok'; Error = ''; Names = @($k.GetSubKeyNames() | Where-Object { $script:Versions -contains [string]$_ }) } }
     catch { return @{ State = 'unreadable'; Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message); Names = @() } }
@@ -257,10 +296,27 @@ if ($SelfTest) {
     T 'Office 2013 settings: [INFO] that it predates the internet-macro block' ((-not $v.Hit) -and $v.Text -match '(?m)^\[INFO\] Office 2013 \(15\.0\) settings are present') $v.Text
     $v = V @(One (Src $N $N (& $P 2)) $none '16.0' 'MS Project')
     T 'Project is read too (Microsoft lists it among the apps the block covers)' ($v.Text -match '(?m)^\[OK\] MS Project 16\.0: VBAWarnings=2') $v.Text
-    $v = V @(One $none $none) $okRoots @{ Account = 'PC\admin'; Interactive = @('PC\alice') }
-    T 'run as another account than the one signed in: [INFO] that person''s settings were NOT read' ($v.Text -match '(?m)^\[INFO\] The account signed in at this PC is PC\\alice: its Office settings were NOT read here' -and -not $v.Gap) $v.Text
-    $v = V @(One $none $none) $okRoots @{ Account = 'PC\alice'; Interactive = @('pc\ALICE') }
-    T 'run as the signed-in account: no such line (names compared without case)' ($v.Text -notmatch 'signed in at this PC') $v.Text
+    $v = V @(One $none $none) $okRoots @{ Account = 'PC\admin'; Others = @('PC\alice'); Unresolved = 0 }
+    T 'run as an administrator account with another account signed in: that account is named as read too' ($v.Text -match '(?m)^\[INFO\] PC\\alice is also signed in at this PC: its Office settings are read too' -and -not $v.Gap) $v.Text
+    $o = Get-MacroVerdict -Reads @(One (Src $N $N (& $P 1)) $none) -Roots $okRoots -Owner 'PC\alice'
+    T 'the other account''s VBAWarnings=1 is the WARNING, and the line names whose setting it is' ($o.Hit -and (($o.Lines -join "`n") -match '(?m)^\[WARNING\] Word 16\.0 \(settings of PC\\alice\): VBAWarnings=1')) ($o.Lines -join ' | ')
+    $o = Get-MacroVerdict -Reads @() -Roots @(@{ Name = 'the registry of PC\alice'; State = 'unreadable'; Error = 'it is not loaded' }) -Owner 'PC\alice'
+    T 'another signed-in account whose registry could not be opened: a raised gap, never "[OK] No Office settings"' ($o.Gap -and (($o.Lines -join "`n") -match '(?m)^\[WARNING\] Office macro policy check NOT performed -- the registry of PC\\alice could not be listed') -and (($o.Lines -join "`n") -notmatch '(?m)^\[OK\]')) ($o.Lines -join ' | ')
+    $o = Get-MacroVerdict -Reads @() -Roots @(@{ Name = 'the registry of PC\alice'; State = 'denied'; Error = 'SecurityException: denied' }) -Owner 'PC\alice' -IsElevated $false
+    T 'another account''s registry refused to a standard-user token: a deferral, never a gap or a row' ((-not $o.Gap) -and $o.Deferred -eq 1 -and (($o.Lines -join "`n") -match '(?m)^\[DEFERRED - ADMIN REQUIRED\] Office macro settings of PC\\alice')) ($o.Lines -join ' | ')
+    $o = Get-MacroVerdict -Reads @() -Roots @(@{ Name = 'the registry of PC\alice'; State = 'denied'; Error = 'SecurityException: denied' }) -Owner 'PC\alice' -IsElevated $true
+    T 'the same refusal to an administrator: a raised gap (the token does not explain it)' ($o.Gap -and $o.Deferred -eq 0) ($o.Lines -join ' | ')
+    $v = V @(One $none $none) @(@{ Name = 'Office'; State = 'denied'; Error = 'SecurityException: denied' }, @{ Name = 'Group Policy'; State = 'nokey' }, @{ Name = 'Cloud Policy'; State = 'nokey' })
+    T 'the user''s OWN settings refused: a raised gap whatever the token -- the token never explains its own registry' ($v.Gap) $v.Text
+    $m = Merge-AccountVerdicts @((V @(One $none $none)), (Get-MacroVerdict -Reads @(One (Src $N $N (& $P 1)) $none) -Roots $okRoots -Owner 'PC\alice'))
+    T 'merged: a clean own account and a weakened other account still raise the WARNING' ($m.Hit -and -not $m.Gap -and (($m.Lines -join "`n") -match 'settings of PC\\alice')) (($m.Lines) -join ' | ')
+    $v = V @(One $none $none) $okRoots @{ Account = 'PC\bob'; Others = @(); Unresolved = 2 }
+    T 'desktop sessions whose account this token could not tell: said, as [INFO]' ($v.Text -match '(?m)^\[INFO\] 2 desktop session\(s\) at this PC belong to an account this token could not identify' -and -not $v.Gap) $v.Text
+    $v = V @(One (Src $N $N (& $P ([long]4294967297))) $none)
+    T 'a value too large for an Int32 is a value Office does not define, never a crash that voids the verdict' ($v.Hit -and $v.Text -match 'VBAWarnings holds a value Office does not define \(4294967297') $v.Text
+    $v = V @((One (Src $N $N (& $P 2)) $none), (One (Src $N $U $N) $none '16.0' 'Excel'))
+    T 'the count of settings read leaves out the ones that could not be read' ($v.Gap -and $v.Text -match '(?m)^\[INFO\] Nothing weakening was found in what could be read: 3 setting\(s\)') $v.Text
+    T 'Outlook is not graded on values it does not use; the seven apps of Microsoft''s list are' (($script:Apps -notcontains 'Outlook') -and $script:Apps.Count -eq 7 -and ($script:Apps -contains 'Visio')) ($script:Apps -join ',')
     $v = V @(One (Src $N $N (& $P ("1`r`n[OK] forged"))) $none)
     T 'control characters in a registry value cannot start a report line' ($v.Hit -and $v.Text -notmatch '(?m)^\[OK\] forged') $v.Text
     $v = V @(One (Src $N $U $N) $none)
@@ -270,12 +326,19 @@ if ($SelfTest) {
     exit 0
 }
 
-$v = $null
-try {
+# Live. The three sources for every version and app under one account's
+# Software root. $MustExist: the root is another account's registry, which
+# must be there (it is loaded while that account is signed in).
+function Read-AccountSettings {
+    param([string]$Root, [string]$Label, [bool]$MustExist)
+    if ($MustExist) {
+        $st = Read-VersionList $Root
+        if ([string]$st.State -ne 'ok') { return @{ Reads = @(); Roots = @(@{ Name = ('the registry of ' + $Label); State = $(if ([string]$st.State -eq 'denied') { 'denied' } else { 'unreadable' }); Error = $(if ([string]$st.State -eq 'nokey') { 'it is not loaded' } else { [string]$st.Error }) }) } }
+    }
     $roots = @(
-        @{ Name = 'Cloud Policy'; Path = (Join-Path $KeyRoot 'Policies\Microsoft\Cloud\Office') },
-        @{ Name = 'Group Policy'; Path = (Join-Path $KeyRoot 'Policies\Microsoft\Office') },
-        @{ Name = 'the user setting'; Path = (Join-Path $KeyRoot 'Microsoft\Office') }
+        @{ Name = 'Cloud Policy'; Path = ($Root.TrimEnd('\') + '\Policies\Microsoft\Cloud\Office') },
+        @{ Name = 'Group Policy'; Path = ($Root.TrimEnd('\') + '\Policies\Microsoft\Office') },
+        @{ Name = 'the user setting'; Path = ($Root.TrimEnd('\') + '\Microsoft\Office') }
     )
     $rootStates = New-Object System.Collections.ArrayList
     $vers = New-Object System.Collections.ArrayList
@@ -292,34 +355,61 @@ try {
             foreach ($rt in $roots) {
                 # Cloud Policy exists for 16.0 only.
                 if ($rt.Name -eq 'Cloud Policy' -and $ver -ne '16.0') { continue }
-                [void]$src.Add(@{ Name = $rt.Name; Key = (Join-Path $rt.Path ($ver + '\' + $app + '\Security')) })
+                [void]$src.Add(@{ Name = $rt.Name; Key = ($rt.Path + '\' + $ver + '\' + $app + '\Security') })
             }
             $vb = @($src | ForEach-Object { @{ Name = $_.Name; S = (Read-RegValueState -KeyPath $_.Key -Name 'VBAWarnings') } })
             $bk = @($src | ForEach-Object { @{ Name = $_.Name; S = (Read-RegValueState -KeyPath $_.Key -Name 'blockcontentexecutionfrominternet') } })
             [void]$reads.Add(@{ App = $app; Ver = $ver; Vba = $vb; Blk = $bk })
         }
     }
+    return @{ Reads = @($reads.ToArray()); Roots = @($rootStates.ToArray()) }
+}
+
+if ($Elevated -lt 0) {
+    $Elevated = 0
+    try { if ((New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { $Elevated = 1 } } catch {}
+}
+$v = $null; $why = ''
+try {
+    # The other accounts signed in at this PC: the owners of explorer.exe. An
+    # elevated audit is often run from a separate administrator account, and
+    # the settings that protect the person at this PC are theirs.
+    $others = New-Object System.Collections.ArrayList
+    foreach ($ok in @($OtherKeyRoot | Where-Object { [string]$_ })) { [void]$others.Add(@{ Name = [string]$ok; Root = [string]$ok }) }
     $ctx = $null
     if ($KeyRoot -ieq 'HKCU:\Software') {
-        $acct = ''; try { $acct = [Security.Principal.WindowsIdentity]::GetCurrent().Name } catch {}
-        # Context only: who owns the desktop shell. $null when it cannot be told.
-        $int = $null
+        $acct = ''; $mySid = ''
+        try { $id = [Security.Principal.WindowsIdentity]::GetCurrent(); $acct = $id.Name; $mySid = $id.User.Value } catch {}
+        $unresolved = 0; $seen = @{}
         try {
-            $int = @(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" -ErrorAction Stop | ForEach-Object {
-                $o = Invoke-CimMethod -InputObject $_ -MethodName GetOwner -ErrorAction SilentlyContinue
-                if ($o -and $o.User) { $(if ($o.Domain) { [string]$o.Domain + '\' + [string]$o.User } else { [string]$o.User }) }
-            } | Sort-Object -Unique)
+            foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" -ErrorAction Stop)) {
+                $sid = ''; $nm = ''
+                try { $sr = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction Stop; if ([int]$sr.ReturnValue -eq 0) { $sid = [string]$sr.Sid } } catch {}
+                try { $or = Invoke-CimMethod -InputObject $p -MethodName GetOwner -ErrorAction Stop; if ([int]$or.ReturnValue -eq 0 -and $or.User) { $nm = $(if ($or.Domain) { [string]$or.Domain + '\' + [string]$or.User } else { [string]$or.User }) } } catch {}
+                if (-not $sid) { $unresolved++; continue }
+                if ($sid -eq $mySid -or $seen.ContainsKey($sid)) { continue }
+                $seen[$sid] = $true
+                [void]$others.Add(@{ Name = $(if ($nm) { $nm } else { $sid }); Root = ('Registry::HKEY_USERS\' + $sid + '\Software') })
+            }
         } catch {}
-        $ctx = @{ Account = $acct; Interactive = $int }
+        $ctx = @{ Account = $acct; Others = @($others | ForEach-Object { $_.Name }); Unresolved = $unresolved }
     }
-    $v = Get-MacroVerdict -Reads @($reads.ToArray()) -Roots @($rootStates.ToArray()) -Context $ctx
-} catch { $v = $null }
+    $mine = Read-AccountSettings -Root $KeyRoot -Label 'this account' -MustExist $false
+    $all = New-Object System.Collections.ArrayList
+    [void]$all.Add((Get-MacroVerdict -Reads $mine.Reads -Roots $mine.Roots -Context $ctx))
+    foreach ($o in $others) {
+        $t = Read-AccountSettings -Root $o.Root -Label $o.Name -MustExist $true
+        [void]$all.Add((Get-MacroVerdict -Reads $t.Reads -Roots $t.Roots -Owner $o.Name -IsElevated ($Elevated -eq 1)))
+    }
+    $v = Merge-AccountVerdicts @($all.ToArray())
+} catch { $v = $null; $why = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message) }
 if ($null -eq $v -or -not $v.Lines) {
-    'office_macro_check: the grading step failed; no verdict was written.'
+    ('office_macro_check: the grading step failed (' + (ConvertTo-PrintableText $why) + '); no verdict was written.')
     exit 1
 }
 foreach ($l in $v.Lines) { $l }
 if ($v.Hit) { Write-Marker -Name 'macro_hit' -Sev 'WARNING' }
 if ($v.Gap) { Write-Marker -Name 'macro_gap' -Sev 'WARNING' }
+if ([int]$v.Deferred -gt 0) { Write-Marker -Name 'macro_deferred' -Sev ([string][int]$v.Deferred) }
 Write-Marker -Name 'macro_done' -Sev 'done'
 exit 0

@@ -6,12 +6,16 @@ $ErrorActionPreference = 'Stop'
 $st = (.\tools\office_macro_check.ps1 -SelfTest) -join "`n"
 if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'office_macro_check -SelfTest failed' }
 $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-if ($n -lt 20) { throw "office_macro_check self-test ran only $n case(s)" }
+if ($n -lt 29) { throw "office_macro_check self-test ran only $n case(s)" }
 function RunM([hashtable]$Extra) {
   $md = Join-Path $env:TEMP ("dz_ci_macro_{0}_{1}" -f $PID, [guid]::NewGuid().ToString('N').Substring(0, 6)); New-Item -ItemType Directory -Path $md -Force | Out-Null
   try {
-    $o = (& .\tools\office_macro_check.ps1 -MarkerDir $md @Extra) -join "`n"; Write-Host $o
-    if ($o -match 'is not recognized|CategoryInfo') { throw "PowerShell error text: $o" }
+    # Errors merged in, as the bat merges them into the report: an error record
+    # in the output is a defect even when the verdict looks right.
+    $raw = @(& .\tools\office_macro_check.ps1 -MarkerDir $md @Extra 2>&1)
+    $o = ($raw | ForEach-Object { [string]$_ }) -join "`n"; Write-Host $o
+    $errs = @($raw | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+    if ($errs.Count -or $o -match 'is not recognized|CategoryInfo') { throw "PowerShell error text: $o" }
     if (-not (Test-Path (Join-Path $md 'dz_macro_done.txt'))) { throw "no done marker: $o" }
     return @{ Out = $o; Markers = (@(Get-ChildItem $md -Filter 'dz_*.txt' | Where-Object { $_.Name -notlike '*_done.txt' } | ForEach-Object { $_.BaseName } | Sort-Object) -join ',') }
   } finally { Remove-Item $md -Recurse -Force -EA SilentlyContinue }
@@ -31,6 +35,22 @@ $gpo = "$root\Policies\Microsoft\Office\16.0\Word\Security"
 $cloud = "$root\Policies\Microsoft\Cloud\Office\16.0\Excel\Security"
 try {
   Expect (RunM $k) '' '(?m)^\[OK\] No Office settings for this account' 'no Office key at all'
+  # A Group Policy for an Office this account has never started: still read
+  # (versions come from every source, not only the user's own key).
+  $pp = "$root\Policies\Microsoft\Office\16.0\PowerPoint\Security"
+  New-Item -Path $pp -Force | Out-Null; Set-ItemProperty -Path $pp -Name VBAWarnings -Value 1 -Type DWord
+  Expect (RunM $k) 'dz_macro_hit' '(?m)^\[WARNING\] PowerPoint 16\.0: VBAWarnings=1 \(set by Group Policy\)' 'a policy with no user Office key beside it'
+  Remove-Item -Path "$root\Policies" -Recurse -Force
+  # ANOTHER signed-in account (the elevated audit run from a separate
+  # administrator account): its settings are read too, and its lines name it.
+  $oth = "$root\other"
+  New-Item -Path "$oth\Microsoft\Office\16.0\Word\Security" -Force | Out-Null; Set-ItemProperty -Path "$oth\Microsoft\Office\16.0\Word\Security" -Name VBAWarnings -Value 1 -Type DWord
+  $r = RunM @{ KeyRoot = $root; OtherKeyRoot = @($oth) }
+  Expect $r 'dz_macro_hit' ('(?m)^\[WARNING\] Word 16\.0 \(settings of ' + [regex]::Escape($oth) + '\): VBAWarnings=1') 'another account''s VBAWarnings=1'
+  if ($r.Out -notmatch '(?m)^\[OK\] No Office settings for this account') { throw "the audit's own (empty) settings were not stated beside the other account's: $($r.Out)" }
+  Remove-Item -Path $oth -Recurse -Force
+  # Another account whose registry is not there: a raised gap, never "no settings".
+  Expect (RunM @{ KeyRoot = $root; OtherKeyRoot = @("$root\nosuch") }) 'dz_macro_gap' '(?m)^\[WARNING\] Office macro policy check NOT performed -- the registry of .*nosuch could not be listed \(it is not loaded\)' 'another account whose registry is not loaded'
   # The benign twin: the default, set explicitly by the user.
   New-Item -Path $user -Force | Out-Null; Set-ItemProperty -Path $user -Name VBAWarnings -Value 2 -Type DWord
   Expect (RunM $k) '' '(?m)^\[OK\] Word 16\.0: VBAWarnings=2 \(set by the user setting\)' 'VBAWarnings=2, the default'
@@ -60,13 +80,23 @@ try {
     Expect $r 'dz_macro_gap' '(?m)^\[WARNING\] Office macro policy check NOT performed in full -- Word 16\.0 VBAWarnings: Group Policy could not be read' 'the Group Policy key denied above a user value'
     if ($r.Out -match '(?m)^\[OK\] (No Office|Word 16\.0: VBAWarnings)') { throw "an unread policy produced an all-clear: $($r.Out)" }
     Write-Host 'office macro: a policy key this account is denied is a raised gap, never the value below it'
+    # The whole Group Policy root denied: which versions it holds cannot be
+    # listed, so it is a gap -- the old Test-Path read this as "not set".
+    $acl = Get-Acl -Path "$root\Policies\Microsoft\Office"
+    $acl.AddAccessRule((New-Object Security.AccessControl.RegistryAccessRule($me, 'QueryValues, EnumerateSubKeys', 'Deny')))
+    Set-Acl -Path "$root\Policies\Microsoft\Office" -AclObject $acl
+    $r = RunM $k
+    if ($r.Markers -notmatch 'dz_macro_gap' -or $r.Out -notmatch 'Group Policy \(.*\\Policies\\Microsoft\\Office\) could not be listed') { throw "a Group Policy root this account cannot list was not a raised gap: [$($r.Markers)] $($r.Out)" }
   } else { Write-Host '[ SKIP ] denied-key case not run: this account can still read the key through the deny rule; the self-test pins the judgement' }
 } finally {
   $ErrorActionPreference = 'Continue'
-  try {
-    $sk = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Software\dz_ci_macro_$PID\Policies\Microsoft\Office\16.0\Word\Security", [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree, [Security.AccessControl.RegistryRights]::ChangePermissions)
-    if ($sk) { $fresh = New-Object Security.AccessControl.RegistrySecurity; $fresh.SetAccessRuleProtection($false, $false); $sk.SetAccessControl($fresh); $sk.Close() }
-  } catch { Write-Host ("cleanup: could not reset the test key's ACL ({0})" -f $_.Exception.Message) }
+  # Parent first: a child under a denied parent is reset after it.
+  foreach ($sub in "Software\dz_ci_macro_$PID\Policies\Microsoft\Office", "Software\dz_ci_macro_$PID\Policies\Microsoft\Office\16.0\Word\Security") {
+    try {
+      $sk = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($sub, [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree, [Security.AccessControl.RegistryRights]::ChangePermissions)
+      if ($sk) { $fresh = New-Object Security.AccessControl.RegistrySecurity; $fresh.SetAccessRuleProtection($false, $false); $sk.SetAccessControl($fresh); $sk.Close() }
+    } catch { Write-Host ("cleanup: could not reset the ACL of {0} ({1})" -f $sub, $_.Exception.Message) }
+  }
   Remove-Item -Path $root -Recurse -Force -EA SilentlyContinue
   if (Test-Path $root) { throw "the CI test key $root could not be removed" }
 }

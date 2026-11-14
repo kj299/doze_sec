@@ -3885,6 +3885,7 @@ echo has weakened that, and that VBAWarnings is not set to enable-all.>> "%REPOR
 del "%TEMP%\dz_macro_hit.txt" 2>nul
 del "%TEMP%\dz_macro_gap.txt" 2>nul
 del "%TEMP%\dz_macro_done.txt" 2>nul
+del "%TEMP%\dz_macro_deferred.txt" 2>nul
 echo  Command: powershell -File tools\office_macro_check.ps1>> "%REPORT%"
 if exist "%SCRIPT_DIR%tools\office_macro_check.ps1" (
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\office_macro_check.ps1">> "%REPORT%" 2>&1
@@ -3900,6 +3901,13 @@ if exist "%TEMP%\dz_macro_gap.txt" (
     rem A gap is its own row, beside a finding or alone.
     call :dz_finding WARNING 13 T1204.002 "Office macro policy check NOT performed - Office settings could not be read"
     del "%TEMP%\dz_macro_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_macro_deferred.txt" (
+    rem Another signed-in account's registry, refused to a standard-user token.
+    set "_MCDEF=0"
+    set /p _MCDEF=<"%TEMP%\dz_macro_deferred.txt"
+    set /a DEFERRED_COUNT+=!_MCDEF!
+    del "%TEMP%\dz_macro_deferred.txt" 2>nul
 )
 if not exist "%TEMP%\dz_macro_done.txt" if exist "%SCRIPT_DIR%tools\office_macro_check.ps1" (
     echo [WARNING] Office macro policy check produced no verdict -- NOT performed: tools\office_macro_check.ps1 did not run to its end.>> "%REPORT%"

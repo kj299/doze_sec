@@ -650,19 +650,23 @@ jobs:
       - name: Office macro policy -- a policy key that cannot be read is a raised gap, never Office's defaults
         run: |
           out=$(pwsh -NoProfile -File tools/office_macro_check.ps1 -SelfTest); echo "$out"
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 20 ] || { echo "only $n macro case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 29 ] || { echo "only $n macro case(s)"; exit 1; }
           echo "$out" | grep -q '^\[FAIL\]' && { echo 'a macro case failed'; exit 1; }
           for n in 'Group Policy unreadable above a user 2: a raised gap, never the user value as the answer' \
                    'the Office root could not be listed: a raised gap, never "[OK] No Office settings"' \
                    'Cloud Policy 1 over Group Policy 4: the WARNING -- Cloud Policy takes precedence' \
                    'Group Policy 2 over a user 1: [OK] in force, the user value is [INFO], never a grade' \
-                   'a hit AND a gap: both raised'; do
+                   'a hit AND a gap: both raised' \
+                   'another signed-in account whose registry could not be opened: a raised gap, never "[OK] No Office settings"' \
+                   'the other account'"'"'s VBAWarnings=1 is the WARNING, and the line names whose setting it is' \
+                   'a value too large for an Int32 is a value Office does not define, never a crash that voids the verdict' \
+                   'another account'"'"'s registry refused to a standard-user token: a deferral, never a gap or a row'; do
             echo "$out" | grep -qF "$n" || { echo "macro case gone: $n"; exit 1; }
           done
           for b in doze_sec.bat doze_sec_noAdmin.bat; do
             grep -qF 'Name VBAWarnings -EA SilentlyContinue' "$b" && { echo "$b: the silenced macro-policy read is back"; exit 1; }
             grep -qF 'tools\office_macro_check.ps1">> "%REPORT%" 2>&1' "$b" || { echo "$b: Section 13 no longer runs office_macro_check"; exit 1; }
-            for m in dz_macro_hit dz_macro_gap dz_macro_done; do grep -qF "%TEMP%\\$m.txt" "$b" || { echo "$b: $m is never read"; exit 1; }; done
+            for m in dz_macro_hit dz_macro_gap dz_macro_done dz_macro_deferred; do grep -qF "%TEMP%\\$m.txt" "$b" || { echo "$b: $m is never read"; exit 1; }; done
             grep -qF 'Office macro policy check produced no verdict' "$b" || { echo "$b: the macro check lost its no-verdict backstop"; exit 1; }
           done
           echo 'Office macro policy: three sources in Office order, an unread one is a gap'

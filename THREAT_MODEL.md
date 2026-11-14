@@ -425,10 +425,13 @@ Found during the v7.1 coverage review; tracked for future work:
   takes the setting from, and not Project or Visio.~~ **Closed:**
   `tools/office_macro_check.ps1` reads Cloud Policy, Group Policy and the
   user's own setting in the order Office applies them, grades the one in
-  force, and raises an unread source above it as a gap. Residual: it reads the
-  audit account's own settings (HKCU) and says whose; another account signed
-  in at the PC is named but not read. Trusted Locations, which also let macros
-  run in files from the internet, are not checked.
+  force, and raises an unread source above it as a gap. It reads the audit
+  account's own settings and, when elevated, those of every other account
+  signed in at the PC. Residual: an account that is not signed in is not read
+  (its registry is not loaded); a standard-user token cannot read other
+  accounts at all (it says how many sessions it saw). Outlook's own macro
+  setting is not graded, and Trusted Locations, which also let macros run in
+  files from the internet, are not checked.
 - ~~A running or installed remote-access tool (AnyDesk, TeamViewer,
   ScreenConnect and others) was printed and counted nowhere: three checks
   (Sections 4 and 17) used tags outside the severity vocabulary, a substring
