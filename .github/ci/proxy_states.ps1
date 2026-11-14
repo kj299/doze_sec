@@ -142,6 +142,13 @@ try {
     $r = RunP @{}
     Expect $r 'dz_winhttp_hit' '(?m)^\[WARNING\] Machine-wide WinHTTP proxy in effect: 127\.0\.0\.1:1 \(read by WinHttpGetDefaultProxyConfiguration\)' 'a real WinHTTP proxy set with netsh'
     Write-Host 'proxy: a real WinHTTP proxy is found by asking Windows'
+    # Reset now, so the per-user plant below runs with WinHTTP direct and its
+    # marker set is its own (finally retries the reset if this one fails).
+    $ErrorActionPreference = 'Continue'
+    & netsh.exe winhttp reset proxy | Out-Null
+    $rc = $LASTEXITCODE; $ErrorActionPreference = 'Stop'
+    if ($rc -ne 0) { throw "netsh winhttp reset proxy exited $rc after the WinHTTP plant" }
+    $winSet = $false
   }
   # A REAL per-user proxy in this account's own HKCU, Windows asked. Settings
   # writes the record and the values together; so does this plant.
