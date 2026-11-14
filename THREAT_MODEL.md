@@ -419,6 +419,22 @@ Found during the v7.1 coverage review; tracked for future work:
   looks three folder levels into the profile, Public and TEMP (the line says
   so), matches a fixed list of extensions, and does not see ransomware that
   keeps the original extension or encrypts other drives.
+- ~~Section 5 listed other accounts' Run/RunOnce values as `[INFO]` and
+  graded none of them, printed `[OK]` when HKEY_USERS or a key could not be
+  read, hid any value named PS*, and never saw an account that was not signed
+  in.~~ **Closed:** `tools/persistence_eval.ps1 -Part OtherAccounts` grades
+  every other account's Run keys with the same rule as HKCU and raises an
+  unreadable key as a gap (a deferral on a standard-user token, which
+  another account's registry denies by design). With `-readSignedOut`
+  (opt-in, elevated, never `-readonly`) it reads a signed-out account from a copy of its `NTUSER.DAT`
+  taken from a Volume Shadow Copy, mounted under `HKU\dz_sec_*` and
+  unmounted again; the account's own file is never opened. With VSS
+  disabled that account is a raised gap. The same tool's HKCU/HKLM loop no longer skips a key it
+  could not read. Residual: Run and RunOnce only, not every per-user
+  persistence location (Startup folder, scheduled tasks and services are
+  read elsewhere; a signed-out account's Startup folder and per-user COM
+  hijacks are not); a run without `-readSignedOut`, a `-readonly` or a standard-user run names signed-out
+  accounts without reading them.
 - ~~Section 18h, the registry IOC match, wrapped every lookup in an empty
   `catch{}`, so a listed key this account could not read, or an entry under
   a hive it cannot read, was dropped and the block printed `[OK]`.~~

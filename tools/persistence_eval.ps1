@@ -38,6 +38,32 @@
 #                   same key is still the hijack. Get-IfeoVerdict holds the
 #                   rule and -SelfTest pins both sides.
 #
+# OTHER ACCOUNTS (-Part OtherAccounts). Section 5 used to LIST other accounts'
+# Run values as [INFO], grade none of them, print [OK] when HKEY_USERS or a key
+# could not be read, hide any value named PS*, count the audit's own account
+# as "another", and never see an account that was not signed in -- whose Run
+# and RunOnce still fire at its next sign-in. Now every value is graded by
+# Get-AutorunVerdict, the same rule as HKCU; an unreadable key is a raised gap
+# (on a standard-user token, another account's registry refused is a counted
+# deferral: those hives deny Users by default, so the token explains it).
+# SIGNED-OUT ACCOUNTS (-LoadSignedOut, elevated only, never -readonly): the
+# account's NTUSER.DAT (or NTUSER.MAN) and its .LOG1/.LOG2 are copied to
+# %TEMP% FROM A VOLUME SHADOW COPY (esentutl /y /vss), so the account's own
+# file is never opened: a plain copy opens it, and a sign-in during that copy
+# cannot load it and gets a TEMPORARY profile. The copy is mounted with reg
+# load as HKU\dz_sec_<pid>_<n>, read through handles that are closed, and
+# unmounted, and deleted, one account at a time, after checking TEMP has room
+# for it twice over. A snapshot that fails is a gap for that account, never a
+# fallback to a plain copy. An interrupted run leaves a mounted COPY and a
+# temp folder -- the account's next sign-in loads its own untouched file as
+# always. The next run unloads stale dz_sec_* mounts (a -readonly run names
+# them instead) and deletes dz_hive_<pid> folders whose run has ended;
+# tools\unload_audit_hives.ps1 does both standalone. Security products may
+# notice esentutl /vss: it is also how attackers copy locked files. (RegLoadAppKey, the
+# private-hive API, is not an option: Microsoft documents that it fails unless
+# every key in the hive has the same security descriptor, which a user hive
+# never has.)
+#
 # A finding writes -MarkerFile so the caller raises the exit code / findings
 # count. CRITICAL is intentionally not emitted here (these are high-but-not-
 # certain indicators); the caller treats a hit as a WARNING.
@@ -48,6 +74,25 @@
 [CmdletBinding()]
 param(
     [string]$MarkerFile,
+    # Default: HKCU/HKLM Run keys and IFEO. OtherAccounts: the Run keys of
+    # every OTHER account on this PC (see the OTHER ACCOUNTS note below).
+    [ValidateSet('Default', 'OtherAccounts')]
+    [string]$Part = 'Default',
+    # A Run key that could not be read: a raised gap, never an all-clear.
+    [string]$GapFile,
+    # OtherAccounts only: a count of accounts this token may not read.
+    [string]$DeferredFile,
+    # OtherAccounts only: written when the part reaches its verdict.
+    [string]$DoneFile,
+    # OtherAccounts only: read signed-out accounts from a COPY of their
+    # registry. The bat passes it only on an elevated, non -readonly run.
+    [switch]$LoadSignedOut,
+    # The run is -readonly: a stale mount from an earlier run is named, not
+    # unloaded (unloading is a change outside the output and temp folders).
+    [switch]$ReadOnly,
+    # CI only: Software roots under HKCU read as if each were another account,
+    # and no live account is read.
+    [string[]]$OtherRoot = @(),
     [switch]$SelfTest,
     # Whether this process runs elevated. Read once from the token below;
     # injectable so the self-test can grade both tokens. -1 = detect.
@@ -165,10 +210,6 @@ function Write-WhenCaveat {
     '  note: registry times are per KEY (any value change updates them) and file times can be forged (timestomping, T1070.006) -- treat them as leads, not proof.'
 }
 
-# PowerShell adds these note-properties to every Get-ItemProperty result; they
-# are not registry values. Matched by EXACT name -- a '^PS' prefix match would
-# also swallow real values whose names start with "PS".
-$psNoteProps = @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider')
 
 # STRONG command-content indicators -- fire on their own (unambiguous):
 # encoded PowerShell, base64 decode, and LOLBin download-and-exec.
@@ -266,6 +307,187 @@ function Get-IfeoReadReport {
     return @{ Sev = 'OK'; Lines = @(("[INFO] {0} IFEO {1} not readable from this token: {2} -- not graded, not cleared; re-run as administrator to grade them." -f $u.Count, $noun, ($u -join ', '))) }
 }
 
+# Live. One Run key through a .NET base key: @{ State = ok|nokey|unreadable|
+# denied; Error; Values = @(@{ Name; Value }) }. The key is closed before this
+# returns (a mounted hive copy cannot be unloaded while a handle is open).
+# Exact value names: no PowerShell note properties to filter, no wildcards.
+function Read-RunValues {
+    param($Base, [string]$SubPath)
+    $k = $null
+    try {
+        try { $k = $Base.OpenSubKey($SubPath, $false) }
+        catch {
+            $den = ($_.Exception -is [System.Security.SecurityException] -or $_.Exception -is [System.UnauthorizedAccessException] -or ($_.Exception.InnerException -is [System.Security.SecurityException]))
+            return @{ State = $(if ($den) { 'denied' } else { 'unreadable' }); Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message); Values = @() }
+        }
+        if ($null -eq $k) { return @{ State = 'nokey'; Error = ''; Values = @() } }
+        $vals = New-Object System.Collections.ArrayList
+        foreach ($n in @($k.GetValueNames())) {
+            # Graded expanded (as Windows runs it), shown raw: for another
+            # account %USERPROFILE% expanded here is the AUDITOR's path.
+            $raw = $k.GetValue($n, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+            [void]$vals.Add(@{ Name = $(if ($n) { [string]$n } else { '(Default)' }); Value = [string]$k.GetValue($n); Raw = [string]$raw })
+        }
+        return @{ State = 'ok'; Error = ''; Values = @($vals.ToArray()) }
+    } catch {
+        return @{ State = 'unreadable'; Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message); Values = @() }
+    } finally { if ($k) { $k.Close() } }
+}
+
+$script:RunSubs = @('Microsoft\Windows\CurrentVersion\Run', 'Microsoft\Windows\CurrentVersion\RunOnce', 'Wow6432Node\Microsoft\Windows\CurrentVersion\Run', 'Wow6432Node\Microsoft\Windows\CurrentVersion\RunOnce')
+
+function ConvertTo-PrintableLine {
+    param([string]$s)
+    $t = (([string]$s) -replace '[\x00-\x1F\x7F]', '?')
+    if ($t.Length -gt 300) { $t = $t.Substring(0, 300) + '...' }
+    return $t
+}
+
+# PURE. $Accounts: @( @{ Label; How = signed-in|copy|ci; Keys = @( @{ Sub;
+# R = <Read-RunValues result> } ); Error = '' (the account could not be read
+# at all) } ). $NotRead: @(labels of signed-out accounts left unread, gate
+# off). $ListError: '' or why the accounts could not be listed.
+# Returns @{ Lines; Hit; Gap; Deferred }.
+function Get-OtherAccountsVerdict {
+    param($Accounts, $NotRead = @(), [string]$ListError = '', [bool]$IsElevated = $true, [string]$NotReadWhy = '', $NoFile = @(), [bool]$OwnSidUnknown = $false)
+    $out = New-Object System.Collections.ArrayList
+    $r = @{ Hit = $false; Gap = $false; Deferred = 0 }
+    $gaps = New-Object System.Collections.ArrayList
+    $defer = New-Object System.Collections.ArrayList
+    $listing = New-Object System.Collections.ArrayList
+    $listed = 0
+    if ($ListError) { [void]$gaps.Add(('the accounts on this PC could not be listed (' + (ConvertTo-PrintableLine $ListError) + ')')) }
+    # Without its own identity the audit cannot tell its own registry from
+    # another account's: say so, never guess.
+    if ($OwnSidUnknown) { [void]$gaps.Add('this account''s own identity could not be read, so its registry could not be told from another account''s') }
+    $read = 0
+    foreach ($a in @($Accounts)) {
+        $lab = ConvertTo-PrintableLine ([string]$a.Label)
+        if ($a.Error) {
+            if ([string]$a.Error -eq 'denied' -and -not $IsElevated) { [void]$defer.Add($lab) } else { [void]$gaps.Add(($lab + ': ' + (ConvertTo-PrintableLine ([string]$a.Error)))) }
+            continue
+        }
+        $acctOk = $true
+        foreach ($kk in @($a.Keys)) {
+            $st = [string]$kk.R.State
+            if ($st -eq 'nokey') { continue }
+            if ($st -ne 'ok') {
+                if ($st -eq 'denied' -and -not $IsElevated) { if (-not $defer.Contains($lab)) { [void]$defer.Add($lab) } }
+                else { [void]$gaps.Add(($lab + ' ' + [string]$kk.Sub + ': ' + (ConvertTo-PrintableLine ([string]$kk.R.Error)))) }
+                $acctOk = $false; continue
+            }
+            foreach ($v in @($kk.R.Values)) {
+                $loc = ('[' + $lab + '\' + [string]$kk.Sub + '\' + (ConvertTo-PrintableLine ([string]$v.Name)) + ']')
+                $why = Get-AutorunVerdict -Key ([string]$kk.Sub) -Name ([string]$v.Name) -Value ([string]$v.Value)
+                if ($why) {
+                    [void]$out.Add(('[WARNING] Suspicious Run-key autorun in another account ' + $loc + ': ' + (ConvertTo-PrintableLine $(if ($v.Raw) { [string]$v.Raw } else { [string]$v.Value }))))
+                    [void]$out.Add(('  indicator: ' + $why))
+                    $r.Hit = $true
+                }
+                $listed++
+                if ($listing.Count -lt 25) { [void]$listing.Add(('    ' + $loc + ' = ' + (ConvertTo-PrintableLine $(if ($v.Raw) { [string]$v.Raw } else { [string]$v.Value })))) }
+            }
+        }
+        if ($acctOk) { $read++ }
+    }
+    if ($listing.Count -gt 0) { [void]$out.Add('[INFO] Run/RunOnce entries in other accounts (context; each was graded above):'); foreach ($l in $listing) { [void]$out.Add($l) }; if ($listed -gt $listing.Count) { [void]$out.Add(('    ... and ' + ($listed - $listing.Count) + ' more, each graded but not listed here.')) } }
+    if ($gaps.Count -gt 0) {
+        $names = (@($gaps | Select-Object -First 3) -join '; ') + $(if ($gaps.Count -gt 3) { ('; and ' + ($gaps.Count - 3) + ' more') } else { '' })
+        [void]$out.Add(('[WARNING] Other accounts'' Run-key check NOT performed' + $(if ($read -gt 0) { ' in full' } else { '' }) + ' -- ' + $names + ', so an autorun planted in that account would go unseen (T1547.001).'))
+        $r.Gap = $true
+    }
+    if ($defer.Count -gt 0) {
+        [void]$out.Add(('[DEFERRED - ADMIN REQUIRED] Other accounts'' Run keys: ' + $defer.Count + ' account(s) this token may not read: ' + ((@($defer) | Select-Object -First 5) -join ', ') + '.'))
+        $r.Deferred += $defer.Count
+    }
+    $nr = @($NotRead | Where-Object { [string]$_ })
+    if ($nr.Count -gt 0) {
+        if (-not $IsElevated) {
+            # The token is the explanation: reading a signed-out account needs administrator.
+            [void]$out.Add(('[DEFERRED - ADMIN REQUIRED] ' + $nr.Count + ' signed-out account(s) not read: ' + ((@($nr | ForEach-Object { ConvertTo-PrintableLine ([string]$_) }) | Select-Object -First 5) -join ', ') + '. Their Run keys run at their next sign-in; reading them needs an elevated run.'))
+            $r.Deferred += $nr.Count
+        } else { [void]$out.Add(('[INFO] ' + $nr.Count + ' signed-out account(s) not read: ' + ((@($nr | ForEach-Object { ConvertTo-PrintableLine ([string]$_) }) | Select-Object -First 5) -join ', ') + $(if ($NotReadWhy) { ' (' + $NotReadWhy + ')' } else { '' }) + '. Their Run keys run at their next sign-in.')) }
+    }
+    foreach ($nf in @($NoFile | Where-Object { [string]$_ })) { [void]$out.Add(('[INFO] ' + (ConvertTo-PrintableLine ([string]$nf)) + ' has a profile entry but no registry file, so nothing of it runs at sign-in.')) }
+    if (-not $r.Hit -and -not $r.Gap) {
+        if (@($Accounts).Count -eq 0 -and $nr.Count -eq 0) { [void]$out.Add('[OK] No other account on this PC has a profile to read.') }
+        elseif ($read -gt 0) { [void]$out.Add(('[OK] No suspicious Run-key autorun in ' + $read + ' other account(s) read.')) }
+    }
+    $r.Lines = @($out.ToArray())
+    return $r
+}
+
+# PURE. The user's own and the machine's Run keys that could not be read.
+function Get-RunKeyGapLines {
+    param([string[]]$Unread)
+    $u = @($Unread | Where-Object { $_ })
+    if ($u.Count -eq 0) { return @() }
+    return @(('[WARNING] Run-key evaluation NOT performed in full -- ' + $u.Count + ' Run key(s) could not be read: ' + ((@($u | ForEach-Object { ConvertTo-PrintableLine $_ })) -join '; ') + ', so an autorun there would go unseen (T1547.001).'))
+}
+
+# PURE. Which ProfileList entries are other accounts not signed in.
+# PURE. Which registry file Windows loads for a profile folder holding these
+# names: NTUSER.MAN (a mandatory profile) wins over NTUSER.DAT when both are
+# there, as it does at sign-in. '' = none.
+function Select-HiveFile {
+    param([string[]]$Names)
+    if (@($Names) -contains 'NTUSER.MAN') { return 'NTUSER.MAN' }
+    if (@($Names) -contains 'NTUSER.DAT') { return 'NTUSER.DAT' }
+    return ''
+}
+
+# Live. The full path of a System32 tool for THIS process's bitness: a 32-bit
+# PowerShell on 64-bit Windows sees SysWOW64 as System32, and VSS refuses a
+# 32-bit requester there, so it reaches the native tool through Sysnative.
+# A full path also keeps an elevated process off a PATH lookup.
+function Get-NativeTool {
+    param([string]$Name)
+    $root = $env:SystemRoot; if (-not $root) { $root = 'C:\Windows' }
+    $sub = $(if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) { 'Sysnative' } else { 'System32' })
+    return ($root.TrimEnd('\') + '\' + $sub + '\' + $Name)
+}
+
+# Live. A folder this ELEVATED tool will write a copy of another person's
+# registry into, and later delete recursively. TEMP is writable by the same
+# user's unelevated processes, so the folder is created fresh (never reused),
+# refused if anything at the path is a reparse point (a junction would send
+# the copy -- and the recursive delete -- somewhere else), and given an ACL
+# that admits only Administrators and SYSTEM. Returns '' or why it failed.
+function New-PrivateFolder {
+    param([string]$Path)
+    if (Test-Path -LiteralPath $Path) { return ('it already exists: ' + $Path) }
+    $parent = Split-Path -Parent $Path
+    $pi = Get-Item -LiteralPath $parent -Force -ErrorAction Stop
+    if ([int]$pi.Attributes -band 0x400) { return ('its parent is a link: ' + $parent) }
+    $null = New-Item -ItemType Directory -Path $Path -ErrorAction Stop
+    $acl = New-Object System.Security.AccessControl.DirectorySecurity
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($sid in 'S-1-5-32-544', 'S-1-5-18') {
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule((New-Object System.Security.Principal.SecurityIdentifier($sid)), 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow')))
+    }
+    Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
+    return ''
+}
+
+# Live. Delete a folder this tool made, only if it is a real folder: a
+# reparse point at any level is refused, never followed.
+function Remove-PrivateFolder {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return '' }
+    $it = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if ($it -and ([int]$it.Attributes -band 0x400)) { return ('refused: ' + $Path + ' is a link, not a folder this audit made') }
+    $links = @(Get-ChildItem -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue | Where-Object { [int]$_.Attributes -band 0x400 })
+    if ($links.Count) { return ('refused: ' + $Path + ' holds a link (' + $links[0].FullName + ')') }
+    Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $Path) { return ('could not remove ' + $Path) }
+    return ''
+}
+
+function Select-SignedOutProfiles {
+    param($Profiles, [string[]]$Loaded, [string]$MySid)
+    return @(@($Profiles) | Where-Object { [string]$_.Sid -match '^S-1-5-21-[\d-]+$' -and [string]$_.Sid -ne $MySid -and @($Loaded) -notcontains [string]$_.Sid })
+}
+
 if ($SelfTest) {
     $fails = 0
     function T { param([string]$Name, [bool]$Ok, [string]$Got)
@@ -347,17 +569,206 @@ if ($SelfTest) {
     $r = Get-IfeoReadReport -Unreadable @() -IsElevated $false
     T 'no unreadable IFEO subkeys prints nothing and raises nothing' ($r.Sev -eq 'OK' -and $r.Lines.Count -eq 0) ($r.Lines -join ' | ')
 
+    # OTHER ACCOUNTS (Section 5): graded like HKCU, a failed read is a gap.
+    $ok = { param($vals) @{ State = 'ok'; Error = ''; Values = @($vals) } }
+    $nk = @{ State = 'nokey'; Error = ''; Values = @() }
+    $dn = @{ State = 'denied'; Error = 'SecurityException: Requested registry access is not allowed.'; Values = @() }
+    $ur = @{ State = 'unreadable'; Error = 'IOException: x'; Values = @() }
+    function Acct { param([string]$L, $R, [string]$How = 'signed-in', [string]$Err = '') @{ Label = $L; How = $How; Error = $Err; Keys = @(@{ Sub = 'Microsoft\Windows\CurrentVersion\Run'; R = $R }) } }
+    $mal = @{ Name = 'Updater'; Value = 'powershell.exe -w hidden -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQA' }
+    $ben = @{ Name = 'OneDrive'; Value = '"C:\Program Files\Microsoft OneDrive\OneDrive.exe" /background' }
+    $v = Get-OtherAccountsVerdict -Accounts @(Acct 'PC\bob' (& $ok @($mal, $ben)))
+    T 'another account''s encoded-PowerShell autorun is the WARNING, naming the account (it used to be an [INFO] listing)' ($v.Hit -and (($v.Lines -join "`n") -match '(?m)^\[WARNING\] Suspicious Run-key autorun in another account \[PC\\bob\\Microsoft\\Windows\\CurrentVersion\\Run\\Updater\]')) ($v.Lines -join ' | ')
+    T 'its benign twin is listed as context, never graded' ((($v.Lines -join "`n") -notmatch 'WARNING[^\r\n]*OneDrive') -and (($v.Lines -join "`n") -match 'OneDrive\.exe')) ($v.Lines -join ' | ')
+    $v = Get-OtherAccountsVerdict -Accounts @(Acct 'PC\bob' (& $ok @(@{ Name = 'PSUpdater'; Value = $mal.Value })))
+    T 'a value named PS* is graded (the old block filtered ^PS and hid it)' ($v.Hit) ($v.Lines -join ' | ')
+    $v = Get-OtherAccountsVerdict -Accounts @(Acct 'PC\bob' $dn) -IsElevated $true
+    T 'another account''s Run key refused to an ADMINISTRATOR: a raised gap, never [OK]' ($v.Gap -and -not $v.Deferred -and (($v.Lines -join "`n") -match '(?m)^\[WARNING\] Other accounts'' Run-key check NOT performed -- PC\\bob') -and (($v.Lines -join "`n") -notmatch '(?m)^\[OK\]')) ($v.Lines -join ' | ')
+    $v = Get-OtherAccountsVerdict -Accounts @(Acct 'PC\bob' $dn) -IsElevated $false
+    T 'the same refusal to a STANDARD user: a deferral (another account''s hive denies Users), never a gap or [OK]' ((-not $v.Gap) -and $v.Deferred -eq 1 -and (($v.Lines -join "`n") -match '(?m)^\[DEFERRED - ADMIN REQUIRED\] Other accounts'' Run keys: 1 account') -and (($v.Lines -join "`n") -notmatch '(?m)^\[OK\]')) ($v.Lines -join ' | ')
+    $v = Get-OtherAccountsVerdict -Accounts @(Acct 'PC\bob' $ur) -IsElevated $false
+    T 'a read that failed for another reason is a gap whatever the token' ($v.Gap) ($v.Lines -join ' | ')
+    $v = Get-OtherAccountsVerdict -Accounts @() -ListError 'SecurityException: denied'
+    T 'the accounts could not be listed: a raised gap, never "[OK] No other account"' ($v.Gap -and (($v.Lines -join "`n") -notmatch '(?m)^\[OK\]')) ($v.Lines -join ' | ')
+    $v = Get-OtherAccountsVerdict -Accounts @(Acct 'PC\bob' $nk)
+    T 'an account with no Run key at all reads clean' ((-not $v.Hit) -and (-not $v.Gap) -and (($v.Lines -join "`n") -match '(?m)^\[OK\] No suspicious Run-key autorun in 1 other account')) ($v.Lines -join ' | ')
+    $v = Get-OtherAccountsVerdict -Accounts @(Acct 'PC\carol' '' 'copy' 'the copy of its registry could not be loaded (reg load exit 1)')
+    T 'a signed-out account whose copy could not be loaded: a raised gap that names it' ($v.Gap -and (($v.Lines -join "`n") -match 'PC\\carol: the copy of its registry could not be loaded')) ($v.Lines -join ' | ')
+    $v = Get-OtherAccountsVerdict -Accounts @() -NotRead @('PC\carol') -NotReadWhy 'not signed in; reading it needs an elevated run without -readonly'
+    T 'a signed-out account left unread is NAMED, never silent and never [OK]' ((($v.Lines -join "`n") -match '(?m)^\[INFO\] 1 signed-out account\(s\) not read: PC\\carol \(not signed in') -and (($v.Lines -join "`n") -notmatch '(?m)^\[OK\]')) ($v.Lines -join ' | ')
+    $v = Get-OtherAccountsVerdict -Accounts @((Acct 'PC\bob' (& $ok @($mal))), (Acct 'PC\dan' $dn)) -IsElevated $true
+    T 'a hit AND a gap: both raised' ($v.Hit -and $v.Gap) ($v.Lines -join ' | ')
+    $v = Get-OtherAccountsVerdict -Accounts @(Acct 'PC\bob' (& $ok @(@{ Name = 'x'; Value = ("a`r`n[OK] forged") })))
+    T 'control characters in a value cannot start a report line' ((($v.Lines -join "`n") -notmatch '(?m)^\[OK\] forged')) ($v.Lines -join ' | ')
+    $v = Get-OtherAccountsVerdict -Accounts @() -NotRead @('PC\carol') -IsElevated $false
+    T 'a signed-out account on a STANDARD-user token is a counted deferral (the token is the explanation)' ($v.Deferred -eq 1 -and -not $v.Gap -and (($v.Lines -join "`n") -match '(?m)^\[DEFERRED - ADMIN REQUIRED\] 1 signed-out account\(s\) not read: PC\\carol')) ($v.Lines -join ' | ')
+    $v = Get-OtherAccountsVerdict -Accounts @() -NoFile @('PC\gone')
+    T 'a profile entry with no registry file is [INFO], never a gap (a deleted or mandatory profile on every run would be a false row)' ((-not $v.Gap) -and (($v.Lines -join "`n") -match '(?m)^\[INFO\] PC\\gone has a profile entry but no registry file')) ($v.Lines -join ' | ')
+    $v = Get-OtherAccountsVerdict -Accounts @() -OwnSidUnknown $true
+    T 'the audit''s own identity unknown: a raised gap, never a guess about which registry is its own' ($v.Gap -and (($v.Lines -join "`n") -notmatch '(?m)^\[OK\]')) ($v.Lines -join ' | ')
+    $many = @(1..30 | ForEach-Object { @{ Name = ('v' + $_); Value = 'C:\Program Files\Vendor\app.exe'; Raw = 'C:\Program Files\Vendor\app.exe' } })
+    $v = Get-OtherAccountsVerdict -Accounts @(Acct 'PC\bob' (& $ok $many))
+    T 'more than 25 values: the listing says how many more were graded but not listed' ((($v.Lines -join "`n") -match '\.\.\. and 5 more, each graded but not listed here\.')) ($v.Lines -join ' | ')
+    $v = Get-OtherAccountsVerdict -Accounts @(Acct 'PC\bob' (& $ok @(@{ Name = 'U'; Value = 'C:\Users\admin\Downloads\x.exe'; Raw = '%USERPROFILE%\Downloads\x.exe' })))
+    T 'a finding shows the RAW value (%USERPROFILE%), not the auditor''s expansion of it' ($v.Hit -and (($v.Lines -join "`n") -match '%USERPROFILE%\\Downloads\\x\.exe') -and (($v.Lines -join "`n") -notmatch 'C:\\Users\\admin')) ($v.Lines -join ' | ')
+    T 'a mandatory profile (NTUSER.MAN beside NTUSER.DAT) is read from the .MAN Windows loads' ((Select-HiveFile @('NTUSER.DAT', 'NTUSER.MAN', 'ntuser.ini')) -eq 'NTUSER.MAN' -and (Select-HiveFile @('NTUSER.DAT')) -eq 'NTUSER.DAT' -and (Select-HiveFile @('ntuser.ini')) -eq '') ''
+    $profs = @(@{ Sid = 'S-1-5-21-1-2-3-1001' }, @{ Sid = 'S-1-5-21-1-2-3-1002' }, @{ Sid = 'S-1-5-21-1-2-3-1003' }, @{ Sid = 'S-1-5-18' })
+    $so = @(Select-SignedOutProfiles -Profiles $profs -Loaded @('S-1-5-21-1-2-3-1002') -MySid 'S-1-5-21-1-2-3-1001')
+    T 'signed out = a user profile that is neither loaded nor the audit''s own (SYSTEM is not a user)' ($so.Count -eq 1 -and [string]$so[0].Sid -eq 'S-1-5-21-1-2-3-1003') (($so | ForEach-Object { $_.Sid }) -join ',')
+    $g = @(Get-RunKeyGapLines -Unread @('HKCU:\Software\Microsoft\Windows\CurrentVersion\Run - SecurityException: denied'))
+    T 'the user''s own Run key that could not be read is a raised gap (the old loop skipped it silently)' ($g.Count -eq 1 -and $g[0] -match '^\[WARNING\] Run-key evaluation NOT performed in full -- ') ($g -join ' | ')
+
     if ($fails) { Write-Output "[FAIL] $fails persistence_eval self-test expectation(s) unmet"; exit 1 }
     Write-Output "[OK] persistence_eval self-test: the owner's $($benign.Count) real autoruns are not findings, encoded/downloading/staged ones are, and Process Explorer's Replace Task Manager is context while an unsigned impostor is the hijack."
     exit 0
 }
 
+# Defence in depth: -readonly never loads, whatever the caller passed.
+if ($ReadOnly) { $LoadSignedOut = $false }
 if ($Elevated -lt 0) {
     $Elevated = 0
     try {
         $id = [Security.Principal.WindowsIdentity]::GetCurrent()
         if ((New-Object Security.Principal.WindowsPrincipal($id)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { $Elevated = 1 }
     } catch {}
+}
+
+if ($Part -eq 'OtherAccounts') {
+    $tmpRoot = $env:TEMP; if (-not $tmpRoot) { $tmpRoot = [IO.Path]::GetTempPath() }
+    # LEFTOVERS from an interrupted run come off first. Each mount is only a
+    # COPY, but it holds a file in TEMP, and that file is a copy of another
+    # person's registry. Unloading is a change outside the output and temp
+    # folders, so a -readonly run names the mount instead.
+    $stale = @()
+    try { $stale = @([Microsoft.Win32.Registry]::Users.GetSubKeyNames() | Where-Object { $_ -match '^dz_sec_\d+_\d+$' }) } catch {}
+    foreach ($m in $stale) {
+        if ($ReadOnly -or $Elevated -ne 1) { ('[INFO] An earlier run''s copy of an account registry is still mounted as HKU\' + $m + '; this run did not unload it (' + $(if ($ReadOnly) { '-readonly' } else { 'not elevated' }) + '). Remove it with: powershell -File tools\unload_audit_hives.ps1 (elevated).'); continue }
+        & (Get-NativeTool 'reg.exe') unload ("HKU\" + $m) 2>&1 | Out-Null
+        ('[INFO] An earlier run''s copy of an account registry was still mounted as HKU\' + $m + ' and has been unloaded' + $(if ($LASTEXITCODE -ne 0) { ' -- FAILED (it goes at reboot; tools\unload_audit_hives.ps1 retries)' } else { '' }) + '.')
+    }
+    foreach ($d in @(Get-ChildItem -LiteralPath $tmpRoot -Force -Filter 'dz_hive_*' -ErrorAction SilentlyContinue)) {
+        $dpid = 0; if (-not [int]::TryParse(($d.Name -replace '^dz_hive_', ''), [ref]$dpid)) { continue }
+        # This run owns nothing yet, so its own PID's folder is an earlier run's too.
+        if ($dpid -ne $PID -and (Get-Process -Id $dpid -ErrorAction SilentlyContinue)) { continue }
+        $why = Remove-PrivateFolder $d.FullName
+        if ($why) { ('[INFO] An earlier run''s registry copy folder was not removed: ' + $why + '.') }
+    }
+    $mySid = ''; try { $mySid = [string][Security.Principal.WindowsIdentity]::GetCurrent().User.Value } catch {}
+    $accounts = New-Object System.Collections.ArrayList
+    $notRead = New-Object System.Collections.ArrayList
+    $noFile = New-Object System.Collections.ArrayList
+    $listErr = ''
+    $nameOf = { param([string]$sid, [string]$fallback)
+        try { return ([Security.Principal.SecurityIdentifier]$sid).Translate([Security.Principal.NTAccount]).Value } catch { if ($fallback) { return $fallback } return $sid } }
+    $readAccount = { param([string]$label, [string]$how, $base, [string]$prefix)
+        $keys = @($script:RunSubs | ForEach-Object { @{ Sub = $_; R = (Read-RunValues -Base $base -SubPath ($prefix + '\' + $_)) } })
+        $err = ''
+        if (@($keys | Where-Object { [string]$_.R.State -eq 'denied' }).Count -eq $keys.Count) { $err = 'denied' }
+        return @{ Label = $label; How = $how; Error = $err; Keys = $keys } }
+    $gapAcct = { param([string]$label, [string]$why) @{ Label = $label; How = 'copy'; Error = $why; Keys = @() } }
+    if (@($OtherRoot).Count -gt 0) {
+        foreach ($o in $OtherRoot) { [void]$accounts.Add((& $readAccount ([string]$o) 'ci' ([Microsoft.Win32.Registry]::CurrentUser) (([string]$o) -replace '^HKCU:\\', ''))) }
+    } elseif (-not $mySid) {
+        # Nothing is read: Get-OtherAccountsVerdict -OwnSidUnknown raises it.
+    } else {
+        $loaded = @()
+        try { $loaded = @([Microsoft.Win32.Registry]::Users.GetSubKeyNames()) } catch { $listErr = ('HKEY_USERS could not be listed: ' + $_.Exception.Message) }
+        foreach ($sid in @($loaded | Where-Object { $_ -match '^S-1-5-21-[\d-]+$' -and $_ -ne $mySid })) { [void]$accounts.Add((& $readAccount (& $nameOf $sid '') 'signed-in' ([Microsoft.Win32.Registry]::Users) ($sid + '\Software'))) }
+        $profiles = New-Object System.Collections.ArrayList
+        $pl = $null
+        try {
+            $lm = [Microsoft.Win32.Registry]::LocalMachine
+            try { $lm = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64) } catch {}
+            $pl = $lm.OpenSubKey('SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList', $false)
+            if ($null -eq $pl) { throw 'the ProfileList key is missing' }
+            foreach ($sid in @($pl.GetSubKeyNames())) {
+                $sk = $null
+                try { $sk = $pl.OpenSubKey($sid, $false); $pth = ''; if ($sk) { $pth = [Environment]::ExpandEnvironmentVariables([string]$sk.GetValue('ProfileImagePath')) }; [void]$profiles.Add(@{ Sid = $sid; Path = $pth }) } finally { if ($sk) { $sk.Close() } }
+            }
+        } catch { if (-not $listErr) { $listErr = ('the profile list could not be read: ' + $_.Exception.Message) } } finally { if ($pl) { $pl.Close() } }
+        $n = 0
+        foreach ($pf in @(Select-SignedOutProfiles -Profiles @($profiles.ToArray()) -Loaded $loaded -MySid $mySid)) {
+            $label = ''; $hive = ''; $dir = ''; $mount = ''; $mounted = $false
+            $sidS = [string]$pf.Sid; $path = [string]$pf.Path
+            if (-not $path) { [void]$accounts.Add((& $gapAcct $sidS 'its profile entry names no profile folder')); continue }
+            $label = (& $nameOf $sidS ($path -replace '^.*\\', ''))
+            if (-not ($LoadSignedOut -and $Elevated -eq 1)) { [void]$notRead.Add($label); continue }
+            # Which registry file: NTUSER.DAT, or NTUSER.MAN for a mandatory
+            # profile. A folder that answers without either holds nothing
+            # that runs at sign-in; a folder that refuses is a gap.
+            try { $null = Get-Item -LiteralPath $path -Force -ErrorAction Stop }
+            catch {
+                # Absent only when the parent ANSWERS without it (the
+                # File.Exists lesson): a refusal can surface as not-found.
+                $absent = $false
+                if ($_.Exception -is [System.Management.Automation.ItemNotFoundException]) {
+                    $par = Split-Path -Parent $path; $leaf = Split-Path -Leaf $path
+                    try { $absent = -not (@(Get-ChildItem -LiteralPath $par -Force -ErrorAction Stop | ForEach-Object { $_.Name }) -contains $leaf) } catch {}
+                }
+                if ($absent) { [void]$noFile.Add($label); continue }
+                [void]$accounts.Add((& $gapAcct $label ('its profile folder could not be read (' + $_.Exception.Message + ')'))); continue
+            }
+            $names = @()
+            try { $names = @(Get-ChildItem -LiteralPath $path -Force -File -ErrorAction Stop | ForEach-Object { $_.Name }) }
+            catch { [void]$accounts.Add((& $gapAcct $label ('its profile folder could not be listed (' + $_.Exception.Message + ')'))); continue }
+            $file = Select-HiveFile $names
+            if (-not $file) { [void]$noFile.Add($label); continue }
+            $n++
+            $hive = $path.TrimEnd('\') + '\' + $file
+            $dir = $tmpRoot.TrimEnd('\') + '\dz_hive_' + $PID + '\' + $n
+            $mount = ('dz_sec_' + $PID + '_' + $n)
+            try {
+                # Room for the copy, twice over.
+                $need = [long]0
+                foreach ($x in @($file, ($file + '.LOG1'), ($file + '.LOG2'))) { if ($names -contains $x) { try { $need += (Get-Item -LiteralPath ($path.TrimEnd('\') + '\' + $x) -Force -ErrorAction Stop).Length } catch {} } }
+                $free = [long]-1
+                try { $free = (New-Object IO.DriveInfo([IO.Path]::GetPathRoot($tmpRoot))).AvailableFreeSpace } catch {}
+                if ($free -lt 0) { [void]$accounts.Add((& $gapAcct $label ('the free space in TEMP (' + $tmpRoot + ') could not be read, so its registry was not copied'))); continue }
+                if ($free -lt (2 * $need)) { [void]$accounts.Add((& $gapAcct $label ('not enough free space in TEMP to copy its registry (' + [math]::Round($need / 1MB) + ' MB needed twice over)'))); continue }
+                $runDir = $tmpRoot.TrimEnd('\') + '\dz_hive_' + $PID
+                if (-not (Test-Path -LiteralPath $runDir)) { $why2 = New-PrivateFolder $runDir; if ($why2) { [void]$accounts.Add((& $gapAcct $label ('its registry copy folder could not be made safely (' + $why2 + ')'))); continue } }
+                $why2 = New-PrivateFolder $dir
+                if ($why2) { $dir = ''; [void]$accounts.Add((& $gapAcct $label ('its registry copy folder could not be made safely (' + $why2 + ')'))); continue }
+                # FROM A SNAPSHOT: esentutl /vss copies out of a Volume Shadow
+                # Copy, so the account's own file is never opened -- a sign-in
+                # during the copy cannot collide with it (a plain copy opens
+                # it, and a sign-in then gets a TEMPORARY profile). No
+                # fallback to a plain copy, ever.
+                $copyFail = ''
+                foreach ($x in @($file, ($file + '.LOG1'), ($file + '.LOG2'))) {
+                    if (-not ($names -contains $x)) { continue }
+                    # An empty log holds nothing to replay: no snapshot for it.
+                    if ($x -ne $file) { $ln = [long]0; try { $ln = (Get-Item -LiteralPath ($path.TrimEnd('\') + '\' + $x) -Force -ErrorAction Stop).Length } catch { $ln = 1 }; if ($ln -eq 0) { continue } }
+                    $eo = (& (Get-NativeTool 'esentutl.exe') /y ($path.TrimEnd('\') + '\' + $x) /vss /d ($dir + '\' + $x) 2>&1 | ForEach-Object { [string]$_ }) -join ' '
+                    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath ($dir + '\' + $x))) { $copyFail = $(if ($x -eq $file) { 'its registry could not be copied from a snapshot (' } else { 'its registry log ' + $x + ' could not be copied, so recent changes may be missing (' }) + (ConvertTo-PrintableLine $eo) + ')'; break }
+                }
+                if ($copyFail) { [void]$accounts.Add((& $gapAcct $label $copyFail)); continue }
+                $lo = (& (Get-NativeTool 'reg.exe') load ("HKU\" + $mount) ($dir + '\' + $file) 2>&1 | ForEach-Object { [string]$_ }) -join ' '
+                if ($LASTEXITCODE -ne 0) { [void]$accounts.Add((& $gapAcct $label ('the copy of its registry could not be loaded (' + (ConvertTo-PrintableLine $lo) + ')'))); continue }
+                $mounted = $true
+                [void]$accounts.Add((& $readAccount ($label + ', signed out, read from a copy') 'copy' ([Microsoft.Win32.Registry]::Users) ($mount + '\Software')))
+            } catch { [void]$accounts.Add((& $gapAcct $label ('its registry could not be read from a copy (' + $_.Exception.Message + ')'))) }
+            finally {
+                # One account at a time: unmount and delete before the next.
+                if ($mounted) {
+                    [GC]::Collect(); [GC]::WaitForPendingFinalizers()
+                    $okU = $false
+                    for ($i = 0; $i -lt 5 -and -not $okU; $i++) { & (Get-NativeTool 'reg.exe') unload ("HKU\" + $mount) 2>&1 | Out-Null; if ($LASTEXITCODE -eq 0) { $okU = $true } else { Start-Sleep -Milliseconds 400; [GC]::Collect() } }
+                    if (-not $okU) { ('[INFO] The copy mounted as HKU\' + $mount + ' could not be unloaded; it is a copy, so the account is unaffected, and it goes at reboot (tools\unload_audit_hives.ps1 retries).') }
+                }
+                if ($dir) { $w3 = Remove-PrivateFolder $dir; if ($w3) { ('[INFO] ' + $w3 + '.') } }
+            }
+        }
+        $w4 = Remove-PrivateFolder ($tmpRoot.TrimEnd('\') + '\dz_hive_' + $PID); if ($w4) { ('[INFO] ' + $w4 + '.') }
+    }
+    $why = $(if ($Elevated -ne 1) { '' } elseif (-not $LoadSignedOut) { 'not signed in; this run did not read signed-out accounts (-readonly, or not asked)' } else { '' })
+    $v = Get-OtherAccountsVerdict -Accounts @($accounts.ToArray()) -NotRead @($notRead.ToArray()) -ListError $listErr -IsElevated ($Elevated -eq 1) -NotReadWhy $why -NoFile @($noFile.ToArray()) -OwnSidUnknown ((@($OtherRoot).Count -eq 0) -and -not $mySid)
+    foreach ($l in $v.Lines) { $l }
+    if ($v.Hit -and $MarkerFile) { Write-MarkerFile -Path $MarkerFile -Value 'WARNING' }
+    if ($v.Gap -and $GapFile) { Write-MarkerFile -Path $GapFile -Value 'WARNING' }
+    if ([int]$v.Deferred -gt 0 -and $DeferredFile) { Write-MarkerFile -Path $DeferredFile -Value ([string][int]$v.Deferred) }
+    if ($DoneFile) { Write-MarkerFile -Path $DoneFile -Value 'done' }
+    exit 0
 }
 
 $runKeys = @(
@@ -370,23 +781,22 @@ $runKeys = @(
 )
 
 $found = $false
+$runUnread = @()
+$script:Hklm64 = [Microsoft.Win32.Registry]::LocalMachine
+try { $script:Hklm64 = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64) } catch {}
 
 foreach ($k in $runKeys) {
-    if (-not (Test-Path $k)) { continue }
-    $props = Get-ItemProperty -Path $k -EA SilentlyContinue
-    if (-not $props) { continue }
-    foreach ($p in $props.PSObject.Properties) {
-        # Skip PowerShell's synthetic note-properties by EXACT name.
-        #
-        # This test used to be `-match '^PS'` -- a case-insensitive PREFIX
-        # match. It skipped PSPath/PSChildName/... as intended, but it also
-        # skipped every REAL registry value whose name merely began with "PS".
-        # Naming a Run-key autorun "PSUpdater" or "psnotify" therefore hid it
-        # from this evaluator completely: no verdict, no finding, no ledger
-        # entry. That is a one-word evasion of the tool's most important
-        # persistence check, and "PS" is a natural prefix for anything
-        # PowerShell-flavoured, so it could also happen by accident.
-        if ($psNoteProps -contains $p.Name) { continue }
+    # Exact value names through the key itself: no PowerShell note properties
+    # to filter (the old '^PS' prefix test hid any autorun named PS*, and the
+    # exact-name list that replaced it is no longer needed), and a key that
+    # could not be read is a raised gap, never skipped.
+    # HKLM through its 64-bit view, so a 32-bit host still reads the native
+    # Run key (and Wow6432Node by its own name), not a redirected copy.
+    $base = $(if ($k.StartsWith('HKCU:')) { [Microsoft.Win32.Registry]::CurrentUser } else { $script:Hklm64 })
+    $rv = Read-RunValues -Base $base -SubPath ($k -replace '^HK(CU|LM):\\', '')
+    if ([string]$rv.State -eq 'nokey') { continue }
+    if ([string]$rv.State -ne 'ok') { $runUnread += ($k + ' - ' + [string]$rv.Error); continue }
+    foreach ($p in @($rv.Values)) {
         $val = [string]$p.Value
         if (-not $val) { continue }
 
@@ -402,6 +812,8 @@ foreach ($k in $runKeys) {
         }
     }
 }
+foreach ($l in (Get-RunKeyGapLines -Unread $runUnread)) { $l }
+if ($runUnread.Count -gt 0 -and $GapFile) { Write-MarkerFile -Path $GapFile -Value 'WARNING' }
 
 $ifeoBase = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options'
 $ifeoOk = $true
@@ -409,15 +821,15 @@ $subs = @()
 $ifeoErr = @()
 # Per-subkey errors ("Requested registry access is not allowed") are collected,
 # not fatal: one restricted subkey used to terminate the enumeration (-EA Stop)
-# and lose the entire check. [SKIPPED] is now reserved for the BASE key being
-# unreadable.
+# and lose the entire check. A BASE key that cannot be read is a raised
+# NOT-performed gap (below), never followed by the all-clear.
 try {
     if (Test-Path -LiteralPath $ifeoBase) {
         $subs = @(Get-ChildItem -Path $ifeoBase -EA SilentlyContinue -ErrorVariable ifeoErr)
     } else { $ifeoOk = $false }
 } catch { $ifeoOk = $false }
 if (-not $ifeoOk) {
-    '[SKIPPED] IFEO enumeration failed -- Debugger-hijack evaluation NOT performed.'
+    '[WARNING] IFEO Debugger-hijack check NOT performed -- the Image File Execution Options key could not be read, so a Debugger hijack would go unseen.'
 } else {
     $ifeoUnreadable = @()
     foreach ($e in @($ifeoErr)) {
@@ -452,8 +864,12 @@ if (-not $ifeoOk) {
     }
 }
 
-if (-not $found) {
+# A failed IFEO read is a gap, raised, never followed by the all-clear.
+if (-not $ifeoOk -and $GapFile) { Write-MarkerFile -Path $GapFile -Value 'WARNING' }
+if (-not $found -and $runUnread.Count -eq 0 -and $ifeoOk) {
     '[OK] No suspicious Run-key autoruns or IFEO Debugger hijacks.'
+} elseif (-not $found) {
+    '[INFO] No suspicious Run-key autorun or IFEO Debugger hijack in what could be read.'
 } elseif ($MarkerFile) {
     Write-MarkerFile -Path $MarkerFile -Value 'hit'
 }

@@ -359,7 +359,16 @@ jobs:
                    'an UNSIGNED procexp64.exe on taskmgr.exe is the hijack' \
                    'sethc.exe -> cmd.exe is the classic hijack' \
                    'an unreadable IFEO subkey as a standard user is INFO, named, not graded, not cleared' \
-                   'IFEO subkeys an ADMINISTRATOR cannot read are a WARNING that names them'; do
+                   'IFEO subkeys an ADMINISTRATOR cannot read are a WARNING that names them' \
+                   "another account's encoded-PowerShell autorun is the WARNING, naming the account" \
+                   'a value named PS* is graded (the old block filtered ^PS and hid it)' \
+                   "the same refusal to a STANDARD user: a deferral (another account's hive denies Users), never a gap or [OK]" \
+                   'a signed-out account left unread is NAMED, never silent and never [OK]' \
+                   "the user's own Run key that could not be read is a raised gap (the old loop skipped it silently)" \
+                   'a signed-out account on a STANDARD-user token is a counted deferral (the token is the explanation)' \
+                   'a profile entry with no registry file is [INFO], never a gap' \
+                   'a finding shows the RAW value (%USERPROFILE%)' \
+                   'more than 25 values: the listing says how many more were graded but not listed'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
           n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 39 ] || { echo "only $n case(s)"; exit 1; }
@@ -867,7 +876,7 @@ jobs:
           dup=$(echo "$called" | uniq -d); [ -z "$dup" ] || { echo "called by more than one step: $dup"; exit 1; }
           for f in $called; do [ -s ".github/ci/$f" ] || { echo ".github/ci/$f is missing or empty -- its step would run nothing"; exit 1; }; done
           for f in .github/ci/*.ps1; do echo "$called" | grep -qxF "$(basename "$f")" || { echo "$f is called by no step in windows-smoke.yml"; exit 1; }; done
-          n=$(echo "$called" | wc -l); [ "$n" -ge 27 ] || { echo "only $n step(s) call a .github/ci script; 27 are expected"; exit 1; }
+          n=$(echo "$called" | wc -l); [ "$n" -ge 28 ] || { echo "only $n step(s) call a .github/ci script; 28 are expected"; exit 1; }
           # cmd reads a bare < or > in an echo as a file redirection, quoted or
           # not by PowerShell's single quotes: 'Expected: <Windows>\system32...'
           # in a tile's help text made the whole line vanish from the dashboard

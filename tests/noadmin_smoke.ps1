@@ -492,6 +492,7 @@ try {
         @{ Name = 'ransomware-extension'; Ran = '(?m)^\[OK\] No files with known ransomware extensions|(?m)^\[CRITICAL\]\[T1486\] Files with ransomware-associated extensions'; Def = '(?m)^\[DEFERRED - ADMIN REQUIRED\] Ransomware-extension'; Gap = '(?m)^\[WARNING\] Ransomware-extension check (NOT performed|produced no verdict)'; Row = '\|18\|T1486\|Ransomware-extension check ' },
         @{ Name = 'remote-access tool'; Ran = '(?m)^\[OK\] No known remote-access tool (running|installed)|(?m)^\[WARNING\] Remote-access tool (RUNNING|INSTALLED): '; Def = '(?m)^\[DEFERRED - ADMIN REQUIRED\] Remote-access tool'; Gap = '(?m)^\[WARNING\] Remote-access tool check .*(NOT performed|produced no verdict)'; Row = '\|4\|T1219\|Remote-access tool check ' },
         @{ Name = 'Office macro policy'; Ran = '(?m)^\[OK\] No Office (settings for this account|macro setting weakens protection)|(?m)^\[WARNING\] .+ \d+\.0: (VBAWarnings|blockcontentexecutionfrominternet)'; Def = '(?m)^\[DEFERRED - ADMIN REQUIRED\] Office macro'; Gap = '(?m)^\[WARNING\] Office macro policy check (NOT performed|produced no verdict)'; Row = '\|13\|T1204\.002\|Office macro policy check ' },
+        @{ Name = 'other accounts'' Run keys'; Ran = '(?m)^\[OK\] No (suspicious Run-key autorun in \d+ other account|other account on this PC has a profile)|(?m)^\[WARNING\] Suspicious Run-key autorun in another account|(?m)^\[INFO\] \d+ signed-out account\(s\) not read'; Def = '(?m)^\[DEFERRED - ADMIN REQUIRED\] Other accounts'' Run keys'; Gap = '(?m)^\[WARNING\] Other accounts'' Run-key check (NOT performed|produced no verdict)'; Row = '\|5\|T1547\.001\|Other accounts'' Run-key check ' },
         @{ Name = 'OpenSSH Server'; Ran = '(?m)^\[OK\] OpenSSH Server (not installed|installed but not running)\.|(?m)^\[WARNING\] OpenSSH Server \(sshd\) is RUNNING'; Def = '(?m)^\[DEFERRED - ADMIN REQUIRED\] OpenSSH Server check'; Gap = '(?m)^\[WARNING\] OpenSSH Server check (NOT performed|produced no verdict)'; Row = '\|18\|T1021\.004\|OpenSSH Server check ' })) {
         $ran = $text1 -match $c.Ran; $def = $text1 -match $c.Def; $gap = $text1 -match $c.Gap
         Write-Host ("  MEASURED: the {0} check on a standard-user token: ran={1} deferred={2} gap={3}" -f $c.Name, $ran, $def, $gap)
@@ -550,7 +551,7 @@ try {
         ("a T1014 row was raised on a standard-user run with nothing printed: {0}" -f (($ledger1 | Where-Object { $_ -match '\|17\|T1014\|' }) -join ' ; '))
     # One restricted IFEO subkey must not lose the check: the readable
     # subkeys are graded and the unreadable one is named.
-    Assert ($text1 -notmatch '\[SKIPPED\] IFEO enumeration failed') `
+    Assert ($text1 -notmatch 'IFEO Debugger-hijack check NOT performed') `
         'the IFEO Debugger-hijack check still ran with one subkey unreadable' `
         'one unreadable IFEO subkey lost the whole Debugger-hijack check ([SKIPPED])'
     Assert ($text1 -match '\[INFO\] \d+ IFEO entr(y|ies) not readable from this token: [^\r\n]*dzsmoke_ifeo\.exe') `

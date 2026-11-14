@@ -44,6 +44,10 @@ if ($SelfTest) {
            Find = '(?m)^if "%READONLY_MODE%"=="1" \(\r?\n\s*echo  \[SKIP\] read-only mode: RunOnce[^\r\n]*\r?\n[^\r\n]*\r?\n\s*goto :runonce_done\r?\n\)\r?\n'
            Repl = ''
            Expect = 'must be gated by READONLY_MODE' },
+        @{ Name = 'the signed-out-account read gate inverted (it would mount registry copies under -readonly)'
+           Find = 'if "%READ_SIGNED_OUT%"=="1" if "%READONLY_MODE%"=="0" set "_LSO=-LoadSignedOut"'
+           Repl = 'if "%READ_SIGNED_OUT%"=="1" if "%READONLY_MODE%"=="1" set "_LSO=-LoadSignedOut"'
+           Expect = '-LoadSignedOut must be set only by' },
         @{ Name = ':args_done no longer forces SKIP_SRP'
            Find = '(?m)^if "%READONLY_MODE%"=="1" set "SKIP_SRP=1"\r?\n'
            Repl = ''
@@ -73,11 +77,11 @@ if ($SelfTest) {
     exit 0
 }
 
-$siteRx = '\breg add\b|\breg delete\b|bcdedit /set|bcdedit /timeout|bcdedit /deletevalue|srp_check\.ps1|Checkpoint-Computer|\bping -n\b|self_update_check\.ps1|threat_list_sync\.ps1|vt_self_check\.ps1|vt_check\.ps1|vt_ip_check\.ps1|dns_probe\.ps1|claude -p|Invoke-WebRequest'
+$siteRx = '\breg add\b|\breg delete\b|bcdedit /set|bcdedit /timeout|bcdedit /deletevalue|srp_check\.ps1|Checkpoint-Computer|\bping -n\b|self_update_check\.ps1|threat_list_sync\.ps1|vt_self_check\.ps1|vt_check\.ps1|vt_ip_check\.ps1|dns_probe\.ps1|claude -p|Invoke-WebRequest|-LoadSignedOut'
 # skip_ttp_update: the -updateTTP block is one region gated at its top by
 # UPDATE_TTP; its internal error exits name the label and mark the region.
 $gateRx = 'READONLY_MODE|SKIP_SRP|SKIP_THREAT_UPDATE|VT_SELF_SKIP|NETWORK_AVAIL|VT_CHECK|DNS_PROBE|UPDATE_TTP|skip_ttp_update'
-$strictRx = '\breg add\b.*RunOnce|bcdedit /set|bcdedit /timeout'
+$strictRx = '\breg add\b.*RunOnce|bcdedit /set|bcdedit /timeout|-LoadSignedOut'
 $fail = @(); $total = 0
 foreach ($b in $bats) {
     $path = Join-Path $Root $b
@@ -113,9 +117,19 @@ foreach ($b in $bats) {
     foreach ($force in @('SKIP_SRP', 'SKIP_THREAT_UPDATE', 'VT_SELF_SKIP')) {
         if ($src -notmatch ('if "%READONLY_MODE%"=="1" set "' + $force + '=1"')) { $fail += ("{0}: :args_done does not force {1}=1 under -readonly" -f $b, $force) }
     }
-    foreach ($refuse in @('VT_CHECK', 'DNS_PROBE', 'UPDATE_TTP')) {
+    foreach ($refuse in @('VT_CHECK', 'DNS_PROBE', 'UPDATE_TTP', 'READ_SIGNED_OUT')) {
         if ($src -notmatch ('if "%READONLY_MODE%"=="1" if "%' + $refuse + '%"=="1" goto :readonly_conflict')) { $fail += ("{0}: -readonly does not refuse {1}" -f $b, $refuse) }
     }
+    # Reading a signed-out account mounts a COPY of its registry: never under
+    # -readonly. The switch reaches the tool only through %_LSO%, set by this
+    # exact line and no other -- a proximity check alone would pass an
+    # inverted gate.
+    # Any prefix of the switch binds it (-LoadSigned works), so match the stem.
+    $lso = @($lines | Where-Object { $_ -match '-LoadSigned' -and $_.TrimStart() -notmatch '^\(?(echo\b|rem\b|::)' })
+    if ($lso.Count -ne 1 -or $lso[0].Trim() -ne 'if "%READ_SIGNED_OUT%"=="1" if "%READONLY_MODE%"=="0" set "_LSO=-LoadSignedOut"') { $fail += ("{0}: -LoadSignedOut must be set only by: if ""%READ_SIGNED_OUT%""==""1"" if ""%READONLY_MODE%""==""0"" set ""_LSO=-LoadSignedOut"" (found {1} line(s): {2})" -f $b, $lso.Count, ($lso -join ' | ')) }
+    $lro = @($lines | Where-Object { $_.Trim() -eq 'if "%READONLY_MODE%"=="1" set "_LRO=-ReadOnly"' })
+    if ($lro.Count -ne 1) { $fail += ("{0}: the OtherAccounts call must be told -ReadOnly under -readonly (if ""%READONLY_MODE%""==""1"" set ""_LRO=-ReadOnly"")" -f $b) }
+    if ($src -notmatch 'persistence_eval\.ps1" -Part OtherAccounts [^\r\n]*%_LSO% %_LRO%') { $fail += ("{0}: the OtherAccounts call no longer passes %_LSO% %_LRO%" -f $b) }
     if ($src -notmatch '(?m)^:readonly_conflict') { $fail += ("{0}: :readonly_conflict label missing" -f $b) }
     if ($src -notmatch 'READ-ONLY RUN -- this audit makes no changes') { $fail += ("{0}: the read-only banner is missing from the report header" -f $b) }
     # The audit GENERATES a remediation script full of machine-changing commands.

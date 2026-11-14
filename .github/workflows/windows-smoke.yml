@@ -418,6 +418,12 @@ jobs:
           $global:LASTEXITCODE = 0
           exit 0
 
+      - name: "Other accounts' Run keys: a signed-out account is read from a COPY of its registry, its autorun found and named, nothing left mounted"
+        shell: powershell
+        run: |
+          & .\.github\ci\other_accounts_run_states.ps1
+          exit $LASTEXITCODE
+
       - name: "Section 18h on 5.1: a registry key that cannot be read is named and raised beside a match, never swallowed"
         shell: powershell
         run: |
@@ -2814,7 +2820,7 @@ jobs:
           $st = (.\tools\persistence_eval.ps1 -SelfTest) -join "`n"
           if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'persistence_eval.ps1 -SelfTest failed' }
           $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($nst -lt 39) { throw "persistence_eval self-test ran only $nst case(s)" }
+          if ($nst -lt 58) { throw "persistence_eval self-test ran only $nst case(s)" }
           if ($st -notmatch 'an unreadable IFEO subkey as a standard user is INFO') { throw 'persistence_eval self-test no longer covers the unreadable-IFEO-subkey case' }
           Write-Host "persistence_eval -SelfTest OK ($nst cases)"
           # On a clean runner (no planted autoruns/IFEO) it must print the OK

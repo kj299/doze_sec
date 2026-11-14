@@ -342,6 +342,23 @@ try {
     else { Report 'netsh portproxy tunnel (port 53219)' 'ABSENT' }
 } catch { Report 'netsh portproxy tunnel (port 53219)' 'ABSENT' }
 
+# Section 5 reads a signed-out account from a COPY of its registry mounted as
+# HKU\dz_sec_<pid>_<n>. An interrupted run can leave such a mount (harmless:
+# it is a copy) and its temp folder; unload and delete both.
+try {
+    foreach ($m in @([Microsoft.Win32.Registry]::Users.GetSubKeyNames() | Where-Object { $_ -match '^dz_sec_\d+_\d+$' })) {
+        & reg.exe unload ("HKU\" + $m) 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) { Report ('mounted registry copy HKU\' + $m) 'REMOVED' } else { $errors += ('could not unload HKU\' + $m + ' (it goes at reboot)') }
+    }
+} catch {}
+foreach ($d in @(Get-ChildItem -LiteralPath ([IO.Path]::GetTempPath()) -Force -Filter 'dz_hive_*' -EA SilentlyContinue)) {
+    # Never follow a link: a junction named dz_hive_* would aim this recursive delete elsewhere.
+    if (([int]$d.Attributes -band 0x400) -or @(Get-ChildItem -LiteralPath $d.FullName -Recurse -Force -EA SilentlyContinue | Where-Object { [int]$_.Attributes -band 0x400 }).Count) { $errors += ('refused ' + $d.FullName + ': it is or holds a link, not a folder the audit made'); continue }
+    Remove-Item -LiteralPath $d.FullName -Recurse -Force -EA SilentlyContinue
+    if (-not (Test-Path -LiteralPath $d.FullName)) { Report ('registry copy folder ' + $d.Name) 'REMOVED' }
+    else { $errors += ('could not remove the registry copy folder ' + $d.FullName + ' (a copy may still be mounted from it; restart, then re-run this)') }
+}
+
 Write-Host ''
 Write-Host ("== Teardown complete: {0} removed, {1} already absent ==" -f $removed, $absent)
 if ($errors.Count) {

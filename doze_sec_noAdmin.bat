@@ -189,6 +189,7 @@ set "NO_ADMIN_MODE=0"
 set "UPDATE_TTP=0"
 set "VT_CHECK=0"
 set "DNS_PROBE=0"
+set "READ_SIGNED_OUT=0"
 set "DNSPROBE_STATE="
 set "PROCPATH_STATE="
 set "DEFCORE_MODE=unknown"
@@ -256,6 +257,7 @@ if /i "%~1"=="-updateTTP"  set "UPDATE_TTP=1"
 if /i "%~1"=="-importTTP"  goto :parse_importttp_noadmin
 if /i "%~1"=="-vt"         set "VT_CHECK=1"
 if /i "%~1"=="-dnsprobe"   set "DNS_PROBE=1"
+if /i "%~1"=="-readSignedOut" set "READ_SIGNED_OUT=1"
 if /i "%~1"=="-noVtSelf"   set "VT_SELF_SKIP=1"
 if /i "%~1"=="-baseline"   set "BASELINE_SAVE=1"
 if /i "%~1"=="-noBaseline" set "BASELINE_SKIP=1"
@@ -294,8 +296,16 @@ if "%READONLY_MODE%"=="1" set "SKIP_THREAT_UPDATE=1"
 if "%READONLY_MODE%"=="1" set "VT_SELF_SKIP=1"
 if "%READONLY_MODE%"=="1" if "%VT_CHECK%"=="1" goto :readonly_conflict
 if "%READONLY_MODE%"=="1" if "%DNS_PROBE%"=="1" goto :readonly_conflict
+if "%READONLY_MODE%"=="1" if "%READ_SIGNED_OUT%"=="1" goto :readonly_conflict_rso
 if "%READONLY_MODE%"=="1" if "%UPDATE_TTP%"=="1" goto :readonly_conflict
 goto :help_done
+
+:readonly_conflict_rso
+echo.
+echo  [ERROR] -readonly cannot be combined with -readSignedOut: reading a signed-out
+echo          account mounts a copy of its registry, a change outside the output folder.
+echo  Exit code: 1 -- audit did not run
+endlocal & exit /b 1
 
 :readonly_conflict
 echo.
@@ -372,6 +382,14 @@ echo                 exists and the network is up. Adds ~50 s to startup but
 echo                 detects tampered system binaries before any audit data
 echo                 is collected. Audit aborts with EXIT_CODE=7 if any
 echo                 binary is flagged malicious by VT.
+echo.
+echo    %C_GREEN%-readSignedOut%C_RESET%  Section 5: also read the Run keys of accounts that are NOT
+echo                 signed in (elevated only; refused with -readonly). Each is
+echo                 copied from a Volume Shadow Copy and the copy mounted. WARNING:
+echo                 if shadow-copy storage is full, Windows deletes your OLDEST
+echo                 restore point to make room, and on a work PC your security
+echo                 software or IT may raise an intrusion alert (esentutl /vss is
+echo                 also how attackers copy locked files). Off by default.
 echo.
 echo    %C_GREEN%-noConsoleLog%C_RESET%  Skip console-output capture (default ON). By default
 echo    %C_GREEN%-readonly%C_RESET%      Inspect only: change nothing on this machine outside the output
@@ -2172,14 +2190,19 @@ echo  Command: powershell -File tools\persistence_eval.ps1>> "%REPORT%"
 echo  Evaluates the raw autorun dumps above: flags encoded/hidden-window/>> "%REPORT%"
 echo  LOLBin-download autoruns and any IFEO Debugger hijack.>> "%REPORT%"
 del "%TEMP%\dz_persist_hit.txt" 2>nul
+del "%TEMP%\dz_persist_gap.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\persistence_eval.ps1" (
-    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\persistence_eval.ps1" -MarkerFile "%TEMP%\dz_persist_hit.txt">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\persistence_eval.ps1" -MarkerFile "%TEMP%\dz_persist_hit.txt" -GapFile "%TEMP%\dz_persist_gap.txt">> "%REPORT%" 2>&1
 ) else (
     echo  [INFO] tools\persistence_eval.ps1 not found -- autorun/IFEO evaluation skipped.>> "%REPORT%"
 )
 if exist "%TEMP%\dz_persist_hit.txt" (
     call :dz_finding WARNING 5 T1547 "Suspicious Run-key autorun or IFEO Debugger hijack"
     del "%TEMP%\dz_persist_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_persist_gap.txt" (
+    call :dz_finding WARNING 5 T1547.001 "Run-key or IFEO evaluation NOT performed in full - a key could not be read"
+    del "%TEMP%\dz_persist_gap.txt" 2>nul
 )
 echo.>> "%REPORT%"
 echo --- Startup Folder / AppCert DLL Evaluation --->> "%REPORT%"
@@ -2437,24 +2460,50 @@ if exist "%TEMP%\dz_logon_logonscript.txt" (
 )
 
 echo.>> "%REPORT%"
-echo --- Other Users' Run Keys (HKU\^<SID^> enumeration) --->> "%REPORT%"
-echo  Command: powershell -Command "Get-ChildItem 'Registry::HKEY_USERS' -EA SilentlyContinue">> "%REPORT%"
-echo  noAdmin: only the current user's hive is loaded under HKEY_USERS;>> "%REPORT%"
-echo  re-run as admin to enumerate other users' Run/RunOnce persistence.>> "%REPORT%"
-echo $loadedHives = Get-ChildItem 'Registry::HKEY_USERS' -EA SilentlyContinue ^| Where-Object { $_.Name -match 'S-1-5-21-' } > "%PSRUN%"
-echo $hits = @() >> "%PSRUN%"
-echo foreach ($hive in $loadedHives) { >> "%PSRUN%"
-echo   $sid = $hive.PSChildName >> "%PSRUN%"
-echo   foreach ($sub in 'Software\Microsoft\Windows\CurrentVersion\Run','Software\Microsoft\Windows\CurrentVersion\RunOnce','Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Run','Software\Wow6432Node\Microsoft\Windows\CurrentVersion\RunOnce') { >> "%PSRUN%"
-echo     $path = "Registry::HKEY_USERS\$sid\$sub" >> "%PSRUN%"
-echo     if (Test-Path $path) { >> "%PSRUN%"
-echo       $values = Get-ItemProperty $path -EA SilentlyContinue >> "%PSRUN%"
-echo       if ($values) { $values.PSObject.Properties ^| Where-Object { $_.Name -notmatch '^^PS' } ^| ForEach-Object { $hits += "  HKU\$sid\$sub\$($_.Name) = $($_.Value)" } } >> "%PSRUN%"
-echo     } >> "%PSRUN%"
-echo   } >> "%PSRUN%"
-echo } >> "%PSRUN%"
-echo if ($hits.Count -gt 0) { '[INFO] Run/RunOnce entries in loaded hives:'; $hits } else { '[OK] No Run/RunOnce entries in other loaded hives.' } >> "%PSRUN%"
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+echo --- Other Accounts' Run Keys (every other account on this PC, graded) --->> "%REPORT%"
+echo  Command: powershell -File tools\persistence_eval.ps1 -Part OtherAccounts>> "%REPORT%"
+echo  Grades the Run/RunOnce values of every OTHER account the way HKCU's are graded.>> "%REPORT%"
+echo  Signed-in accounts are read under HKEY_USERS. A signed-out account is read from a>> "%REPORT%"
+echo  COPY of its registry taken from a Volume Shadow Copy, so its own file is never>> "%REPORT%"
+echo  opened -- only with -readSignedOut on an elevated run; otherwise it is named, unread.>> "%REPORT%"
+del "%TEMP%\dz_persist_other_hit.txt" 2>nul
+del "%TEMP%\dz_persist_other_gap.txt" 2>nul
+del "%TEMP%\dz_persist_other_deferred.txt" 2>nul
+del "%TEMP%\dz_persist_other_done.txt" 2>nul
+if "%READ_SIGNED_OUT%"=="1" if "%READONLY_MODE%"=="0" (
+    echo  [INFO] -readSignedOut: signed-out accounts are copied from a Volume Shadow Copy. If shadow-copy storage is full, Windows deletes the OLDEST restore point to make room, and security software or IT may raise an intrusion alert for esentutl /vss.>> "%REPORT%"
+    echo  %C_YELLOW%[NOTE]%C_RESET% -readSignedOut: copying signed-out accounts' registries from a Volume Shadow Copy. If shadow-copy storage is full Windows deletes your OLDEST restore point; security software or IT may raise an alert.
+)
+set "_LSO="
+set "_LRO="
+if "%READ_SIGNED_OUT%"=="1" if "%READONLY_MODE%"=="0" set "_LSO=-LoadSignedOut"
+if "%READONLY_MODE%"=="1" set "_LRO=-ReadOnly"
+if exist "%SCRIPT_DIR%tools\persistence_eval.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\persistence_eval.ps1" -Part OtherAccounts -MarkerFile "%TEMP%\dz_persist_other_hit.txt" -GapFile "%TEMP%\dz_persist_other_gap.txt" -DeferredFile "%TEMP%\dz_persist_other_deferred.txt" -DoneFile "%TEMP%\dz_persist_other_done.txt" %_LSO% %_LRO%>> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\persistence_eval.ps1 not found -- Other accounts' Run-key check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 5 T1547.001 "Other accounts' Run-key check NOT performed - tool missing"
+)
+if exist "%TEMP%\dz_persist_other_hit.txt" (
+    call :dz_finding WARNING 5 T1547.001 "Suspicious Run-key autorun in another account"
+    del "%TEMP%\dz_persist_other_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_persist_other_gap.txt" (
+    rem A gap is its own row, beside a finding or alone.
+    call :dz_finding WARNING 5 T1547.001 "Other accounts' Run-key check NOT performed - an account's registry could not be read"
+    del "%TEMP%\dz_persist_other_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_persist_other_deferred.txt" (
+    set "_PODEF=0"
+    set /p _PODEF=<"%TEMP%\dz_persist_other_deferred.txt"
+    set /a DEFERRED_COUNT+=!_PODEF!
+    del "%TEMP%\dz_persist_other_deferred.txt" 2>nul
+)
+if not exist "%TEMP%\dz_persist_other_done.txt" if exist "%SCRIPT_DIR%tools\persistence_eval.ps1" (
+    echo [WARNING] Other accounts' Run-key check produced no verdict -- NOT performed: tools\persistence_eval.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 5 T1547.001 "Other accounts' Run-key check produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_persist_other_done.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- Startup Folders --->> "%REPORT%"
@@ -5492,7 +5541,7 @@ echo --- [CTI][T1105+T1059] LOLBin Download Cradles in Event 4688 (last 24h) ---
 echo  Command: wevtutil qe Security /q:"*[System[(EventID=4688)]]" /c:1000 /rd:true /f:text ^| select_lines.ps1 "bitsadmin" "certutil -urlcache" "curl " "wget" "Invoke-WebRequest" "Start-BitsTransfer" "desktopimgdownldr" "esentutl">> "%REPORT%"
 if "%IS_ADMIN%"=="0" goto :cti_lolbin4688_noadmin
 wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:1000 /rd:true /f:text > "%TEMP%\dz_evt.tmp" 2>nul
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" "bitsadmin" "certutil -urlcache" "curl " "wget" "Invoke-WebRequest" "Start-BitsTransfer" "desktopimgdownldr" "esentutl">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" -ExcludeAuditEsentutl "bitsadmin" "certutil -urlcache" "curl " "wget" "Invoke-WebRequest" "Start-BitsTransfer" "desktopimgdownldr" "esentutl">> "%REPORT%" 2>&1
 del "%TEMP%\dz_evt.tmp" 2>nul
 goto :cti_lolbin4688_done
 :cti_lolbin4688_noadmin
