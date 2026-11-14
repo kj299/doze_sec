@@ -6,6 +6,16 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Office macro policy: a setting that could not be read is no longer "defaults apply"
+**Before.** Section 13 read each Office application's `VBAWarnings` and `blockcontentexecutionfrominternet` with errors silenced, and skipped any Office version whose key it could not see. A key this account could not read was therefore "not set", and the block printed `[INFO] No explicit per-app macro settings found ... platform defaults apply`. It read Group Policy and the user's own setting, but not Cloud Policy, and it did not read Project or Visio.
+
+**Now.** `tools/office_macro_check.ps1`.
+- It reads three sources in the order Office applies them: Cloud Policy, then Group Policy, then the user's own setting (Microsoft: Cloud Policy settings take precedence over Group Policy). The source that holds the value decides, and the line names it. A lower source that disagrees is `[INFO]`, never a grade.
+- A source above the deciding one that could not be read is a raised `NOT performed` row: what is in force is then unknown. A finding and a gap are both raised.
+- `VBAWarnings=1` (every macro runs without asking), `blockcontentexecutionfrominternet=0` (the block on macros in files from the internet turned off), and a value Office does not define are each a counted WARNING. These lines used to print the application's name before the tag; they now open with it.
+- It reads every Office version present under any source, so a policy written before Office was first started is still read. It also covers Visio and Project. Office 2013 and 2010 settings get an `[INFO]` line: those versions predate the internet-macro block.
+- The settings are per user. The result names whose settings were read, and when a different account is signed in at the PC, it says that account's settings were not read.
+
 ### The ransomware-extension walk and two file listings: a folder that could not be read is no longer an all-clear
 **Before.** Section 18's ransomware-extension check, a CRITICAL finding, walked the user profile, `Users\Public` and TEMP with errors silenced: a folder it could not read was dropped and the block printed `[OK] No files with known ransomware extensions`. The browser credential-store and token-cache listings did the same.
 

@@ -4143,38 +4143,30 @@ echo --- Office Macro Policy (T1204.002 - malicious macro documents) --->> "%REP
 echo THREAT: VBA macros in phishing attachments remain a top initial-access vector.>> "%REPORT%"
 echo Since 2022 Microsoft blocks internet-sourced macros by default -- verify nothing>> "%REPORT%"
 echo has weakened that, and that VBAWarnings is not set to enable-all.>> "%REPORT%"
-echo  Command: powershell reads VBAWarnings + blockcontentexecutionfrominternet per Office app>> "%REPORT%"
-echo $vbaMap = @{} > "%PSRUN%"
-echo $vbaMap[1] = '[WARNING] VBAWarnings=1 - ALL macros enabled with no prompt. Reset to 2 or higher.' >> "%PSRUN%"
-echo $vbaMap[2] = '[OK] VBAWarnings=2 - macros disabled with notification - default' >> "%PSRUN%"
-echo $vbaMap[3] = '[OK] VBAWarnings=3 - only digitally signed macros allowed' >> "%PSRUN%"
-echo $vbaMap[4] = '[OK] VBAWarnings=4 - all macros disabled without notification' >> "%PSRUN%"
-echo $apps = @('Word','Excel','PowerPoint','Access','Publisher','Outlook') >> "%PSRUN%"
-echo $found = $false >> "%PSRUN%"
-echo foreach ($ver in @('16.0','15.0','14.0')) { >> "%PSRUN%"
-echo   if (-not (Test-Path ('HKCU:\Software\Microsoft\Office\' + $ver))) { continue } >> "%PSRUN%"
-echo   foreach ($app in $apps) { >> "%PSRUN%"
-echo     $sec = 'HKCU:\Software\Microsoft\Office\' + $ver + '\' + $app + '\Security' >> "%PSRUN%"
-echo     $pol = 'HKCU:\Software\Policies\Microsoft\Office\' + $ver + '\' + $app + '\Security' >> "%PSRUN%"
-echo     $w = (Get-ItemProperty $pol -Name VBAWarnings -EA SilentlyContinue).VBAWarnings >> "%PSRUN%"
-echo     $src = 'policy' >> "%PSRUN%"
-echo     if ($null -eq $w) { $w = (Get-ItemProperty $sec -Name VBAWarnings -EA SilentlyContinue).VBAWarnings; $src = 'user' } >> "%PSRUN%"
-echo     $blk = (Get-ItemProperty $pol -Name blockcontentexecutionfrominternet -EA SilentlyContinue).blockcontentexecutionfrominternet >> "%PSRUN%"
-echo     if ($null -eq $blk) { $blk = (Get-ItemProperty $sec -Name blockcontentexecutionfrominternet -EA SilentlyContinue).blockcontentexecutionfrominternet } >> "%PSRUN%"
-echo     if ($null -ne $w) { >> "%PSRUN%"
-echo       $found = $true >> "%PSRUN%"
-echo       $msg = $vbaMap[[int]$w]; if (-not $msg) { $msg = '[INFO] VBAWarnings=' + $w } >> "%PSRUN%"
-echo       Write-Output ($app + ' ' + $ver + ' [' + $src + ']: ' + $msg) >> "%PSRUN%"
-echo     } >> "%PSRUN%"
-echo     if ($null -ne $blk) { >> "%PSRUN%"
-echo       $found = $true >> "%PSRUN%"
-echo       if ([int]$blk -eq 1) { Write-Output ($app + ' ' + $ver + ': [OK] internet-sourced macros blocked - blockcontentexecutionfrominternet=1') } >> "%PSRUN%"
-echo       else { Write-Output ($app + ' ' + $ver + ': [WARNING] blockcontentexecutionfrominternet=' + $blk + ' - MOTW macro block weakened') } >> "%PSRUN%"
-echo     } >> "%PSRUN%"
-echo   } >> "%PSRUN%"
-echo } >> "%PSRUN%"
-echo if (-not $found) { Write-Output '[INFO] No explicit per-app macro settings found - Office absent or platform defaults apply. Modern default blocks internet-sourced macros.' } >> "%PSRUN%"
-call :dz_ps_scan 13 T1204.002 "Office macro protection weakened"
+del "%TEMP%\dz_macro_hit.txt" 2>nul
+del "%TEMP%\dz_macro_gap.txt" 2>nul
+del "%TEMP%\dz_macro_done.txt" 2>nul
+echo  Command: powershell -File tools\office_macro_check.ps1>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\office_macro_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\office_macro_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\office_macro_check.ps1 not found -- Office macro policy check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 13 T1204.002 "Office macro policy check NOT performed - tool missing"
+)
+if exist "%TEMP%\dz_macro_hit.txt" (
+    call :dz_finding WARNING 13 T1204.002 "Office macro protection weakened"
+    del "%TEMP%\dz_macro_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_macro_gap.txt" (
+    rem A gap is its own row, beside a finding or alone.
+    call :dz_finding WARNING 13 T1204.002 "Office macro policy check NOT performed - Office settings could not be read"
+    del "%TEMP%\dz_macro_gap.txt" 2>nul
+)
+if not exist "%TEMP%\dz_macro_done.txt" if exist "%SCRIPT_DIR%tools\office_macro_check.ps1" (
+    echo [WARNING] Office macro policy check produced no verdict -- NOT performed: tools\office_macro_check.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 13 T1204.002 "Office macro policy check produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_macro_done.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- Mark-of-the-Web Preservation: SAFE=SaveZoneInformation absent or 0x1 --->> "%REPORT%"

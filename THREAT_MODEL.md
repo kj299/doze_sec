@@ -419,6 +419,16 @@ Found during the v7.1 coverage review; tracked for future work:
   looks three folder levels into the profile, Public and TEMP (the line says
   so), matches a fixed list of extensions, and does not see ransomware that
   keeps the original extension or encrypts other drives.
+- ~~The Section 13 Office macro policy check silenced every read and skipped
+  an Office version whose key it could not see, so a key it could not read
+  printed "[INFO] ... defaults apply"; it read two of the three places Office
+  takes the setting from, and not Project or Visio.~~ **Closed:**
+  `tools/office_macro_check.ps1` reads Cloud Policy, Group Policy and the
+  user's own setting in the order Office applies them, grades the one in
+  force, and raises an unread source above it as a gap. Residual: it reads the
+  audit account's own settings (HKCU) and says whose; another account signed
+  in at the PC is named but not read. Trusted Locations, which also let macros
+  run in files from the internet, are not checked.
 - ~~A running or installed remote-access tool (AnyDesk, TeamViewer,
   ScreenConnect and others) was printed and counted nowhere: three checks
   (Sections 4 and 17) used tags outside the severity vocabulary, a substring

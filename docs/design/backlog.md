@@ -860,7 +860,7 @@ Class A -- a failed read reaches `[OK]` (15 blocks):
 | Accessibility backdoor (Section 17): the same registry read again, Defender history, binary signatures | `[OK]` for the registry and for Defender; nothing for a missing binary | DONE 2026-11-12, same tool; Section 17 states Section 13's verdict |
 | OpenSSH Server (Section 18, and the cmd dump in Section 10) | `[OK] OpenSSH Server not installed.` | DONE 2026-11-12, `tools/sshd_check.ps1` |
 | Ransomware extensions (Section 18, CRITICAL finding) | `[OK] No files with known ransomware extensions` | DONE 2026-11-13, `tools/file_walk_check.ps1 -Check RansomExt` |
-| Office macro policy (Section 13) | `[INFO] No explicit per-app macro settings ... defaults apply` | open |
+| Office macro policy (Section 13) | `[INFO] No explicit per-app macro settings ... defaults apply` | DONE 2026-11-14, `tools/office_macro_check.ps1` |
 | Proxy settings, two blocks (Section 3) | `[OK] No proxy settings in registry` / `Not configured` | open |
 | RMM software installed (Section 17) | `[OK] No unexpected RMM software found.` | DONE 2026-11-13, `tools/rmm_check.ps1` (Section 4) |
 | Run/RunOnce in other users' hives (Section 5) | `[OK] No Run/RunOnce entries in other-user hives.` | open |
