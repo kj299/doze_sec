@@ -6,7 +6,7 @@ $ErrorActionPreference = 'Stop'
 $st = (.\tools\office_macro_check.ps1 -SelfTest) -join "`n"
 if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'office_macro_check -SelfTest failed' }
 $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-if ($n -lt 29) { throw "office_macro_check self-test ran only $n case(s)" }
+if ($n -lt 30) { throw "office_macro_check self-test ran only $n case(s)" }
 function RunM([hashtable]$Extra) {
   $md = Join-Path $env:TEMP ("dz_ci_macro_{0}_{1}" -f $PID, [guid]::NewGuid().ToString('N').Substring(0, 6)); New-Item -ItemType Directory -Path $md -Force | Out-Null
   try {
@@ -80,14 +80,25 @@ try {
     Expect $r 'dz_macro_gap' '(?m)^\[WARNING\] Office macro policy check NOT performed in full -- Word 16\.0 VBAWarnings: Group Policy could not be read' 'the Group Policy key denied above a user value'
     if ($r.Out -match '(?m)^\[OK\] (No Office|Word 16\.0: VBAWarnings)') { throw "an unread policy produced an all-clear: $($r.Out)" }
     Write-Host 'office macro: a policy key this account is denied is a raised gap, never the value below it'
-    # The whole Group Policy root denied: which versions it holds cannot be
-    # listed, so it is a gap -- the old Test-Path read this as "not set".
+  } else { Write-Host '[ SKIP ] denied-key case not run: this account can still read the key through the deny rule; the self-test pins the judgement' }
+  # The whole Group Policy root denied: which versions it holds cannot be
+  # listed, so it is a gap -- the old Test-Path read this as "not set". The
+  # leaf's deny comes off first, so setting the root's ACL cannot trip on it.
+  $rootDenied = $false
+  try {
+    $sk = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Software\dz_ci_macro_$PID\Policies\Microsoft\Office\16.0\Word\Security", [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree, [Security.AccessControl.RegistryRights]::ChangePermissions)
+    if ($sk) { $fresh = New-Object Security.AccessControl.RegistrySecurity; $fresh.SetAccessRuleProtection($false, $false); $sk.SetAccessControl($fresh); $sk.Close() }
     $acl = Get-Acl -Path "$root\Policies\Microsoft\Office"
+    $me = [Security.Principal.WindowsIdentity]::GetCurrent().User
     $acl.AddAccessRule((New-Object Security.AccessControl.RegistryAccessRule($me, 'QueryValues, EnumerateSubKeys', 'Deny')))
     Set-Acl -Path "$root\Policies\Microsoft\Office" -AclObject $acl
+    try { $null = (Get-Item -LiteralPath "$root\Policies\Microsoft\Office" -ErrorAction Stop).GetSubKeyNames() } catch { $rootDenied = $true }
+  } catch { Write-Host ("[ SKIP ] the deny ACL could not be set on the Group Policy root on this image ({0})" -f $_.Exception.Message) }
+  if ($rootDenied) {
     $r = RunM $k
     if ($r.Markers -notmatch 'dz_macro_gap' -or $r.Out -notmatch 'Group Policy \(.*\\Policies\\Microsoft\\Office\) could not be listed') { throw "a Group Policy root this account cannot list was not a raised gap: [$($r.Markers)] $($r.Out)" }
-  } else { Write-Host '[ SKIP ] denied-key case not run: this account can still read the key through the deny rule; the self-test pins the judgement' }
+    Write-Host 'office macro: a Group Policy root this account cannot list is a raised gap'
+  } else { Write-Host '[ SKIP ] denied-root case not run: this account can still list the root through the deny rule; the self-test pins the judgement' }
 } finally {
   $ErrorActionPreference = 'Continue'
   # Parent first: a child under a denied parent is reset after it.

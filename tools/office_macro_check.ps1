@@ -166,9 +166,13 @@ function Get-MacroVerdict {
     $who = $(if ($Owner) { ' (settings of ' + (ConvertTo-PrintableText $Owner) + ')' } else { '' })
     if ($Context -and $Context.Account) {
         [void]$out.Add(('[INFO] These are the Office settings of ' + (ConvertTo-PrintableText ([string]$Context.Account)) + ', the account this audit ran as.'))
-        foreach ($o in @($Context.Others | Where-Object { [string]$_ })) { [void]$out.Add(('[INFO] ' + (ConvertTo-PrintableText ([string]$o)) + ' is also signed in at this PC: its Office settings are read too, on the lines that name it.')) }
-        if ([int]$Context.Unresolved -gt 0) { [void]$out.Add(('[INFO] ' + [int]$Context.Unresolved + ' desktop session(s) at this PC belong to an account this token could not identify, so their Office settings were not read. An audit run as administrator reads them.')) }
+        foreach ($o in @($Context.Others | Where-Object { [string]$_ })) { [void]$out.Add(('[INFO] ' + (ConvertTo-PrintableText ([string]$o)) + ' is also signed in at this PC: its Office settings follow, on the lines that name it.')) }
     }
+    # A session whose account could not be told: the token explains it only
+    # when it is a standard user's. As administrator it is a gap.
+    $unres = $(if ($Context) { [int]$Context.Unresolved } else { 0 })
+    if ($unres -gt 0 -and $IsElevated) { [void]$gaps.Add(([string]$unres + ' desktop session(s) at this PC belong to an account that could not be identified, so their Office settings were not read')) }
+    elseif ($unres -gt 0) { [void]$out.Add(('[INFO] ' + $unres + ' desktop session(s) at this PC belong to an account this token could not identify, so their Office settings were not read. An audit run as administrator reads them.')) }
     foreach ($x in @($Roots)) { if ([string]$x.State -ne 'ok' -and [string]$x.State -ne 'nokey') { [void]$gaps.Add(([string]$x.Name + ' could not be listed (' + (ConvertTo-PrintableText ([string]$x.Error)) + ')')) } }
     $explicit = 0
     $vers = New-Object System.Collections.ArrayList
@@ -297,7 +301,7 @@ if ($SelfTest) {
     $v = V @(One (Src $N $N (& $P 2)) $none '16.0' 'MS Project')
     T 'Project is read too (Microsoft lists it among the apps the block covers)' ($v.Text -match '(?m)^\[OK\] MS Project 16\.0: VBAWarnings=2') $v.Text
     $v = V @(One $none $none) $okRoots @{ Account = 'PC\admin'; Others = @('PC\alice'); Unresolved = 0 }
-    T 'run as an administrator account with another account signed in: that account is named as read too' ($v.Text -match '(?m)^\[INFO\] PC\\alice is also signed in at this PC: its Office settings are read too' -and -not $v.Gap) $v.Text
+    T 'run as an administrator account with another account signed in: that account is named' ($v.Text -match '(?m)^\[INFO\] PC\\alice is also signed in at this PC: its Office settings follow' -and -not $v.Gap) $v.Text
     $o = Get-MacroVerdict -Reads @(One (Src $N $N (& $P 1)) $none) -Roots $okRoots -Owner 'PC\alice'
     T 'the other account''s VBAWarnings=1 is the WARNING, and the line names whose setting it is' ($o.Hit -and (($o.Lines -join "`n") -match '(?m)^\[WARNING\] Word 16\.0 \(settings of PC\\alice\): VBAWarnings=1')) ($o.Lines -join ' | ')
     $o = Get-MacroVerdict -Reads @() -Roots @(@{ Name = 'the registry of PC\alice'; State = 'unreadable'; Error = 'it is not loaded' }) -Owner 'PC\alice'
@@ -307,11 +311,14 @@ if ($SelfTest) {
     $o = Get-MacroVerdict -Reads @() -Roots @(@{ Name = 'the registry of PC\alice'; State = 'denied'; Error = 'SecurityException: denied' }) -Owner 'PC\alice' -IsElevated $true
     T 'the same refusal to an administrator: a raised gap (the token does not explain it)' ($o.Gap -and $o.Deferred -eq 0) ($o.Lines -join ' | ')
     $v = V @(One $none $none) @(@{ Name = 'Office'; State = 'denied'; Error = 'SecurityException: denied' }, @{ Name = 'Group Policy'; State = 'nokey' }, @{ Name = 'Cloud Policy'; State = 'nokey' })
-    T 'the user''s OWN settings refused: a raised gap whatever the token -- the token never explains its own registry' ($v.Gap) $v.Text
+    $o = Get-MacroVerdict -Reads @(One $none $none) -Roots @(@{ Name = 'Office'; State = 'denied'; Error = 'SecurityException: denied' }, @{ Name = 'Group Policy'; State = 'nokey' }, @{ Name = 'Cloud Policy'; State = 'nokey' }) -IsElevated $false
+    T 'the user''s OWN settings refused: a raised gap whatever the token -- the token never explains its own registry' ($v.Gap -and $o.Gap -and $o.Deferred -eq 0) ($o.Lines -join ' | ')
     $m = Merge-AccountVerdicts @((V @(One $none $none)), (Get-MacroVerdict -Reads @(One (Src $N $N (& $P 1)) $none) -Roots $okRoots -Owner 'PC\alice'))
     T 'merged: a clean own account and a weakened other account still raise the WARNING' ($m.Hit -and -not $m.Gap -and (($m.Lines -join "`n") -match 'settings of PC\\alice')) (($m.Lines) -join ' | ')
-    $v = V @(One $none $none) $okRoots @{ Account = 'PC\bob'; Others = @(); Unresolved = 2 }
-    T 'desktop sessions whose account this token could not tell: said, as [INFO]' ($v.Text -match '(?m)^\[INFO\] 2 desktop session\(s\) at this PC belong to an account this token could not identify' -and -not $v.Gap) $v.Text
+    $o = Get-MacroVerdict -Reads @(One $none $none) -Roots $okRoots -Context @{ Account = 'PC\bob'; Others = @(); Unresolved = 2 } -IsElevated $false
+    T 'desktop sessions a standard-user token could not identify: said, as [INFO]' ((($o.Lines -join "`n") -match '(?m)^\[INFO\] 2 desktop session\(s\) at this PC belong to an account this token could not identify') -and -not $o.Gap) ($o.Lines -join ' | ')
+    $o = Get-MacroVerdict -Reads @(One $none $none) -Roots $okRoots -Context @{ Account = 'PC\bob'; Others = @(); Unresolved = 1 } -IsElevated $true
+    T 'a session an ADMINISTRATOR could not identify: a raised gap -- the token does not explain it' ($o.Gap -and (($o.Lines -join "`n") -match '(?m)^\[WARNING\] Office macro policy check NOT performed in full -- 1 desktop session\(s\) at this PC belong to an account that could not be identified') -and (($o.Lines -join "`n") -notmatch 'An audit run as administrator')) ($o.Lines -join ' | ')
     $v = V @(One (Src $N $N (& $P ([long]4294967297))) $none)
     T 'a value too large for an Int32 is a value Office does not define, never a crash that voids the verdict' ($v.Hit -and $v.Text -match 'VBAWarnings holds a value Office does not define \(4294967297') $v.Text
     $v = V @((One (Src $N $N (& $P 2)) $none), (One (Src $N $U $N) $none '16.0' 'Excel'))
@@ -386,7 +393,12 @@ try {
                 $sid = ''; $nm = ''
                 try { $sr = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction Stop; if ([int]$sr.ReturnValue -eq 0) { $sid = [string]$sr.Sid } } catch {}
                 try { $or = Invoke-CimMethod -InputObject $p -MethodName GetOwner -ErrorAction Stop; if ([int]$or.ReturnValue -eq 0 -and $or.User) { $nm = $(if ($or.Domain) { [string]$or.Domain + '\' + [string]$or.User } else { [string]$or.User }) } } catch {}
-                if (-not $sid) { $unresolved++; continue }
+                if (-not $sid) {
+                    # Gone between the listing and the call: an ordinary race, not a session.
+                    $still = $null; try { $still = Get-CimInstance Win32_Process -Filter ("ProcessId=" + [int]$p.ProcessId) -ErrorAction Stop } catch {}
+                    if ($still) { $unresolved++ }
+                    continue
+                }
                 if ($sid -eq $mySid -or $seen.ContainsKey($sid)) { continue }
                 $seen[$sid] = $true
                 [void]$others.Add(@{ Name = $(if ($nm) { $nm } else { $sid }); Root = ('Registry::HKEY_USERS\' + $sid + '\Software') })
@@ -396,7 +408,7 @@ try {
     }
     $mine = Read-AccountSettings -Root $KeyRoot -Label 'this account' -MustExist $false
     $all = New-Object System.Collections.ArrayList
-    [void]$all.Add((Get-MacroVerdict -Reads $mine.Reads -Roots $mine.Roots -Context $ctx))
+    [void]$all.Add((Get-MacroVerdict -Reads $mine.Reads -Roots $mine.Roots -Context $ctx -IsElevated ($Elevated -eq 1)))
     foreach ($o in $others) {
         $t = Read-AccountSettings -Root $o.Root -Label $o.Name -MustExist $true
         [void]$all.Add((Get-MacroVerdict -Reads $t.Reads -Roots $t.Roots -Owner $o.Name -IsElevated ($Elevated -eq 1)))

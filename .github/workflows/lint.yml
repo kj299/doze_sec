@@ -650,7 +650,7 @@ jobs:
       - name: Office macro policy -- a policy key that cannot be read is a raised gap, never Office's defaults
         run: |
           out=$(pwsh -NoProfile -File tools/office_macro_check.ps1 -SelfTest); echo "$out"
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 29 ] || { echo "only $n macro case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 30 ] || { echo "only $n macro case(s)"; exit 1; }
           echo "$out" | grep -q '^\[FAIL\]' && { echo 'a macro case failed'; exit 1; }
           for n in 'Group Policy unreadable above a user 2: a raised gap, never the user value as the answer' \
                    'the Office root could not be listed: a raised gap, never "[OK] No Office settings"' \
