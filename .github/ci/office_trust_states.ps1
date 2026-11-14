@@ -18,7 +18,7 @@ $ErrorActionPreference = 'Stop'
 $st = (.\tools\office_macro_check.ps1 -SelfTest) -join "`n"
 if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'office_macro_check -SelfTest failed' }
 $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-if ($n -lt 70) { throw "office_macro_check self-test ran only $n case(s)" }
+if ($n -lt 85) { throw "office_macro_check self-test ran only $n case(s)" }
 function RunT([hashtable]$Extra) {
   $md = Join-Path $env:TEMP ("dz_ci_trust_{0}_{1}" -f $PID, [guid]::NewGuid().ToString('N').Substring(0, 6)); New-Item -ItemType Directory -Path $md -Force | Out-Null
   try {
@@ -80,6 +80,20 @@ try {
   New-ItemProperty -Path "$tl\Location7" -Name Path -Value 'C:\Users\Public\AppData\Roaming\Microsoft\Templates' -PropertyType String -Force | Out-Null
   Expect (RunT $k) 'dz_trustloc_hit' 'C:\\Users\\Public\\AppData\\Roaming\\Microsoft\\Templates -- the Public folder' 'a look-alike default under the Public profile'
   Remove-Item -Path "$tl\Location7" -Recurse -Force
+  # Policy allows only Trusted Locations defined by policy ("allow user
+  # locations" = 0 in Common): the user's Downloads entry is not in force,
+  # while a Group Policy entry beside it still raises.
+  $cm = "$user\Policies\Microsoft\Office\16.0\Common\Security\Trusted Locations"
+  New-Item -Path $cm -Force | Out-Null
+  New-ItemProperty -Path $cm -Name 'allow user locations' -Value 0 -PropertyType DWord -Force | Out-Null
+  New-Item -Path "$tl\Location6" -Force | Out-Null
+  New-ItemProperty -Path "$tl\Location6" -Name Path -Value 'C:\Users\dzci\Downloads' -PropertyType String -Force | Out-Null
+  Expect (RunT $k) '' 'Downloads \(set by the user setting\) is not in force: Group Policy allows only Trusted Locations defined by policy' 'a user entry under the policy-only setting'
+  New-Item -Path "$gp\Location2" -Force | Out-Null
+  New-ItemProperty -Path "$gp\Location2" -Name Path -Value 'C:\dz_ci_policy_only' -PropertyType String -Force | Out-Null
+  Expect (RunT $k) 'dz_trustloc_hit' 'Word 16\.0, set by Group Policy\): C:\\dz_ci_policy_only' 'a policy entry under the policy-only setting'
+  Remove-Item -Path "$user\Policies" -Recurse -Force
+  Remove-Item -Path "$tl\Location6" -Recurse -Force
   # Every other source through the real reader: a Group Policy entry, the
   # machine key and its 32-bit twin, and another signed-in account.
   New-Item -Path "$gp\Location1" -Force | Out-Null

@@ -494,11 +494,16 @@ Found during the v7.1 coverage review; tracked for future work:
   signed-out account's settings are not read. A default is recognised only
   under the account's own AppData and this PC's Program Files (never another
   profile, another drive or a `..` path), so an 8.3 short path or an AppData
-  redirected where neither is read raises as non-default. Three things that
-  can put an entry out of force are not read, so such an entry is still
-  graded (the safe direction): the "Allow mix of policy and user locations"
-  policy, the user's own "disable all Trusted Locations" checkbox, and a
-  mapped drive (a network location Office may ignore).
+  redirected where neither is read raises as non-default. The three policy
+  switches are read under the value names the DISA Office STIG checks quote
+  from the ADMX (allownetworklocations, alllocationsdisabled, and "allow user
+  locations" for the policy-only setting); Microsoft's page names the
+  policies but not their values. Two things that can put an entry out of
+  force are not read, so such an entry is still graded (the safe direction):
+  the user's own "disable all Trusted Locations" checkbox, and a mapped drive
+  (a network location Office may ignore). Under the policy-only setting, a
+  machine-setting entry is still graded, as Microsoft does not say whether
+  Office honours it.
 - ~~A running or installed remote-access tool (AnyDesk, TeamViewer,
   ScreenConnect and others) was printed and counted nowhere: three checks
   (Sections 4 and 17) used tags outside the severity vocabulary, a substring

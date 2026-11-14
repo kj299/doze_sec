@@ -682,12 +682,14 @@ jobs:
       - name: Office Trusted Locations and Trusted Documents -- a non-default location or macros enabled in a download is a counted WARNING
         run: |
           out=$(pwsh -NoProfile -File tools/office_macro_check.ps1 -SelfTest); echo "$out"
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 70 ] || { echo "only $n macro and trust case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 85 ] || { echo "only $n macro and trust case(s)"; exit 1; }
           echo "$out" | grep -q '^\[FAIL\]' && { echo 'a case failed'; exit 1; }
           for n in 'Downloads as a Trusted Location: the WARNING, the raw path, subfolders and the shape note' \
                    'Office'"'"'s own defaults only: [OK] plus an INFO count, no WARNING' \
                    'a network location while network locations are not allowed: INFO not in force, no WARNING' \
                    'Group Policy disables all trusted locations: the entry is INFO not in force, no WARNING' \
+                   'policy allows only policy-defined locations (allow user locations=0): a user-set entry is INFO not in force' \
+                   'the same policy leaves a Group Policy entry a WARNING' \
                    'a Trusted Locations key that could not be read: a raised gap, never [OK]' \
                    'macros enabled in a document from Downloads: the WARNING with the path and the date' \
                    'macros enabled in the person'"'"'s own Documents: INFO with the path, never a WARNING' \
