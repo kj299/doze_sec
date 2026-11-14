@@ -7,14 +7,14 @@ are a separate, machine-specific record of changes each audit made.
 ## Unreleased
 
 ### Registry IOC match (Section 18h): a key that could not be read is named and raised
-**Before.** Each `ioc_registry.txt` entry was looked up inside an empty `catch{}`. A listed key this account could not read, and an entry under a hive the check cannot read, were dropped without a word, and the block printed `[OK] No suspicious registry IOC matches.` On a machine with no registry at all (the Linux CI run) it printed `[OK]` for every entry.
+**Before.** Each `ioc_registry.txt` entry was looked up inside an empty `catch{}`. A listed key this account could not read, and an entry under a hive the check cannot read, were dropped without a word, and the block printed `[OK] No suspicious registry IOC matches.` On a machine with no registry at all (the Linux CI run), every lookup failed and the block still printed `[OK]`.
 
 **Now.**
 - An entry whose key could not be read is named with the reason, and raised as `Registry IOC match NOT performed in full`, beside any match. An entry under any hive other than HKLM or HKCU is named the same way.
 - A key that does not exist is an answer, as before.
-- On a standard-user token, an HKLM key it is refused is `[DEFERRED - ADMIN REQUIRED]` and counted. The user's own HKCU is never deferred.
+- A refusal is a gap on every token, standard user included: each key the shipped list names is one a standard user can read, so a refusal is a deny rule on the key, which is the shape that hides persistence, not a limit of the token.
 - A value is matched by its exact name from the key's own value list. `Get-ItemProperty -Name` accepted wildcards.
-- The comment filter's caret was eaten by cmd, so any list line containing `#` anywhere was skipped as a comment. It is now anchored as intended.
+- The comment filter's caret was eaten by cmd, so any list line containing `#` anywhere was skipped as a comment. It is now anchored, in 18h and in the same filter in 18b-18e. A line of spaces is no longer read as an entry.
 - `tests/section18_gaps.ps1` now holds 18h to "NOT performed in full" where there is no registry, and to no unread key on Windows with the shipped list.
 
 ### Office macro policy: a setting that could not be read is no longer "defaults apply"

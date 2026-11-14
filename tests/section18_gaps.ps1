@@ -206,6 +206,22 @@ function Get-StructureDefects {
         elseif ($di + 2 -ge $after.Count -or $after[$di + 1] -notmatch ('^\s*echo \[WARNING\] ' + [regex]::Escape($sp.Name) + ' NOT performed -- ') -or $after[$di + 2] -notmatch ('^\s*call :dz_finding WARNING 18 ' + [regex]::Escape($sp.Tech) + ' ')) {
             $bad += "${tag}: a block that stopped before its verdict is not printed and raised as WARNING 18 $($sp.Tech)"
         }
+        # 18h also writes an unread marker (a key on its list that could not
+        # be read). The block printing it is not enough: the bat must delete it
+        # before the run and raise it after, or the gap reaches no ledger row.
+        $ui = -1
+        if ($joined.Contains('dz_iochit_' + $sp.S + '_unread.txt')) {
+            $unreadMark = 'dz_iochit_' + $sp.S + '_unread.txt'
+            if (-not @($before | Where-Object { $_.Trim() -eq ('del "%TEMP%\' + $unreadMark + '" 2>nul') }).Count) { $bad += "${tag}: the unread marker is not deleted before the run (a stale one would raise a gap that did not happen)" }
+            $wide = @($code[($r + 1)..([Math]::Min($code.Count - 1, $r + 30))])
+            for ($i = 0; $i -lt $wide.Count; $i++) { if ($wide[$i].Trim() -eq ('if exist "%TEMP%\' + $unreadMark + '" (')) { $ui = $i; break } }
+            if ($ui -lt 0) { $bad += "${tag}: the bat never reads $unreadMark after the run, so keys that could not be read reach no ledger row" }
+            else {
+                $ri = $ui + 1; while ($ri -lt $wide.Count -and $wide[$ri].Trim() -match '^rem\s') { $ri++ }
+                if ($ri -ge $wide.Count -or $wide[$ri] -notmatch ('^\s*call :dz_finding WARNING 18 ' + [regex]::Escape($sp.Tech) + ' "' + [regex]::Escape($sp.Name) + ' NOT performed in full')) { $bad += "${tag}: the unread marker is not raised as WARNING 18 $($sp.Tech) `"$($sp.Name) NOT performed in full...`"" }
+                for ($i = $ui + 1; $i -lt $wide.Count -and $wide[$i].Trim() -ne ')'; $i++) { if ($wide[$i] -match 'IOC_HITS') { $bad += "${tag}: the unread read changes IOC_HITS -- keys that could not be read would count as a match"; break } }
+            }
+        }
         # A gap is not a match: nothing between each gap/done read and its
         # closing parenthesis may touch IOC_HITS.
         foreach ($start in @($gi, $di)) {
@@ -371,6 +387,10 @@ try {
         TM 'the 18c list path pasted between single quotes again fails when RUN from a folder named with an apostrophe' @(Get-BlockDefects $m8 'mutated' 'Missing' '' $work @('18c')) 'folder whose name holds an apostrophe: the block stopped before its verdict'
         $m9 = Replace-Once $base 'if not exist "%TEMP%\dz_iochit_18d_done.txt" (' 'if not exist "%TEMP%\dz_iochit_18d_doneX.txt" (' '18d done check removed'
         TM 'the bat no longer checking the 18d done marker fails' @(Get-StructureDefects $m9 'mutated') 'never checks dz_iochit_18d_done.txt'
+        $m10 = Replace-Once $base 'if exist "%TEMP%\dz_iochit_18h_unread.txt" (' 'if exist "%TEMP%\dz_iochit_18h_unreadX.txt" (' '18h unread read removed'
+        TM 'the bat no longer reading the 18h unread marker fails' @(Get-StructureDefects $m10 'mutated') 'never reads dz_iochit_18h_unread.txt'
+        $m11 = Replace-Once $base ("del `"%TEMP%\dz_iochit_18h_unread.txt`" 2>nul`n") '' '18h unread marker not deleted before the run'
+        TM 'the unread marker not deleted before its run fails' @(Get-StructureDefects $m11 'mutated') 'the unread marker is not deleted before the run'
         $m10 = Replace-Once $base "    call :dz_finding WARNING 18 T1071 `"Named pipe IOC match NOT performed - list unreadable or empty, or pipes not enumerable`"`n" "    call :dz_finding WARNING 18 T1071 `"Named pipe IOC match NOT performed - list unreadable or empty, or pipes not enumerable`"`n    set /a IOC_HITS+=1`n" '18b gap counted as a match'
         TM 'a gap read that increments IOC_HITS fails' @(Get-StructureDefects $m10 'mutated') 'a gap read changes IOC_HITS'
         $m11 = Replace-Once $base "    call :dz_finding WARNING 18 IOCSWEEP `"IOC sweep NOT performed - no ThreatLists folder found`"`n" '' 'no-lists branch unraised'

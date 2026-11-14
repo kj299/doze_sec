@@ -1264,7 +1264,7 @@ jobs:
         run: pwsh -NoProfile -File tests/section18_gaps.ps1 -SelfTest
       - name: "Section 18: every matcher that cannot run says NOT performed and raises it (both bats)"
         run: pwsh -NoProfile -File tests/section18_gaps.ps1 -Mode Missing
-      - name: "Section 18: the shipped lists on Linux (no Windows listings: 18b/18c/18e gap, 18d/18h OK)"
+      - name: "Section 18: the shipped lists on Linux (no Windows listings: 18b/18c/18e gap, 18h unread, 18d OK)"
         run: pwsh -NoProfile -File tests/section18_gaps.ps1 -Mode Shipped
       # findstr /g: read a broken list as [OK]: the errorlevel checked was the
       # SECOND findstr's in the pipe. Each of 18a, 18f and 18g must call

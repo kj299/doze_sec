@@ -5178,7 +5178,7 @@ echo  Matching named pipes against ioc_named_pipes.txt>> "%REPORT%"
 :: ends by writing its dz_iochit_18X_done.txt; without it, the check stopped
 :: before a verdict and that is a raised gap too.
 echo $iocFile = Join-Path $env:IOCDIR 'ioc_named_pipes.txt' > "%PSRUN%"
-echo $patterns=if(Test-Path $iocFile){Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'}} >> "%PSRUN%"
+echo $patterns=if(Test-Path $iocFile){Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^^\s*#'}} >> "%PSRUN%"
 echo $pipes=Get-ChildItem \\.\pipe\ -EA SilentlyContinue >> "%PSRUN%"
 echo $hits=@() >> "%PSRUN%"
 echo foreach($p in $patterns){try{$m=$pipes ^| Where-Object {$_.Name -match $p}; if($m){$hits+=$m}}catch{}} >> "%PSRUN%"
@@ -5208,7 +5208,7 @@ echo --- [18c] Service IOC Match --->> "%REPORT%"
 echo  Command: powershell -Command "Get-CimInstance Win32_Service -EA SilentlyContinue">> "%REPORT%"
 echo  Matching services against ioc_services.txt>> "%REPORT%"
 echo $iocFile = Join-Path $env:IOCDIR 'ioc_services.txt' > "%PSRUN%"
-echo $patterns=if(Test-Path $iocFile){Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'}} >> "%PSRUN%"
+echo $patterns=if(Test-Path $iocFile){Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^^\s*#'}} >> "%PSRUN%"
 echo $svcs=Get-CimInstance Win32_Service -EA SilentlyContinue >> "%PSRUN%"
 echo $hits=@() >> "%PSRUN%"
 echo foreach($p in $patterns){try{$m=$svcs ^| Where-Object {$_.Name -match $p -or $_.DisplayName -match $p}; if($m){$hits+=$m}}catch{}} >> "%PSRUN%"
@@ -5238,7 +5238,7 @@ echo --- [18d] Suspicious File Path IOC Check --->> "%REPORT%"
 echo  Command: powershell -Command "foreach($p in Get-Content '%IOCDIR:'=''%\ioc_file_paths.txt'){ if(Test-Path ([Environment]::ExpandEnvironmentVariables($p))){ $p } }">> "%REPORT%"
 echo  Checking for known malware staging paths from ioc_file_paths.txt>> "%REPORT%"
 echo $iocFile = Join-Path $env:IOCDIR 'ioc_file_paths.txt' > "%PSRUN%"
-echo $paths=if(Test-Path $iocFile){Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'}} >> "%PSRUN%"
+echo $paths=if(Test-Path $iocFile){Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^^\s*#'}} >> "%PSRUN%"
 echo $hits=@() >> "%PSRUN%"
 echo foreach($p in $paths){ >> "%PSRUN%"
 echo   $expanded=[System.Environment]::ExpandEnvironmentVariables($p.Trim()) >> "%PSRUN%"
@@ -5276,7 +5276,7 @@ echo  Matching scheduled task NAMES and ACTIONS against ioc_scheduled_tasks.txt>
 :: later in a long command line was never seen. The task's full path and every
 :: action's Execute and Arguments are properties, the same in every language.
 echo $iocFile = Join-Path $env:IOCDIR 'ioc_scheduled_tasks.txt' > "%PSRUN%"
-echo $patterns = if (Test-Path $iocFile) { Get-Content $iocFile ^| Where-Object {$_.Trim() -and $_ -notmatch '^\s*#'} } >> "%PSRUN%"
+echo $patterns = if (Test-Path $iocFile) { Get-Content $iocFile ^| Where-Object {$_.Trim() -and $_ -notmatch '^^\s*#'} } >> "%PSRUN%"
 echo $tasks = @(Get-ScheduledTask -EA SilentlyContinue ^| ForEach-Object { [pscustomobject]@{ Task = ([string]$_.TaskPath).TrimEnd('\') + '\' + [string]$_.TaskName; Action = (@($_.Actions ^| ForEach-Object { ([string]$_.Execute + ' ' + [string]$_.Arguments).Trim() }) -join '; ') } }) >> "%PSRUN%"
 echo if (-not $patterns) { '[WARNING] Scheduled task IOC match NOT performed -- ioc_scheduled_tasks.txt is missing or holds no entries.'; New-Item "$env:TEMP\dz_iochit_18e_gap.txt" -Force ^| Out-Null } elseif ($tasks.Count -eq 0) { '[WARNING] Scheduled task IOC match NOT performed -- Get-ScheduledTask listed no tasks.'; New-Item "$env:TEMP\dz_iochit_18e_gap.txt" -Force ^| Out-Null } else { $hits = @(); foreach ($p in $patterns) { $rx = [regex]::Escape($p.Trim()); $hits += $tasks ^| Where-Object { ($_.Task -match $rx) -or ($_.Action -match $rx) } }; $hits = @($hits ^| Sort-Object Task,Action -Unique); if ($hits.Count -gt 0) { $hits ^| Format-List Task,Action; '[WARNING] Scheduled task IOC matches found.'; New-Item "$env:TEMP\dz_iochit_18e.txt" -Force ^| Out-Null } else { '[OK] No scheduled task IOC matches.' } } >> "%PSRUN%"
 echo New-Item "$env:TEMP\dz_iochit_18e_done.txt" -Force ^| Out-Null >> "%PSRUN%"
@@ -5390,22 +5390,20 @@ set "_ENUM18G="
 
 echo.>> "%REPORT%"
 echo --- [18h] Registry IOC Check --->> "%REPORT%"
-echo  Command: powershell -Command "Get-ItemProperty $psPath -Name $valName -EA Stop">> "%REPORT%"
+echo  Command: powershell -Command "(Get-Item -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -EA Stop).GetValueNames()"   [one key from ioc_registry.txt; each entry is read this way]>> "%REPORT%"
 echo  Checking suspicious registry keys from ioc_registry.txt>> "%REPORT%"
 echo $iocFile = Join-Path $env:IOCDIR 'ioc_registry.txt' > "%PSRUN%"
-echo $lines=@(if(Test-Path $iocFile){Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^^\s*#'}}) >> "%PSRUN%"
-echo $adm=$false; try{$adm=([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.SecurityIdentifier]'S-1-5-32-544')}catch{} >> "%PSRUN%"
-echo $hits=@(); $unread=@(); $defer=@() >> "%PSRUN%"
+echo $lines=@(if(Test-Path $iocFile){Get-Content $iocFile ^| Where-Object {$_.Trim() -and $_ -notmatch '^^\s*#'}}) >> "%PSRUN%"
+echo $hits=@(); $unread=@() >> "%PSRUN%"
 echo foreach($line in $lines){ >> "%PSRUN%"
-echo   $parts=$line.Split('^|'); $keyPath=$parts[0].Trim(); $valName=if($parts.Count -gt 1){$parts[1]}else{$null}; $badVal=if($parts.Count -gt 2){$parts[2]}else{$null} >> "%PSRUN%"
+echo   $parts=$line.Split('^|'); $keyPath=$parts[0].Trim(); $valName=if($parts.Count -gt 1){$parts[1].Trim()}else{$null}; $badVal=if($parts.Count -gt 2){$parts[2].Trim()}else{$null} >> "%PSRUN%"
 echo   $label=if($valName){$keyPath+'\'+$valName}else{$keyPath} >> "%PSRUN%"
 echo   if($keyPath -notmatch '^^(HKLM^|HKCU)\\'){$unread+=($label+' - the entry must start HKLM\ or HKCU\'); continue} >> "%PSRUN%"
 echo   $psPath=$keyPath -replace '^^HKLM\\','HKLM:\' -replace '^^HKCU\\','HKCU:\' >> "%PSRUN%"
 echo   $k=$null >> "%PSRUN%"
 echo   try{ $k=Get-Item -LiteralPath $psPath -EA Stop }catch{ >> "%PSRUN%"
 echo     if($_.Exception -is [System.Management.Automation.ItemNotFoundException]){continue} >> "%PSRUN%"
-echo     $den=($_.Exception -is [System.Security.SecurityException] -or $_.Exception -is [System.UnauthorizedAccessException]) >> "%PSRUN%"
-echo     if($den -and -not $adm -and $keyPath -match '^^HKLM\\'){$defer+=$keyPath}else{$unread+=($label+' - '+$_.Exception.GetType().Name)} >> "%PSRUN%"
+echo     $unread+=($label+' - '+$_.Exception.GetType().Name) >> "%PSRUN%"
 echo     continue >> "%PSRUN%"
 echo   } >> "%PSRUN%"
 echo   try{ >> "%PSRUN%"
@@ -5416,13 +5414,11 @@ echo } >> "%PSRUN%"
 echo if($lines.Count -eq 0){'[WARNING] Registry IOC match NOT performed -- ioc_registry.txt is missing or holds no entries.'; New-Item "$env:TEMP\dz_iochit_18h_gap.txt" -Force ^| Out-Null}else{ >> "%PSRUN%"
 echo   if($hits.Count -gt 0){'[WARNING] Suspicious registry IOCs found:'; $hits; New-Item "$env:TEMP\dz_iochit_18h.txt" -Force ^| Out-Null} >> "%PSRUN%"
 echo   if($unread.Count -gt 0){'[WARNING] Registry IOC match NOT performed in full -- '+$unread.Count+' of '+$lines.Count+' entr(ies) could not be read, so a match there would go unseen: '+((@($unread) ^| Select-Object -First 5) -join '; ')+$(if($unread.Count -gt 5){'; and '+($unread.Count-5)+' more'}else{'.'}); New-Item "$env:TEMP\dz_iochit_18h_unread.txt" -Force ^| Out-Null} >> "%PSRUN%"
-echo   if($defer.Count -gt 0){'[DEFERRED - ADMIN REQUIRED] Registry IOC match: '+$defer.Count+' HKLM key(s) this token may not read: '+((@($defer) ^| Select-Object -First 5) -join '; '); Set-Content -Path "$env:TEMP\dz_iochit_18h_deferred.txt" -Value $defer.Count -Encoding ASCII} >> "%PSRUN%"
-echo   if($hits.Count -eq 0 -and $unread.Count -eq 0){'[OK] No suspicious registry IOC matches'+$(if($defer.Count -gt 0){' in the entries this token could read.'}else{'.'})} >> "%PSRUN%"
+echo   if($hits.Count -eq 0 -and $unread.Count -eq 0){'[OK] No suspicious registry IOC matches.'} >> "%PSRUN%"
 echo } >> "%PSRUN%"
 echo New-Item "$env:TEMP\dz_iochit_18h_done.txt" -Force ^| Out-Null >> "%PSRUN%"
 del "%TEMP%\dz_iochit_18h.txt" 2>nul
 del "%TEMP%\dz_iochit_18h_unread.txt" 2>nul
-del "%TEMP%\dz_iochit_18h_deferred.txt" 2>nul
 del "%TEMP%\dz_iochit_18h_gap.txt" 2>nul
 del "%TEMP%\dz_iochit_18h_done.txt" 2>nul
 "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
@@ -5444,12 +5440,6 @@ if exist "%TEMP%\dz_iochit_18h_unread.txt" (
     rem A key that could not be read is its own row, beside a match or alone.
     call :dz_finding WARNING 18 T1112 "Registry IOC match NOT performed in full - registry keys could not be read"
     del "%TEMP%\dz_iochit_18h_unread.txt" 2>nul
-)
-if exist "%TEMP%\dz_iochit_18h_deferred.txt" (
-    set "_RIDEF=0"
-    set /p _RIDEF=<"%TEMP%\dz_iochit_18h_deferred.txt"
-    set /a DEFERRED_COUNT+=!_RIDEF!
-    del "%TEMP%\dz_iochit_18h_deferred.txt" 2>nul
 )
 
 echo.>> "%REPORT%"

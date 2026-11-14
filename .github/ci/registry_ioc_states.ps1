@@ -7,11 +7,15 @@
 # renders it exactly as cmd writes it), on a list naming throwaway keys:
 #   hit      a value the list names                       -> matched
 #   twin     a value whose name only CONTAINS that name   -> not matched
+#   wildcard an entry naming DzCiUpd* -> matches nothing: names are exact, and
+#            the old Get-ItemProperty -Name took the * as a wildcard
 #   badval   a value whose data is not the listed bad one -> not matched
 #   missing  a key that does not exist                    -> nothing (an answer)
 #   denied   a key this account may not read              -> named, raised gap
 #   badhive  an entry under a hive the check cannot read  -> named, raised gap
-# The old block wrapped every read in catch{}, so the last two vanished.
+# The old block wrapped every read in catch{}, so the last two vanished. A
+# denied key is a gap on every token: each key the shipped list names is one a
+# standard user can read, so a refusal is a deny rule, not the token.
 $ErrorActionPreference = 'Stop'
 $root = "HKCU:\Software\dz_ci_rioc_$PID"
 $lists = Join-Path $env:TEMP ("dz_ci_rioc_lists_{0}" -f $PID)
@@ -35,6 +39,7 @@ try {
   Set-Content -LiteralPath (Join-Path $lists 'ioc_registry.txt') -Encoding ASCII -Value @(
     '# CI list',
     "$reg\Run|DzCiUpdate",
+    "$reg\Run|DzCiUpd*",
     "$reg\Run|DzCiFlag|1",
     "$reg\Missing|DzCiNothing",
     "$reg\Denied|DzCiHidden",
@@ -47,6 +52,7 @@ try {
   if ($o -notmatch 'S18 18h hit=1 gap=0 done=1 unread=1') { throw "18h did not report the match AND the unread entries (or did not reach its verdict): $o" }
   if ($o -notmatch [regex]::Escape("$reg\Run\DzCiUpdate = C:\dz_ci_does_not_exist.exe")) { throw "18h did not print the value it matched: $o" }
   if ($o -match 'DzCiUpdateHelper') { throw "18h matched the twin, whose name only contains a listed name: $o" }
+  if ($o -match [regex]::Escape('DzCiUpd*')) { throw "18h treated a * in a listed value name as a wildcard, or named it: $o" }
   if ($o -match 'DzCiFlag =') { throw "18h matched a value whose data is not the listed bad value: $o" }
   if ($o -match 'DzCiNothing') { throw "18h named a key that does not exist as unread -- a missing key is an answer: $o" }
   if ($o -notmatch [regex]::Escape('HKU\.DEFAULT\Software\dz_ci_rioc\DzCiOther - the entry must start HKLM\ or HKCU\')) { throw "18h did not name the entry under a hive it cannot read: $o" }

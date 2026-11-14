@@ -423,9 +423,8 @@ Found during the v7.1 coverage review; tracked for future work:
   `catch{}`, so a listed key this account could not read, or an entry under
   a hive it cannot read, was dropped and the block printed `[OK]`.~~
   **Closed:** each such entry is named and raised as `NOT performed in
-  full`, beside any match. A missing key is an answer. On a standard-user
-  token an HKLM key it is refused is a deferral. Values are matched by exact
-  name, no longer through `Get-ItemProperty`'s wildcards. Residual: the list
+  full`, beside any match, on every token. A missing key is an answer.
+  Values are matched by exact name, no longer through `Get-ItemProperty`'s wildcards. Residual: the list
   names keys under HKLM and HKCU only; another user's hive is not read.
 - ~~The Section 13 Office macro policy check silenced every read and skipped
   an Office version whose key it could not see, so a key it could not read
