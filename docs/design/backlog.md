@@ -865,7 +865,7 @@ Class A -- a failed read reaches `[OK]` (15 blocks):
 | RMM software installed (Section 17) | `[OK] No unexpected RMM software found.` | DONE 2026-11-13, `tools/rmm_check.ps1` (Section 4) |
 | Run/RunOnce in other users' hives (Section 5) | `[OK] No Run/RunOnce entries in other-user hives.` | open |
 | Browser credential stores; token cache (Section 18) | `[OK] No unusual recent access` / `modifications` | DONE 2026-11-13, `tools/file_walk_check.ps1 -Check CredStores` / `TokenCache` |
-| Registry IOC match (Section 18h) | has a NOT-performed branch, but one entry whose key is denied is swallowed by `catch{}` and not named | open |
+| Registry IOC match (Section 18h) | has a NOT-performed branch, but one entry whose key is denied is swallowed by `catch{}` and not named | DONE 2026-11-14, same staged block: named and raised as `NOT performed in full` |
 
 Class B -- fails loud or to `[INFO]` (2): unsigned DLLs in system paths (a
 failed signature read counts as unsigned); Sticky Keys (a failed read prints

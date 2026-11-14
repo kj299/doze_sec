@@ -5258,19 +5258,36 @@ echo --- [18h] Registry IOC Check --->> "%REPORT%"
 echo  Command: powershell -Command "Get-ItemProperty $psPath -Name $valName -EA Stop">> "%REPORT%"
 echo  Checking suspicious registry keys from ioc_registry.txt>> "%REPORT%"
 echo $iocFile = Join-Path $env:IOCDIR 'ioc_registry.txt' > "%PSRUN%"
-echo $lines=if(Test-Path $iocFile){Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^\s*#'}} >> "%PSRUN%"
-echo $hits=@() >> "%PSRUN%"
+echo $lines=@(if(Test-Path $iocFile){Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^^\s*#'}}) >> "%PSRUN%"
+echo $adm=$false; try{$adm=([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.SecurityIdentifier]'S-1-5-32-544')}catch{} >> "%PSRUN%"
+echo $hits=@(); $unread=@(); $defer=@() >> "%PSRUN%"
 echo foreach($line in $lines){ >> "%PSRUN%"
-echo   $parts=$line.Split('^|'); $keyPath=$parts[0]; $valName=if($parts.Count -gt 1){$parts[1]}else{$null}; $badVal=if($parts.Count -gt 2){$parts[2]}else{$null} >> "%PSRUN%"
-echo   $psPath=$keyPath -replace '^HKLM\\','HKLM:\' -replace '^HKCU\\','HKCU:\' >> "%PSRUN%"
+echo   $parts=$line.Split('^|'); $keyPath=$parts[0].Trim(); $valName=if($parts.Count -gt 1){$parts[1]}else{$null}; $badVal=if($parts.Count -gt 2){$parts[2]}else{$null} >> "%PSRUN%"
+echo   $label=if($valName){$keyPath+'\'+$valName}else{$keyPath} >> "%PSRUN%"
+echo   if($keyPath -notmatch '^^(HKLM^|HKCU)\\'){$unread+=($label+' - the entry must start HKLM\ or HKCU\'); continue} >> "%PSRUN%"
+echo   $psPath=$keyPath -replace '^^HKLM\\','HKLM:\' -replace '^^HKCU\\','HKCU:\' >> "%PSRUN%"
+echo   $k=$null >> "%PSRUN%"
+echo   try{ $k=Get-Item -LiteralPath $psPath -EA Stop }catch{ >> "%PSRUN%"
+echo     if($_.Exception -is [System.Management.Automation.ItemNotFoundException]){continue} >> "%PSRUN%"
+echo     $den=($_.Exception -is [System.Security.SecurityException] -or $_.Exception -is [System.UnauthorizedAccessException]) >> "%PSRUN%"
+echo     if($den -and -not $adm -and $keyPath -match '^^HKLM\\'){$defer+=$keyPath}else{$unread+=($label+' - '+$_.Exception.GetType().Name)} >> "%PSRUN%"
+echo     continue >> "%PSRUN%"
+echo   } >> "%PSRUN%"
 echo   try{ >> "%PSRUN%"
-echo     if($valName){$v=Get-ItemProperty $psPath -Name $valName -EA Stop; $cur="$($v.$valName)"; if($badVal){if($cur -eq $badVal){$hits+="$keyPath\$valName = $cur"}}else{$hits+="$keyPath\$valName = $cur"}} >> "%PSRUN%"
-echo     else{if(Test-Path $psPath){ $k=Get-Item -LiteralPath $psPath -EA SilentlyContinue; $n=0; if($k){$n=$k.ValueCount+$k.SubKeyCount}; if($n -gt 0){$hits+="$keyPath [EXISTS, $n entr(ies)]"} }} >> "%PSRUN%"
-echo   }catch{} >> "%PSRUN%"
+echo     if($valName){ if(@($k.GetValueNames()) -contains $valName){$cur=[string]$k.GetValue($valName); if($badVal){if($cur -eq $badVal){$hits+="$keyPath\$valName = $cur"}}else{$hits+="$keyPath\$valName = $cur"}} } >> "%PSRUN%"
+echo     else{ $n=$k.ValueCount+$k.SubKeyCount; if($n -gt 0){$hits+="$keyPath [EXISTS, $n entr(ies)]"} } >> "%PSRUN%"
+echo   }catch{ $unread+=($label+' - '+$_.Exception.GetType().Name) } >> "%PSRUN%"
 echo } >> "%PSRUN%"
-echo if(-not $lines){'[WARNING] Registry IOC match NOT performed -- ioc_registry.txt is missing or holds no entries.'; New-Item "$env:TEMP\dz_iochit_18h_gap.txt" -Force ^| Out-Null}elseif($hits.Count -gt 0){'[WARNING] Suspicious registry IOCs found:'; $hits; New-Item "$env:TEMP\dz_iochit_18h.txt" -Force ^| Out-Null}else{'[OK] No suspicious registry IOC matches.'} >> "%PSRUN%"
+echo if($lines.Count -eq 0){'[WARNING] Registry IOC match NOT performed -- ioc_registry.txt is missing or holds no entries.'; New-Item "$env:TEMP\dz_iochit_18h_gap.txt" -Force ^| Out-Null}else{ >> "%PSRUN%"
+echo   if($hits.Count -gt 0){'[WARNING] Suspicious registry IOCs found:'; $hits; New-Item "$env:TEMP\dz_iochit_18h.txt" -Force ^| Out-Null} >> "%PSRUN%"
+echo   if($unread.Count -gt 0){'[WARNING] Registry IOC match NOT performed in full -- '+$unread.Count+' of '+$lines.Count+' entr(ies) could not be read, so a match there would go unseen: '+((@($unread) ^| Select-Object -First 5) -join '; ')+$(if($unread.Count -gt 5){'; and '+($unread.Count-5)+' more'}else{'.'}); New-Item "$env:TEMP\dz_iochit_18h_unread.txt" -Force ^| Out-Null} >> "%PSRUN%"
+echo   if($defer.Count -gt 0){'[DEFERRED - ADMIN REQUIRED] Registry IOC match: '+$defer.Count+' HKLM key(s) this token may not read: '+((@($defer) ^| Select-Object -First 5) -join '; '); Set-Content -Path "$env:TEMP\dz_iochit_18h_deferred.txt" -Value $defer.Count -Encoding ASCII} >> "%PSRUN%"
+echo   if($hits.Count -eq 0 -and $unread.Count -eq 0){'[OK] No suspicious registry IOC matches'+$(if($defer.Count -gt 0){' in the entries this token could read.'}else{'.'})} >> "%PSRUN%"
+echo } >> "%PSRUN%"
 echo New-Item "$env:TEMP\dz_iochit_18h_done.txt" -Force ^| Out-Null >> "%PSRUN%"
 del "%TEMP%\dz_iochit_18h.txt" 2>nul
+del "%TEMP%\dz_iochit_18h_unread.txt" 2>nul
+del "%TEMP%\dz_iochit_18h_deferred.txt" 2>nul
 del "%TEMP%\dz_iochit_18h_gap.txt" 2>nul
 del "%TEMP%\dz_iochit_18h_done.txt" 2>nul
 "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
@@ -5288,6 +5305,17 @@ if not exist "%TEMP%\dz_iochit_18h_done.txt" (
     call :dz_finding WARNING 18 T1112 "Registry IOC match NOT performed - the check stopped before a verdict"
 )
 del "%TEMP%\dz_iochit_18h_done.txt" 2>nul
+if exist "%TEMP%\dz_iochit_18h_unread.txt" (
+    rem A key that could not be read is its own row, beside a match or alone.
+    call :dz_finding WARNING 18 T1112 "Registry IOC match NOT performed in full - registry keys could not be read"
+    del "%TEMP%\dz_iochit_18h_unread.txt" 2>nul
+)
+if exist "%TEMP%\dz_iochit_18h_deferred.txt" (
+    set "_RIDEF=0"
+    set /p _RIDEF=<"%TEMP%\dz_iochit_18h_deferred.txt"
+    set /a DEFERRED_COUNT+=!_RIDEF!
+    del "%TEMP%\dz_iochit_18h_deferred.txt" 2>nul
+)
 
 echo.>> "%REPORT%"
 echo --- [18i] TTP Coverage Summary --->> "%REPORT%"

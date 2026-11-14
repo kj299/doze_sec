@@ -867,7 +867,7 @@ jobs:
           dup=$(echo "$called" | uniq -d); [ -z "$dup" ] || { echo "called by more than one step: $dup"; exit 1; }
           for f in $called; do [ -s ".github/ci/$f" ] || { echo ".github/ci/$f is missing or empty -- its step would run nothing"; exit 1; }; done
           for f in .github/ci/*.ps1; do echo "$called" | grep -qxF "$(basename "$f")" || { echo "$f is called by no step in windows-smoke.yml"; exit 1; }; done
-          n=$(echo "$called" | wc -l); [ "$n" -ge 26 ] || { echo "only $n step(s) call a .github/ci script; 26 are expected"; exit 1; }
+          n=$(echo "$called" | wc -l); [ "$n" -ge 27 ] || { echo "only $n step(s) call a .github/ci script; 27 are expected"; exit 1; }
           # cmd reads a bare < or > in an echo as a file redirection, quoted or
           # not by PowerShell's single quotes: 'Expected: <Windows>\system32...'
           # in a tile's help text made the whole line vanish from the dashboard
