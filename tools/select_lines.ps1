@@ -40,6 +40,11 @@ param(
     [Parameter(Mandatory=$false)] [string]$PatternFile = '',
     [Parameter(Mandatory=$false)] [switch]$CaseSensitive,
     [Parameter(Mandatory=$false)] [switch]$Invert,
+    # Set aside the audit's OWN esentutl calls (Section 5, -readSignedOut):
+    # exactly the shape it runs, a profile's NTUSER.DAT/.MAN copied to a
+    # %TEMP%\dz_hive_<pid>\<n>\ folder, never any other esentutl line. The
+    # count is printed, so the exclusion is declared, never silent.
+    [Parameter(Mandatory=$false)] [switch]$ExcludeAuditEsentutl,
     [Parameter(Mandatory=$false)] [switch]$SelfTest,
     [Parameter(Position=0, ValueFromRemainingArguments=$true)] [string[]]$Pattern
 )
@@ -89,6 +94,14 @@ if ($SelfTest) {
         T 'a CRLF list matches the same as an LF one' ($r.Exit -eq 0 -and ($r.Lines -join ' ') -match 'CHISEL') ("exit=" + $r.Exit)
         $r = Run @('-Path', $input1, '-PatternFile', (W 'bs.txt' "C:\dz_selftest_ioc\`n"))
         T 'a backslash in an entry is literal' ($r.Exit -eq 0 -and ($r.Lines -join ' ') -match 'dz_selftest_ioc') ("exit=" + $r.Exit)
+        $self = 'Process Command Line: "C:\Windows\System32\esentutl.exe" /y C:\Users\bob\NTUSER.DAT /vss /d C:\Users\admin\AppData\Local\Temp\dz_hive_4242\1\NTUSER.DAT'
+        $evil = 'Process Command Line: esentutl.exe /y C:\Windows\NTDS\ntds.dit /vss /d C:\Users\Public\n.dit'
+        $inE = W 'esent.txt' ($self + "`n" + $evil + "`n")
+        $r = Run @('-Path', $inE, '-ExcludeAuditEsentutl', 'esentutl')
+        $j = $r.Lines -join ' | '
+        T 'the audit''s own esentutl copy is set aside and COUNTED; another esentutl line is still listed' ($r.Exit -eq 0 -and $j -match 'ntds\.dit' -and $j -notmatch 'dz_hive_4242' -and $j -match '\[INFO\] 1 line\(s\) set aside') ("exit=" + $r.Exit + ' ' + $j)
+        $r = Run @('-Path', $inE, 'esentutl')
+        T 'without the switch nothing is set aside' (($r.Lines -join ' ') -match 'dz_hive_4242') ''
         $long = ('x' * 20000) + ' chisel'
         $r = Run @('-Path', (W 'long.txt' ($long + "`n")), '-PatternFile', $list)
         T 'a hit at the end of a 20,000-character line is found' ($r.Exit -eq 0) ("exit=" + $r.Exit)
@@ -153,11 +166,14 @@ if (-not (Test-Path -LiteralPath $Path)) { exit 1 }
 # Mirror findstr's exit code: 0 = at least one line emitted, 1 = none emitted.
 # Callers (e.g. doze_sec.bat) gate WARN/CRITICAL blocks on `if errorlevel 0`.
 $emitted = 0
+$setAside = 0
+$selfRx = '(?i)\\esentutl\.exe"?\s+/y\s+"?[^"]*\\NTUSER\.(DAT|MAN)(\.LOG[12])?"?\s+/vss\s+/d\s+"?[^"]*\\dz_hive_\d+\\\d+\\NTUSER\.(DAT|MAN)(\.LOG[12])?"?\s*$'
 $reader = $null
 try {
     $reader = [System.IO.StreamReader]::new($Path)
     while ($null -ne ($line = $reader.ReadLine())) {
         $hit = Test-Hit $line
+        if ($hit -and $ExcludeAuditEsentutl -and $line -match $selfRx) { $setAside++; continue }
         if ($hit -xor $Invert) {
             Write-Output $line
             $emitted++
@@ -166,4 +182,5 @@ try {
 } finally {
     if ($reader) { $reader.Dispose() }
 }
+if ($setAside -gt 0) { ('[INFO] ' + $setAside + ' line(s) set aside: this audit''s own esentutl copies of a signed-out account''s registry (-readSignedOut), recognised by their exact shape.') }
 if ($emitted -gt 0) { exit 0 } else { exit 1 }

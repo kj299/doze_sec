@@ -201,6 +201,7 @@ set "IMPORT_TTP_FILE="
 set "CTI_SKILL_SWITCH="
 set "VT_CHECK=0"
 set "DNS_PROBE=0"
+set "READ_SIGNED_OUT=0"
 set "DNSPROBE_STATE="
 set "PROCPATH_STATE="
 set "DEFCORE_MODE=unknown"
@@ -282,6 +283,7 @@ if /i "%~1"=="-importTTP"  goto :parse_importttp
 if /i "%~1"=="-ctiSkill"   goto :parse_ctiskill
 if /i "%~1"=="-vt"         set "VT_CHECK=1"
 if /i "%~1"=="-dnsprobe"   set "DNS_PROBE=1"
+if /i "%~1"=="-readSignedOut" set "READ_SIGNED_OUT=1"
 if /i "%~1"=="-noVtSelf"   set "VT_SELF_SKIP=1"
 if /i "%~1"=="-baseline"   set "BASELINE_SAVE=1"
 if /i "%~1"=="-noBaseline" set "BASELINE_SKIP=1"
@@ -334,8 +336,16 @@ if "%READONLY_MODE%"=="1" set "SKIP_THREAT_UPDATE=1"
 if "%READONLY_MODE%"=="1" set "VT_SELF_SKIP=1"
 if "%READONLY_MODE%"=="1" if "%VT_CHECK%"=="1" goto :readonly_conflict
 if "%READONLY_MODE%"=="1" if "%DNS_PROBE%"=="1" goto :readonly_conflict
+if "%READONLY_MODE%"=="1" if "%READ_SIGNED_OUT%"=="1" goto :readonly_conflict_rso
 if "%READONLY_MODE%"=="1" if "%UPDATE_TTP%"=="1" goto :readonly_conflict
 goto :help_done
+
+:readonly_conflict_rso
+echo.
+echo  [ERROR] -readonly cannot be combined with -readSignedOut: reading a signed-out
+echo          account mounts a copy of its registry, a change outside the output folder.
+echo  Exit code: 1 -- audit did not run
+endlocal & exit /b 1
 
 :readonly_conflict
 echo.
@@ -438,6 +448,14 @@ echo                 exists and the network is up. Adds ~50 s to startup but
 echo                 detects tampered system binaries before any audit data
 echo                 is collected. Audit aborts with EXIT_CODE=7 if any
 echo                 binary is flagged malicious by VT.
+echo.
+echo    %C_GREEN%-readSignedOut%C_RESET%  Section 5: also read the Run keys of accounts that are NOT
+echo                 signed in (elevated only; refused with -readonly). Each is
+echo                 copied from a Volume Shadow Copy and the copy mounted. WARNING:
+echo                 if shadow-copy storage is full, Windows deletes your OLDEST
+echo                 restore point to make room, and on a work PC your security
+echo                 software or IT may raise an intrusion alert (esentutl /vss is
+echo                 also how attackers copy locked files). Off by default.
 echo.
 echo    %C_GREEN%-noConsoleLog%C_RESET%  Skip console-output capture (default ON). By default
 echo    %C_GREEN%-readonly%C_RESET%      Inspect only: change nothing on this machine outside the output
@@ -2833,14 +2851,18 @@ echo  Command: powershell -File tools\persistence_eval.ps1 -Part OtherAccounts>>
 echo  Grades the Run/RunOnce values of every OTHER account the way HKCU's are graded.>> "%REPORT%"
 echo  Signed-in accounts are read under HKEY_USERS. A signed-out account is read from a>> "%REPORT%"
 echo  COPY of its registry taken from a Volume Shadow Copy, so its own file is never>> "%REPORT%"
-echo  opened. That needs an elevated run without -readonly; otherwise it is named, unread.>> "%REPORT%"
+echo  opened -- only with -readSignedOut on an elevated run; otherwise it is named, unread.>> "%REPORT%"
 del "%TEMP%\dz_persist_other_hit.txt" 2>nul
 del "%TEMP%\dz_persist_other_gap.txt" 2>nul
 del "%TEMP%\dz_persist_other_deferred.txt" 2>nul
 del "%TEMP%\dz_persist_other_done.txt" 2>nul
+if "%READ_SIGNED_OUT%"=="1" if "%READONLY_MODE%"=="0" (
+    echo  [INFO] -readSignedOut: signed-out accounts are copied from a Volume Shadow Copy. If shadow-copy storage is full, Windows deletes the OLDEST restore point to make room, and security software or IT may raise an intrusion alert for esentutl /vss.>> "%REPORT%"
+    echo  %C_YELLOW%[NOTE]%C_RESET% -readSignedOut: copying signed-out accounts' registries from a Volume Shadow Copy. If shadow-copy storage is full Windows deletes your OLDEST restore point; security software or IT may raise an alert.
+)
 set "_LSO="
 set "_LRO="
-if "%READONLY_MODE%"=="0" set "_LSO=-LoadSignedOut"
+if "%READ_SIGNED_OUT%"=="1" if "%READONLY_MODE%"=="0" set "_LSO=-LoadSignedOut"
 if "%READONLY_MODE%"=="1" set "_LRO=-ReadOnly"
 if exist "%SCRIPT_DIR%tools\persistence_eval.ps1" (
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\persistence_eval.ps1" -Part OtherAccounts -MarkerFile "%TEMP%\dz_persist_other_hit.txt" -GapFile "%TEMP%\dz_persist_other_gap.txt" -DeferredFile "%TEMP%\dz_persist_other_deferred.txt" -DoneFile "%TEMP%\dz_persist_other_done.txt" %_LSO% %_LRO%>> "%REPORT%" 2>&1
@@ -5654,7 +5676,7 @@ echo.>> "%REPORT%"
 echo --- [CTI][T1105+T1059] LOLBin Download Cradles in Event 4688 (last 24h) --->> "%REPORT%"
 echo  Command: wevtutil qe Security /q:"*[System[(EventID=4688)]]" /c:1000 /rd:true /f:text ^| select_lines.ps1 "bitsadmin" "certutil -urlcache" "curl " "wget" "Invoke-WebRequest" "Start-BitsTransfer" "desktopimgdownldr" "esentutl">> "%REPORT%"
 wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:1000 /rd:true /f:text > "%TEMP%\dz_evt.tmp" 2>nul
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" "bitsadmin" "certutil -urlcache" "curl " "wget" "Invoke-WebRequest" "Start-BitsTransfer" "desktopimgdownldr" "esentutl">> "%REPORT%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" -ExcludeAuditEsentutl "bitsadmin" "certutil -urlcache" "curl " "wget" "Invoke-WebRequest" "Start-BitsTransfer" "desktopimgdownldr" "esentutl">> "%REPORT%" 2>&1
 del "%TEMP%\dz_evt.tmp" 2>nul
 
 :: --- [CTI] AMSI Bypass Artifacts in PowerShell Logs (T1562.001) ---

@@ -425,15 +425,15 @@ Found during the v7.1 coverage review; tracked for future work:
   in.~~ **Closed:** `tools/persistence_eval.ps1 -Part OtherAccounts` grades
   every other account's Run keys with the same rule as HKCU and raises an
   unreadable key as a gap (a deferral on a standard-user token, which
-  another account's registry denies by design). An elevated run without
-  `-readonly` reads a signed-out account from a copy of its `NTUSER.DAT`
+  another account's registry denies by design). With `-readSignedOut`
+  (opt-in, elevated, never `-readonly`) it reads a signed-out account from a copy of its `NTUSER.DAT`
   taken from a Volume Shadow Copy, mounted under `HKU\dz_sec_*` and
   unmounted again; the account's own file is never opened. With VSS
   disabled that account is a raised gap. The same tool's HKCU/HKLM loop no longer skips a key it
   could not read. Residual: Run and RunOnce only, not every per-user
   persistence location (Startup folder, scheduled tasks and services are
   read elsewhere; a signed-out account's Startup folder and per-user COM
-  hijacks are not); a `-readonly` or standard-user run names signed-out
+  hijacks are not); a run without `-readSignedOut`, a `-readonly` or a standard-user run names signed-out
   accounts without reading them.
 - ~~Section 18h, the registry IOC match, wrapped every lookup in an empty
   `catch{}`, so a listed key this account could not read, or an entry under

@@ -351,7 +351,9 @@ try {
         if ($LASTEXITCODE -eq 0) { Report ('mounted registry copy HKU\' + $m) 'REMOVED' } else { $errors += ('could not unload HKU\' + $m + ' (it goes at reboot)') }
     }
 } catch {}
-foreach ($d in @(Get-ChildItem -LiteralPath ([IO.Path]::GetTempPath()) -Directory -Filter 'dz_hive_*' -EA SilentlyContinue)) {
+foreach ($d in @(Get-ChildItem -LiteralPath ([IO.Path]::GetTempPath()) -Force -Filter 'dz_hive_*' -EA SilentlyContinue)) {
+    # Never follow a link: a junction named dz_hive_* would aim this recursive delete elsewhere.
+    if (([int]$d.Attributes -band 0x400) -or @(Get-ChildItem -LiteralPath $d.FullName -Recurse -Force -EA SilentlyContinue | Where-Object { [int]$_.Attributes -band 0x400 }).Count) { $errors += ('refused ' + $d.FullName + ': it is or holds a link, not a folder the audit made'); continue }
     Remove-Item -LiteralPath $d.FullName -Recurse -Force -EA SilentlyContinue
     if (-not (Test-Path -LiteralPath $d.FullName)) { Report ('registry copy folder ' + $d.Name) 'REMOVED' }
     else { $errors += ('could not remove the registry copy folder ' + $d.FullName + ' (a copy may still be mounted from it; restart, then re-run this)') }

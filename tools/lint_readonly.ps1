@@ -45,8 +45,8 @@ if ($SelfTest) {
            Repl = ''
            Expect = 'must be gated by READONLY_MODE' },
         @{ Name = 'the signed-out-account read gate inverted (it would mount registry copies under -readonly)'
-           Find = 'if "%READONLY_MODE%"=="0" set "_LSO=-LoadSignedOut"'
-           Repl = 'if "%READONLY_MODE%"=="1" set "_LSO=-LoadSignedOut"'
+           Find = 'if "%READ_SIGNED_OUT%"=="1" if "%READONLY_MODE%"=="0" set "_LSO=-LoadSignedOut"'
+           Repl = 'if "%READ_SIGNED_OUT%"=="1" if "%READONLY_MODE%"=="1" set "_LSO=-LoadSignedOut"'
            Expect = '-LoadSignedOut must be set only by' },
         @{ Name = ':args_done no longer forces SKIP_SRP'
            Find = '(?m)^if "%READONLY_MODE%"=="1" set "SKIP_SRP=1"\r?\n'
@@ -117,16 +117,19 @@ foreach ($b in $bats) {
     foreach ($force in @('SKIP_SRP', 'SKIP_THREAT_UPDATE', 'VT_SELF_SKIP')) {
         if ($src -notmatch ('if "%READONLY_MODE%"=="1" set "' + $force + '=1"')) { $fail += ("{0}: :args_done does not force {1}=1 under -readonly" -f $b, $force) }
     }
-    foreach ($refuse in @('VT_CHECK', 'DNS_PROBE', 'UPDATE_TTP')) {
+    foreach ($refuse in @('VT_CHECK', 'DNS_PROBE', 'UPDATE_TTP', 'READ_SIGNED_OUT')) {
         if ($src -notmatch ('if "%READONLY_MODE%"=="1" if "%' + $refuse + '%"=="1" goto :readonly_conflict')) { $fail += ("{0}: -readonly does not refuse {1}" -f $b, $refuse) }
     }
     # Reading a signed-out account mounts a COPY of its registry: never under
     # -readonly. The switch reaches the tool only through %_LSO%, set by this
     # exact line and no other -- a proximity check alone would pass an
     # inverted gate.
-    $lso = @($lines | Where-Object { $_ -match '-LoadSignedOut' -and $_.TrimStart() -notmatch '^(echo\b|rem\b|::)' })
-    if ($lso.Count -ne 1 -or $lso[0].Trim() -ne 'if "%READONLY_MODE%"=="0" set "_LSO=-LoadSignedOut"') { $fail += ("{0}: -LoadSignedOut must be set only by: if ""%READONLY_MODE%""==""0"" set ""_LSO=-LoadSignedOut"" (found {1} line(s): {2})" -f $b, $lso.Count, ($lso -join ' | ')) }
-    if ($src -notmatch 'persistence_eval\.ps1" -Part OtherAccounts [^\r\n]*%_LSO%') { $fail += ("{0}: the OtherAccounts call no longer passes %_LSO%" -f $b) }
+    # Any prefix of the switch binds it (-LoadSigned works), so match the stem.
+    $lso = @($lines | Where-Object { $_ -match '-LoadSigned' -and $_.TrimStart() -notmatch '^\(?(echo\b|rem\b|::)' })
+    if ($lso.Count -ne 1 -or $lso[0].Trim() -ne 'if "%READ_SIGNED_OUT%"=="1" if "%READONLY_MODE%"=="0" set "_LSO=-LoadSignedOut"') { $fail += ("{0}: -LoadSignedOut must be set only by: if ""%READ_SIGNED_OUT%""==""1"" if ""%READONLY_MODE%""==""0"" set ""_LSO=-LoadSignedOut"" (found {1} line(s): {2})" -f $b, $lso.Count, ($lso -join ' | ')) }
+    $lro = @($lines | Where-Object { $_.Trim() -eq 'if "%READONLY_MODE%"=="1" set "_LRO=-ReadOnly"' })
+    if ($lro.Count -ne 1) { $fail += ("{0}: the OtherAccounts call must be told -ReadOnly under -readonly (if ""%READONLY_MODE%""==""1"" set ""_LRO=-ReadOnly"")" -f $b) }
+    if ($src -notmatch 'persistence_eval\.ps1" -Part OtherAccounts [^\r\n]*%_LSO% %_LRO%') { $fail += ("{0}: the OtherAccounts call no longer passes %_LSO% %_LRO%" -f $b) }
     if ($src -notmatch '(?m)^:readonly_conflict') { $fail += ("{0}: :readonly_conflict label missing" -f $b) }
     if ($src -notmatch 'READ-ONLY RUN -- this audit makes no changes') { $fail += ("{0}: the read-only banner is missing from the report header" -f $b) }
     # The audit GENERATES a remediation script full of machine-changing commands.

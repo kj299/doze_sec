@@ -426,6 +426,63 @@ function Get-RunKeyGapLines {
 }
 
 # PURE. Which ProfileList entries are other accounts not signed in.
+# PURE. Which registry file Windows loads for a profile folder holding these
+# names: NTUSER.MAN (a mandatory profile) wins over NTUSER.DAT when both are
+# there, as it does at sign-in. '' = none.
+function Select-HiveFile {
+    param([string[]]$Names)
+    if (@($Names) -contains 'NTUSER.MAN') { return 'NTUSER.MAN' }
+    if (@($Names) -contains 'NTUSER.DAT') { return 'NTUSER.DAT' }
+    return ''
+}
+
+# Live. The full path of a System32 tool for THIS process's bitness: a 32-bit
+# PowerShell on 64-bit Windows sees SysWOW64 as System32, and VSS refuses a
+# 32-bit requester there, so it reaches the native tool through Sysnative.
+# A full path also keeps an elevated process off a PATH lookup.
+function Get-NativeTool {
+    param([string]$Name)
+    $root = $env:SystemRoot; if (-not $root) { $root = 'C:\Windows' }
+    $sub = $(if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) { 'Sysnative' } else { 'System32' })
+    return ($root.TrimEnd('\') + '\' + $sub + '\' + $Name)
+}
+
+# Live. A folder this ELEVATED tool will write a copy of another person's
+# registry into, and later delete recursively. TEMP is writable by the same
+# user's unelevated processes, so the folder is created fresh (never reused),
+# refused if anything at the path is a reparse point (a junction would send
+# the copy -- and the recursive delete -- somewhere else), and given an ACL
+# that admits only Administrators and SYSTEM. Returns '' or why it failed.
+function New-PrivateFolder {
+    param([string]$Path)
+    if (Test-Path -LiteralPath $Path) { return ('it already exists: ' + $Path) }
+    $parent = Split-Path -Parent $Path
+    $pi = Get-Item -LiteralPath $parent -Force -ErrorAction Stop
+    if ([int]$pi.Attributes -band 0x400) { return ('its parent is a link: ' + $parent) }
+    $null = New-Item -ItemType Directory -Path $Path -ErrorAction Stop
+    $acl = New-Object System.Security.AccessControl.DirectorySecurity
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($sid in 'S-1-5-32-544', 'S-1-5-18') {
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule((New-Object System.Security.Principal.SecurityIdentifier($sid)), 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow')))
+    }
+    Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
+    return ''
+}
+
+# Live. Delete a folder this tool made, only if it is a real folder: a
+# reparse point at any level is refused, never followed.
+function Remove-PrivateFolder {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return '' }
+    $it = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if ($it -and ([int]$it.Attributes -band 0x400)) { return ('refused: ' + $Path + ' is a link, not a folder this audit made') }
+    $links = @(Get-ChildItem -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue | Where-Object { [int]$_.Attributes -band 0x400 })
+    if ($links.Count) { return ('refused: ' + $Path + ' holds a link (' + $links[0].FullName + ')') }
+    Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $Path) { return ('could not remove ' + $Path) }
+    return ''
+}
+
 function Select-SignedOutProfiles {
     param($Profiles, [string[]]$Loaded, [string]$MySid)
     return @(@($Profiles) | Where-Object { [string]$_.Sid -match '^S-1-5-21-[\d-]+$' -and [string]$_.Sid -ne $MySid -and @($Loaded) -notcontains [string]$_.Sid })
@@ -554,6 +611,7 @@ if ($SelfTest) {
     T 'more than 25 values: the listing says how many more were graded but not listed' ((($v.Lines -join "`n") -match '\.\.\. and 5 more, each graded but not listed here\.')) ($v.Lines -join ' | ')
     $v = Get-OtherAccountsVerdict -Accounts @(Acct 'PC\bob' (& $ok @(@{ Name = 'U'; Value = 'C:\Users\admin\Downloads\x.exe'; Raw = '%USERPROFILE%\Downloads\x.exe' })))
     T 'a finding shows the RAW value (%USERPROFILE%), not the auditor''s expansion of it' ($v.Hit -and (($v.Lines -join "`n") -match '%USERPROFILE%\\Downloads\\x\.exe') -and (($v.Lines -join "`n") -notmatch 'C:\\Users\\admin')) ($v.Lines -join ' | ')
+    T 'a mandatory profile (NTUSER.MAN beside NTUSER.DAT) is read from the .MAN Windows loads' ((Select-HiveFile @('NTUSER.DAT', 'NTUSER.MAN', 'ntuser.ini')) -eq 'NTUSER.MAN' -and (Select-HiveFile @('NTUSER.DAT')) -eq 'NTUSER.DAT' -and (Select-HiveFile @('ntuser.ini')) -eq '') ''
     $profs = @(@{ Sid = 'S-1-5-21-1-2-3-1001' }, @{ Sid = 'S-1-5-21-1-2-3-1002' }, @{ Sid = 'S-1-5-21-1-2-3-1003' }, @{ Sid = 'S-1-5-18' })
     $so = @(Select-SignedOutProfiles -Profiles $profs -Loaded @('S-1-5-21-1-2-3-1002') -MySid 'S-1-5-21-1-2-3-1001')
     T 'signed out = a user profile that is neither loaded nor the audit''s own (SYSTEM is not a user)' ($so.Count -eq 1 -and [string]$so[0].Sid -eq 'S-1-5-21-1-2-3-1003') (($so | ForEach-Object { $_.Sid }) -join ',')
@@ -565,6 +623,8 @@ if ($SelfTest) {
     exit 0
 }
 
+# Defence in depth: -readonly never loads, whatever the caller passed.
+if ($ReadOnly) { $LoadSignedOut = $false }
 if ($Elevated -lt 0) {
     $Elevated = 0
     try {
@@ -583,14 +643,15 @@ if ($Part -eq 'OtherAccounts') {
     try { $stale = @([Microsoft.Win32.Registry]::Users.GetSubKeyNames() | Where-Object { $_ -match '^dz_sec_\d+_\d+$' }) } catch {}
     foreach ($m in $stale) {
         if ($ReadOnly -or $Elevated -ne 1) { ('[INFO] An earlier run''s copy of an account registry is still mounted as HKU\' + $m + '; this run did not unload it (' + $(if ($ReadOnly) { '-readonly' } else { 'not elevated' }) + '). Remove it with: powershell -File tools\unload_audit_hives.ps1 (elevated).'); continue }
-        & reg.exe unload ("HKU\" + $m) 2>&1 | Out-Null
+        & (Get-NativeTool 'reg.exe') unload ("HKU\" + $m) 2>&1 | Out-Null
         ('[INFO] An earlier run''s copy of an account registry was still mounted as HKU\' + $m + ' and has been unloaded' + $(if ($LASTEXITCODE -ne 0) { ' -- FAILED (it goes at reboot; tools\unload_audit_hives.ps1 retries)' } else { '' }) + '.')
     }
-    foreach ($d in @(Get-ChildItem -LiteralPath $tmpRoot -Directory -Filter 'dz_hive_*' -ErrorAction SilentlyContinue)) {
+    foreach ($d in @(Get-ChildItem -LiteralPath $tmpRoot -Force -Filter 'dz_hive_*' -ErrorAction SilentlyContinue)) {
         $dpid = 0; if (-not [int]::TryParse(($d.Name -replace '^dz_hive_', ''), [ref]$dpid)) { continue }
-        if ($dpid -eq $PID -or (Get-Process -Id $dpid -ErrorAction SilentlyContinue)) { continue }
-        Remove-Item -LiteralPath $d.FullName -Recurse -Force -ErrorAction SilentlyContinue
-        if (Test-Path -LiteralPath $d.FullName) { ('[INFO] An earlier run''s registry copy folder ' + $d.FullName + ' could not be removed yet (a copy is still mounted from it).') }
+        # This run owns nothing yet, so its own PID's folder is an earlier run's too.
+        if ($dpid -ne $PID -and (Get-Process -Id $dpid -ErrorAction SilentlyContinue)) { continue }
+        $why = Remove-PrivateFolder $d.FullName
+        if ($why) { ('[INFO] An earlier run''s registry copy folder was not removed: ' + $why + '.') }
     }
     $mySid = ''; try { $mySid = [string][Security.Principal.WindowsIdentity]::GetCurrent().User.Value } catch {}
     $accounts = New-Object System.Collections.ArrayList
@@ -608,7 +669,7 @@ if ($Part -eq 'OtherAccounts') {
     if (@($OtherRoot).Count -gt 0) {
         foreach ($o in $OtherRoot) { [void]$accounts.Add((& $readAccount ([string]$o) 'ci' ([Microsoft.Win32.Registry]::CurrentUser) (([string]$o) -replace '^HKCU:\\', ''))) }
     } elseif (-not $mySid) {
-        $listErr = ''
+        # Nothing is read: Get-OtherAccountsVerdict -OwnSidUnknown raises it.
     } else {
         $loaded = @()
         try { $loaded = @([Microsoft.Win32.Registry]::Users.GetSubKeyNames()) } catch { $listErr = ('HKEY_USERS could not be listed: ' + $_.Exception.Message) }
@@ -616,7 +677,9 @@ if ($Part -eq 'OtherAccounts') {
         $profiles = New-Object System.Collections.ArrayList
         $pl = $null
         try {
-            $pl = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList', $false)
+            $lm = [Microsoft.Win32.Registry]::LocalMachine
+            try { $lm = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64) } catch {}
+            $pl = $lm.OpenSubKey('SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList', $false)
             if ($null -eq $pl) { throw 'the ProfileList key is missing' }
             foreach ($sid in @($pl.GetSubKeyNames())) {
                 $sk = $null
@@ -635,13 +698,20 @@ if ($Part -eq 'OtherAccounts') {
             # that runs at sign-in; a folder that refuses is a gap.
             try { $null = Get-Item -LiteralPath $path -Force -ErrorAction Stop }
             catch {
-                if ($_.Exception -is [System.Management.Automation.ItemNotFoundException]) { [void]$noFile.Add($label); continue }
+                # Absent only when the parent ANSWERS without it (the
+                # File.Exists lesson): a refusal can surface as not-found.
+                $absent = $false
+                if ($_.Exception -is [System.Management.Automation.ItemNotFoundException]) {
+                    $par = Split-Path -Parent $path; $leaf = Split-Path -Leaf $path
+                    try { $absent = -not (@(Get-ChildItem -LiteralPath $par -Force -ErrorAction Stop | ForEach-Object { $_.Name }) -contains $leaf) } catch {}
+                }
+                if ($absent) { [void]$noFile.Add($label); continue }
                 [void]$accounts.Add((& $gapAcct $label ('its profile folder could not be read (' + $_.Exception.Message + ')'))); continue
             }
             $names = @()
             try { $names = @(Get-ChildItem -LiteralPath $path -Force -File -ErrorAction Stop | ForEach-Object { $_.Name }) }
             catch { [void]$accounts.Add((& $gapAcct $label ('its profile folder could not be listed (' + $_.Exception.Message + ')'))); continue }
-            $file = $(if ($names -contains 'NTUSER.DAT') { 'NTUSER.DAT' } elseif ($names -contains 'NTUSER.MAN') { 'NTUSER.MAN' } else { '' })
+            $file = Select-HiveFile $names
             if (-not $file) { [void]$noFile.Add($label); continue }
             $n++
             $hive = $path.TrimEnd('\') + '\' + $file
@@ -653,8 +723,12 @@ if ($Part -eq 'OtherAccounts') {
                 foreach ($x in @($file, ($file + '.LOG1'), ($file + '.LOG2'))) { if ($names -contains $x) { try { $need += (Get-Item -LiteralPath ($path.TrimEnd('\') + '\' + $x) -Force -ErrorAction Stop).Length } catch {} } }
                 $free = [long]-1
                 try { $free = (New-Object IO.DriveInfo([IO.Path]::GetPathRoot($tmpRoot))).AvailableFreeSpace } catch {}
-                if ($free -ge 0 -and $free -lt (2 * $need)) { [void]$accounts.Add((& $gapAcct $label ('not enough free space in TEMP to copy its registry (' + [math]::Round($need / 1MB) + ' MB needed twice over)'))); continue }
-                New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null
+                if ($free -lt 0) { [void]$accounts.Add((& $gapAcct $label ('the free space in TEMP (' + $tmpRoot + ') could not be read, so its registry was not copied'))); continue }
+                if ($free -lt (2 * $need)) { [void]$accounts.Add((& $gapAcct $label ('not enough free space in TEMP to copy its registry (' + [math]::Round($need / 1MB) + ' MB needed twice over)'))); continue }
+                $runDir = $tmpRoot.TrimEnd('\') + '\dz_hive_' + $PID
+                if (-not (Test-Path -LiteralPath $runDir)) { $why2 = New-PrivateFolder $runDir; if ($why2) { [void]$accounts.Add((& $gapAcct $label ('its registry copy folder could not be made safely (' + $why2 + ')'))); continue } }
+                $why2 = New-PrivateFolder $dir
+                if ($why2) { $dir = ''; [void]$accounts.Add((& $gapAcct $label ('its registry copy folder could not be made safely (' + $why2 + ')'))); continue }
                 # FROM A SNAPSHOT: esentutl /vss copies out of a Volume Shadow
                 # Copy, so the account's own file is never opened -- a sign-in
                 # during the copy cannot collide with it (a plain copy opens
@@ -663,11 +737,13 @@ if ($Part -eq 'OtherAccounts') {
                 $copyFail = ''
                 foreach ($x in @($file, ($file + '.LOG1'), ($file + '.LOG2'))) {
                     if (-not ($names -contains $x)) { continue }
-                    $eo = (& esentutl.exe /y ($path.TrimEnd('\') + '\' + $x) /vss /d ($dir + '\' + $x) 2>&1 | ForEach-Object { [string]$_ }) -join ' '
+                    # An empty log holds nothing to replay: no snapshot for it.
+                    if ($x -ne $file) { $ln = [long]0; try { $ln = (Get-Item -LiteralPath ($path.TrimEnd('\') + '\' + $x) -Force -ErrorAction Stop).Length } catch { $ln = 1 }; if ($ln -eq 0) { continue } }
+                    $eo = (& (Get-NativeTool 'esentutl.exe') /y ($path.TrimEnd('\') + '\' + $x) /vss /d ($dir + '\' + $x) 2>&1 | ForEach-Object { [string]$_ }) -join ' '
                     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath ($dir + '\' + $x))) { $copyFail = $(if ($x -eq $file) { 'its registry could not be copied from a snapshot (' } else { 'its registry log ' + $x + ' could not be copied, so recent changes may be missing (' }) + (ConvertTo-PrintableLine $eo) + ')'; break }
                 }
                 if ($copyFail) { [void]$accounts.Add((& $gapAcct $label $copyFail)); continue }
-                $lo = (& reg.exe load ("HKU\" + $mount) ($dir + '\' + $file) 2>&1 | ForEach-Object { [string]$_ }) -join ' '
+                $lo = (& (Get-NativeTool 'reg.exe') load ("HKU\" + $mount) ($dir + '\' + $file) 2>&1 | ForEach-Object { [string]$_ }) -join ' '
                 if ($LASTEXITCODE -ne 0) { [void]$accounts.Add((& $gapAcct $label ('the copy of its registry could not be loaded (' + (ConvertTo-PrintableLine $lo) + ')'))); continue }
                 $mounted = $true
                 [void]$accounts.Add((& $readAccount ($label + ', signed out, read from a copy') 'copy' ([Microsoft.Win32.Registry]::Users) ($mount + '\Software')))
@@ -677,13 +753,13 @@ if ($Part -eq 'OtherAccounts') {
                 if ($mounted) {
                     [GC]::Collect(); [GC]::WaitForPendingFinalizers()
                     $okU = $false
-                    for ($i = 0; $i -lt 5 -and -not $okU; $i++) { & reg.exe unload ("HKU\" + $mount) 2>&1 | Out-Null; if ($LASTEXITCODE -eq 0) { $okU = $true } else { Start-Sleep -Milliseconds 400; [GC]::Collect() } }
+                    for ($i = 0; $i -lt 5 -and -not $okU; $i++) { & (Get-NativeTool 'reg.exe') unload ("HKU\" + $mount) 2>&1 | Out-Null; if ($LASTEXITCODE -eq 0) { $okU = $true } else { Start-Sleep -Milliseconds 400; [GC]::Collect() } }
                     if (-not $okU) { ('[INFO] The copy mounted as HKU\' + $mount + ' could not be unloaded; it is a copy, so the account is unaffected, and it goes at reboot (tools\unload_audit_hives.ps1 retries).') }
                 }
-                if ($dir) { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
+                if ($dir) { $w3 = Remove-PrivateFolder $dir; if ($w3) { ('[INFO] ' + $w3 + '.') } }
             }
         }
-        Remove-Item -LiteralPath ($tmpRoot.TrimEnd('\') + '\dz_hive_' + $PID) -Recurse -Force -ErrorAction SilentlyContinue
+        $w4 = Remove-PrivateFolder ($tmpRoot.TrimEnd('\') + '\dz_hive_' + $PID); if ($w4) { ('[INFO] ' + $w4 + '.') }
     }
     $why = $(if ($Elevated -ne 1) { '' } elseif (-not $LoadSignedOut) { 'not signed in; this run did not read signed-out accounts (-readonly, or not asked)' } else { '' })
     $v = Get-OtherAccountsVerdict -Accounts @($accounts.ToArray()) -NotRead @($notRead.ToArray()) -ListError $listErr -IsElevated ($Elevated -eq 1) -NotReadWhy $why -NoFile @($noFile.ToArray()) -OwnSidUnknown ((@($OtherRoot).Count -eq 0) -and -not $mySid)
@@ -745,8 +821,8 @@ $subs = @()
 $ifeoErr = @()
 # Per-subkey errors ("Requested registry access is not allowed") are collected,
 # not fatal: one restricted subkey used to terminate the enumeration (-EA Stop)
-# and lose the entire check. [SKIPPED] is now reserved for the BASE key being
-# unreadable.
+# and lose the entire check. A BASE key that cannot be read is a raised
+# NOT-performed gap (below), never followed by the all-clear.
 try {
     if (Test-Path -LiteralPath $ifeoBase) {
         $subs = @(Get-ChildItem -Path $ifeoBase -EA SilentlyContinue -ErrorVariable ifeoErr)

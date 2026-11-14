@@ -10,9 +10,10 @@
 #   * without -LoadSignedOut the account is NAMED as not read, never silent;
 #   * afterwards no HKU\dz_sec_* mount and no dz_hive_<pid> copy remains, and
 #     the account's own NTUSER.DAT was never mounted or copied directly: it is
-#     held OPEN by this script while the tool runs, so a mount of it, or a
-#     plain copy of it, would fail -- only a copy from a snapshot succeeds --
-#     and its hash is unchanged afterwards.
+#     held open with NO sharing by this script while the tool runs (as the
+#     kernel holds a signed-in account's hive), so a mount of it, or a plain
+#     copy of it, would fail -- only a copy from a snapshot succeeds -- and
+#     its hash is unchanged afterwards.
 $ErrorActionPreference = 'Stop'
 $st = (.\tools\persistence_eval.ps1 -SelfTest) -join "`n"
 if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'persistence_eval -SelfTest failed' }
@@ -79,10 +80,11 @@ try {
   $r = RunO @{}
   if ($r.Hit -or $r.Out -notmatch ('signed-out account\(s\) not read: [^\r\n]*' + [regex]::Escape($user))) { throw "without -LoadSignedOut the signed-out account was not named as unread: $($r.Out)" }
   # With it: the malign value is the finding, named by account; the twin is
-  # not. The account's own file is held open meanwhile (no sharing for
-  # writers or deleters, and Windows needs exclusive access to mount it), so
-  # the tool can succeed only by copying from a snapshot.
-  $hold = [IO.File]::Open($hive, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+  # not. The account's own file is held open with NO sharing meanwhile --
+  # exactly what the kernel does to a hive it has loaded at a sign-in -- so a
+  # plain copy and a mount of the original both fail, and the tool can
+  # succeed only by copying from a snapshot.
+  $hold = [IO.File]::Open($hive, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)
   try { $r = RunO @{ LoadSignedOut = $true } } finally { $hold.Dispose() }
   if (-not $r.Hit -or $r.Out -notmatch ('(?m)^\[WARNING\] Suspicious Run-key autorun in another account \[[^\]]*' + [regex]::Escape($user) + '[^\]]*signed out, read from a copy\\Microsoft\\Windows\\CurrentVersion\\Run\\DzCiUpdater\]')) { throw "the planted autorun in the signed-out account was not found and named: $($r.Out)" }
   if ($r.Out -match 'WARNING[^\r\n]*DzCiOneDrive') { throw "the benign twin was graded as a finding: $($r.Out)" }

@@ -63,8 +63,13 @@ So, for anything a user runs locally:
   Volume Shadow Copy (`esentutl /y /vss`), mounts the copy (`HKU\dz_sec_*`),
   and treats a failed snapshot as a gap, never a reason to fall back to a
   plain copy; an interrupted run leaves only a copy, the next run removes it,
-  and `tools\unload_audit_hives.ps1` does it standalone. Never `-readonly`
-  (`lint_readonly` requires the exact gate line). `RegLoadAppKey` is not the way out:
+  and `tools\unload_audit_hives.ps1` does it standalone. And a snapshot has
+  its own blast radius: when shadow storage is full Windows deletes the
+  oldest restore point, and `esentutl /vss` is a stock intrusion alert on a
+  managed PC -- so the whole thing is opt-in (`-readSignedOut`), warned with
+  both outcomes named, refused with `-readonly` (`lint_readonly` requires the
+  exact gate line). The second review found both; the first draft had made
+  it the default. `RegLoadAppKey` is not the way out:
   Microsoft documents it failing unless every key in the hive shares one
   security descriptor, which a user hive never does.
 - **Test artifacts are quarantined and stamped.** A harness run passes

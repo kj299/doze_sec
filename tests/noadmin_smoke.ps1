@@ -551,7 +551,7 @@ try {
         ("a T1014 row was raised on a standard-user run with nothing printed: {0}" -f (($ledger1 | Where-Object { $_ -match '\|17\|T1014\|' }) -join ' ; '))
     # One restricted IFEO subkey must not lose the check: the readable
     # subkeys are graded and the unreadable one is named.
-    Assert ($text1 -notmatch '\[SKIPPED\] IFEO enumeration failed') `
+    Assert ($text1 -notmatch 'IFEO Debugger-hijack check NOT performed') `
         'the IFEO Debugger-hijack check still ran with one subkey unreadable' `
         'one unreadable IFEO subkey lost the whole Debugger-hijack check ([SKIPPED])'
     Assert ($text1 -match '\[INFO\] \d+ IFEO entr(y|ies) not readable from this token: [^\r\n]*dzsmoke_ifeo\.exe') `
