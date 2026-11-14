@@ -491,7 +491,14 @@ Found during the v7.1 coverage review; tracked for future work:
   attachment cache is a WARNING. Residual: the record layout is documented by
   forensic practice, not by Microsoft; a Trusted Publisher certificate, an
   add-in, and the contents of XLSTART and Word Startup are not read; a
-  signed-out account's settings are not read.
+  signed-out account's settings are not read. A default is recognised only
+  under the account's own AppData and this PC's Program Files (never another
+  profile, another drive or a `..` path), so an 8.3 short path or an AppData
+  redirected where neither is read raises as non-default. Three things that
+  can put an entry out of force are not read, so such an entry is still
+  graded (the safe direction): the "Allow mix of policy and user locations"
+  policy, the user's own "disable all Trusted Locations" checkbox, and a
+  mapped drive (a network location Office may ignore).
 - ~~A running or installed remote-access tool (AnyDesk, TeamViewer,
   ScreenConnect and others) was printed and counted nowhere: three checks
   (Sections 4 and 17) used tags outside the severity vocabulary, a substring

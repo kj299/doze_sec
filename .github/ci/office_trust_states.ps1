@@ -74,6 +74,30 @@ try {
   Expect (RunT $k) '' 'is not in force: Group Policy disables all trusted locations' 'all trusted locations disabled by policy'
   Remove-Item -Path "$user\Policies" -Recurse -Force
   Remove-Item -Path "$tl\Location8" -Recurse -Force; Remove-ItemProperty -Path $tl -Name AllowNetworkLocations
+  # A Templates folder under the PUBLIC profile only looks like Office's
+  # default: every account can write there. It must raise.
+  New-Item -Path "$tl\Location7" -Force | Out-Null
+  New-ItemProperty -Path "$tl\Location7" -Name Path -Value 'C:\Users\Public\AppData\Roaming\Microsoft\Templates' -PropertyType String -Force | Out-Null
+  Expect (RunT $k) 'dz_trustloc_hit' 'C:\\Users\\Public\\AppData\\Roaming\\Microsoft\\Templates -- the Public folder' 'a look-alike default under the Public profile'
+  Remove-Item -Path "$tl\Location7" -Recurse -Force
+  # Every other source through the real reader: a Group Policy entry, the
+  # machine key and its 32-bit twin, and another signed-in account.
+  New-Item -Path "$gp\Location1" -Force | Out-Null
+  New-ItemProperty -Path "$gp\Location1" -Name Path -Value 'C:\dz_ci_policy_folder' -PropertyType String -Force | Out-Null
+  Expect (RunT $k) 'dz_trustloc_hit' 'Word 16\.0, set by Group Policy\): C:\\dz_ci_policy_folder' 'a Group Policy Trusted Location'
+  Remove-Item -Path "$user\Policies" -Recurse -Force
+  foreach ($mk in @(@{ P = "$mach\Microsoft\Office\16.0\Excel\Security\Trusted Locations\Location5"; N = 'the machine setting' }, @{ P = "$mach\WOW6432Node\Microsoft\Office\16.0\Excel\Security\Trusted Locations\Location5"; N = 'the machine setting \(32-bit\)' })) {
+    New-Item -Path $mk.P -Force | Out-Null
+    New-ItemProperty -Path $mk.P -Name Path -Value 'C:\dz_ci_machine_folder' -PropertyType String -Force | Out-Null
+    Expect (RunT $k) 'dz_trustloc_hit' ('Excel 16\.0, set by ' + $mk.N + '\): C:\\dz_ci_machine_folder') ('a Trusted Location in ' + $mk.N)
+    Remove-Item -Path $mk.P -Recurse -Force
+  }
+  $oth = "$root\o"
+  New-Item -Path "$oth\Microsoft\Office\16.0\Word\Security\Trusted Locations\Location3" -Force | Out-Null
+  New-ItemProperty -Path "$oth\Microsoft\Office\16.0\Word\Security\Trusted Locations\Location3" -Name Path -Value 'C:\dz_ci_other_folder' -PropertyType String -Force | Out-Null
+  Expect (RunT @{ KeyRoot = $user; MachineRoot = $mach; OtherKeyRoot = @($oth) }) 'dz_trustloc_hit' ('Word 16\.0 \(settings of ' + [regex]::Escape($oth) + '\), set by the user setting\): C:\\dz_ci_other_folder') 'another signed-in account''s Trusted Location'
+  Expect (RunT @{ KeyRoot = $user; MachineRoot = $mach; OtherKeyRoot = @("$root\nosuch") }) 'dz_trustloc_gap' 'the registry of .*nosuch could not be listed \(it is not loaded\)' 'another account whose registry is not loaded'
+  Remove-Item -Path $oth -Recurse -Force
   # Trusted Documents: macros enabled for a download (malign) beside the
   # person's own spreadsheet (benign), one without the flag, one too short.
   New-Item -Path $tr -Force | Out-Null

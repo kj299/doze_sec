@@ -692,7 +692,10 @@ jobs:
                    'macros enabled in a document from Downloads: the WARNING with the path and the date' \
                    'macros enabled in the person'"'"'s own Documents: INFO with the path, never a WARNING' \
                    'a record without the macros flag, even from Downloads: counted, never a WARNING' \
-                   'not a default: %APPDATA%\Microsoft\Templates\Evil'; do
+                   ': C:\Users\Public\AppData\Roaming\Microsoft\Templates' \
+                   ': C:\Users\..\AppData\Roaming\Microsoft\Word\Startup' \
+                   ': E:\Program Files\Microsoft Office\root\Templates' \
+                   'recognised (Microsoft'"'"'s table): C:\Program Files\Microsoft Office 15\root\Templates\'; do
             echo "$out" | grep -qF "$n" || { echo "trust case gone: $n"; exit 1; }
           done
           for b in doze_sec.bat doze_sec_noAdmin.bat; do
