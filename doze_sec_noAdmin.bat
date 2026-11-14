@@ -1859,14 +1859,45 @@ if "%DNS_PROBE%"=="1" (
 )
 
 echo.>> "%REPORT%"
-echo --- Proxy Settings --->> "%REPORT%"
-echo  Command: powershell -Command "Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -EA SilentlyContinue">> "%REPORT%"
-echo $p=Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -EA SilentlyContinue > "%PSRUN%"
-echo if($p){$pe=if($p.ProxyEnable){'1 [ENABLED]'}else{'0 [DISABLED]'};Write-Output "ProxyEnable : $pe";if($p.ProxyServer){Write-Output "ProxyServer : $($p.ProxyServer)"}else{Write-Output 'ProxyServer : [OK] Not configured'};if($p.AutoConfigURL){Write-Output "AutoConfigURL: $($p.AutoConfigURL)"}else{Write-Output 'AutoConfigURL: [OK] Not configured'}}else{Write-Output '[OK] No proxy settings in registry'} >> "%PSRUN%"
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
-echo $p=(Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -EA SilentlyContinue).ProxyServer > "%PSRUN%"
-echo if($p){Write-Output ('HKLM ProxyServer: '+$p)}else{Write-Output 'HKLM ProxyServer: [OK] Not configured'} >> "%PSRUN%"
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+echo --- Proxy Settings (T1090 - a proxy reads or redirects web traffic) --->> "%REPORT%"
+echo  [INFO] Every signed-in account's web proxy, and the machine-wide WinHTTP proxy services use.>> "%REPORT%"
+del "%TEMP%\dz_proxy_hit.txt" 2>nul
+del "%TEMP%\dz_winhttp_hit.txt" 2>nul
+del "%TEMP%\dz_proxy_gap.txt" 2>nul
+del "%TEMP%\dz_proxy_deferred.txt" 2>nul
+del "%TEMP%\dz_proxy_done.txt" 2>nul
+echo  Command: powershell -File tools\proxy_check.ps1>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\proxy_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\proxy_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\proxy_check.ps1 not found -- Proxy-settings check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 3 T1090 "Proxy-settings check NOT performed - tool missing"
+)
+if exist "%TEMP%\dz_proxy_hit.txt" (
+    call :dz_finding WARNING 3 T1090 "Web proxy in effect"
+    del "%TEMP%\dz_proxy_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_winhttp_hit.txt" (
+    call :dz_finding WARNING 3 T1090 "Machine-wide WinHTTP proxy in effect"
+    del "%TEMP%\dz_winhttp_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_proxy_gap.txt" (
+    rem A gap is its own row, beside a finding or alone.
+    call :dz_finding WARNING 3 T1090 "Proxy-settings check NOT performed - proxy settings could not be read"
+    del "%TEMP%\dz_proxy_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_proxy_deferred.txt" (
+    rem Another signed-in account's registry, refused to a standard-user token.
+    set "_PXDEF=0"
+    set /p _PXDEF=<"%TEMP%\dz_proxy_deferred.txt"
+    set /a DEFERRED_COUNT+=!_PXDEF!
+    del "%TEMP%\dz_proxy_deferred.txt" 2>nul
+)
+if not exist "%TEMP%\dz_proxy_done.txt" if exist "%SCRIPT_DIR%tools\proxy_check.ps1" (
+    echo [WARNING] Proxy-settings check produced no verdict -- NOT performed: tools\proxy_check.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 3 T1090 "Proxy-settings check produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_proxy_done.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- Saved WiFi Profiles --->> "%REPORT%"

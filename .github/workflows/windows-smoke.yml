@@ -1442,6 +1442,12 @@ jobs:
           & .\.github\ci\office_macro_states.ps1
           exit $LASTEXITCODE
 
+      - name: proxy_check.ps1 -SelfTest + the runner's own proxy settings, every state through the real reader, and a real WinHTTP proxy found by asking Windows (a key that cannot be read is a raised gap)
+        shell: powershell
+        run: |
+          & .\.github\ci\proxy_states.ps1
+          exit $LASTEXITCODE
+
       - name: named_pipe_check.ps1 -SelfTest + live (a C2 pipe list that could not be read is a raised gap, never an all-clear)
         shell: powershell
         run: |

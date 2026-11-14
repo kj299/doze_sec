@@ -110,7 +110,7 @@ Temp path check, admin detection, OS version, OS compatibility, Safe Mode, log d
 |---|---------|:-:|----------------|
 | 1 | System identity and patch level | No | Unpatched OS, CVE exposure |
 | 2 | User accounts and privilege audit | No | Rogue accounts, SID anomalies |
-| 3 | Network configuration and connections | No | C2 callbacks, DNS anomalies, open shares |
+| 3 | Network configuration and connections | No | C2 callbacks, DNS anomalies, open shares; web proxy in effect for any signed-in account and the machine-wide WinHTTP proxy (T1090) |
 | 4 | Running processes | No | LOLBins, RMM tools, suspicious paths, system-process names outside their directory or started by the wrong parent (T1036), a system process that is a copy of its parent (an LSASS copy: T1003.001), loaded-module inspection (DLLs inside running processes: staging-path, unsigned, non-Microsoft in core security processes — T1055/T1574) |
 | 5 | Startup and persistence | No | Run keys, Startup folders, Winlogon, IFEO debuggers, AppInit/AppCert DLLs, logon/unlock vectors (Notify, Credential Providers, Network Provider DLLs), netsh helpers, print processors and port monitors, BITS jobs (including one queued to upload a file off the machine, T1048, and what BITS recorded about transfers that already finished), PowerShell profiles, time providers |
 | 6 | Scheduled tasks | No | Malicious tasks, action-path detection (PS CSV, Task-To-Run column only) |

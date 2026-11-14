@@ -6,6 +6,16 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Proxy settings (Section 3): a proxy in effect is a finding, WinHTTP is read, and a failed read is a gap
+**Before.** Section 3 listed `ProxyEnable`, `ProxyServer` and `AutoConfigURL` with no severity, so a proxy carrying every web request through someone else's server reached no ledger row. A failed read of Internet Settings printed `[OK] No proxy settings in registry`, and the HKLM line printed `[OK] Not configured` for a key it had not opened. It read only the audit's own account (an administrator's, when the audit is run from a separate admin account) and never read the machine-wide WinHTTP proxy that Windows Update and Defender use.
+
+**Now.** `tools/proxy_check.ps1`.
+- A proxy server or auto-config (PAC) script in effect is a counted WARNING (T1090) naming the account, the address and where it was read. The owner decided that any proxy counts, because one set by someone else reads or redirects all web traffic; one `[INFO]` line says who sets one on purpose. Automatic detection alone (the Windows default) and a `ProxyServer` value that is not switched on are `[INFO]`.
+- For the audit's own account Windows is asked what is in force (`WinHttpGetIEProxyConfigForCurrentUser`). For other signed-in accounts (the owners of explorer.exe) the connection-settings record and the values are both read, and a proxy in either is graded.
+- Group Policy `ProxySettingsPerUser=0` makes the machine's setting the one graded.
+- The machine-wide WinHTTP proxy, asked of Windows (`WinHttpGetDefaultProxyConfiguration`) and read from the 32-bit record too, is its own WARNING.
+- A key or record that could not be read, or one that does not parse, is a raised `NOT performed` row, beside any finding. Another account's registry refused to a standard-user token is `[DEFERRED - ADMIN REQUIRED]` and counted.
+
 ### Other accounts' Run keys (Section 5): graded, a failed read is a gap, and signed-out accounts are read
 **Before.** Section 5 listed the Run/RunOnce values of the accounts loaded under HKEY_USERS as `[INFO]` and graded none of them, so an encoded-PowerShell autorun in a second account was never a finding. A failed read of HKEY_USERS or of a key printed `[OK] No Run/RunOnce entries in other-user hives.` A `-notmatch '^PS'` filter hid any value whose name starts with "PS". The audit's own account was counted as "another". An account that was not signed in was never seen, although its Run keys fire at its next sign-in.
 

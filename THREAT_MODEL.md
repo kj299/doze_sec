@@ -405,9 +405,11 @@ Found during the v7.1 coverage review; tracked for future work:
   the three Section 17 WMI permanent-subscription checks (which also
   fail closed if `Get-WMIObject` is unavailable, e.g. under PowerShell
   7). Checks intentionally left as plain `[OK]` because an empty result
-  is genuinely correct, not a masked failure: Section 3 proxy (Internet
-  Settings keys are always present), the Section 5 HKEY_USERS Run-key
-  walk (informational, per-subkey `Test-Path` guarded). (The Section 17
+  is genuinely correct, not a masked failure: the Section 5 HKEY_USERS Run-key
+  walk (informational, per-subkey `Test-Path` guarded). (The Section 3 proxy
+  block was listed here too; that was wrong -- a silenced Internet Settings
+  read printed `[OK] No proxy settings in registry` -- and it is now
+  `tools/proxy_check.ps1`, below.) (The Section 17
   RMM checks were listed here too; that was wrong -- a silenced Uninstall
   read printed `[OK]` -- and they are now `tools/rmm_check.ps1`, below.)
   Probes elsewhere may still degrade silently, but
@@ -435,6 +437,21 @@ Found during the v7.1 coverage review; tracked for future work:
   read elsewhere; a signed-out account's Startup folder and per-user COM
   hijacks are not); a run without `-readSignedOut`, a `-readonly` or a standard-user run names signed-out
   accounts without reading them.
+- ~~Section 3 listed the proxy settings with no severity, printed `[OK] No
+  proxy settings in registry` when the Internet Settings read failed, read
+  only the audit's own account, and never read the machine-wide WinHTTP
+  proxy.~~ **Closed:** `tools/proxy_check.ps1`. A proxy server or
+  auto-config script in effect, for the audit's account or any other
+  signed-in account, is a counted WARNING (T1090) naming the account and the
+  store; for the audit's own account Windows is asked what is in force. A
+  Group Policy machine-wide setting (ProxySettingsPerUser=0) is graded in its
+  place. The WinHTTP proxy (64-bit and WOW6432Node) is a WARNING of its own.
+  A key or record that could not be read is a raised gap; another account's
+  registry refused to a standard-user token is a deferral. Residual: a proxy
+  set inside a browser's own settings (Firefox keeps its own), a per-app
+  proxy, an environment-variable proxy (`HTTP_PROXY`), and the proxy of a
+  signed-out account are not read; automatic detection (WPAD) is reported,
+  not followed, so a hostile WPAD answer on the network is not seen.
 - ~~Section 18h, the registry IOC match, wrapped every lookup in an empty
   `catch{}`, so a listed key this account could not read, or an entry under
   a hive it cannot read, was dropped and the block printed `[OK]`.~~

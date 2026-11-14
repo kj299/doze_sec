@@ -804,6 +804,12 @@ proof     = harness:Run value whose name only contains a listed name
 signature = Suspicious registry IOCs found
 note      = Section 18h looks each ioc_registry.txt entry up by exact key and exact value name (the key's own value list, no wildcards), and where the entry gives a bad value, the value must equal it (UAC on, EnableLUA=1, is not the listed EnableLUA=0). A vendor value whose name merely contains a listed name is not a match; the harness plants ChromeUpdateHelper_dz_selftest under HKCU Run and asserts it stays out of 18h, beside a ChromeUpdate value that must be matched. Listed Run value names (ChromeUpdate, AdobeUpdater, OneDriveUpdate) are names attackers borrow from real updaters, so a hit can be the genuine product; read the data. Verify a hit: reg query "<key>" /v <value>, then Get-AuthenticodeSignature on the program the data points at.
 
+[proxy-set-on-purpose]
+class     = ADVISE
+maxsev    = WARNING
+proof     = ci:proxy_check.ps1 -SelfTest + the runner's own proxy settings, every state through the real reader, and a real WinHTTP proxy found by asking Windows (a key that cannot be read is a raised gap); field:a proxy a workplace, VPN, antivirus product or developer tool set on purpose is a state only a real machine produces
+signature = (Web proxy in effect for |Machine-wide WinHTTP proxy in effect)
+note      = A web proxy or auto-config (PAC) script carries every web request of the account through someone's server. Workplaces set one by Group Policy, VPN clients and some antivirus products install one, and Fiddler, Burp and similar developer tools run one on 127.0.0.1. Adware and banking trojans set the same values, and the audit cannot tell which. The owner decided (2026-11-14) that any proxy in effect is a counted WARNING, so the line names the account, the server or script address, and the store it was read from. Automatic proxy detection alone is the Windows default and stays [INFO]; CI pins that twin beside a planted proxy. Verify: Settings > Network and internet > Proxy for the per-user setting, netsh winhttp show proxy for the machine-wide one; ask whoever manages the PC whether they set it.
 [rmm-installed-on-purpose]
 class     = ADVISE
 maxsev    = WARNING
