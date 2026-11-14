@@ -327,7 +327,7 @@ function Get-ProxyVerdict {
     elseif ($unres -gt 0) { [void]$out.Add(('[INFO] ' + $unres + ' desktop session(s) at this PC belong to an account this token could not identify, so their proxy settings were not read. An audit run as administrator reads them.')) }
     # The process list failing is not the token (any account may list
     # processes): the other signed-in accounts are unknown, a gap.
-    if ($Context -and [string]$Context.ListError) { [void]$gaps.Add(('the accounts signed in at this PC could not be listed (' + (ConvertTo-PrintableText ([string]$Context.ListError)) + '), so only this account''s proxy settings were read')) }
+    if ($Context -and [string]$Context.ListError) { [void]$gaps.Add(('not every account signed in at this PC could be listed (' + (ConvertTo-PrintableText ([string]$Context.ListError)) + '), so some accounts'' proxy settings may not have been read')) }
     if ($Context -and [string]$Context.UserApiError) { [void]$out.Add(('[INFO] Windows could not be asked which proxy is in force for this account (' + (ConvertTo-PrintableText ([string]$Context.UserApiError)) + '); its registry settings are graded instead.')) }
     $machineWide = $false
     $ps = [string]$Policy.State
@@ -564,7 +564,7 @@ if ($SelfTest) {
     $v = V (Me (NewRead -Blob $direct)) -Ctx @{ Account = 'PC\u'; Others = @(); Unresolved = 2 } -El $false
     T 'the same on a standard-user token: INFO, no gap' ((-not $v.Gap) -and $v.Text -match '\[INFO\] 2 desktop session') $v.Text
     $v = V (Me (NewRead -Blob $direct)) -Ctx @{ Account = 'PC\u'; Others = @(); Unresolved = 0; ListError = 'CimException: Invalid class' } -El $false
-    T 'the signed-in accounts could not be listed: a raised gap on any token, beside the [OK] for this account' ($v.Gap -and $v.Text -match 'accounts signed in at this PC could not be listed \(CimException: Invalid class\)' -and $v.Text -match '\[OK\] No web proxy in effect for this account') $v.Text
+    T 'the signed-in accounts could not be listed: a raised gap on any token, beside the [OK] for this account' ($v.Gap -and $v.Text -match 'not every account signed in at this PC could be listed \(CimException: Invalid class\)' -and $v.Text -match '\[OK\] No web proxy in effect for this account') $v.Text
     $v = V (Me (NewRead -Blob $direct)) -Ctx @{ Account = 'PC\u'; Others = @(); Unresolved = 0; UserApiError = 'WinHttpGetIEProxyConfigForCurrentUser failed, Win32 error 2' }
     T 'Windows not asked for this account: the line says why, and the registry is graded' ((-not $v.Gap) -and $v.Text -match '\[INFO\] Windows could not be asked which proxy is in force for this account \(WinHttpGetIEProxyConfigForCurrentUser failed, Win32 error 2\)') $v.Text
 

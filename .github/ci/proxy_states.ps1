@@ -60,7 +60,10 @@ foreach ($rk in @(@{ K = $isKey; N = 'DefaultConnectionSettings' }, @{ K = 'HKLM
   Write-Host ("MEASURED: the runner's real {0}: {1}" -f $rk.N, $(if ($b -is [byte[]]) { '{0} bytes, flags 0x{1:X}' -f $b.Length, $(if ($b.Length -ge 12) { [BitConverter]::ToUInt32($b, 8) } else { 0 }) } else { 'not present' }))
 }
 $real = RunP @{ NoApi = $true }
-if ($real.Markers -match 'dz_proxy_gap') { throw "the record parser could not read the runner's real records: $($real.Out)" }
+# Windows just reported this runner clean, so the records must read clean too:
+# a misread as a proxy would be a false WARNING for every other account.
+if ($real.Markers) { throw "the record parser misread the runner's real records (Windows reports them clean): [$($real.Markers)] $($real.Out)" }
+if ($real.Out -notmatch '(?m)^\[OK\] No web proxy in effect for this account \(read from ') { throw "the runner's real records were not graded from the registry: $($real.Out)" }
 
 # EVERY STATE through the real reader, on throwaway HKCU keys.
 # Touches: registry:HKCU:\Software\dz_ci_proxy_<pid> (removed in finally).
@@ -72,11 +75,14 @@ $winSet = $false
 # The runner's own HKCU proxy values, backed up before the real-HKCU plant.
 $hk = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
 $saved = @{}
-foreach ($pair in @(@($hk, 'ProxyEnable'), @($hk, 'ProxyServer'), @("$hk\Connections", 'DefaultConnectionSettings'))) {
+foreach ($pair in @(@($hk, 'ProxyEnable'), @($hk, 'ProxyServer'), @($hk, 'ProxyOverride'), @("$hk\Connections", 'DefaultConnectionSettings'))) {
   $kk = $pair[0]; $nn = $pair[1]; $item = Get-Item -LiteralPath $kk -EA SilentlyContinue
   $saved["$kk|$nn"] = $(if ($item -and (@($item.GetValueNames()) -contains $nn)) { @{ Had = $true; Value = $item.GetValue($nn, $null, 'DoNotExpandEnvironmentNames'); Kind = [string]$item.GetValueKind($nn) } } else { @{ Had = $false } })
 }
 $hkcuPlanted = $false
+# The few seconds a real plant lives, the runner's own traffic to GitHub
+# bypasses it; the bypass list is [INFO] and never decides a grade.
+$ciBypass = '<local>;*.github.com;*.githubusercontent.com;*.actions.githubusercontent.com;*.blob.core.windows.net;*.windows.net'
 try {
   New-Item -Path "$uis\Connections" -Force | Out-Null
   New-Item -Path "$mach\Microsoft\Windows\CurrentVersion\Internet Settings\Connections" -Force | Out-Null
@@ -124,12 +130,12 @@ try {
     Write-Host 'proxy: an Internet Settings key this account is denied is a raised gap, never "no proxy"'
   } else { Write-Host '[ SKIP ] denied-key case not run: this account can still read the key through the deny rule; the self-test pins the judgement' }
 
-  # THE REAL WINHTTP PROXY, found by asking Windows. Never over a proxy the
-  # runner already has: that one is not ours to reset.
-  if ($live.Markers -match 'dz_winhttp_hit') { Write-Host '[ SKIP ] the runner already has a WinHTTP proxy; the plant would overwrite it' }
-  else {
+  # THE REAL WINHTTP PROXY, found by asking Windows. A runner that already
+  # had a proxy, of either kind, failed the clean-runner pin above, so no
+  # plant below can overwrite one that is not ours.
+  . {
     $ErrorActionPreference = 'Continue'
-    & netsh.exe winhttp set proxy proxy-server="127.0.0.1:1" bypass-list="<local>" | Out-Null
+    & netsh.exe winhttp set proxy proxy-server="127.0.0.1:1" bypass-list="$ciBypass" | Out-Null
     $rc = $LASTEXITCODE; $ErrorActionPreference = 'Stop'
     if ($rc -ne 0) { throw "netsh could not set the WinHTTP proxy (exit $rc)" }
     $winSet = $true
@@ -139,21 +145,24 @@ try {
   }
   # A REAL per-user proxy in this account's own HKCU, Windows asked. Settings
   # writes the record and the values together; so does this plant.
-  if ($live.Markers -match 'dz_proxy_hit') { Write-Host '[ SKIP ] the runner already has a per-user proxy; the plant would overwrite it' }
-  else {
+  . {
     $hkcuPlanted = $true
     if (-not (Test-Path -LiteralPath "$hk\Connections")) { New-Item -Path "$hk\Connections" -Force | Out-Null }
-    Set-ItemProperty -Path "$hk\Connections" -Name DefaultConnectionSettings -Value (Blob 3 '127.0.0.1:1' '<local>') -Type Binary
+    Set-ItemProperty -Path "$hk\Connections" -Name DefaultConnectionSettings -Value (Blob 3 '127.0.0.1:1' $ciBypass) -Type Binary
+    Set-ItemProperty -Path $hk -Name ProxyOverride -Value $ciBypass
     Set-ItemProperty -Path $hk -Name ProxyEnable -Value 1 -Type DWord; Set-ItemProperty -Path $hk -Name ProxyServer -Value '127.0.0.1:1'
     Expect (RunP @{}) 'dz_proxy_hit' '(?m)^\[WARNING\] Web proxy in effect for this account: proxy server 127\.0\.0\.1:1 \(read from what Windows reports for this account\)' 'a real per-user proxy, Windows asked'
     # Its twin: what Settings leaves when the proxy is switched off -- the
     # address kept, the proxy flag cleared, ProxyEnable 0. Not a proxy.
-    Set-ItemProperty -Path "$hk\Connections" -Name DefaultConnectionSettings -Value (Blob 1 '127.0.0.1:1' '<local>') -Type Binary
+    Set-ItemProperty -Path "$hk\Connections" -Name DefaultConnectionSettings -Value (Blob 1 '127.0.0.1:1' $ciBypass) -Type Binary
     Set-ItemProperty -Path $hk -Name ProxyEnable -Value 0 -Type DWord
     Expect (RunP @{}) '' '(?m)^\[OK\] No web proxy in effect for this account \(read from what Windows reports for this account\)' 'a per-user proxy switched off, Windows asked'
     Write-Host 'proxy: a real per-user proxy is found by asking Windows, and one switched off is not'
   }
   Write-Host 'proxy: a proxy in effect is the finding, automatic detection and a dormant value are not, an unread key is a gap'
+} catch {
+  # Printed first: a failure in finally below would otherwise replace it.
+  Write-Host ("::error::" + $_.Exception.Message); throw
 } finally {
   $ErrorActionPreference = 'Continue'
   $restoreFail = @()
@@ -179,7 +188,7 @@ try {
     if ($sk) { $fresh = New-Object Security.AccessControl.RegistrySecurity; $fresh.SetAccessRuleProtection($false, $false); $sk.SetAccessControl($fresh); $sk.Close() }
   } catch { Write-Host ("cleanup: could not reset the test key's ACL ({0})" -f $_.Exception.Message) }
   Remove-Item -Path $root -Recurse -Force -EA SilentlyContinue
-  if (Test-Path $root) { throw "the CI test key $root could not be removed" }
-  if ($restoreFail.Count) { throw ("the runner's proxy settings were not restored -- later steps would run behind a dead proxy: " + ($restoreFail -join '; ')) }
+  if (Test-Path $root) { $restoreFail += "the CI test key $root could not be removed" }
+  if ($restoreFail.Count) { throw ("cleanup failed -- the runner's proxy settings may not be restored, and later steps would run behind a dead proxy: " + ($restoreFail -join '; ')) }
 }
 exit 0
