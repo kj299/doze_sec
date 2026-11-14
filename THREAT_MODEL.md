@@ -419,6 +419,13 @@ Found during the v7.1 coverage review; tracked for future work:
   looks three folder levels into the profile, Public and TEMP (the line says
   so), matches a fixed list of extensions, and does not see ransomware that
   keeps the original extension or encrypts other drives.
+- ~~Section 18h, the registry IOC match, wrapped every lookup in an empty
+  `catch{}`, so a listed key this account could not read, or an entry under
+  a hive it cannot read, was dropped and the block printed `[OK]`.~~
+  **Closed:** each such entry is named and raised as `NOT performed in
+  full`, beside any match, on every token. A missing key is an answer.
+  Values are matched by exact name, no longer through `Get-ItemProperty`'s wildcards. Residual: the list
+  names keys under HKLM and HKCU only; another user's hive is not read.
 - ~~The Section 13 Office macro policy check silenced every read and skipped
   an Office version whose key it could not see, so a key it could not read
   printed "[INFO] ... defaults apply"; it read two of the three places Office

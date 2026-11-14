@@ -802,7 +802,7 @@ note      = Section 18d tests each ioc_file_paths.txt entry as an exact path aft
 class     = ADVISE
 proof     = harness:Run value whose name only contains a listed name
 signature = Suspicious registry IOCs found
-note      = Section 18h looks each ioc_registry.txt entry up by exact key and exact value name (Get-ItemProperty -Name), and where the entry gives a bad value, the value must equal it (UAC on, EnableLUA=1, is not the listed EnableLUA=0). A vendor value whose name merely contains a listed name is not a match; the harness plants ChromeUpdateHelper_dz_selftest under HKCU Run and asserts it stays out of 18h, beside a ChromeUpdate value that must be matched. Listed Run value names (ChromeUpdate, AdobeUpdater, OneDriveUpdate) are names attackers borrow from real updaters, so a hit can be the genuine product; read the data. Verify a hit: reg query "<key>" /v <value>, then Get-AuthenticodeSignature on the program the data points at.
+note      = Section 18h looks each ioc_registry.txt entry up by exact key and exact value name (the key's own value list, no wildcards), and where the entry gives a bad value, the value must equal it (UAC on, EnableLUA=1, is not the listed EnableLUA=0). A vendor value whose name merely contains a listed name is not a match; the harness plants ChromeUpdateHelper_dz_selftest under HKCU Run and asserts it stays out of 18h, beside a ChromeUpdate value that must be matched. Listed Run value names (ChromeUpdate, AdobeUpdater, OneDriveUpdate) are names attackers borrow from real updaters, so a hit can be the genuine product; read the data. Verify a hit: reg query "<key>" /v <value>, then Get-AuthenticodeSignature on the program the data points at.
 
 [rmm-installed-on-purpose]
 class     = ADVISE

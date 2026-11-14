@@ -29,9 +29,12 @@
 #   -Mode Shipped  the blocks against -ListDir (default ThreatLists). On Windows
 #                  no gap at all -- every listing works there. On Linux the
 #                  listings 18b, 18c and 18e need do not exist, so those three
-#                  print their listing gap and 18d and 18h print [OK].
+#                  print their listing gap; 18h finds no registry, so it says
+#                  NOT performed in full and writes its unread marker (it used
+#                  to print [OK] there: its catch{} swallowed every failed
+#                  read); and 18d prints [OK].
 #   -Mode Run      -ListDir and -Sections: run those blocks of doze_sec.bat and
-#                  print their output and one 'S18 <sec> hit=<0|1> gap=<0|1>'
+#                  print their output and one 'S18 <sec> hit=<0|1> gap=<0|1> done=<0|1> unread=<0|1>'
 #                  line each.
 # Every mode first checks the bats themselves: both carry the same blocks; each
 # block reads its list path from the environment ($env:IOCDIR), never pasted
@@ -75,7 +78,7 @@ $script:Specs = @(
     @{ S = '18c'; List = 'ioc_services.txt';        Name = 'Service IOC match';        Tech = 'T1543'; Linux = 'gap' },
     @{ S = '18d'; List = 'ioc_file_paths.txt';      Name = 'Staging file IOC match';   Tech = 'T1074'; Linux = 'ok' },
     @{ S = '18e'; List = 'ioc_scheduled_tasks.txt'; Name = 'Scheduled task IOC match'; Tech = 'T1053'; Linux = 'gap' },
-    @{ S = '18h'; List = 'ioc_registry.txt';        Name = 'Registry IOC match';       Tech = 'T1112'; Linux = 'ok' }
+    @{ S = '18h'; List = 'ioc_registry.txt';        Name = 'Registry IOC match';       Tech = 'T1112'; Linux = 'unread' }
 )
 # Through -File, '-Sections 18b,18e' arrives as ONE string; split it.
 $Sections = @($Sections | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
@@ -135,12 +138,14 @@ function Get-StagedBlock {
 function Invoke-Block {
     # Run one rendered block with IOCDIR = $Dir (in the environment, as cmd
     # hands it to the child; a %IOCDIR% left in the text is substituted the way
-    # cmd would paste it) and TEMP = $Work. Returns @{ Out; Hit; Gap; Done }.
+    # cmd would paste it) and TEMP = $Work. Returns @{ Out; Hit; Gap; Done; Unread }.
     param([string[]]$Block, [string]$Section, [string]$Dir, [string]$Work)
     $hit = Join-Path $Work ('dz_iochit_' + $Section + '.txt')
     $gap = Join-Path $Work ('dz_iochit_' + $Section + '_gap.txt')
     $done = Join-Path $Work ('dz_iochit_' + $Section + '_done.txt')
-    foreach ($f in $hit, $gap, $done) { if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force } }
+    # Only 18h writes it: keys on its list that could not be read.
+    $unread = Join-Path $Work ('dz_iochit_' + $Section + '_unread.txt')
+    foreach ($f in $hit, $gap, $done, $unread) { if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force } }
     $ps1 = Join-Path $Work ('block_' + $Section + '.ps1')
     $src = @($Block | ForEach-Object { $_.Replace('%IOCDIR%', $Dir) }) -join "`r`n"
     [IO.File]::WriteAllText($ps1, $src, [Text.Encoding]::ASCII)
@@ -150,7 +155,7 @@ function Invoke-Block {
     $env:IOCDIR = $Dir
     try { $out = (& $script:Exe -NoProfile -ExecutionPolicy Bypass -File $ps1 2>&1 | ForEach-Object { "$_" }) -join "`n" }
     finally { $env:TEMP = $savedTemp; $env:IOCDIR = $savedIoc }
-    return @{ Out = $out; Hit = (Test-Path -LiteralPath $hit); Gap = (Test-Path -LiteralPath $gap); Done = (Test-Path -LiteralPath $done) }
+    return @{ Out = $out; Hit = (Test-Path -LiteralPath $hit); Gap = (Test-Path -LiteralPath $gap); Done = (Test-Path -LiteralPath $done); Unread = (Test-Path -LiteralPath $unread) }
 }
 
 function Get-CodeLines {
@@ -200,6 +205,22 @@ function Get-StructureDefects {
         if ($di -lt 0) { $bad += "${tag}: the bat never checks $doneMark, so a block that stopped before its verdict raises nothing" }
         elseif ($di + 2 -ge $after.Count -or $after[$di + 1] -notmatch ('^\s*echo \[WARNING\] ' + [regex]::Escape($sp.Name) + ' NOT performed -- ') -or $after[$di + 2] -notmatch ('^\s*call :dz_finding WARNING 18 ' + [regex]::Escape($sp.Tech) + ' ')) {
             $bad += "${tag}: a block that stopped before its verdict is not printed and raised as WARNING 18 $($sp.Tech)"
+        }
+        # 18h also writes an unread marker (a key on its list that could not
+        # be read). The block printing it is not enough: the bat must delete it
+        # before the run and raise it after, or the gap reaches no ledger row.
+        $ui = -1
+        if ($joined.Contains('dz_iochit_' + $sp.S + '_unread.txt')) {
+            $unreadMark = 'dz_iochit_' + $sp.S + '_unread.txt'
+            if (-not @($before | Where-Object { $_.Trim() -eq ('del "%TEMP%\' + $unreadMark + '" 2>nul') }).Count) { $bad += "${tag}: the unread marker is not deleted before the run (a stale one would raise a gap that did not happen)" }
+            $wide = @($code[($r + 1)..([Math]::Min($code.Count - 1, $r + 30))])
+            for ($i = 0; $i -lt $wide.Count; $i++) { if ($wide[$i].Trim() -eq ('if exist "%TEMP%\' + $unreadMark + '" (')) { $ui = $i; break } }
+            if ($ui -lt 0) { $bad += "${tag}: the bat never reads $unreadMark after the run, so keys that could not be read reach no ledger row" }
+            else {
+                $ri = $ui + 1; while ($ri -lt $wide.Count -and $wide[$ri].Trim() -match '^rem\s') { $ri++ }
+                if ($ri -ge $wide.Count -or $wide[$ri] -notmatch ('^\s*call :dz_finding WARNING 18 ' + [regex]::Escape($sp.Tech) + ' "' + [regex]::Escape($sp.Name) + ' NOT performed in full')) { $bad += "${tag}: the unread marker is not raised as WARNING 18 $($sp.Tech) `"$($sp.Name) NOT performed in full...`"" }
+                for ($i = $ui + 1; $i -lt $wide.Count -and $wide[$i].Trim() -ne ')'; $i++) { if ($wide[$i] -match 'IOC_HITS') { $bad += "${tag}: the unread read changes IOC_HITS -- keys that could not be read would count as a match"; break } }
+            }
         }
         # A gap is not a match: nothing between each gap/done read and its
         # closing parenthesis may touch IOC_HITS.
@@ -296,13 +317,18 @@ function Get-BlockDefects {
             $want = if ($script:OnWindows) { 'ok' } else { $sp.Linux }
             if ($Mode -eq 'Run') {
                 Write-Output $r.Out
-                Write-Output ("S18 {0} hit={1} gap={2} done={3}" -f $sp.S, [int]$r.Hit, [int]$r.Gap, [int]$r.Done)
+                Write-Output ("S18 {0} hit={1} gap={2} done={3} unread={4}" -f $sp.S, [int]$r.Hit, [int]$r.Gap, [int]$r.Done, [int]$r.Unread)
                 continue
             }
             if (-not $r.Done) { $bad += ("{0}, shipped list: the block stopped before its verdict (no done marker); it printed: {1}" -f $tag, $r.Out) }
+            $partRx = '(?m)^\[WARNING\] ' + [regex]::Escape($sp.Name) + ' NOT performed in full -- '
             if ($want -eq 'gap') {
                 if ($r.Out -notmatch $gapRx -or -not $r.Gap) { $bad += ("{0}, shipped list on Linux: expected the listing gap and its marker; it printed: {1}" -f $tag, $r.Out) }
+            } elseif ($want -eq 'unread') {
+                if ($r.Out -notmatch $partRx -or -not $r.Unread) { $bad += ("{0}, shipped list on Linux: no registry here, so every entry is unread -- expected 'NOT performed in full' and its marker; it printed: {1}" -f $tag, $r.Out) }
+                if ($r.Out -match '(?m)^\[OK\]') { $bad += ("{0}, shipped list on Linux: it printed [OK] having read no key: {1}" -f $tag, $r.Out) }
             } else {
+                if ($r.Unread -or $r.Out -match $partRx) { $bad += ("{0}, shipped list: keys could not be read on a machine where every listed key is readable -- a false WARNING; it printed: {1}" -f $tag, $r.Out) }
                 if ($r.Gap -or $r.Out -match $gapRx) { $bad += ("{0}, shipped list: a gap on a machine where the list and the listing both work -- a false WARNING; it printed: {1}" -f $tag, $r.Out) }
                 if ($r.Out -notmatch '(?m)^\[(OK|WARNING|CRITICAL)\] ') { $bad += ("{0}, shipped list: printed no verdict line at all: {1}" -f $tag, $r.Out) }
             }
@@ -361,6 +387,10 @@ try {
         TM 'the 18c list path pasted between single quotes again fails when RUN from a folder named with an apostrophe' @(Get-BlockDefects $m8 'mutated' 'Missing' '' $work @('18c')) 'folder whose name holds an apostrophe: the block stopped before its verdict'
         $m9 = Replace-Once $base 'if not exist "%TEMP%\dz_iochit_18d_done.txt" (' 'if not exist "%TEMP%\dz_iochit_18d_doneX.txt" (' '18d done check removed'
         TM 'the bat no longer checking the 18d done marker fails' @(Get-StructureDefects $m9 'mutated') 'never checks dz_iochit_18d_done.txt'
+        $m10 = Replace-Once $base 'if exist "%TEMP%\dz_iochit_18h_unread.txt" (' 'if exist "%TEMP%\dz_iochit_18h_unreadX.txt" (' '18h unread read removed'
+        TM 'the bat no longer reading the 18h unread marker fails' @(Get-StructureDefects $m10 'mutated') 'never reads dz_iochit_18h_unread.txt'
+        $m11 = Replace-Once $base ("del `"%TEMP%\dz_iochit_18h_unread.txt`" 2>nul`n") '' '18h unread marker not deleted before the run'
+        TM 'the unread marker not deleted before its run fails' @(Get-StructureDefects $m11 'mutated') 'the unread marker is not deleted before the run'
         $m10 = Replace-Once $base "    call :dz_finding WARNING 18 T1071 `"Named pipe IOC match NOT performed - list unreadable or empty, or pipes not enumerable`"`n" "    call :dz_finding WARNING 18 T1071 `"Named pipe IOC match NOT performed - list unreadable or empty, or pipes not enumerable`"`n    set /a IOC_HITS+=1`n" '18b gap counted as a match'
         TM 'a gap read that increments IOC_HITS fails' @(Get-StructureDefects $m10 'mutated') 'a gap read changes IOC_HITS'
         $m11 = Replace-Once $base "    call :dz_finding WARNING 18 IOCSWEEP `"IOC sweep NOT performed - no ThreatLists folder found`"`n" '' 'no-lists branch unraised'
