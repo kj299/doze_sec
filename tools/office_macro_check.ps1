@@ -278,10 +278,18 @@ function Read-VersionList {
 #   Temp, Public, the profile itself, a drive root, a network share.
 #   NOT IN FORCE, said and not graded: a network (\\ or http) entry while no
 #   source allows network locations (Microsoft: Office ignores it), and every
-#   entry when Group Policy disables all trusted locations. The ADMX value
-#   names are allownetworklocations and alllocationsdisabled; Microsoft's page
-#   names the policies, not the values. If a name were wrong, the value would
-#   never be read as set and every entry would be graded -- the safe direction.
+#   entry when Group Policy disables all trusted locations, and every entry the
+#   USER set when policy allows only Trusted Locations defined by policy
+#   (Microsoft: "Allow mix of policy and user locations" Disabled -- "Only
+#   Trusted Locations defined by policy are allowed"; Not Configured behaves as
+#   Enabled). Microsoft's page names the policies, not their registry values;
+#   the value names come from the Office ADMX as the DISA Office STIG checks
+#   quote it: allownetworklocations and alllocationsdisabled under
+#   <app>\Security\Trusted Locations, and "allow user locations" under
+#   Common\Security\Trusted Locations (V-223293). A machine-setting entry stays
+#   graded under that policy: whether Office ignores it is not documented. If a
+#   name were wrong, the value would never be read as set and every entry would
+#   be graded -- the safe direction.
 # Trusted Documents (Security\Trusted Documents\TrustRecords) is Office's record
 # of each document whose content the person enabled: the value NAME is the
 # document's path or URL, the data starts with a FILETIME (when it was trusted)
@@ -368,7 +376,7 @@ function ConvertFrom-TrustRecord {
 # $Records: @( @{ App; Ver; Name; Bytes } ). $Gaps: @( '<what could not be read>' ).
 # Returns @{ Lines; Hit; DocHit; Gap; Deferred; Gaps }.
 function Get-TrustVerdict {
-    param($Entries, $Gates, $Records, $Gaps, [string]$Owner = '', [bool]$IsElevated = $true, [bool]$Denied = $false, [bool]$OfficeSeen = $true, [string[]]$AppDataRoots = @(), [string[]]$ProgramRoots = @())
+    param($Entries, $Gates, $Records, $Gaps, [string]$Owner = '', [bool]$IsElevated = $true, [bool]$Denied = $false, [bool]$OfficeSeen = $true, [string[]]$AppDataRoots = @(), [string[]]$ProgramRoots = @(), $UserLocs = @{})
     $out = New-Object System.Collections.ArrayList
     $r = @{ Lines = @(); Hit = $false; DocHit = $false; Gap = $false; Deferred = 0; Gaps = @() }
     $who = $(if ($Owner) { ' (settings of ' + (ConvertTo-PrintableText $Owner) + ')' } else { '' })
@@ -391,6 +399,8 @@ function Get-TrustVerdict {
         $isNet = (([string]$e.Path -match '^\\\\') -or ([string]$e.Raw -match '^\\\\') -or ([string]$e.Path -imatch '^https?:'))
         $netOn = $gate -and $gate.Net -and $gate.Net.Decided -and (ConvertTo-RegNumber $gate.Net.Value) -eq 1
         $netGap = $gate -and $gate.Net -and [string]$gate.Net.Gap
+        $ul = $(if ($UserLocs) { $UserLocs[[string]$e.Ver] } else { $null })
+        if ([string]$e.Source -eq 'the user setting' -and $ul -and $ul.Decided -and (ConvertTo-RegNumber $ul.Value) -eq 0) { [void]$out.Add(('[INFO] ' + $tag + ': Trusted Location ' + $shown + ' (set by the user setting) is not in force: ' + [string]$ul.From + ' allows only Trusted Locations defined by policy.')); continue }
         if ($off) { [void]$out.Add(('[INFO] ' + $tag + ': Trusted Location ' + $shown + ' (set by ' + [string]$e.Source + ') is not in force: ' + [string]$gate.Off.From + ' disables all trusted locations.')); continue }
         if ($isNet -and -not $netOn -and -not $netGap) { [void]$out.Add(('[INFO] ' + $tag + ': Trusted Location ' + $shown + ' (set by ' + [string]$e.Source + ') is a network location, which Office ignores while network locations are not allowed (the default).')); continue }
         $shape = Get-LocationShape $(if ([string]$e.Path) { [string]$e.Path } else { [string]$e.Raw })
@@ -502,10 +512,17 @@ function Read-TrustAccount {
             @{ Name = 'the machine setting (Click-to-Run, 32-bit)'; Path = ($M + '\Microsoft\Office\ClickToRun\REGISTRY\MACHINE\Software\Wow6432Node\Microsoft\Office'); Policy = $false; User = $false })
     }
     $gateSrc = @{}
+    $ulSrc = @{}; $ulRootFail = $false
     foreach ($s in $srcs) {
         $vl = Read-VersionList $s.Path
         if ([string]$vl.State -eq 'nokey') { continue }
-        if ([string]$vl.State -ne 'ok') { [void]$res.Gaps.Add(($s.Name + ' (' + $s.Path + ') could not be listed (' + (ConvertTo-PrintableText ([string]$vl.Error)) + ')')); continue }
+        if ([string]$vl.State -ne 'ok') {
+            [void]$res.Gaps.Add(($s.Name + ' (' + $s.Path + ') could not be listed (' + (ConvertTo-PrintableText ([string]$vl.Error)) + ')'))
+            # A policy root that could not be listed may hold the policy-only
+            # switch for any version: no lower source may decide it.
+            if ($s.Policy) { $ulRootFail = $true }
+            continue
+        }
         foreach ($ver in @($vl.Names)) {
             if ($s.Name -eq 'Cloud Policy' -and $ver -ne '16.0') { continue }
             $res.OfficeSeen = $true
@@ -515,6 +532,12 @@ function Read-TrustAccount {
                 $ks = Open-KeyState $tlPath
                 $gk = ($(if ($app -eq 'Common') { 'all Office apps' } else { $app }) + '|' + $ver)
                 if (-not $gateSrc.ContainsKey($gk)) { $gateSrc[$gk] = @{ Net = (New-Object System.Collections.ArrayList); Off = (New-Object System.Collections.ArrayList) } }
+                if ($s.Policy -and $app -eq 'Common' -and $ks.State -ne 'ok') {
+                    # Same rows as the other gates: an unreadable source above
+                    # must stop a lower one deciding (Select-InForce gaps).
+                    if (-not $ulSrc.ContainsKey($ver)) { $ulSrc[$ver] = New-Object System.Collections.ArrayList }
+                    [void]$ulSrc[$ver].Add(@{ Name = $s.Name; S = $(if ($ks.State -eq 'nokey') { @{ State = 'nokey' } } else { @{ State = 'unreadable'; Error = $ks.Error } }) })
+                }
                 if ($ks.State -eq 'nokey') {
                     [void]$gateSrc[$gk].Net.Add(@{ Name = $s.Name; S = @{ State = 'nokey' } })
                     if ($s.Policy) { [void]$gateSrc[$gk].Off.Add(@{ Name = $s.Name; S = @{ State = 'nokey' } }) }
@@ -525,6 +548,10 @@ function Read-TrustAccount {
                 } else {
                     [void]$gateSrc[$gk].Net.Add(@{ Name = $s.Name; S = (Read-RegValueState -KeyPath $tlPath -Name 'AllowNetworkLocations') })
                     if ($s.Policy) { [void]$gateSrc[$gk].Off.Add(@{ Name = $s.Name; S = (Read-RegValueState -KeyPath $tlPath -Name 'AllLocationsDisabled') }) }
+                    if ($s.Policy -and $app -eq 'Common') {
+                        if (-not $ulSrc.ContainsKey($ver)) { $ulSrc[$ver] = New-Object System.Collections.ArrayList }
+                        [void]$ulSrc[$ver].Add(@{ Name = $s.Name; S = (Read-RegValueState -KeyPath $tlPath -Name 'allow user locations') })
+                    }
                     $subs = @()
                     try { $subs = @($ks.Key.GetSubKeyNames()) } catch { [void]$res.Gaps.Add(($app + ' ' + $ver + ' Trusted Locations (' + $s.Name + ') could not be listed (' + (ConvertTo-PrintableText $_.Exception.Message) + ')')) }
                     foreach ($sn in $subs) {
@@ -557,6 +584,8 @@ function Read-TrustAccount {
         }
     }
     foreach ($gk in $gateSrc.Keys) { $res.Gates[$gk] = @{ Net = (Select-InForce @($gateSrc[$gk].Net.ToArray())); Off = (Select-InForce @($gateSrc[$gk].Off.ToArray())) } }
+    $res.UserLocs = @{}
+    if (-not $ulRootFail) { foreach ($ver in $ulSrc.Keys) { $res.UserLocs[$ver] = Select-InForce @($ulSrc[$ver].ToArray()) } }
     return $res
 }
 
@@ -643,7 +672,8 @@ if ($SelfTest) {
     function TG { param($Net = $null, $Off = $null) $g = @{}; $g['Word|16.0'] = @{ Net = $(if ($null -ne $Net) { @{ Decided = $true; From = 'the user setting'; Value = $Net; Gap = '' } } else { @{ Decided = $false; Gap = '' } }); Off = $(if ($null -ne $Off) { @{ Decided = $true; From = 'Group Policy'; Value = $Off; Gap = '' } } else { @{ Decided = $false; Gap = '' } }) }; return $g }
     function TRec { param([string]$Name, [uint32]$Flag = 0x7FFFFFFF, [int]$Len = 24) $b = New-Object byte[] $Len; if ($Len -ge 12) { [BitConverter]::GetBytes([long]133400000000000000).CopyTo($b, 0); [BitConverter]::GetBytes($Flag).CopyTo($b, $Len - 4) }; @{ App = 'Word'; Ver = '16.0'; Name = $Name; Bytes = $b } }
     $tAD = @('C:\Users\bob\AppData\Roaming'); $tPF = @('C:\Program Files', 'C:\Program Files (x86)')
-    function TV { param($E = @(), $G = (TG), $Rec = @(), $Gaps = @(), [string]$Owner = '', [bool]$El = $true, [bool]$Den = $false, [bool]$Seen = $true) $x = Get-TrustVerdict -Entries $E -Gates $G -Records $Rec -Gaps $Gaps -Owner $Owner -IsElevated $El -Denied $Den -OfficeSeen $Seen -AppDataRoots $tAD -ProgramRoots $tPF; $x.Text = ($x.Lines -join "`n"); return $x }
+    function TV { param($E = @(), $G = (TG), $Rec = @(), $Gaps = @(), [string]$Owner = '', [bool]$El = $true, [bool]$Den = $false, [bool]$Seen = $true, $UL = @{}) $x = Get-TrustVerdict -Entries $E -Gates $G -Records $Rec -Gaps $Gaps -Owner $Owner -IsElevated $El -Denied $Den -OfficeSeen $Seen -AppDataRoots $tAD -ProgramRoots $tPF -UserLocs $UL; $x.Text = ($x.Lines -join "`n"); return $x }
+    function TUL { param($v) $h = @{}; $h['16.0'] = @{ Decided = $true; From = 'Group Policy'; Value = $v; Gap = '' }; return $h }
     foreach ($d in @('%APPDATA%\Microsoft\Templates', 'C:\Users\bob\AppData\Roaming\Microsoft\Word\Startup\', '%appdata%\Microsoft\Excel\XLSTART', 'C:\Program Files\Microsoft Office\root\Templates\', 'C:\Program Files (x86)\Microsoft Office\root\Office16\STARTUP', 'C:\Program Files\Microsoft Office\Office15\XLSTART', 'C:\Program Files\Microsoft Office\root\Document Themes 16\', '%APPDATA%\Microsoft\Addins', 'C:\Program Files\Microsoft Office\root\Office16\ACCWIZ', 'C:\Program Files\Microsoft Office 15\root\Templates\', 'C:\Program Files\Microsoft Office 15\root\Office15\XLSTART', '%ProgramFiles%\Microsoft Office\root\Templates')) {
         T ("default Trusted Location recognised (Microsoft's table): " + $d) (Test-OfficeDefaultLocation $d $tAD $tPF) ''
     }
@@ -662,6 +692,19 @@ if ($SelfTest) {
     T 'the same network location with network locations allowed: the WARNING, and the allowance said' ($v.Hit -and $v.Text -match 'a network location, which anyone who can write to it controls' -and $v.Text -match 'network locations are allowed as Trusted Locations') $v.Text
     $v = TV @(TE 'C:\Users\bob\Downloads') (TG $null 1)
     T 'Group Policy disables all trusted locations: the entry is INFO not in force, no WARNING' ((-not $v.Hit) -and $v.Text -match 'is not in force: Group Policy disables all trusted locations') $v.Text
+    $v = TV @(TE 'C:\Users\bob\Downloads') -UL (TUL 0)
+    T 'policy allows only policy-defined locations (allow user locations=0): a user-set entry is INFO not in force' ((-not $v.Hit) -and $v.Text -match 'is not in force: Group Policy allows only Trusted Locations defined by policy') $v.Text
+    $v = TV @(TE 'C:\Users\bob\Downloads' -Src 'Group Policy') -UL (TUL 0)
+    T 'the same policy leaves a Group Policy entry a WARNING' ($v.Hit) $v.Text
+    $v = TV @(TE 'C:\Users\bob\Downloads' -Src 'the machine setting') -UL (TUL 0)
+    T 'the same policy leaves a machine-setting entry a WARNING (undocumented either way: the safe direction)' ($v.Hit) $v.Text
+    $ulg = @{}; $ulg['16.0'] = (Select-InForce @(@{ Name = 'Cloud Policy'; S = @{ State = 'unreadable'; Error = 'SecurityException: x' } }, @{ Name = 'machine-wide Group Policy'; S = @{ State = 'present'; Value = 0 } }))
+    $v = TV @(TE 'C:\Users\bob\Downloads') -UL $ulg
+    T 'a higher policy source unreadable, a lower one 0: the user entry is still graded (the lower source does not decide)' ($v.Hit) $v.Text
+    $v = TV @(TE 'C:\Users\bob\Downloads') -UL (TUL 1)
+    T 'allow user locations=1: a user-set entry is graded' ($v.Hit) $v.Text
+    $v = TV @(TE 'C:\Users\bob\Downloads' -App 'Word') -UL @{ '15.0' = @{ Decided = $true; From = 'Group Policy'; Value = 0; Gap = '' } }
+    T 'the policy for another Office version does not reach a 16.0 entry' ($v.Hit) $v.Text
     $v = TV @(TE 'C:\Users\bob\Downloads') (TG $null 0)
     T 'AllLocationsDisabled=0: the entry is graded' ($v.Hit) $v.Text
     foreach ($c in @(@{ P = 'C:\'; S = 'a whole drive' }, @{ P = 'C:\Users\bob'; S = 'the whole user profile' }, @{ P = 'C:\Users\bob\AppData\Local\Temp'; S = 'a Temp folder' }, @{ P = 'C:\Users\Public\Documents'; S = 'the Public folder' }, @{ P = 'C:\Users\bob\Desktop'; S = 'the Desktop' })) {
@@ -802,10 +845,10 @@ try {
             if ([string]$ctx.ListError) { [void]$ctxGaps.Add(('not every account signed in at this PC could be listed (' + (ConvertTo-PrintableText ([string]$ctx.ListError)) + '), so some accounts'' settings may not have been read')) }
         }
         $pfRoots = @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:ProgramW6432 | Where-Object { [string]$_ })
-        [void]$all.Add((Get-TrustVerdict -Entries @($mine.Entries.ToArray()) -Gates $mine.Gates -Records @($mine.Records.ToArray()) -Gaps (@($mine.Gaps.ToArray()) + @($ctxGaps.ToArray())) -IsElevated ($Elevated -eq 1) -OfficeSeen $mine.OfficeSeen -AppDataRoots (Get-AccountAppData -Root $KeyRoot -Own $true) -ProgramRoots $pfRoots))
+        [void]$all.Add((Get-TrustVerdict -Entries @($mine.Entries.ToArray()) -Gates $mine.Gates -Records @($mine.Records.ToArray()) -Gaps (@($mine.Gaps.ToArray()) + @($ctxGaps.ToArray())) -IsElevated ($Elevated -eq 1) -OfficeSeen $mine.OfficeSeen -UserLocs $mine.UserLocs -AppDataRoots (Get-AccountAppData -Root $KeyRoot -Own $true) -ProgramRoots $pfRoots))
         foreach ($o in $others) {
             $t = Read-TrustAccount -Root $o.Root -MachineRoot '' -Label $o.Name -MustExist $true -Expand $false
-            [void]$all.Add((Get-TrustVerdict -Entries @($t.Entries.ToArray()) -Gates $t.Gates -Records @($t.Records.ToArray()) -Gaps @($t.Gaps.ToArray()) -Owner $o.Name -IsElevated ($Elevated -eq 1) -Denied $t.Denied -OfficeSeen $t.OfficeSeen -AppDataRoots (Get-AccountAppData -Root $o.Root -Own $false) -ProgramRoots $pfRoots))
+            [void]$all.Add((Get-TrustVerdict -Entries @($t.Entries.ToArray()) -Gates $t.Gates -Records @($t.Records.ToArray()) -Gaps @($t.Gaps.ToArray()) -Owner $o.Name -IsElevated ($Elevated -eq 1) -Denied $t.Denied -OfficeSeen $t.OfficeSeen -UserLocs $t.UserLocs -AppDataRoots (Get-AccountAppData -Root $o.Root -Own $false) -ProgramRoots $pfRoots))
         }
         $tv = @{ Lines = (New-Object System.Collections.ArrayList); Hit = $false; DocHit = $false; Gap = $false; Deferred = 0 }
         foreach ($l in $head) { [void]$tv.Lines.Add($l) }

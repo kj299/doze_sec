@@ -6,6 +6,11 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Office Trusted Locations: the "policy locations only" setting is read
+**Before.** #285 did not read the Group Policy setting "Allow mix of policy and user locations". When that policy is Disabled, Office allows only Trusted Locations defined by policy, yet each location the user had set was still raised as a WARNING saying its macros run unprompted.
+
+**Now.** The value (`allow user locations` under `Common\Security\Trusted Locations`) is read from Cloud Policy, Group Policy and, for the audit's own account, machine-wide Group Policy. A source that cannot be read stops a lower one deciding. When it is 0, a user-set entry is `[INFO]`, not in force; policy entries, and machine-setting entries (Microsoft does not say), are still graded. The three switch value names are now cited: Microsoft's page names the policies only, and the DISA Office STIG checks quote the ADMX value names.
+
 ### Office Trusted Locations and Trusted Documents (Section 13): a folder whose macros run unprompted is a finding
 **Before.** The audit graded Office's macro settings but never read Trusted Locations. Microsoft documents that files in a Trusted Location skip Protected View, File Block and the block on macros from the internet, so a Trusted Location on Downloads defeated every setting the audit graded, unseen. Office's record of the documents whose macros a person enabled was not read either.
 
