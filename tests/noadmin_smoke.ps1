@@ -540,6 +540,12 @@ try {
         Assert ($text1 -match 'Real-time protection: NOT graded on this standard-user token') 'the real-time tile names the token as the reason' 'the real-time tile gave a reason other than the token for a standard-user deferral'
     }
     Assert ($text1 -notmatch 'a third-party AV may own protection') 'the Defender tiles no longer guess a third-party AV' 'a Defender tile still guesses "a third-party AV may own protection"'
+    # MEASURED 2026-11-15: a standard-user token is shown real-time, on-access
+    # and Tamper Protection as OFF whatever their state. Those values must
+    # never be graded on this token; the runner has no Security Center, so
+    # real-time is a counted deferral here.
+    Assert ($text1 -notmatch '(?m)^\[CRITICAL\] Defender real-time protection is OFF \(T1562' -and $text1 -notmatch '(?m)^\[WARNING\] Tamper Protection is OFF' -and $text1 -notmatch '(?m)^\[WARNING\] Defender on-access protection is off') 'the masked Defender fields are not graded on a standard-user token' 'a masked Defender field (real-time, on-access or tamper read OFF) was graded on a standard-user token'
+    Assert ($text1 -match 'Tamper protection and signature age: NOT graded -- Defender does not show them truthfully') 'the tamper tile reads NOT graded on a standard-user token' 'the tamper tile graded a masked value on a standard-user token'
     # Defender's detection history needs administrator: the deferral line the
     # bat always printed, and never "[OK] No ... detections on record".
     Assert ($text1 -match '(?m)^\[DEFERRED - ADMIN REQUIRED\] Get-MpThreatDetection requires admin\.' -and $text1 -notmatch 'No Win32/AccessibilityEscalation Defender detections on record') `

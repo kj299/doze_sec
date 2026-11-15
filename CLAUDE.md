@@ -708,7 +708,14 @@ standard-user run never reported real-time protection switched off. It now
 runs; only the detection history is gated. And a standard user's
 `Get-MpPreference` ANSWERS, putting "N/A: Must be an administrator" where each
 exclusion list would be: a placeholder like that is a deferral, never data --
-read the value's shape before treating it as a finding.
+read the value's shape before treating it as a finding. **And an answer is
+not a truthful answer.** The standard-user CI job then MEASURED that
+`Get-MpComputerStatus` shows that token real-time, on-access and Tamper
+Protection as OFF while the administrator token on the same runner reads them
+ON: the first draft graded them and raised a false CRITICAL on a clean runner.
+On that token a FALSE is not evidence (masking only ever reads off); real-time
+is graded from Windows Security Center's own entry for Defender, and what has
+no second source is deferred.
 
 **A walk has three ways to read clean without looking, and a review found
 all three in one tool before it shipped.** `tools/file_walk_check.ps1`

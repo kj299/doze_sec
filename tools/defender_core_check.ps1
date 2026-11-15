@@ -149,8 +149,19 @@ function Get-DefenderCoreReport {
         [datetime]$Now = (Get-Date),
         [string]$StatusErr = '', [bool]$StatusDenied = $false,
         [string]$PrefErr = '', [bool]$PrefDenied = $false,
-        [bool]$IsElevated = $true, $OtherAv = $null
+        [bool]$IsElevated = $true, $OtherAv = $null,
+        # Windows Security Center's own entry for Defender: @{ Asked; On } with
+        # On $true/$false, or $null when there is no such entry. Read only on a
+        # standard-user token, where Get-MpComputerStatus masks the fields.
+        $DefenderSc = $null
     )
+    # MEASURED on a runner (2026-11-15): to a standard-user token
+    # Get-MpComputerStatus reports real-time, on-access and Tamper Protection
+    # as OFF while the administrator token on the same machine reads them ON.
+    # So on that token a FALSE is not evidence (a TRUE is: masking only reads
+    # off). Real-time is graded from Security Center instead; the other two
+    # have no second source and are deferred.
+    $masked = (-not $IsElevated); $rtUnknown = $false; $maskedDeferred = $false; $maskedOT = $false
     $gap = $false; $gapStatus = $false; $gapPref = $false; $deferred = 0; $whyStatus = 'ok'; $whyPref = 'ok'
     $out = New-Object System.Collections.Generic.List[string]
     $sev = 'OK'
@@ -173,7 +184,19 @@ function Get-DefenderCoreReport {
             [void]$out.Add('[WARNING] Defender antimalware service is not enabled (T1562.001).'); $sev = Get-MaxSev $sev 'WARNING'; $findings++
         }
         if (-not $passive) {
-            if (-not $Status.RealTimeProtectionEnabled) {
+            if (-not $Status.RealTimeProtectionEnabled -and $masked) {
+                if ($DefenderSc -and $DefenderSc.Asked -and $null -ne $DefenderSc.On) {
+                    if ($DefenderSc.On) {
+                        $rt = $true
+                        [void]$out.Add('[INFO] Defender real-time protection is on, as Windows Security Center reports it (a standard-user token is shown real-time protection as off by Get-MpComputerStatus whatever its state).')
+                    } else {
+                        [void]$out.Add('[CRITICAL] Defender real-time protection is OFF, as Windows Security Center reports it (T1562.001) -- files are not scanned as they are written or run. Fix: Set-MpPreference -DisableRealtimeMonitoring $false'); $sev = Get-MaxSev $sev 'CRITICAL'; $findings++
+                    }
+                } else {
+                    $rtUnknown = $true; $maskedDeferred = $true
+                    [void]$out.Add('[DEFERRED - ADMIN REQUIRED] Defender real-time protection not graded: Get-MpComputerStatus shows it as off to a standard-user token whatever its state, and Windows Security Center has no entry for Defender here (it is absent on Windows Server). An audit run as administrator grades it.')
+                }
+            } elseif (-not $Status.RealTimeProtectionEnabled) {
                 [void]$out.Add('[CRITICAL] Defender real-time protection is OFF (T1562.001) -- files are not scanned as they are written or run. Fix: Set-MpPreference -DisableRealtimeMonitoring $false'); $sev = Get-MaxSev $sev 'CRITICAL'; $findings++
             }
             if (-not $Status.AntivirusEnabled) {
@@ -182,12 +205,14 @@ function Get-DefenderCoreReport {
             if (-not $Status.AntispywareEnabled) {
                 [void]$out.Add('[WARNING] Defender antispyware protection is off.'); $sev = Get-MaxSev $sev 'WARNING'; $findings++
             }
-            if (-not $Status.OnAccessProtectionEnabled) {
+            if (-not $Status.OnAccessProtectionEnabled -and $masked) { $maskedOT = $true }
+            elseif (-not $Status.OnAccessProtectionEnabled) {
                 [void]$out.Add('[WARNING] Defender on-access protection is off -- files are not scanned when opened.'); $sev = Get-MaxSev $sev 'WARNING'; $findings++
             }
         }
         $tamper = [bool]$Status.IsTamperProtected
-        if (-not $Status.IsTamperProtected) {
+        if (-not $Status.IsTamperProtected -and $masked) { $maskedOT = $true }
+        elseif (-not $Status.IsTamperProtected) {
             [void]$out.Add('[WARNING] Tamper Protection is OFF -- an attacker who gains admin can silently disable Defender and its logging. Fix: Windows Security > Virus & threat protection > Manage settings > Tamper Protection On'); $sev = Get-MaxSev $sev 'WARNING'; $findings++
         }
         $age = $null
@@ -200,6 +225,12 @@ function Get-DefenderCoreReport {
         $f = Get-DefenderQueryFailure -Query 'Get-MpComputerStatus' -What 'core status (real-time, antivirus, tamper protection, signatures)' -Err $StatusErr -Denied $StatusDenied -IsElevated $IsElevated -Av $OtherAv
         [void]$out.Add($f.Line); if ($f.Gap) { $gap = $true; $gapStatus = $true }; $deferred += [int]$f.Deferred; $whyStatus = [string]$f.Reason
     }
+    if ($maskedOT) {
+        $maskedDeferred = $true
+        [void]$out.Add('[DEFERRED - ADMIN REQUIRED] Defender on-access and Tamper Protection not graded where they read off: a standard-user token is shown them as off whatever their state. An audit run as administrator grades them.')
+    }
+    if ($maskedDeferred) { $deferred++; $whyStatus = 'stdmasked' }
+    $graded = ($StatusOk -and -not $rtUnknown)
     if ($PrefOk) {
         if ($Pref.DisableRealtimeMonitoring) {
             [void]$out.Add('[CRITICAL] DisableRealtimeMonitoring is SET (T1562.001) -- real-time monitoring was explicitly turned off.'); $sev = Get-MaxSev $sev 'CRITICAL'; $findings++
@@ -220,14 +251,14 @@ function Get-DefenderCoreReport {
         $f = Get-DefenderQueryFailure -Query 'Get-MpPreference' -What 'disable-flags' -Err $PrefErr -Denied $PrefDenied -IsElevated $IsElevated -Av $OtherAv
         [void]$out.Add($f.Line); if ($f.Gap) { $gap = $true; $gapPref = $true }; $deferred += [int]$f.Deferred; $whyPref = [string]$f.Reason
     }
-    if ($StatusOk -and $PrefOk -and $findings -eq 0) {
+    if ($StatusOk -and $PrefOk -and $findings -eq 0 -and -not $maskedDeferred) {
         if ($passive) {
             [void]$out.Add('[OK] Defender itself is tamper-protected, current and not policy-disabled; protection belongs to the other product above.')
         } else {
             [void]$out.Add('[OK] Defender core protection on: real-time, antivirus, on-access and tamper protection enabled; signatures current; no disable flags set.')
         }
     }
-    return @{ Lines = @($out.ToArray()); Sev = $sev; Gap = $gap; GapStatus = $gapStatus; GapPref = $gapPref; Why = ($whyStatus + '|' + $whyPref); Deferred = $deferred; Mode = $mode; Passive = $passive; RealTime = $rt; Graded = $StatusOk; State = (Get-DefenderStateLine -Mode $mode -RealTime $rt -Graded $StatusOk -Tamper $tamper -SigAgeDays $ageDays) }
+    return @{ Lines = @($out.ToArray()); Sev = $sev; Gap = $gap; GapStatus = $gapStatus; GapPref = $gapPref; Why = ($whyStatus + '|' + $whyPref); Deferred = $deferred; Mode = $mode; Passive = $passive; RealTime = $rt; Graded = $graded; State = (Get-DefenderStateLine -Mode $mode -RealTime $rt -Graded $graded -Tamper $tamper -SigAgeDays $ageDays) }
 }
 
 if ($SelfTest) {
@@ -273,6 +304,20 @@ if ($SelfTest) {
     T 'Security Center could not be asked (Windows Server): the line says so, never "names no other"' ($r.GapStatus -and (& $j $r) -match 'Windows Security Center could not be asked' -and (& $j $r) -notmatch 'names no other') (& $j $r)
     $r = Get-DefenderCoreReport -StatusOk $false -Status $null -StatusErr 'CimException: Access denied' -StatusDenied $true -IsElevated $false -PrefOk $true -Pref (Pr) -Now $now
     T 'a standard-user refusal is the reason the tile states: deferred' ($r.Why -eq 'deferred|ok') $r.Why
+    # MEASURED masking on a standard-user token: real-time, on-access and tamper read OFF.
+    $m = St -Rt $false -Oa $false -Tp $false
+    $r = Get-DefenderCoreReport -StatusOk $true -Status $m -PrefOk $true -Pref (Pr) -IsElevated $false -DefenderSc @{ Asked = $false; On = $null } -Now $now
+    T 'standard token, masked fields, no Security Center (Windows Server, the CI runner): deferrals, NEVER the false CRITICAL' ($r.Sev -eq 'OK' -and (-not $r.Graded) -and $r.Why -eq 'stdmasked|ok' -and $r.Deferred -ge 1 -and (& $j $r) -notmatch '\[CRITICAL\]' -and (& $j $r) -notmatch 'Tamper Protection is OFF' -and (& $j $r) -notmatch '^\[OK\] Defender core protection on') (& $j $r)
+    $r = Get-DefenderCoreReport -StatusOk $true -Status $m -PrefOk $true -Pref (Pr) -IsElevated $false -DefenderSc @{ Asked = $true; On = $true } -Now $now
+    T 'standard token, masked real-time, Security Center says Defender is on: graded on, no CRITICAL, tamper still deferred' ($r.Sev -eq 'OK' -and $r.Graded -and $r.RealTime -and (& $j $r) -match 'real-time protection is on, as Windows Security Center reports it' -and (& $j $r) -match 'Tamper Protection not graded') (& $j $r)
+    $r = Get-DefenderCoreReport -StatusOk $true -Status $m -PrefOk $true -Pref (Pr) -IsElevated $false -DefenderSc @{ Asked = $true; On = $false } -Now $now
+    T 'standard token, Security Center says Defender real-time is OFF: the CRITICAL, naming the source' ($r.Sev -eq 'CRITICAL' -and (& $j $r) -match '\[CRITICAL\] Defender real-time protection is OFF, as Windows Security Center reports it') (& $j $r)
+    $r = Get-DefenderCoreReport -StatusOk $true -Status (St) -PrefOk $true -Pref (Pr) -IsElevated $false -Now $now
+    T 'standard token, every field reads ON: trusted (masking only reads off), the OK line prints' ($r.Sev -eq 'OK' -and $r.Graded -and $r.Deferred -eq 0 -and (& $j $r) -match '^\[OK\] Defender core protection on') (& $j $r)
+    $r = Get-DefenderCoreReport -StatusOk $true -Status (St -Oa $false) -PrefOk $true -Pref (Pr) -IsElevated $false -Now $now
+    T 'standard token, only on-access reads off: one deferral line, no WARNING' ($r.Deferred -eq 1 -and (& $j $r) -match 'on-access and Tamper Protection not graded' -and (& $j $r) -notmatch '\[WARNING\]') (& $j $r)
+    $r = Get-DefenderCoreReport -StatusOk $true -Status $m -PrefOk $true -Pref (Pr) -IsElevated $true -Now $now
+    T 'the SAME values ELEVATED are graded as before: CRITICAL and the tamper WARNING' ($r.Sev -eq 'CRITICAL' -and (& $j $r) -match 'Tamper Protection is OFF' -and $r.Deferred -eq 0) (& $j $r)
     $r = Get-DefenderCoreReport -StatusOk $false -Status $null -StatusErr 'CimException: Invalid namespace' -IsElevated $true -OtherAv @{ Asked = $true; Names = @('Contoso AV') } -PrefOk $false -Pref $null -PrefErr 'x' -Now $now
     T 'Defender does not answer and Security Center names another enabled antivirus: INFO naming it, no gap' ((-not $r.Gap) -and (& $j $r) -match '^\[INFO\] Get-MpComputerStatus did not answer \(CimException: Invalid namespace\); Windows Security Center names Contoso AV as the enabled antivirus') (& $j $r)
     $r = Get-DefenderCoreReport -StatusOk $true -Status (St) -PrefOk $false -Pref $null -Now $now
@@ -302,7 +347,16 @@ $pfOk = $true; $pr = $null; $pfErr = ''; $pfDen = $false
 try { $pr = Get-MpPreference -ErrorAction Stop } catch { $pfOk = $false; $pfErr = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message); $pfDen = Test-DefenderAccessDenied $_.Exception }
 $other = $null
 if (-not ($stOk -and $pfOk)) { $other = Get-OtherAntivirus }
-$rep = Get-DefenderCoreReport -StatusOk $stOk -Status $st -PrefOk $pfOk -Pref $pr -StatusErr $stErr -StatusDenied $stDen -PrefErr $pfErr -PrefDenied $pfDen -IsElevated ($Elevated -eq 1) -OtherAv $other
+# Security Center's own view of Defender, for the fields a standard-user token
+# is shown masked. On = $null when Security Center has no Defender entry.
+$dsc = $null
+if ($Elevated -ne 1) {
+    try {
+        $e = @(Get-CimInstance -Namespace 'root\SecurityCenter2' -ClassName AntiVirusProduct -ErrorAction Stop | Where-Object { [string]$_.displayName -match 'Windows Defender|Microsoft Defender' })
+        if ($e.Count -gt 0) { $dsc = @{ Asked = $true; On = ((([int]$e[0].productState) -band 0xF000) -eq 0x1000) } } else { $dsc = @{ Asked = $true; On = $null } }
+    } catch { $dsc = @{ Asked = $false; On = $null } }
+}
+$rep = Get-DefenderCoreReport -StatusOk $stOk -Status $st -PrefOk $pfOk -Pref $pr -StatusErr $stErr -StatusDenied $stDen -PrefErr $pfErr -PrefDenied $pfDen -IsElevated ($Elevated -eq 1) -OtherAv $other -DefenderSc $dsc
 $rep.Lines
 Write-Marker -Name 'defcore' -Sev $rep.Sev
 # Two checks, two gap markers: the ledger row names the one that was not done.
