@@ -512,6 +512,24 @@ try {
     # The Office macro settings are this user's own (HKCU): a standard user reads
     # them, so a gap here is a defect, not the token.
     Assert ($text1 -notmatch '(?m)^\[WARNING\] Office macro policy check (NOT performed|produced no verdict)') 'the Office macro policy was read from the user''s own settings, no gap' 'the Office macro policy check raised a gap on the user''s own settings'
+    # Section 9 runs on this token now (it used to be skipped wholesale). What a
+    # standard user gets from Defender is MEASURED, and each check must state
+    # what it did: graded, deferred (the token is the explanation), or a gap
+    # with its row. The "N/A: Must be an administrator" placeholder must never
+    # become an exclusion finding.
+    foreach ($c in @(
+        @{ Name = 'Defender core status'; Ran = '(?m)^\[OK\] Defender (core protection on|itself is tamper-protected)|(?m)^\[(CRITICAL|WARNING)\] (Defender real-time|Defender antivirus|Defender antimalware|Defender antispyware|Defender on-access|Tamper Protection|Defender signatures)|(?m)^\[INFO\] Defender is running in '; Def = '(?m)^\[DEFERRED - ADMIN REQUIRED\] Get-MpComputerStatus was refused'; Gap = '(?m)^\[WARNING\] Defender core status .*check NOT performed'; Row = '\|9\|T1562\.001\|Defender core status check NOT performed' },
+        @{ Name = 'Defender exclusions'; Ran = '(?m)^\[OK\] No (path|process|extension) exclusions\.|(?m)^\[WARNING\] Exclusion (paths|processes|extensions) found'; Def = '(?m)^\[DEFERRED - ADMIN REQUIRED\] (Defender withholds its exclusion|Get-MpPreference was refused)'; Gap = '(?m)^\[WARNING\] Defender exclusions .*check NOT performed'; Row = '\|9\|T1562\.001\|Defender exclusions check NOT performed' })) {
+        $ran = $text1 -match $c.Ran; $def = $text1 -match $c.Def; $gap = $text1 -match $c.Gap
+        Write-Host ("  MEASURED: the {0} check on a standard-user token: ran={1} deferred={2} gap={3}" -f $c.Name, $ran, $def, $gap)
+        Assert ($ran -or $def -or $gap) ('the {0} check stated what it did on a standard-user token' -f $c.Name) ('the {0} check printed neither a result, a deferral nor a gap (Section 9 skipped again?)' -f $c.Name)
+        $rows = @($ledger1 | Where-Object { $_ -match $c.Row }).Count
+        if ($gap) { Assert ($rows -gt 0) ('the {0} gap has its ledger row' -f $c.Name) ('a {0} NOT-performed line was printed with no ledger row' -f $c.Name) }
+    }
+    Write-Host ("  MEASURED: Defender lines on a standard-user token: " + (($text1 -split "`r?`n" | Where-Object { $_ -match '^\[(OK|INFO|WARNING|CRITICAL|DEFERRED - ADMIN REQUIRED)\] .*(Defender|Get-Mp|exclusion|Tamper)' } | Select-Object -First 8) -join ' | '))
+    Assert ($text1 -notmatch '(?m)^    (path|process|extension): N/A') 'the "N/A: Must be an administrator" placeholder is never listed as an exclusion' 'the standard-user placeholder was listed as a Defender exclusion'
+    Assert (@($ledger1 | Where-Object { $_ -match 'Defender exclusions configured' }).Count -eq 0) 'no "Defender exclusions configured" row on a clean standard-user run' 'a clean standard-user run raised "Defender exclusions configured" (the N/A placeholder graded as an exclusion?)'
+    Assert ($text1 -match '(?m)^ --- Endpoint Telemetry|(?m)^--- Endpoint Telemetry') 'the EDR-agent check ran on a standard-user token' 'the EDR-agent check did not run on a standard-user token (Section 9 skipped again?)'
     # Defender's detection history needs administrator: the deferral line the
     # bat always printed, and never "[OK] No ... detections on record".
     Assert ($text1 -match '(?m)^\[DEFERRED - ADMIN REQUIRED\] Get-MpThreatDetection requires admin\.' -and $text1 -notmatch 'No Win32/AccessibilityEscalation Defender detections on record') `

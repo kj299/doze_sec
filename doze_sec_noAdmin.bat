@@ -2871,16 +2871,10 @@ echo       gaining admin, making Defender blind to their implants.>> "%REPORT%"
 echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
-if "%IS_ADMIN%"=="0" goto :sec9_noadmin
-goto :sec9_run
-:sec9_noadmin
-echo  [DEFERRED - ADMIN REQUIRED] Defender cmdlets require administrator privileges.>> "%REPORT%"
-echo  Affected: Get-MpComputerStatus, Get-MpPreference, Get-MpThreatDetection.>> "%REPORT%"
-echo.>> "%REPORT%"
-echo %C_MAGENTA%[9/18] [DEFERRED]%C_RESET% Defender check requires admin.
-set /a DEFERRED_COUNT+=1
-goto :sec9_verdict
-:sec9_run
+:: Section 9 runs on a standard-user token too (defer the command that needs
+:: administrator, never the section): Defender status, its disable flags, the
+:: EDR agents and the ASR rules are readable from this token, and each tool
+:: declares what it was refused. Only the detection history below is gated.
 
 echo --- Defender Core Status --->> "%REPORT%"
 echo  Command: powershell -Command "Get-MpComputerStatus">> "%REPORT%"
@@ -2922,6 +2916,8 @@ echo off, which is the first thing an intruder does after gaining admin.>> "%REP
 echo  Command: powershell -File tools\defender_core_check.ps1   [evaluates Get-MpComputerStatus + Get-MpPreference]>> "%REPORT%"
 del "%TEMP%\dz_defcore.txt" 2>nul
 del "%TEMP%\dz_defcore_state.txt" 2>nul
+del "%TEMP%\dz_defcore_gap.txt" 2>nul
+del "%TEMP%\dz_defcore_deferred.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\defender_core_check.ps1" (
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\defender_core_check.ps1">> "%REPORT%" 2>&1
 ) else (
@@ -2933,6 +2929,17 @@ if exist "%TEMP%\dz_defcore.txt" (
     set /p _DCSEV=<"%TEMP%\dz_defcore.txt"
     call :dz_finding !_DCSEV! 9 T1562.001 "Defender core protection disabled, passive without a replacement, or tampered with"
     del "%TEMP%\dz_defcore.txt" 2>nul
+)
+if exist "%TEMP%\dz_defcore_gap.txt" (
+    rem A gap is its own row, beside a finding or alone.
+    call :dz_finding WARNING 9 T1562.001 "Defender core status check NOT performed - Defender did not answer and no other antivirus is registered"
+    del "%TEMP%\dz_defcore_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_defcore_deferred.txt" (
+    set "_DCDEF=0"
+    set /p _DCDEF=<"%TEMP%\dz_defcore_deferred.txt"
+    set /a DEFERRED_COUNT+=!_DCDEF!
+    del "%TEMP%\dz_defcore_deferred.txt" 2>nul
 )
 :: Carry this check's verdict to the summary dashboard (the PROCPATH_STATE /
 :: DNSPROBE_STATE idiom): the real-time tile states what Section 9 found instead
@@ -2966,6 +2973,8 @@ echo never scanned. Every exclusion below is listed for you to confirm it is you
 echo  Command: powershell -File tools\defender_exclusions_check.ps1   [evaluates (Get-MpPreference).ExclusionPath, ExclusionProcess and ExclusionExtension]>> "%REPORT%"
 del "%TEMP%\dz_defexcl.txt" 2>nul
 del "%TEMP%\dz_defexcl_state.txt" 2>nul
+del "%TEMP%\dz_defexcl_gap.txt" 2>nul
+del "%TEMP%\dz_defexcl_deferred.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\defender_exclusions_check.ps1" (
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\defender_exclusions_check.ps1">> "%REPORT%" 2>&1
 ) else (
@@ -2979,6 +2988,17 @@ if exist "%TEMP%\dz_defexcl.txt" (
     set /p _DXSEV=<"%TEMP%\dz_defexcl.txt"
     call :dz_finding !_DXSEV! 9 T1562.001 "Defender exclusions configured"
     del "%TEMP%\dz_defexcl.txt" 2>nul
+)
+if exist "%TEMP%\dz_defexcl_gap.txt" (
+    rem A gap is its own row, beside a finding or alone.
+    call :dz_finding WARNING 9 T1562.001 "Defender exclusions check NOT performed - the exclusion lists could not be read"
+    del "%TEMP%\dz_defexcl_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_defexcl_deferred.txt" (
+    set "_DXDEF=0"
+    set /p _DXDEF=<"%TEMP%\dz_defexcl_deferred.txt"
+    set /a DEFERRED_COUNT+=!_DXDEF!
+    del "%TEMP%\dz_defexcl_deferred.txt" 2>nul
 )
 :: Carry the counts to the dashboard (the DEFCORE_* idiom): the exclusion tiles
 :: state what this section found instead of calling Get-MpPreference a second
@@ -3072,8 +3092,14 @@ del "%TEMP%\dz_asr_hit.txt" 2>nul
 echo.>> "%REPORT%"
 echo --- Defender Threat Detection History --->> "%REPORT%"
 echo  Command: powershell -Command "Get-MpThreatDetection">> "%REPORT%"
+if "%IS_ADMIN%"=="0" goto :sec9_history_noadmin
 echo Get-MpThreatDetection ^| Select-Object ActionSuccess,InitialDetectionTime,ThreatID,DomainUser,ProcessName ^| Format-Table -AutoSize > "%PSRUN%"
 "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+goto :sec9_history_done
+:sec9_history_noadmin
+echo  [DEFERRED - ADMIN REQUIRED] Get-MpThreatDetection (Defender detection history) requires administrator.>> "%REPORT%"
+set /a DEFERRED_COUNT+=1
+:sec9_history_done
 echo.>> "%REPORT%"
 
 :: ====================================================================
@@ -6067,13 +6093,9 @@ echo sec 'WINDOWS DEFENDER  (Section 9)' >> "%PSRUN%"
 echo $dcMode='%DEFCORE_MODE%';$dcRt='%DEFCORE_RT%';$dcGraded='%DEFCORE_GRADED%';$dcTamper='%DEFCORE_TAMPER%';$dcSigAge=[int]'%DEFCORE_SIGAGE%';$dcPassive=($dcMode -ne '' -and $dcMode -ne 'unknown' -and $dcMode -notmatch 'Normal') >> "%PSRUN%"
 echo $dcTamperOff=$(if($dcGraded -eq '1' -and $dcTamper -ne '1'){'yes'}else{'no'});$dcSigOld=$(if($dcGraded -eq '1' -and $dcSigAge -gt 7){'yes'}else{'no'}) >> "%PSRUN%"
 echo $dxGraded='%DEFEXCL_GRADED%';$dxPaths=[int]'%DEFEXCL_PATHS%';$dxProcs=[int]'%DEFEXCL_PROCS%';$dxExts=[int]'%DEFEXCL_EXTS%' >> "%PSRUN%"
-echo if($isAdmin -eq '1'){ >> "%PSRUN%"
 echo if($dcGraded -ne '1'){ck 'INFO' 'Real-time protection: NOT graded -- Section 9 could not query Defender' 'Get-MpComputerStatus failed in Section 9: a third-party AV may own protection, or Defender is disabled. Confirm which manually.'}elseif($dcPassive){ck 'INFO' ('Defender in '+$dcMode+' -- another antivirus product is in control (Section 9)') 'Defender real-time flags read off by design while another product is primary. Verify that product is running and current.'}elseif($dcRt -eq '1'){ck 'PASS' 'Real-time protection enabled'}else{ck 'CRIT' 'Real-time protection DISABLED' 'Run: Set-MpPreference -DisableRealtimeMonitoring $false'} >> "%PSRUN%"
 echo if($dcGraded -ne '1'){ck 'INFO' 'Tamper protection and signature age: NOT graded -- Section 9 could not query Defender'}else{if($dcTamper -eq '1'){ck 'PASS' 'Tamper protection enabled'}else{ck 'WARN' 'Tamper protection disabled' 'Enable via Windows Security ^> Virus and threat protection settings'};if($dcSigAge -lt 0){ck 'INFO' 'Signature age: not reported by Defender (Section 9)'}elseif($dcSigAge -gt 7){ck 'WARN' "Signatures are $dcSigAge days old -- updates are not arriving (Section 9)" 'Run: Update-MpSignature'}else{ck 'PASS' "Signatures current ($dcSigAge days old)"}} >> "%PSRUN%"
 echo if($dxGraded -ne '1'){ck 'INFO' 'Defender exclusions: NOT graded -- Section 9 could not query Get-MpPreference' 'A third-party AV may own protection, or Defender is disabled. Confirm which manually.'}else{if($dxPaths -gt 0){ck 'WARN' "Defender path exclusions configured: $dxPaths (Section 9)" 'Exclusions hide whatever they cover from Defender. Verify each is legitimate; the list is in Section 9.'}else{ck 'PASS' 'No Defender path exclusions configured (Section 9)'};if($dxProcs -gt 0){ck 'WARN' "Defender process exclusions configured: $dxProcs (Section 9)" 'Verify each is legitimate; the list is in Section 9.'}else{ck 'PASS' 'No Defender process exclusions configured (Section 9)'};if($dxExts -gt 0){ck 'WARN' "Defender extension exclusions configured: $dxExts (Section 9)" 'An excluded extension is unscanned wherever it appears. Verify each; the list is in Section 9.'}else{ck 'PASS' 'No Defender extension exclusions configured (Section 9)'}} >> "%PSRUN%"
-echo }else{ >> "%PSRUN%"
-echo ck 'INFO' 'Defender status check deferred (requires admin)' >> "%PSRUN%"
-echo } >> "%PSRUN%"
 echo. >> "%PSRUN%"
 
 :: ===== ATTACK SURFACE ================================================
@@ -6134,8 +6156,8 @@ echo. >> "%PSRUN%"
 echo if($isAdmin -eq '0'){ >> "%PSRUN%"
 echo sec 'DEFERRED CHECKS  (Re-run as Administrator for full audit)' >> "%PSRUN%"
 echo ck 'INFO' 'Security Event Log analysis deferred' >> "%PSRUN%"
-echo ck 'INFO' 'Firewall configuration check deferred' >> "%PSRUN%"
-echo ck 'INFO' 'Windows Defender status check deferred' >> "%PSRUN%"
+echo ck 'INFO' 'Firewall rule listing deferred (the firewall state is graded in Section 8)' >> "%PSRUN%"
+echo ck 'INFO' 'Windows Defender detection history deferred (its status, exclusions and ASR rules are graded in Section 9)' >> "%PSRUN%"
 echo ck 'INFO' 'BitLocker and Secure Boot verification deferred' >> "%PSRUN%"
 echo ck 'INFO' 'SMB server configuration check deferred' >> "%PSRUN%"
 echo ck 'INFO' 'netsh portproxy tunnel check deferred' >> "%PSRUN%"

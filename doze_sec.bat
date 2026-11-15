@@ -3253,6 +3253,8 @@ echo off, which is the first thing an intruder does after gaining admin.>> "%REP
 echo  Command: powershell -File tools\defender_core_check.ps1   [evaluates Get-MpComputerStatus + Get-MpPreference]>> "%REPORT%"
 del "%TEMP%\dz_defcore.txt" 2>nul
 del "%TEMP%\dz_defcore_state.txt" 2>nul
+del "%TEMP%\dz_defcore_gap.txt" 2>nul
+del "%TEMP%\dz_defcore_deferred.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\defender_core_check.ps1" (
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\defender_core_check.ps1">> "%REPORT%" 2>&1
 ) else (
@@ -3264,6 +3266,17 @@ if exist "%TEMP%\dz_defcore.txt" (
     set /p _DCSEV=<"%TEMP%\dz_defcore.txt"
     call :dz_finding !_DCSEV! 9 T1562.001 "Defender core protection disabled, passive without a replacement, or tampered with"
     del "%TEMP%\dz_defcore.txt" 2>nul
+)
+if exist "%TEMP%\dz_defcore_gap.txt" (
+    rem A gap is its own row, beside a finding or alone.
+    call :dz_finding WARNING 9 T1562.001 "Defender core status check NOT performed - Defender did not answer and no other antivirus is registered"
+    del "%TEMP%\dz_defcore_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_defcore_deferred.txt" (
+    set "_DCDEF=0"
+    set /p _DCDEF=<"%TEMP%\dz_defcore_deferred.txt"
+    set /a DEFERRED_COUNT+=!_DCDEF!
+    del "%TEMP%\dz_defcore_deferred.txt" 2>nul
 )
 :: Carry this check's verdict to the summary dashboard (the PROCPATH_STATE /
 :: DNSPROBE_STATE idiom): the real-time tile states what Section 9 found instead
@@ -3297,6 +3310,8 @@ echo never scanned. Every exclusion below is listed for you to confirm it is you
 echo  Command: powershell -File tools\defender_exclusions_check.ps1   [evaluates (Get-MpPreference).ExclusionPath, ExclusionProcess and ExclusionExtension]>> "%REPORT%"
 del "%TEMP%\dz_defexcl.txt" 2>nul
 del "%TEMP%\dz_defexcl_state.txt" 2>nul
+del "%TEMP%\dz_defexcl_gap.txt" 2>nul
+del "%TEMP%\dz_defexcl_deferred.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\defender_exclusions_check.ps1" (
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\defender_exclusions_check.ps1">> "%REPORT%" 2>&1
 ) else (
@@ -3310,6 +3325,17 @@ if exist "%TEMP%\dz_defexcl.txt" (
     set /p _DXSEV=<"%TEMP%\dz_defexcl.txt"
     call :dz_finding !_DXSEV! 9 T1562.001 "Defender exclusions configured"
     del "%TEMP%\dz_defexcl.txt" 2>nul
+)
+if exist "%TEMP%\dz_defexcl_gap.txt" (
+    rem A gap is its own row, beside a finding or alone.
+    call :dz_finding WARNING 9 T1562.001 "Defender exclusions check NOT performed - the exclusion lists could not be read"
+    del "%TEMP%\dz_defexcl_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_defexcl_deferred.txt" (
+    set "_DXDEF=0"
+    set /p _DXDEF=<"%TEMP%\dz_defexcl_deferred.txt"
+    set /a DEFERRED_COUNT+=!_DXDEF!
+    del "%TEMP%\dz_defexcl_deferred.txt" 2>nul
 )
 :: Carry the counts to the dashboard (the DEFCORE_* idiom): the exclusion tiles
 :: state what this section found instead of calling Get-MpPreference a second

@@ -701,7 +701,14 @@ measured that a standard user CAN read the effective firewall state, SMBv1
 and WinRM. This is the second instance of the skipped-by-goto class above.
 A section-wide deferral hides everything in the section the token could have
 answered. When a tool is added to a section, read the section's non-admin
-branch; `lint.yml` pins this one.
+branch; `lint.yml` pins this one. **The third instance was Section 9**, found
+by the per-`goto` search of the no-admin bat (2026-11-15): one jump skipped
+Defender's status, its disable flags, the EDR agents, exclusions and ASR, so a
+standard-user run never reported real-time protection switched off. It now
+runs; only the detection history is gated. And a standard user's
+`Get-MpPreference` ANSWERS, putting "N/A: Must be an administrator" where each
+exclusion list would be: a placeholder like that is a deferral, never data --
+read the value's shape before treating it as a finding.
 
 **A walk has three ways to read clean without looking, and a review found
 all three in one tool before it shipped.** `tools/file_walk_check.ps1`
