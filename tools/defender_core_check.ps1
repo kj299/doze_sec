@@ -153,7 +153,11 @@ function Get-DefenderCoreReport {
         # Windows Security Center's own entry for Defender: @{ Asked; On } with
         # On $true/$false, or $null when there is no such entry. Read only on a
         # standard-user token, where Get-MpComputerStatus masks the fields.
-        $DefenderSc = $null
+        $DefenderSc = $null,
+        # The Group Policy values for the disable flags (HKLM, readable by any
+        # token): @{ <flag> = @{ State = present|absent|nokey|unreadable; Value; Error } }.
+        # Read only on a standard-user token.
+        $PolicyFlags = $null
     )
     # MEASURED on a runner (2026-11-15): to a standard-user token
     # Get-MpComputerStatus reports real-time, on-access and Tamper Protection
@@ -231,7 +235,39 @@ function Get-DefenderCoreReport {
     }
     if ($maskedDeferred) { $deferred++; $whyStatus = 'stdmasked' }
     $graded = ($StatusOk -and -not $rtUnknown)
-    if ($PrefOk) {
+    $prefMasked = $false
+    if ($PrefOk -and $masked) {
+        # MEASURED (2026-11-15): to a standard-user token Get-MpPreference
+        # reads DisableRealtimeMonitoring as SET on a runner whose administrator
+        # token reads it clear, so its disable flags are not evidence on that
+        # token. The Group Policy values are: they are how a policy turns
+        # Defender off, and any token can read them. The local settings have no
+        # second source and are deferred.
+        $flagText = @{
+            DisableRealtimeMonitoring = @('CRITICAL', 'DisableRealtimeMonitoring is SET by Group Policy (T1562.001) -- real-time monitoring is turned off.')
+            DisableBehaviorMonitoring = @('WARNING', 'DisableBehaviorMonitoring is set by Group Policy -- behavioural detection is off.')
+            DisableScriptScanning     = @('WARNING', 'DisableScriptScanning is set by Group Policy -- malicious scripts are not scanned.')
+            DisableIOAVProtection     = @('WARNING', 'DisableIOAVProtection is set by Group Policy -- downloaded files are not scanned.')
+            DisableBlockAtFirstSeen   = @('WARNING', 'DisableBlockAtFirstSeen is set by Group Policy -- cloud first-sight blocking is off.')
+        }
+        $polGap = New-Object System.Collections.ArrayList
+        foreach ($fl in @('DisableRealtimeMonitoring', 'DisableBehaviorMonitoring', 'DisableScriptScanning', 'DisableIOAVProtection', 'DisableBlockAtFirstSeen')) {
+            $st = $null; if ($PolicyFlags) { $st = $PolicyFlags[$fl] }
+            if ($null -eq $st) { [void]$polGap.Add(($fl + ': not read')); continue }
+            if ([string]$st.State -eq 'unreadable') { [void]$polGap.Add(($fl + ': ' + ((([string]$st.Error) -replace '[\x00-\x1F\x7F]', '?')))); continue }
+            if ([string]$st.State -eq 'present' -and [string]$st.Value -eq '1') {
+                [void]$out.Add(('[' + $flagText[$fl][0] + '] ' + $flagText[$fl][1])); $sev = Get-MaxSev $sev $flagText[$fl][0]; $findings++
+            }
+        }
+        if ($polGap.Count -gt 0) {
+            [void]$out.Add(('[WARNING] Defender disable-flags check NOT performed -- the Group Policy values could not be read (' + ($polGap -join '; ') + '), so a policy that switched Defender off would go unseen on this standard-user token (T1562.001).'))
+            $gap = $true; $gapPref = $true; $whyPref = 'gap'
+        }
+        $raw = $null; try { $raw = $Pref.DisableRealtimeMonitoring } catch {}
+        $rawShown = $(if ($null -eq $raw) { '(nothing)' } else { (([string]$raw) -replace '[\x00-\x1F\x7F]', '?') + ' (' + $raw.GetType().Name + ')' })
+        [void]$out.Add(('[DEFERRED - ADMIN REQUIRED] Defender''s LOCAL disable settings not graded on this standard-user token: Get-MpPreference shows it DisableRealtimeMonitoring=' + $rawShown + ' whatever the setting. The Group Policy values above were read; an audit run as administrator grades the local settings.'))
+        $prefMasked = $true; $deferred++; if ($whyPref -eq 'ok') { $whyPref = 'stdmasked' }
+    } elseif ($PrefOk) {
         if ($Pref.DisableRealtimeMonitoring) {
             [void]$out.Add('[CRITICAL] DisableRealtimeMonitoring is SET (T1562.001) -- real-time monitoring was explicitly turned off.'); $sev = Get-MaxSev $sev 'CRITICAL'; $findings++
         }
@@ -251,7 +287,7 @@ function Get-DefenderCoreReport {
         $f = Get-DefenderQueryFailure -Query 'Get-MpPreference' -What 'disable-flags' -Err $PrefErr -Denied $PrefDenied -IsElevated $IsElevated -Av $OtherAv
         [void]$out.Add($f.Line); if ($f.Gap) { $gap = $true; $gapPref = $true }; $deferred += [int]$f.Deferred; $whyPref = [string]$f.Reason
     }
-    if ($StatusOk -and $PrefOk -and $findings -eq 0 -and -not $maskedDeferred) {
+    if ($StatusOk -and $PrefOk -and $findings -eq 0 -and -not $maskedDeferred -and -not $prefMasked -and -not $gap) {
         if ($passive) {
             [void]$out.Add('[OK] Defender itself is tamper-protected, current and not policy-disabled; protection belongs to the other product above.')
         } else {
@@ -274,6 +310,7 @@ if ($SelfTest) {
         return [pscustomobject]@{ DisableRealtimeMonitoring = $Rtm; DisableBehaviorMonitoring = $Bm; DisableScriptScanning = $Ss; DisableIOAVProtection = $Ioav; DisableBlockAtFirstSeen = $Bafs }
     }
     $j = { param($r) ($r.Lines -join "`n") }
+    $noPol = @{}; foreach ($fl in 'DisableRealtimeMonitoring', 'DisableBehaviorMonitoring', 'DisableScriptScanning', 'DisableIOAVProtection', 'DisableBlockAtFirstSeen') { $noPol[$fl] = @{ State = 'nokey' } }
 
     $r = Get-DefenderCoreReport -StatusOk $true -Status (St -Rt $false -Av $false) -PrefOk $true -Pref (Pr) -Now $now
     T 'Normal mode with real-time OFF: CRITICAL, names T1562.001 and the fix' ($r.Sev -eq 'CRITICAL' -and (& $j $r) -match '\[CRITICAL\] Defender real-time protection is OFF \(T1562.001\).*Set-MpPreference -DisableRealtimeMonitoring \$false' -and (& $j $r) -match '\[CRITICAL\] Defender antivirus is OFF') (& $j $r)
@@ -293,8 +330,8 @@ if ($SelfTest) {
     T 'signatures 3 days old: nothing raised, the OK line prints' ($r.Sev -eq 'OK' -and (& $j $r) -match '^\[OK\] Defender core protection on:' -and (& $j $r) -notmatch '\[WARNING\]') (& $j $r)
     $r = Get-DefenderCoreReport -StatusOk $false -Status $null -PrefOk $true -Pref (Pr) -Now $now
     T 'Get-MpComputerStatus failed, no other antivirus: a raised gap (never [SKIPPED]-and-silent), not graded, state says ungraded' ($r.Sev -eq 'OK' -and $r.Gap -and (-not $r.Graded) -and (& $j $r) -match '^\[WARNING\] Defender core status \(real-time, antivirus, tamper protection, signatures\) check NOT performed -- Get-MpComputerStatus failed' -and (& $j $r) -notmatch '\[SKIPPED\]' -and $r.State -eq 'unknown|0|0|0|-1') ((& $j $r) + ' / ' + $r.State)
-    $r = Get-DefenderCoreReport -StatusOk $false -Status $null -StatusErr 'CimException: Access denied' -StatusDenied $true -IsElevated $false -PrefOk $true -Pref (Pr) -Now $now
-    T 'Get-MpComputerStatus REFUSED to a standard-user token: a counted deferral, no gap' ($r.Deferred -eq 1 -and (-not $r.Gap) -and (& $j $r) -match '^\[DEFERRED - ADMIN REQUIRED\] Get-MpComputerStatus was refused to this standard-user token') (& $j $r)
+    $r = Get-DefenderCoreReport -StatusOk $false -Status $null -StatusErr 'CimException: Access denied' -StatusDenied $true -IsElevated $false -PolicyFlags $noPol -PrefOk $true -Pref (Pr) -Now $now
+    T 'Get-MpComputerStatus REFUSED to a standard-user token: a counted deferral, no gap' ($r.Deferred -eq 2 -and (-not $r.Gap) -and (& $j $r) -match '^\[DEFERRED - ADMIN REQUIRED\] Get-MpComputerStatus was refused to this standard-user token') (& $j $r)
     $r = Get-DefenderCoreReport -StatusOk $false -Status $null -StatusErr 'CimException: Access denied' -StatusDenied $true -IsElevated $true -PrefOk $true -Pref (Pr) -Now $now
     T 'the same refusal ELEVATED: a raised gap (the token does not explain it)' ($r.Gap -and $r.Deferred -eq 0) (& $j $r)
     T 'the reason travels to the tile: status gap, flags fine' ($r.Why -eq 'gap|ok' -and $r.GapStatus -and (-not $r.GapPref)) $r.Why
@@ -302,22 +339,33 @@ if ($SelfTest) {
     T 'only Get-MpPreference failed: the FLAGS gap marker, never the core-status one' ($r.GapPref -and (-not $r.GapStatus) -and $r.Why -eq 'ok|gap' -and (& $j $r) -match 'names no other enabled antivirus') (& $j $r)
     $r = Get-DefenderCoreReport -StatusOk $false -Status $null -StatusErr 'x' -IsElevated $true -OtherAv @{ Asked = $false; Names = @() } -PrefOk $true -Pref (Pr) -Now $now
     T 'Security Center could not be asked (Windows Server): the line says so, never "names no other"' ($r.GapStatus -and (& $j $r) -match 'Windows Security Center could not be asked' -and (& $j $r) -notmatch 'names no other') (& $j $r)
-    $r = Get-DefenderCoreReport -StatusOk $false -Status $null -StatusErr 'CimException: Access denied' -StatusDenied $true -IsElevated $false -PrefOk $true -Pref (Pr) -Now $now
-    T 'a standard-user refusal is the reason the tile states: deferred' ($r.Why -eq 'deferred|ok') $r.Why
+    $r = Get-DefenderCoreReport -StatusOk $false -Status $null -StatusErr 'CimException: Access denied' -StatusDenied $true -IsElevated $false -PolicyFlags $noPol -PrefOk $true -Pref (Pr) -Now $now
+    T 'a standard-user refusal is the reason the tile states: deferred' ($r.Why -eq 'deferred|stdmasked') $r.Why
     # MEASURED masking on a standard-user token: real-time, on-access and tamper read OFF.
     $m = St -Rt $false -Oa $false -Tp $false
-    $r = Get-DefenderCoreReport -StatusOk $true -Status $m -PrefOk $true -Pref (Pr) -IsElevated $false -DefenderSc @{ Asked = $false; On = $null } -Now $now
-    T 'standard token, masked fields, no Security Center (Windows Server, the CI runner): deferrals, NEVER the false CRITICAL' ($r.Sev -eq 'OK' -and (-not $r.Graded) -and $r.Why -eq 'stdmasked|ok' -and $r.Deferred -ge 1 -and (& $j $r) -notmatch '\[CRITICAL\]' -and (& $j $r) -notmatch 'Tamper Protection is OFF' -and (& $j $r) -notmatch '^\[OK\] Defender core protection on') (& $j $r)
-    $r = Get-DefenderCoreReport -StatusOk $true -Status $m -PrefOk $true -Pref (Pr) -IsElevated $false -DefenderSc @{ Asked = $true; On = $true } -Now $now
+    $r = Get-DefenderCoreReport -StatusOk $true -Status $m -PrefOk $true -Pref (Pr) -IsElevated $false -PolicyFlags $noPol -DefenderSc @{ Asked = $false; On = $null } -Now $now
+    T 'standard token, masked fields, no Security Center (Windows Server, the CI runner): deferrals, NEVER the false CRITICAL' ($r.Sev -eq 'OK' -and (-not $r.Graded) -and $r.Why -eq 'stdmasked|stdmasked' -and $r.Deferred -ge 2 -and (& $j $r) -notmatch '\[CRITICAL\]' -and (& $j $r) -notmatch 'Tamper Protection is OFF' -and (& $j $r) -notmatch '^\[OK\] Defender core protection on') (& $j $r)
+    $r = Get-DefenderCoreReport -StatusOk $true -Status $m -PrefOk $true -Pref (Pr) -IsElevated $false -PolicyFlags $noPol -DefenderSc @{ Asked = $true; On = $true } -Now $now
     T 'standard token, masked real-time, Security Center says Defender is on: graded on, no CRITICAL, tamper still deferred' ($r.Sev -eq 'OK' -and $r.Graded -and $r.RealTime -and (& $j $r) -match 'real-time protection is on, as Windows Security Center reports it' -and (& $j $r) -match 'Tamper Protection not graded') (& $j $r)
-    $r = Get-DefenderCoreReport -StatusOk $true -Status $m -PrefOk $true -Pref (Pr) -IsElevated $false -DefenderSc @{ Asked = $true; On = $false } -Now $now
+    $r = Get-DefenderCoreReport -StatusOk $true -Status $m -PrefOk $true -Pref (Pr) -IsElevated $false -PolicyFlags $noPol -DefenderSc @{ Asked = $true; On = $false } -Now $now
     T 'standard token, Security Center says Defender real-time is OFF: the CRITICAL, naming the source' ($r.Sev -eq 'CRITICAL' -and (& $j $r) -match '\[CRITICAL\] Defender real-time protection is OFF, as Windows Security Center reports it') (& $j $r)
-    $r = Get-DefenderCoreReport -StatusOk $true -Status (St) -PrefOk $true -Pref (Pr) -IsElevated $false -Now $now
-    T 'standard token, every field reads ON: trusted (masking only reads off), the OK line prints' ($r.Sev -eq 'OK' -and $r.Graded -and $r.Deferred -eq 0 -and (& $j $r) -match '^\[OK\] Defender core protection on') (& $j $r)
-    $r = Get-DefenderCoreReport -StatusOk $true -Status (St -Oa $false) -PrefOk $true -Pref (Pr) -IsElevated $false -Now $now
-    T 'standard token, only on-access reads off: one deferral line, no WARNING' ($r.Deferred -eq 1 -and (& $j $r) -match 'on-access and Tamper Protection not graded' -and (& $j $r) -notmatch '\[WARNING\]') (& $j $r)
+    $r = Get-DefenderCoreReport -StatusOk $true -Status (St) -PrefOk $true -Pref (Pr) -IsElevated $false -PolicyFlags $noPol -Now $now
+    T 'standard token, every status field reads ON: trusted (masking only reads off); only the local disable settings are deferred, no all-clear claimed' ($r.Sev -eq 'OK' -and $r.Graded -and $r.Deferred -eq 1 -and $r.Why -eq 'ok|stdmasked' -and (& $j $r) -notmatch 'real-time protection not graded' -and (& $j $r) -notmatch '^\[OK\] Defender core protection on') (& $j $r)
+    $r = Get-DefenderCoreReport -StatusOk $true -Status (St -Oa $false) -PrefOk $true -Pref (Pr) -IsElevated $false -PolicyFlags $noPol -Now $now
+    T 'standard token, only on-access reads off: one status deferral line (plus the local flags), no WARNING' ($r.Deferred -eq 2 -and (& $j $r) -match 'on-access and Tamper Protection not graded' -and (& $j $r) -notmatch '\[WARNING\]') (& $j $r)
     $r = Get-DefenderCoreReport -StatusOk $true -Status $m -PrefOk $true -Pref (Pr) -IsElevated $true -Now $now
     T 'the SAME values ELEVATED are graded as before: CRITICAL and the tamper WARNING' ($r.Sev -eq 'CRITICAL' -and (& $j $r) -match 'Tamper Protection is OFF' -and $r.Deferred -eq 0) (& $j $r)
+    # MEASURED masking of Get-MpPreference on a standard-user token: DisableRealtimeMonitoring reads SET.
+    $r = Get-DefenderCoreReport -StatusOk $true -Status (St) -PrefOk $true -Pref (Pr -Rtm $true) -IsElevated $false -PolicyFlags $noPol -Now $now
+    T 'standard token, Get-MpPreference shows DisableRealtimeMonitoring SET, no policy sets it: NEVER the CRITICAL, a counted deferral naming the raw value' ($r.Sev -eq 'OK' -and (& $j $r) -notmatch '\[CRITICAL\]' -and (& $j $r) -match 'LOCAL disable settings not graded on this standard-user token: Get-MpPreference shows it DisableRealtimeMonitoring=True \(Boolean\)' -and $r.Why -eq 'ok|stdmasked') (& $j $r)
+    $pol = $noPol.Clone(); $pol['DisableRealtimeMonitoring'] = @{ State = 'present'; Value = 1 }
+    $r = Get-DefenderCoreReport -StatusOk $true -Status (St) -PrefOk $true -Pref (Pr -Rtm $true) -IsElevated $false -PolicyFlags $pol -Now $now
+    T 'standard token, Group Policy sets DisableRealtimeMonitoring=1: the CRITICAL, naming Group Policy' ($r.Sev -eq 'CRITICAL' -and (& $j $r) -match '\[CRITICAL\] DisableRealtimeMonitoring is SET by Group Policy') (& $j $r)
+    $pol = $noPol.Clone(); $pol['DisableScriptScanning'] = @{ State = 'unreadable'; Error = 'SecurityException: x' }
+    $r = Get-DefenderCoreReport -StatusOk $true -Status (St) -PrefOk $true -Pref (Pr) -IsElevated $false -PolicyFlags $pol -Now $now
+    T 'standard token, a policy value that cannot be read: the FLAGS gap, never an all-clear' ($r.GapPref -and (-not $r.GapStatus) -and (& $j $r) -match 'Defender disable-flags check NOT performed -- the Group Policy values could not be read' -and (& $j $r) -notmatch '^\[OK\] Defender core') (& $j $r)
+    $r = Get-DefenderCoreReport -StatusOk $true -Status (St) -PrefOk $true -Pref (Pr -Rtm $true) -IsElevated $true -Now $now
+    T 'the same Get-MpPreference value ELEVATED is still the CRITICAL' ($r.Sev -eq 'CRITICAL' -and (& $j $r) -match '\[CRITICAL\] DisableRealtimeMonitoring is SET \(T1562\.001') (& $j $r)
     $r = Get-DefenderCoreReport -StatusOk $false -Status $null -StatusErr 'CimException: Invalid namespace' -IsElevated $true -OtherAv @{ Asked = $true; Names = @('Contoso AV') } -PrefOk $false -Pref $null -PrefErr 'x' -Now $now
     T 'Defender does not answer and Security Center names another enabled antivirus: INFO naming it, no gap' ((-not $r.Gap) -and (& $j $r) -match '^\[INFO\] Get-MpComputerStatus did not answer \(CimException: Invalid namespace\); Windows Security Center names Contoso AV as the enabled antivirus') (& $j $r)
     $r = Get-DefenderCoreReport -StatusOk $true -Status (St) -PrefOk $false -Pref $null -Now $now
@@ -349,6 +397,21 @@ $other = $null
 if (-not ($stOk -and $pfOk)) { $other = Get-OtherAntivirus }
 # Security Center's own view of Defender, for the fields a standard-user token
 # is shown masked. On = $null when Security Center has no Defender entry.
+$polFlags = $null
+if ($Elevated -ne 1) {
+    $polFlags = @{}
+    $pk = @{ DisableRealtimeMonitoring = 'Real-Time Protection'; DisableBehaviorMonitoring = 'Real-Time Protection'; DisableScriptScanning = 'Real-Time Protection'; DisableIOAVProtection = 'Real-Time Protection'; DisableBlockAtFirstSeen = 'Spynet' }
+    foreach ($fl in $pk.Keys) {
+        $path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\' + $pk[$fl]
+        try {
+            $k = Get-Item -LiteralPath $path -ErrorAction Stop
+            if (@($k.GetValueNames()) -contains $fl) { $polFlags[$fl] = @{ State = 'present'; Value = $k.GetValue($fl, $null) } } else { $polFlags[$fl] = @{ State = 'absent' } }
+        } catch {
+            if ($_.Exception -is [System.Management.Automation.ItemNotFoundException]) { $polFlags[$fl] = @{ State = 'nokey' } }
+            else { $polFlags[$fl] = @{ State = 'unreadable'; Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message) } }
+        }
+    }
+}
 $dsc = $null
 if ($Elevated -ne 1) {
     try {
@@ -356,7 +419,7 @@ if ($Elevated -ne 1) {
         if ($e.Count -gt 0) { $dsc = @{ Asked = $true; On = ((([int]$e[0].productState) -band 0xF000) -eq 0x1000) } } else { $dsc = @{ Asked = $true; On = $null } }
     } catch { $dsc = @{ Asked = $false; On = $null } }
 }
-$rep = Get-DefenderCoreReport -StatusOk $stOk -Status $st -PrefOk $pfOk -Pref $pr -StatusErr $stErr -StatusDenied $stDen -PrefErr $pfErr -PrefDenied $pfDen -IsElevated ($Elevated -eq 1) -OtherAv $other -DefenderSc $dsc
+$rep = Get-DefenderCoreReport -StatusOk $stOk -Status $st -PrefOk $pfOk -Pref $pr -StatusErr $stErr -StatusDenied $stDen -PrefErr $pfErr -PrefDenied $pfDen -IsElevated ($Elevated -eq 1) -OtherAv $other -DefenderSc $dsc -PolicyFlags $polFlags
 $rep.Lines
 Write-Marker -Name 'defcore' -Sev $rep.Sev
 # Two checks, two gap markers: the ledger row names the one that was not done.

@@ -518,7 +518,7 @@ try {
     # with its row. The "N/A: Must be an administrator" placeholder must never
     # become an exclusion finding.
     foreach ($c in @(
-        @{ Name = 'Defender core status'; Ran = '(?m)^\[OK\] Defender (core protection on|itself is tamper-protected)|(?m)^\[(CRITICAL|WARNING)\] (Defender real-time|Defender antivirus|Defender antimalware|Defender antispyware|Defender on-access|Tamper Protection|Defender signatures)|(?m)^\[INFO\] Defender is running in '; Def = '(?m)^\[DEFERRED - ADMIN REQUIRED\] Get-MpComputerStatus was refused'; Gap = '(?m)^\[WARNING\] Defender core status .*check NOT performed'; Row = '\|9\|T1562\.001\|Defender core status check NOT performed' },
+        @{ Name = 'Defender core status'; Ran = '(?m)^\[OK\] Defender (core protection on|itself is tamper-protected)|(?m)^\[(CRITICAL|WARNING)\] (Defender real-time|Defender antivirus|Defender antimalware|Defender antispyware|Defender on-access|Tamper Protection|Defender signatures)|(?m)^\[INFO\] Defender is running in '; Def = '(?m)^\[DEFERRED - ADMIN REQUIRED\] (Get-MpComputerStatus was refused|Defender real-time protection not graded|Defender on-access and Tamper Protection not graded|Defender''s LOCAL disable settings not graded)'; Gap = '(?m)^\[WARNING\] Defender core status .*check NOT performed'; Row = '\|9\|T1562\.001\|Defender core status check NOT performed' },
         @{ Name = 'Defender exclusions'; Ran = '(?m)^\[OK\] No (path|process|extension) exclusions\.|(?m)^\[WARNING\] Exclusion (paths|processes|extensions) found'; Def = '(?m)^\[DEFERRED - ADMIN REQUIRED\] (Defender withholds its exclusion|Get-MpPreference was refused)'; Gap = '(?m)^\[WARNING\] Defender exclusions .*check NOT performed'; Row = '\|9\|T1562\.001\|Defender exclusions check NOT performed' })) {
         $ran = $text1 -match $c.Ran; $def = $text1 -match $c.Def; $gap = $text1 -match $c.Gap
         Write-Host ("  MEASURED: the {0} check on a standard-user token: ran={1} deferred={2} gap={3}" -f $c.Name, $ran, $def, $gap)
@@ -544,7 +544,9 @@ try {
     # and Tamper Protection as OFF whatever their state. Those values must
     # never be graded on this token; the runner has no Security Center, so
     # real-time is a counted deferral here.
-    Assert ($text1 -notmatch '(?m)^\[CRITICAL\] Defender real-time protection is OFF \(T1562' -and $text1 -notmatch '(?m)^\[WARNING\] Tamper Protection is OFF' -and $text1 -notmatch '(?m)^\[WARNING\] Defender on-access protection is off') 'the masked Defender fields are not graded on a standard-user token' 'a masked Defender field (real-time, on-access or tamper read OFF) was graded on a standard-user token'
+    Assert ($text1 -notmatch '(?m)^\[CRITICAL\] Defender real-time protection is OFF \(T1562\.001' -and $text1 -notmatch '(?m)^\[WARNING\] Tamper Protection is OFF' -and $text1 -notmatch '(?m)^\[WARNING\] Defender on-access protection is off') 'the masked Defender fields are not graded on a standard-user token' 'a masked Defender field (real-time, on-access or tamper read OFF) was graded on a standard-user token'
+    Assert ($text1 -notmatch '(?m)^\[CRITICAL\] DisableRealtimeMonitoring is SET \(T1562\.001') 'the masked Get-MpPreference flags are not graded on a standard-user token' 'a masked Get-MpPreference flag (DisableRealtimeMonitoring) was graded on a standard-user token'
+    Write-Host ("  MEASURED: what Get-MpPreference shows a standard-user token: " + (($text1 -split "`r?`n" | Where-Object { $_ -match 'LOCAL disable settings not graded' }) -join ' | '))
     Assert ($text1 -match 'Tamper protection and signature age: NOT graded -- Defender does not show them truthfully') 'the tamper tile reads NOT graded on a standard-user token' 'the tamper tile graded a masked value on a standard-user token'
     # Defender's detection history needs administrator: the deferral line the
     # bat always printed, and never "[OK] No ... detections on record".

@@ -715,7 +715,9 @@ Protection as OFF while the administrator token on the same runner reads them
 ON: the first draft graded them and raised a false CRITICAL on a clean runner.
 On that token a FALSE is not evidence (masking only ever reads off); real-time
 is graded from Windows Security Center's own entry for Defender, and what has
-no second source is deferred.
+no second source is deferred. The second round measured `Get-MpPreference`
+showing the same token `DisableRealtimeMonitoring` SET: every field a token
+may be shown masked needs that treatment, not only the first one CI catches.
 
 **A walk has three ways to read clean without looking, and a review found
 all three in one tool before it shipped.** `tools/file_walk_check.ps1`
