@@ -90,19 +90,23 @@ function Get-DefenderStateLine {
 # enabled antivirus, which is the documented reason Defender's own interface
 # can be absent: then the line says so as [INFO]. A query that could not be
 # made is never [OK] and never [SKIPPED]-and-silent.
-# $OtherAv: names of other enabled antivirus products, or $null when Security
-# Center could not be asked. Returns @{ Line; Gap; Deferred }.
+# $Av: @{ Asked = <Security Center answered>; Names = <other ENABLED antivirus> },
+# or $null. "Could not be asked" and "names none" are worded apart: Windows
+# Server has no Security Center, and saying it named nothing would be untrue.
+# Returns @{ Line; Gap; Deferred; Reason = deferred|otherav|gap }.
 function Get-DefenderQueryFailure {
-    param([string]$Query, [string]$What, [string]$Err, [bool]$Denied, [bool]$IsElevated, $OtherAv)
+    param([string]$Query, [string]$What, [string]$Err, [bool]$Denied, [bool]$IsElevated, $Av)
     $e = (([string]$Err) -replace '[\x00-\x1F\x7F]', '?'); if ($e.Length -gt 200) { $e = $e.Substring(0, 200) + '...' }
     if ($Denied -and -not $IsElevated) {
-        return @{ Line = ('[DEFERRED - ADMIN REQUIRED] ' + $Query + ' was refused to this standard-user token -- ' + $What + ' not read; an audit run as administrator reads it.'); Gap = $false; Deferred = 1 }
+        return @{ Line = ('[DEFERRED - ADMIN REQUIRED] ' + $Query + ' was refused to this standard-user token -- ' + $What + ' not read; an audit run as administrator reads it.'); Gap = $false; Deferred = 1; Reason = 'deferred' }
     }
-    $names = @($OtherAv | Where-Object { [string]$_ })
+    $names = @(); $asked = $false
+    if ($Av) { $asked = [bool]$Av.Asked; $names = @($Av.Names | Where-Object { [string]$_ }) }
     if ($names.Count -gt 0) {
-        return @{ Line = ('[INFO] ' + $Query + ' did not answer (' + $e + '); Windows Security Center names ' + (($names | ForEach-Object { (([string]$_) -replace '[\x00-\x1F\x7F]', '?') }) -join ', ') + ' as the antivirus on this PC, so Defender''s own ' + $What + ' is not the protection in force. Verify that product is running and current.'); Gap = $false; Deferred = 0 }
+        return @{ Line = ('[INFO] ' + $Query + ' did not answer (' + $e + '); Windows Security Center names ' + (($names | ForEach-Object { (([string]$_) -replace '[\x00-\x1F\x7F]', '?') }) -join ', ') + ' as the enabled antivirus on this PC, so Defender''s own ' + $What + ' is not the protection in force. Verify that product is running and current.'); Gap = $false; Deferred = 0; Reason = 'otherav' }
     }
-    return @{ Line = ('[WARNING] Defender ' + $What + ' check NOT performed -- ' + $Query + ' failed (' + $e + ') and Windows Security Center names no other antivirus, so Defender switched off would go unseen (T1562.001).'); Gap = $true; Deferred = 0 }
+    $sc = $(if ($asked) { 'Windows Security Center names no other enabled antivirus' } else { 'Windows Security Center could not be asked (it is absent on Windows Server), so no other antivirus is known' })
+    return @{ Line = ('[WARNING] Defender ' + $What + ' check NOT performed -- ' + $Query + ' failed (' + $e + ') and ' + $sc + ', so Defender switched off would go unseen (T1562.001).'); Gap = $true; Deferred = 0; Reason = 'gap' }
 }
 
 # Live. Was this exception an access refusal? Walks the inner exceptions:
@@ -122,14 +126,16 @@ function Test-DefenderAccessDenied {
     return $false
 }
 
-# Live. Other enabled antivirus products Windows Security Center knows of, or
-# $null when it could not be asked (it is absent on Windows Server). The state
-# bits 12-15 are 1 when the product's protection is on.
+# Live. Other ENABLED antivirus products Windows Security Center knows of:
+# @{ Asked; Names }. Asked is $false when Security Center could not be asked
+# (it is absent on Windows Server). The state bits 12-15 are 1 when the
+# product's protection is on (0 off, 2 snoozed, 3 expired: not counted).
 function Get-OtherAntivirus {
     try {
         $p = @(Get-CimInstance -Namespace 'root\SecurityCenter2' -ClassName AntiVirusProduct -ErrorAction Stop)
-        return @($p | Where-Object { [string]$_.displayName -notmatch 'Windows Defender|Microsoft Defender' -and ((([int]$_.productState) -band 0xF000) -eq 0x1000) } | ForEach-Object { [string]$_.displayName })
-    } catch { return $null }
+        $n = @($p | Where-Object { [string]$_.displayName -notmatch 'Windows Defender|Microsoft Defender' -and ((([int]$_.productState) -band 0xF000) -eq 0x1000) } | ForEach-Object { [string]$_.displayName })
+        return @{ Asked = $true; Names = $n }
+    } catch { return @{ Asked = $false; Names = @() } }
 }
 
 # Pure. $Status / $Pref are whatever Get-MpComputerStatus / Get-MpPreference
@@ -145,7 +151,7 @@ function Get-DefenderCoreReport {
         [string]$PrefErr = '', [bool]$PrefDenied = $false,
         [bool]$IsElevated = $true, $OtherAv = $null
     )
-    $gap = $false; $deferred = 0
+    $gap = $false; $gapStatus = $false; $gapPref = $false; $deferred = 0; $whyStatus = 'ok'; $whyPref = 'ok'
     $out = New-Object System.Collections.Generic.List[string]
     $sev = 'OK'
     $mode = ''
@@ -191,8 +197,8 @@ function Get-DefenderCoreReport {
             [void]$out.Add('[WARNING] Defender signatures are ' + [int]$age + ' day(s) old -- updates are not arriving, which is itself a tampering indicator.'); $sev = Get-MaxSev $sev 'WARNING'; $findings++
         }
     } else {
-        $f = Get-DefenderQueryFailure -Query 'Get-MpComputerStatus' -What 'core status (real-time, antivirus, tamper protection, signatures)' -Err $StatusErr -Denied $StatusDenied -IsElevated $IsElevated -OtherAv $OtherAv
-        [void]$out.Add($f.Line); if ($f.Gap) { $gap = $true }; $deferred += [int]$f.Deferred
+        $f = Get-DefenderQueryFailure -Query 'Get-MpComputerStatus' -What 'core status (real-time, antivirus, tamper protection, signatures)' -Err $StatusErr -Denied $StatusDenied -IsElevated $IsElevated -Av $OtherAv
+        [void]$out.Add($f.Line); if ($f.Gap) { $gap = $true; $gapStatus = $true }; $deferred += [int]$f.Deferred; $whyStatus = [string]$f.Reason
     }
     if ($PrefOk) {
         if ($Pref.DisableRealtimeMonitoring) {
@@ -211,8 +217,8 @@ function Get-DefenderCoreReport {
             [void]$out.Add('[WARNING] DisableBlockAtFirstSeen is set -- cloud first-sight blocking is off.'); $sev = Get-MaxSev $sev 'WARNING'; $findings++
         }
     } else {
-        $f = Get-DefenderQueryFailure -Query 'Get-MpPreference' -What 'disable-flags' -Err $PrefErr -Denied $PrefDenied -IsElevated $IsElevated -OtherAv $OtherAv
-        [void]$out.Add($f.Line); if ($f.Gap) { $gap = $true }; $deferred += [int]$f.Deferred
+        $f = Get-DefenderQueryFailure -Query 'Get-MpPreference' -What 'disable-flags' -Err $PrefErr -Denied $PrefDenied -IsElevated $IsElevated -Av $OtherAv
+        [void]$out.Add($f.Line); if ($f.Gap) { $gap = $true; $gapPref = $true }; $deferred += [int]$f.Deferred; $whyPref = [string]$f.Reason
     }
     if ($StatusOk -and $PrefOk -and $findings -eq 0) {
         if ($passive) {
@@ -221,7 +227,7 @@ function Get-DefenderCoreReport {
             [void]$out.Add('[OK] Defender core protection on: real-time, antivirus, on-access and tamper protection enabled; signatures current; no disable flags set.')
         }
     }
-    return @{ Lines = @($out.ToArray()); Sev = $sev; Gap = $gap; Deferred = $deferred; Mode = $mode; Passive = $passive; RealTime = $rt; Graded = $StatusOk; State = (Get-DefenderStateLine -Mode $mode -RealTime $rt -Graded $StatusOk -Tamper $tamper -SigAgeDays $ageDays) }
+    return @{ Lines = @($out.ToArray()); Sev = $sev; Gap = $gap; GapStatus = $gapStatus; GapPref = $gapPref; Why = ($whyStatus + '|' + $whyPref); Deferred = $deferred; Mode = $mode; Passive = $passive; RealTime = $rt; Graded = $StatusOk; State = (Get-DefenderStateLine -Mode $mode -RealTime $rt -Graded $StatusOk -Tamper $tamper -SigAgeDays $ageDays) }
 }
 
 if ($SelfTest) {
@@ -260,8 +266,15 @@ if ($SelfTest) {
     T 'Get-MpComputerStatus REFUSED to a standard-user token: a counted deferral, no gap' ($r.Deferred -eq 1 -and (-not $r.Gap) -and (& $j $r) -match '^\[DEFERRED - ADMIN REQUIRED\] Get-MpComputerStatus was refused to this standard-user token') (& $j $r)
     $r = Get-DefenderCoreReport -StatusOk $false -Status $null -StatusErr 'CimException: Access denied' -StatusDenied $true -IsElevated $true -PrefOk $true -Pref (Pr) -Now $now
     T 'the same refusal ELEVATED: a raised gap (the token does not explain it)' ($r.Gap -and $r.Deferred -eq 0) (& $j $r)
-    $r = Get-DefenderCoreReport -StatusOk $false -Status $null -StatusErr 'CimException: Invalid namespace' -IsElevated $true -OtherAv @('Contoso AV') -PrefOk $false -Pref $null -PrefErr 'x' -Now $now
-    T 'Defender does not answer and Security Center names another enabled antivirus: INFO naming it, no gap' ((-not $r.Gap) -and (& $j $r) -match '^\[INFO\] Get-MpComputerStatus did not answer \(CimException: Invalid namespace\); Windows Security Center names Contoso AV as the antivirus') (& $j $r)
+    T 'the reason travels to the tile: status gap, flags fine' ($r.Why -eq 'gap|ok' -and $r.GapStatus -and (-not $r.GapPref)) $r.Why
+    $r = Get-DefenderCoreReport -StatusOk $true -Status (St) -PrefOk $false -Pref $null -PrefErr 'x' -IsElevated $true -OtherAv @{ Asked = $true; Names = @() } -Now $now
+    T 'only Get-MpPreference failed: the FLAGS gap marker, never the core-status one' ($r.GapPref -and (-not $r.GapStatus) -and $r.Why -eq 'ok|gap' -and (& $j $r) -match 'names no other enabled antivirus') (& $j $r)
+    $r = Get-DefenderCoreReport -StatusOk $false -Status $null -StatusErr 'x' -IsElevated $true -OtherAv @{ Asked = $false; Names = @() } -PrefOk $true -Pref (Pr) -Now $now
+    T 'Security Center could not be asked (Windows Server): the line says so, never "names no other"' ($r.GapStatus -and (& $j $r) -match 'Windows Security Center could not be asked' -and (& $j $r) -notmatch 'names no other') (& $j $r)
+    $r = Get-DefenderCoreReport -StatusOk $false -Status $null -StatusErr 'CimException: Access denied' -StatusDenied $true -IsElevated $false -PrefOk $true -Pref (Pr) -Now $now
+    T 'a standard-user refusal is the reason the tile states: deferred' ($r.Why -eq 'deferred|ok') $r.Why
+    $r = Get-DefenderCoreReport -StatusOk $false -Status $null -StatusErr 'CimException: Invalid namespace' -IsElevated $true -OtherAv @{ Asked = $true; Names = @('Contoso AV') } -PrefOk $false -Pref $null -PrefErr 'x' -Now $now
+    T 'Defender does not answer and Security Center names another enabled antivirus: INFO naming it, no gap' ((-not $r.Gap) -and (& $j $r) -match '^\[INFO\] Get-MpComputerStatus did not answer \(CimException: Invalid namespace\); Windows Security Center names Contoso AV as the enabled antivirus') (& $j $r)
     $r = Get-DefenderCoreReport -StatusOk $true -Status (St) -PrefOk $false -Pref $null -Now $now
     T 'Get-MpPreference failed: a raised gap for the flags, the status half still grades, no all-clear' ($r.Sev -eq 'OK' -and $r.Gap -and (& $j $r) -match '\[WARNING\] Defender disable-flags check NOT performed -- Get-MpPreference failed' -and (& $j $r) -notmatch '^\[OK\]') (& $j $r)
     $r = Get-DefenderCoreReport -StatusOk $true -Status (St -Svc $false) -PrefOk $true -Pref (Pr -Bm $true) -Now $now
@@ -292,7 +305,12 @@ if (-not ($stOk -and $pfOk)) { $other = Get-OtherAntivirus }
 $rep = Get-DefenderCoreReport -StatusOk $stOk -Status $st -PrefOk $pfOk -Pref $pr -StatusErr $stErr -StatusDenied $stDen -PrefErr $pfErr -PrefDenied $pfDen -IsElevated ($Elevated -eq 1) -OtherAv $other
 $rep.Lines
 Write-Marker -Name 'defcore' -Sev $rep.Sev
-if ($rep.Gap) { Write-Marker -Name 'defcore_gap' -Sev 'WARNING' }
+# Two checks, two gap markers: the ledger row names the one that was not done.
+if ($rep.GapStatus) { Write-Marker -Name 'defcore_gap' -Sev 'WARNING' }
+if ($rep.GapPref) { Write-Marker -Name 'defflags_gap' -Sev 'WARNING' }
+# Why each half was not graded (ok|deferred|otherav|gap), for the tiles and
+# the ASR block: a tile that knows WHY must say it (the RDP-tile rule).
+try { Set-Content -LiteralPath (Join-Path $MarkerDir 'dz_defcore_why.txt') -Value $rep.Why -Encoding ASCII } catch {}
 if ([int]$rep.Deferred -gt 0) { Write-Marker -Name 'defcore_deferred' -Sev ([string][int]$rep.Deferred) }
 try {
     $d = Split-Path -Parent $StateFile

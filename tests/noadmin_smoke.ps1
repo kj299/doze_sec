@@ -529,7 +529,17 @@ try {
     Write-Host ("  MEASURED: Defender lines on a standard-user token: " + (($text1 -split "`r?`n" | Where-Object { $_ -match '^\[(OK|INFO|WARNING|CRITICAL|DEFERRED - ADMIN REQUIRED)\] .*(Defender|Get-Mp|exclusion|Tamper)' } | Select-Object -First 8) -join ' | '))
     Assert ($text1 -notmatch '(?m)^    (path|process|extension): N/A') 'the "N/A: Must be an administrator" placeholder is never listed as an exclusion' 'the standard-user placeholder was listed as a Defender exclusion'
     Assert (@($ledger1 | Where-Object { $_ -match 'Defender exclusions configured' }).Count -eq 0) 'no "Defender exclusions configured" row on a clean standard-user run' 'a clean standard-user run raised "Defender exclusions configured" (the N/A placeholder graded as an exclusion?)'
-    Assert ($text1 -match '(?m)^ --- Endpoint Telemetry|(?m)^--- Endpoint Telemetry') 'the EDR-agent check ran on a standard-user token' 'the EDR-agent check did not run on a standard-user token (Section 9 skipped again?)'
+    # edr_presence's own closing line, not the header the bat always echoes.
+    Assert ($text1 -match '(?m)^\[INFO\] \d+ security product/agent\(s\) inspected\.') 'the EDR-agent check ran on a standard-user token' 'the EDR-agent check did not run on a standard-user token (Section 9 skipped again?)'
+    # A tile that knows WHY must say it: a deferral reads as the token, never
+    # as "could not query Defender" or "a third-party AV may own protection".
+    if ($text1 -match '(?m)^\[DEFERRED - ADMIN REQUIRED\] Defender withholds its exclusion') {
+        Assert ($text1 -match 'Defender exclusions: NOT graded on this standard-user token') 'the exclusion tile names the token as the reason' 'the exclusion tile gave a reason other than the token for a standard-user deferral'
+    }
+    if ($text1 -match '(?m)^\[DEFERRED - ADMIN REQUIRED\] Get-MpComputerStatus was refused') {
+        Assert ($text1 -match 'Real-time protection: NOT graded on this standard-user token') 'the real-time tile names the token as the reason' 'the real-time tile gave a reason other than the token for a standard-user deferral'
+    }
+    Assert ($text1 -notmatch 'a third-party AV may own protection') 'the Defender tiles no longer guess a third-party AV' 'a Defender tile still guesses "a third-party AV may own protection"'
     # Defender's detection history needs administrator: the deferral line the
     # bat always printed, and never "[OK] No ... detections on record".
     Assert ($text1 -match '(?m)^\[DEFERRED - ADMIN REQUIRED\] Get-MpThreatDetection requires admin\.' -and $text1 -notmatch 'No Win32/AccessibilityEscalation Defender detections on record') `

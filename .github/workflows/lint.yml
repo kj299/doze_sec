@@ -1029,12 +1029,14 @@ jobs:
           for n in 'Get-MpComputerStatus failed, no other antivirus: a raised gap (never [SKIPPED]-and-silent)' \
                    'Get-MpComputerStatus REFUSED to a standard-user token: a counted deferral, no gap' \
                    'the same refusal ELEVATED: a raised gap (the token does not explain it)' \
-                   'Defender does not answer and Security Center names another enabled antivirus: INFO naming it, no gap'; do
+                   'Defender does not answer and Security Center names another enabled antivirus: INFO naming it, no gap' \
+                   'only Get-MpPreference failed: the FLAGS gap marker, never the core-status one' \
+                   'Security Center could not be asked (Windows Server): the line says so, never "names no other"'; do
             echo "$out" | grep -qF "$n" || { echo "core case gone: $n"; exit 1; }
           done
           grep -qF 'goto :sec9_noadmin' doze_sec_noAdmin.bat && { echo 'doze_sec_noAdmin.bat: Section 9 is skipped wholesale on a standard-user token again'; exit 1; }
           for b in doze_sec.bat doze_sec_noAdmin.bat; do
-            for m in dz_defcore_gap dz_defcore_deferred dz_defexcl_gap dz_defexcl_deferred; do grep -qF "%TEMP%\\$m.txt" "$b" || { echo "$b: $m is never read"; exit 1; }; done
+            for m in dz_defcore_gap dz_defcore_deferred dz_defflags_gap dz_defcore_why dz_defexcl_gap dz_defexcl_deferred dz_defexcl_why dz_edr_gap dz_edr_deferred dz_asr_unread; do grep -qF "%TEMP%\\$m.txt" "$b" || { echo "$b: $m is never read"; exit 1; }; done
           done
       - name: module_inspect -- lsass denied on a standard-user token is DEFERRED; elevated with LSA Protection off it is a raised gap
         run: |

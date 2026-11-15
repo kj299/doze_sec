@@ -95,19 +95,23 @@ function Get-ExclusionStateLine {
 # enabled antivirus, which is the documented reason Defender's own interface
 # can be absent: then the line says so as [INFO]. A query that could not be
 # made is never [OK] and never [SKIPPED]-and-silent.
-# $OtherAv: names of other enabled antivirus products, or $null when Security
-# Center could not be asked. Returns @{ Line; Gap; Deferred }.
+# $Av: @{ Asked = <Security Center answered>; Names = <other ENABLED antivirus> },
+# or $null. "Could not be asked" and "names none" are worded apart: Windows
+# Server has no Security Center, and saying it named nothing would be untrue.
+# Returns @{ Line; Gap; Deferred; Reason = deferred|otherav|gap }.
 function Get-DefenderQueryFailure {
-    param([string]$Query, [string]$What, [string]$Err, [bool]$Denied, [bool]$IsElevated, $OtherAv)
+    param([string]$Query, [string]$What, [string]$Err, [bool]$Denied, [bool]$IsElevated, $Av)
     $e = (([string]$Err) -replace '[\x00-\x1F\x7F]', '?'); if ($e.Length -gt 200) { $e = $e.Substring(0, 200) + '...' }
     if ($Denied -and -not $IsElevated) {
-        return @{ Line = ('[DEFERRED - ADMIN REQUIRED] ' + $Query + ' was refused to this standard-user token -- ' + $What + ' not read; an audit run as administrator reads it.'); Gap = $false; Deferred = 1 }
+        return @{ Line = ('[DEFERRED - ADMIN REQUIRED] ' + $Query + ' was refused to this standard-user token -- ' + $What + ' not read; an audit run as administrator reads it.'); Gap = $false; Deferred = 1; Reason = 'deferred' }
     }
-    $names = @($OtherAv | Where-Object { [string]$_ })
+    $names = @(); $asked = $false
+    if ($Av) { $asked = [bool]$Av.Asked; $names = @($Av.Names | Where-Object { [string]$_ }) }
     if ($names.Count -gt 0) {
-        return @{ Line = ('[INFO] ' + $Query + ' did not answer (' + $e + '); Windows Security Center names ' + (($names | ForEach-Object { (([string]$_) -replace '[\x00-\x1F\x7F]', '?') }) -join ', ') + ' as the antivirus on this PC, so Defender''s own ' + $What + ' is not the protection in force. Verify that product is running and current.'); Gap = $false; Deferred = 0 }
+        return @{ Line = ('[INFO] ' + $Query + ' did not answer (' + $e + '); Windows Security Center names ' + (($names | ForEach-Object { (([string]$_) -replace '[\x00-\x1F\x7F]', '?') }) -join ', ') + ' as the enabled antivirus on this PC, so Defender''s own ' + $What + ' is not the protection in force. Verify that product is running and current.'); Gap = $false; Deferred = 0; Reason = 'otherav' }
     }
-    return @{ Line = ('[WARNING] Defender ' + $What + ' check NOT performed -- ' + $Query + ' failed (' + $e + ') and Windows Security Center names no other antivirus, so Defender switched off would go unseen (T1562.001).'); Gap = $true; Deferred = 0 }
+    $sc = $(if ($asked) { 'Windows Security Center names no other enabled antivirus' } else { 'Windows Security Center could not be asked (it is absent on Windows Server), so no other antivirus is known' })
+    return @{ Line = ('[WARNING] Defender ' + $What + ' check NOT performed -- ' + $Query + ' failed (' + $e + ') and ' + $sc + ', so Defender switched off would go unseen (T1562.001).'); Gap = $true; Deferred = 0; Reason = 'gap' }
 }
 
 # Live. Was this exception an access refusal? Walks the inner exceptions:
@@ -127,14 +131,16 @@ function Test-DefenderAccessDenied {
     return $false
 }
 
-# Live. Other enabled antivirus products Windows Security Center knows of, or
-# $null when it could not be asked (it is absent on Windows Server). The state
-# bits 12-15 are 1 when the product's protection is on.
+# Live. Other ENABLED antivirus products Windows Security Center knows of:
+# @{ Asked; Names }. Asked is $false when Security Center could not be asked
+# (it is absent on Windows Server). The state bits 12-15 are 1 when the
+# product's protection is on (0 off, 2 snoozed, 3 expired: not counted).
 function Get-OtherAntivirus {
     try {
         $p = @(Get-CimInstance -Namespace 'root\SecurityCenter2' -ClassName AntiVirusProduct -ErrorAction Stop)
-        return @($p | Where-Object { [string]$_.displayName -notmatch 'Windows Defender|Microsoft Defender' -and ((([int]$_.productState) -band 0xF000) -eq 0x1000) } | ForEach-Object { [string]$_.displayName })
-    } catch { return $null }
+        $n = @($p | Where-Object { [string]$_.displayName -notmatch 'Windows Defender|Microsoft Defender' -and ((([int]$_.productState) -band 0xF000) -eq 0x1000) } | ForEach-Object { [string]$_.displayName })
+        return @{ Asked = $true; Names = $n }
+    } catch { return @{ Asked = $false; Names = @() } }
 }
 
 # PURE. Defender's placeholder for a list this token may not see. The
@@ -152,7 +158,7 @@ function Test-WithheldList {
 function Get-DefenderExclusionReport {
     param([bool]$PrefOk, $Pref, [string]$PrefErr = '', [bool]$PrefDenied = $false, [bool]$IsElevated = $true, $OtherAv = $null)
     $out = New-Object System.Collections.Generic.List[string]
-    $sev = 'OK'; $gap = $false; $deferred = 0; $withheld = $false
+    $sev = 'OK'; $gap = $false; $deferred = 0; $withheld = $false; $why = 'ok'
     $counts = @{ path = 0; process = 0; extension = 0 }
     if ($PrefOk) {
         $kinds = @(
@@ -168,10 +174,10 @@ function Get-DefenderExclusionReport {
                 $withheld = $true
                 if (-not $IsElevated) {
                     [void]$out.Add(('[DEFERRED - ADMIN REQUIRED] Defender withholds its exclusion {0} from a standard-user token ("N/A: Must be an administrator") -- they were not read; an audit run as administrator reads them.' -f $k.Plural))
-                    $deferred++
+                    $deferred++; $why = 'deferred'
                 } else {
                     [void]$out.Add(('[WARNING] Defender exclusions check NOT performed in full -- the exclusion {0} were withheld even from this administrator token ("N/A ... administrator"), so a folder or program Defender skips would go unseen (T1562.001).' -f $k.Plural))
-                    $gap = $true
+                    $gap = $true; $why = 'gap'
                 }
                 continue
             }
@@ -186,12 +192,12 @@ function Get-DefenderExclusionReport {
             }
         }
     } else {
-        $f = Get-DefenderQueryFailure -Query 'Get-MpPreference' -What 'exclusions (paths, processes, extensions)' -Err $PrefErr -Denied $PrefDenied -IsElevated $IsElevated -OtherAv $OtherAv
-        [void]$out.Add($f.Line); if ($f.Gap) { $gap = $true }; $deferred += [int]$f.Deferred
+        $f = Get-DefenderQueryFailure -Query 'Get-MpPreference' -What 'exclusions (paths, processes, extensions)' -Err $PrefErr -Denied $PrefDenied -IsElevated $IsElevated -Av $OtherAv
+        [void]$out.Add($f.Line); if ($f.Gap) { $gap = $true }; $deferred += [int]$f.Deferred; $why = [string]$f.Reason
     }
     $graded = ($PrefOk -and -not $withheld)
     return @{
-        Lines = @($out.ToArray()); Sev = $sev; Graded = $graded; Gap = $gap; Deferred = $deferred
+        Lines = @($out.ToArray()); Sev = $sev; Graded = $graded; Gap = $gap; Deferred = $deferred; Why = $why
         Paths = $counts['path']; Processes = $counts['process']; Extensions = $counts['extension']
         State = (Get-ExclusionStateLine -Graded $graded -Paths $counts['path'] -Processes $counts['process'] -Extensions $counts['extension'])
     }
@@ -226,7 +232,7 @@ if ($SelfTest) {
     $r = Get-DefenderExclusionReport -PrefOk $true -Pref (Pr -P @($na) -X @($na) -E @($na)) -IsElevated $false
     T 'a standard user sees "N/A: Must be an administrator": three counted deferrals, NO exclusion WARNING, not graded' ($r.Sev -eq 'OK' -and $r.Deferred -eq 3 -and (-not $r.Gap) -and (-not $r.Graded) -and (& $j $r) -notmatch 'Exclusion paths found' -and (& $j $r) -match '^\[DEFERRED - ADMIN REQUIRED\] Defender withholds its exclusion paths' -and $r.State -eq '0|0|0|0') ((& $j $r) + ' / ' + $r.State)
     $r = Get-DefenderExclusionReport -PrefOk $true -Pref (Pr -P @('N/A: Must be and administrator to view exclusions')) -IsElevated $false
-    T 'the older wording ("Must be and administrator") is the same placeholder, never a path' ($r.Deferred -eq 1 -and $r.Sev -eq 'OK') (& $j $r)
+    T 'the older wording ("Must be and administrator") is the same placeholder, never a path' ($r.Deferred -eq 1 -and $r.Sev -eq 'OK' -and $r.Why -eq 'deferred') (& $j $r)
     $r = Get-DefenderExclusionReport -PrefOk $true -Pref (Pr -P @($na)) -IsElevated $true
     T 'the placeholder on an ADMINISTRATOR token: a raised gap, never an exclusion and never a deferral' ($r.Gap -and $r.Deferred -eq 0 -and $r.Sev -eq 'OK' -and (& $j $r) -notmatch 'Exclusion paths found') (& $j $r)
     $r = Get-DefenderExclusionReport -PrefOk $true -Pref (Pr -P @('C:\N/A administrator stuff'))
@@ -257,6 +263,8 @@ $rep.Lines
 Write-Marker -Name 'defexcl' -Sev $rep.Sev
 if ($rep.Gap) { Write-Marker -Name 'defexcl_gap' -Sev 'WARNING' }
 if ([int]$rep.Deferred -gt 0) { Write-Marker -Name 'defexcl_deferred' -Sev ([string][int]$rep.Deferred) }
+# Why the lists were not graded (ok|deferred|otherav|gap), for the tiles.
+try { Set-Content -LiteralPath (Join-Path $MarkerDir 'dz_defexcl_why.txt') -Value $rep.Why -Encoding ASCII } catch {}
 try {
     $d = Split-Path -Parent $StateFile
     if ($d -and -not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force -EA SilentlyContinue | Out-Null }
