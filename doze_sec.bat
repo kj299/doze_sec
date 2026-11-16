@@ -228,6 +228,7 @@ set "UAC_STATE=ungraded"
 set "RDP_STATE=ungraded"
 set "ACCIFEO_STATE=ungraded"
 set "ACCBIN_STATE=ungraded"
+set "UNQUOTED_STATE=ungraded"
 set "PORTPROXY_STATE=ungraded"
 set "SSHD_STATE=ungraded"
 set "RMM_STATE=ungraded"
@@ -3101,9 +3102,44 @@ if exist "%TEMP%\dz_svcgate_hit.txt" (
 
 echo.>> "%REPORT%"
 echo --- Unquoted Service Paths with Spaces --->> "%REPORT%"
-echo  Command: powershell -Command "Get-CimInstance Win32_Service">> "%REPORT%"
-echo $ok=$true; try{$v=Get-CimInstance Win32_Service -EA Stop ^| Where-Object {$_.PathName -and $_.PathName -notmatch '^\x22' -and $_.PathName -match ' ' -and $_.PathName -notmatch '^^[A-Za-z]:\\Windows\\'}}catch{$ok=$false}; if(-not $ok){'[SKIPPED] Get-CimInstance Win32_Service failed -- unquoted-path check NOT performed.'}elseif($v){$v ^| Select-Object Name,StartMode,PathName ^| Format-Table -AutoSize -Wrap}else{'[OK] No unquoted service paths found.'} > "%PSRUN%"
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+del "%TEMP%\dz_unquoted_crit.txt" 2>nul
+del "%TEMP%\dz_unquoted_warn.txt" 2>nul
+del "%TEMP%\dz_unquoted_gap.txt" 2>nul
+del "%TEMP%\dz_unquoted_deferred.txt" 2>nul
+del "%TEMP%\dz_unquoted_state.txt" 2>nul
+echo  Command: powershell -File tools\unquoted_service_check.ps1   [reads each service ImagePath under HKLM\SYSTEM\CurrentControlSet\Services, then who can write where Windows looks first]>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\unquoted_service_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\unquoted_service_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\unquoted_service_check.ps1 not found -- unquoted service path check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 7 T1574.009 "Unquoted service path check NOT performed - tool missing"
+)
+if exist "%TEMP%\dz_unquoted_crit.txt" (
+    call :dz_finding CRITICAL 7 T1574.009 "Unquoted service path - a file already sits where Windows looks first"
+    del "%TEMP%\dz_unquoted_crit.txt" 2>nul
+)
+if exist "%TEMP%\dz_unquoted_warn.txt" (
+    call :dz_finding WARNING 7 T1574.009 "Unquoted service path a non-administrator can hijack"
+    del "%TEMP%\dz_unquoted_warn.txt" 2>nul
+)
+if exist "%TEMP%\dz_unquoted_gap.txt" (
+    call :dz_finding WARNING 7 T1574.009 "Unquoted service path check NOT performed - the service registry could not be read"
+    del "%TEMP%\dz_unquoted_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_unquoted_deferred.txt" (
+    set "_UQDEF=0"
+    set /p _UQDEF=<"%TEMP%\dz_unquoted_deferred.txt"
+    set /a DEFERRED_COUNT+=!_UQDEF!
+    del "%TEMP%\dz_unquoted_deferred.txt" 2>nul
+)
+set "_TS="
+if exist "%TEMP%\dz_unquoted_state.txt" set /p _TS=<"%TEMP%\dz_unquoted_state.txt"
+del "%TEMP%\dz_unquoted_state.txt" 2>nul
+if defined _TS if "!_TS:~0,3!"=="uq=" set "UNQUOTED_STATE=!_TS!"
+if not "!UNQUOTED_STATE:~0,3!"=="uq=" if exist "%SCRIPT_DIR%tools\unquoted_service_check.ps1" (
+    echo [WARNING] Unquoted service path check produced no verdict -- NOT performed: tools\unquoted_service_check.ps1 ran but wrote no usable verdict.>> "%REPORT%"
+    call :dz_finding WARNING 7 T1574.009 "Unquoted service path check produced no verdict - NOT performed"
+)
 
 echo.>> "%REPORT%"
 echo --- All Services State --->> "%REPORT%"

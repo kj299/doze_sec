@@ -795,6 +795,25 @@ jobs:
                    'sshd running and the keys file unreadable: said as NOT counted, never "0 key(s)"'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
+          out=$(pwsh -NoProfile -File tools/unquoted_service_check.ps1 -SelfTest); echo "$out"
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 34 ] || { echo "only $n unquoted-service case(s)"; exit 1; }
+          for n in 'a space only in the ARGUMENTS: nothing to intercept' \
+                   "Microsoft's own example: program.exe, sub.exe, sub dir\\program.exe, program name.exe, in that order" \
+                   'svchost -k netsvcs (no .exe, arguments, no space in the path): nothing to intercept, the real program is never "planted"' \
+                   "C:\\ as Windows ships it (create subfolders only, Modify inherit-only): no one but administrators can create C:\\Program.exe" \
+                   'a folder one ordinary account may write (bob, with SYSTEM): bob counts, whoever runs the audit' \
+                   'permissions that could not be read: a raised GAP naming the folder, never a hijack row, never INFO, never [OK]' \
+                   'the Services key could not be listed: a raised gap, never [OK]' \
+                   'a DENY entry grants nothing'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          for b in doze_sec.bat doze_sec_noAdmin.bat; do
+            grep -qF "'[OK] No unquoted service paths found.'" "$b" && { echo "$b: the old unquoted-path block (no severity, no raise) is back"; exit 1; }
+            grep -qF 'Unquoted service path check produced no verdict' "$b" || { echo "$b: the unquoted-path check lost its no-verdict backstop"; exit 1; }
+            for m in unquoted_crit unquoted_warn unquoted_gap unquoted_deferred; do
+              grep -qF "if exist \"%TEMP%\\dz_$m.txt\" (" "$b" || { echo "$b: the dz_$m marker is never read"; exit 1; }
+            done
+          done
           out=$(pwsh -NoProfile -File tools/portproxy_check.ps1 -SelfTest); echo "$out"
           n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 14 ] || { echo "only $n portproxy case(s)"; exit 1; }
           for n in 'a subkey that could not be read: a raised gap, never [OK]' \

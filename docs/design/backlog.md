@@ -898,5 +898,5 @@ Its 38 staged blocks match `doze_sec.bat`'s, so the per-block results above carr
 | Section 17 portproxy (both bats) | the rule check matches the English word "Listen", so a non-English Windows, or a failed `netsh`, prints `[OK]`; the no-admin bat defers it although the PortProxy registry key is readable | DONE: `tools/portproxy_check.ps1` reads the PortProxy key (all four kinds) on both tokens; the tile states its verdict |
 | Section 13 Secure Boot | deferred on a standard user; `HKLM\SYSTEM\CurrentControlSet\Control\SecureBoot\State` (written at boot) is readable | open |
 | Section 17 password spray | the deferral line is printed but not added to `DEFERRED_COUNT` | open |
-| Section 7 unquoted service paths (both bats) | a failed `Get-CimInstance Win32_Service` prints `[SKIPPED] ... NOT performed` and raises nothing | open |
+| Section 7 unquoted service paths (both bats) | a failed `Get-CimInstance Win32_Service` prints `[SKIPPED] ... NOT performed` and raises nothing | DONE: `tools/unquoted_service_check.ps1` reads the registry ImagePaths and grades by exploitability; a finding now reaches the ledger, which it never did |
 

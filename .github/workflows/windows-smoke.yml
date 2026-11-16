@@ -1460,6 +1460,12 @@ jobs:
           & .\.github\ci\portproxy_states.ps1
           exit $LASTEXITCODE
 
+      - name: unquoted_service_check.ps1 -SelfTest + the runner's own services and real scratch folders (a file already where Windows looks first is CRITICAL, a folder Users can write is a WARNING, an admin-only folder is INFO, an unread key is a gap)
+        shell: powershell
+        run: |
+          & .\.github\ci\unquoted_service_states.ps1
+          exit $LASTEXITCODE
+
       - name: named_pipe_check.ps1 -SelfTest + live (a C2 pipe list that could not be read is a raised gap, never an all-clear)
         shell: powershell
         run: |
