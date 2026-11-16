@@ -437,6 +437,20 @@ Found during the v7.1 coverage review; tracked for future work:
   read elsewhere; a signed-out account's Startup folder and per-user COM
   hijacks are not); a run without `-readSignedOut`, a `-readonly` or a standard-user run names signed-out
   accounts without reading them.
+- ~~Section 13's Secure Boot check printed `[INFO] Secure Boot query not
+  supported (may be legacy BIOS)` for any failure, on any token, and the
+  no-admin bat skipped it; Section 17's password-spray check printed `[INFO]
+  No 4625 events or insufficient privileges` for a Security log it could not
+  read, and its standard-user deferral was never counted.~~ **Closed:**
+  `tools/secure_boot_check.ps1` reads the firmware type (GetFirmwareType),
+  `Confirm-SecureBootUEFI` when elevated and the boot-time registry record
+  `UEFISecureBootEnabled` on any token; off is the WARNING, legacy BIOS the
+  INFO it was, and a state nobody could read a raised gap.
+  `event_scan_check -Check Spray` reads 4625 account names from each
+  record's own fields, raises an unreadable log as a gap and counts a
+  standard-user refusal as a deferral. Residual: the spray rule still looks
+  at the newest 200 failures whatever their age (the line states the span),
+  and a spray that stays under eleven names is not graded.
 - ~~Section 7's unquoted-service-path scan printed a bare table with no
   severity and raised nothing, matched a space anywhere in the command line
   (arguments included), read Win32_Service (which leaves out a service whose

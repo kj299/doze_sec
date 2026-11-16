@@ -1466,6 +1466,12 @@ jobs:
           & .\.github\ci\unquoted_service_states.ps1
           exit $LASTEXITCODE
 
+      - name: secure_boot_check.ps1 -SelfTest + the runner's own Secure Boot from both sources and every registry state through the real reader (a state nobody could read is a raised gap, never 'may be legacy BIOS')
+        shell: powershell
+        run: |
+          & .\.github\ci\secure_boot_states.ps1
+          exit $LASTEXITCODE
+
       - name: named_pipe_check.ps1 -SelfTest + live (a C2 pipe list that could not be read is a raised gap, never an all-clear)
         shell: powershell
         run: |

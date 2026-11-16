@@ -6,6 +6,18 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Secure Boot (Section 13) and the password-spray check (Section 17): a failed read is a gap
+**Before.**
+- **Secure Boot.** The check printed `[INFO] Secure Boot query not supported (may be legacy BIOS)` for any failure, on any token, so Secure Boot switched off went unseen whenever the query failed. The no-admin bat skipped it on a standard-user token.
+- **Password spray.** The check read the Security log with errors silenced and printed `[INFO] No 4625 events or insufficient privileges` for a log it could not read. Its standard-user deferral was printed but never counted.
+
+**Now.**
+- **`tools/secure_boot_check.ps1`.** It reads the firmware type (`GetFirmwareType`, no administrator needed). Elevated, it also runs `Confirm-SecureBootUEFI`. On any token it reads the boot-time record `HKLM\SYSTEM\CurrentControlSet\Control\SecureBoot\State\UEFISecureBootEnabled`, which a standard user can read, so the check runs on both tokens.
+  - **Grades:** off is the same WARNING, raising the same row. Legacy BIOS stays INFO, now said as a fact. A state nobody could read is a raised `NOT performed` row.
+  - **Sources:** each line names the source that answered. A disagreement between the firmware and the record is `[INFO]`.
+- **`event_scan_check -Check Spray`.** It uses the existing tested event reader and takes each failed sign-in's account name from the record's own field, which is not localized. More than ten names is the same WARNING, now listing the names and the time span. An unreadable log is a raised gap; a refusal to a standard-user token is a counted deferral.
+- **CI.** It plants eleven real failed sign-ins (made-up names against the runner's own IPC$) and must find them as the spray.
+
 ### Unquoted service paths (Section 7): graded by whether they can be exploited
 **Before.** The check listed any service whose command line was unquoted and contained a space anywhere, arguments included, as a bare table with no severity. It raised nothing, so an unquoted service path never reached the ledger, `FINDINGS COUNTED` or the exit code. A failed `Get-CimInstance Win32_Service` printed an unraised `[SKIPPED]`. cmd also ate the `^` in its "starts with a quote" test, so a path with a quoted argument was skipped.
 

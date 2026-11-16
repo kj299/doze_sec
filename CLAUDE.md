@@ -710,7 +710,11 @@ portproxy check** (2026-11-16), deferred as "netsh portproxy requires admin"
 while the rules sit in an HKLM Services key a standard user reads; it also
 decided by finding netsh's English column header, so it read clean on every
 non-English Windows. Read where Windows STORES a setting, never the words a
-tool prints about it. And a standard user's
+tool prints about it. The fifth and sixth were Secure Boot (Windows writes
+its state to an HKLM value at every boot) and the password-spray check,
+whose deferral was printed but never counted -- and whose read, once looked
+at, printed `[INFO] No 4625 events or insufficient privileges` for a log it
+could not open: fix the shape, not only the symptom the backlog named. And a standard user's
 `Get-MpPreference` ANSWERS, putting "N/A: Must be an administrator" where each
 exclusion list would be: a placeholder like that is a deferral, never data --
 read the value's shape before treating it as a finding. **And an answer is
