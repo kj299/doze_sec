@@ -17,11 +17,12 @@
 #   * logon screen bit set -> the WARNING the bats always printed; clear ->
 #     [OK]; value or key absent -> Windows' default applies, which is the
 #     shortcut ON, said so; not a number -> a gap;
-#   * the logon key could not be read -> a raised gap, or a counted deferral
-#     when a refused standard-user token is the whole reason;
+#   * the logon key could not be read -> a raised gap on any token (Users can
+#     read HKEY_USERS\.DEFAULT, so a refusal is not the token's limit);
 #   * this user's own setting is one [INFO] line and never grades.
 # Markers: dz_sticky_hit / dz_sticky_gap / dz_sticky_deferred, written before
-# the state. State: dz_sticky_state.txt  sticky=<on|off|gap|deferred>
+# the state. State: dz_sticky_state.txt
+#   sticky=<on|off|gap>,lf=<logon Flags|->,uf=<user Flags|->
 #
 # Usage:
 #   powershell -File tools\sticky_keys_check.ps1 [-MarkerDir <dir>] [-StateFile <path>] [-Elevated 0|1]
@@ -110,19 +111,21 @@ function Get-StickyVerdict {
         'off' { [void]$out.Add(('[OK] Sticky Keys shortcut disabled at the logon screen (Flags ' + $l.Flags + ' in the system default profile).')); $st = 'off' }
         'odd' { [void]$out.Add(('[WARNING] Sticky Keys check NOT performed -- the logon screen''s Flags value is not a number (' + (ConvertTo-PrintableText $l.Flags) + '), so whether Shift x5 opens it there is not known (T1546.008).')); $gap = $true; $st = 'gap' }
         default {
+            # Users can read HKEY_USERS\.DEFAULT on every Windows, so a refusal is
+            # not explained by the token: a deny entry there is the shape of
+            # tampering. A gap on any token, never a deferral.
             $why = ConvertTo-PrintableText $l.Error
-            if ((-not $IsElevated) -and $why -match 'SecurityException|UnauthorizedAccess') {
-                [void]$out.Add(('[DEFERRED - ADMIN REQUIRED] Sticky Keys check: the logon screen''s setting (HKEY_USERS\.DEFAULT) was refused to this standard-user token (' + $why + ') -- an audit run as administrator reads it.'))
-                $deferred = 1; $st = 'deferred'
-            } else {
-                [void]$out.Add(('[WARNING] Sticky Keys check NOT performed -- the logon screen''s setting (HKEY_USERS\.DEFAULT) could not be read (' + $why + '), so a Shift x5 shortcut there would go unseen (T1546.008).'))
-                $gap = $true; $st = 'gap'
-            }
+            [void]$out.Add(('[WARNING] Sticky Keys check NOT performed -- the logon screen''s setting (HKEY_USERS\.DEFAULT) could not be read (' + $why + '), so a Shift x5 shortcut there would go unseen (T1546.008).'))
+            $gap = $true; $st = 'gap'
         }
     }
     [void]$out.Add($userLine)
     if ($hit) { [void]$out.Add('[INFO] The shortcut alone opens only Sticky Keys; it becomes a password-free SYSTEM shell when sethc.exe has been replaced, which Section 17 checks. Turning it off removes the trigger: Settings > Accessibility > Keyboard > Sticky Keys shortcut.') }
-    return @{ Lines = @($out.ToArray()); Hit = $hit; Gap = $gap; Deferred = $deferred; State = ('sticky=' + $st) }
+    # The observed values ride in the state, digits or '-', so the
+    # remediation's undo can put back exactly what the audit saw.
+    $lf = $(if ($l.Kind -eq 'on' -or $l.Kind -eq 'off') { $l.Flags } else { '-' })
+    $uf = $(if ($u.Kind -eq 'on' -or $u.Kind -eq 'off') { $u.Flags } else { '-' })
+    return @{ Lines = @($out.ToArray()); Hit = $hit; Gap = $gap; Deferred = $deferred; State = ('sticky=' + $st + ',lf=' + $lf + ',uf=' + $uf) }
 }
 
 if ($SelfTest) {
@@ -132,19 +135,19 @@ if ($SelfTest) {
     }
     function Rg { param([string]$State = 'present', $Value = '510', [string]$Err = '') @{ State = $State; Value = $Value; Kind = 'String'; Error = $Err } }
     $v = Get-StickyVerdict (Rg -Value '510') (Rg -Value '506'); $t = $v.Lines -join "`n"
-    T 'logon screen Flags 510 (Windows ships it): the WARNING, keeping the signature the contract test pins' ($v.Hit -and $v.State -eq 'sticky=on' -and $t -match '(?m)^\[WARNING\] Sticky Keys shortcut ENABLED at the logon screen' -and $t -match 'Flags 510') $t
+    T 'logon screen Flags 510 (Windows ships it): the WARNING, keeping the signature the contract test pins' ($v.Hit -and $v.State -eq 'sticky=on,lf=510,uf=506' -and $t -match '(?m)^\[WARNING\] Sticky Keys shortcut ENABLED at the logon screen' -and $t -match 'Flags 510') $t
     $v = Get-StickyVerdict (Rg -Value '506') (Rg -Value '510'); $t = $v.Lines -join "`n"
-    T 'logon screen off (506) while this user has it on: [OK] -- the logon screen decides, the user line is INFO' ((-not $v.Hit) -and $v.State -eq 'sticky=off' -and $t -match '(?m)^\[OK\] Sticky Keys shortcut disabled at the logon screen' -and $t -match '(?m)^\[INFO\] This account''s own setting: the shortcut is on') $t
+    T 'logon screen off (506) while this user has it on: [OK] -- the logon screen decides, the user line is INFO' ((-not $v.Hit) -and $v.State -eq 'sticky=off,lf=506,uf=510' -and $t -match '(?m)^\[OK\] Sticky Keys shortcut disabled at the logon screen' -and $t -match '(?m)^\[INFO\] This account''s own setting: the shortcut is on') $t
     $v = Get-StickyVerdict (Rg -State 'absent') (Rg -Value '506'); $t = $v.Lines -join "`n"
     T 'logon value absent: Windows'' default applies, which is on -- the WARNING, said so' ($v.Hit -and $t -match 'Windows'' default applies, which is on') $t
     $v = Get-StickyVerdict (Rg -State 'nokey') (Rg -State 'nokey')
-    T 'logon key absent: the default-on WARNING too' ($v.Hit -and $v.State -eq 'sticky=on') ($v.Lines -join ' | ')
+    T 'logon key absent: the default-on WARNING too, and the state records it as not set (the undo removes what the fix writes)' ($v.Hit -and $v.State -eq 'sticky=on,lf=-,uf=-') ($v.Lines -join ' | ')
     $v = Get-StickyVerdict (Rg -Value 'abc') (Rg)
-    T 'a Flags value that is not a number: a gap, not on or off' ($v.Gap -and -not $v.Hit -and $v.State -eq 'sticky=gap') ($v.Lines -join ' | ')
+    T 'a Flags value that is not a number: a gap, not on or off' ($v.Gap -and -not $v.Hit -and $v.State -like 'sticky=gap,*') ($v.Lines -join ' | ')
     $v = Get-StickyVerdict (Rg -State 'unreadable' -Err 'IOException: x') (Rg); $t = $v.Lines -join "`n"
     T 'the logon key could not be read: a raised gap, never "[INFO] ... not set in registry"' ($v.Gap -and $t -match '(?m)^\[WARNING\] Sticky Keys check NOT performed -- the logon screen' -and $t -notmatch 'not set in registry' -and $t -notmatch '\[OK\]') $t
     $v = Get-StickyVerdict (Rg -State 'unreadable' -Err 'SecurityException: Requested registry access is not allowed.') (Rg) -IsElevated $false
-    T 'refused to a standard-user token: a counted deferral, not a row' ((-not $v.Gap) -and $v.Deferred -eq 1 -and $v.State -eq 'sticky=deferred') ($v.Lines -join ' | ')
+    T 'refused to a standard-user token: a raised gap, not a deferral (Users can read HKEY_USERS\.DEFAULT; a refusal there is the tampering shape)' ($v.Gap -and $v.Deferred -eq 0 -and $v.State -like 'sticky=gap,*') ($v.Lines -join ' | ')
     $v = Get-StickyVerdict (Rg -State 'unreadable' -Err 'SecurityException: denied') (Rg) -IsElevated $true
     T 'the same refusal for an administrator: a raised gap' ($v.Gap -and $v.Deferred -eq 0) ($v.Lines -join ' | ')
     $v = Get-StickyVerdict (Rg -Value '506') (Rg -State 'unreadable' -Err 'x')
@@ -154,7 +157,7 @@ if ($SelfTest) {
     $v = Get-StickyVerdict (Rg -Value ('x' + [char]10 + '[OK] Sticky Keys shortcut disabled')) (Rg)
     T 'a control character in the value cannot forge an [OK] line' ($v.Gap -and @($v.Lines | Where-Object { $_ -match '^\[OK\]' }).Count -eq 0) ($v.Lines -join ' | ')
     if ($fails) { Write-Output "[FAIL] $fails sticky_keys_check self-test expectation(s) unmet"; exit 1 }
-    Write-Output '[OK] sticky_keys_check self-test: the logon screen decides (HKEY_USERS\.DEFAULT), absent is Windows'' default (on), this user''s setting is INFO, and a key that could not be read is a raised gap (or a deferral for a refused standard user).'
+    Write-Output '[OK] sticky_keys_check self-test: the logon screen decides (HKEY_USERS\.DEFAULT), absent is Windows'' default (on), this user''s setting is INFO, and a key that could not be read is a raised gap on any token.'
     exit 0
 }
 
@@ -167,7 +170,7 @@ $logon = Read-RegValueState -KeyPath $LogonKey -Name 'Flags'
 $user = Read-RegValueState -KeyPath $UserKey -Name 'Flags'
 $v = $null
 try { $v = Get-StickyVerdict -Logon $logon -User $user -IsElevated ($Elevated -eq 1) } catch { $v = $null }
-if ($null -eq $v -or [string]$v.State -notmatch '^sticky=(on|off|gap|deferred)$') {
+if ($null -eq $v -or [string]$v.State -notmatch '^sticky=(on|off|gap|deferred),lf=(\d+|-),uf=(\d+|-)$') {
     'sticky_keys_check: the grading step failed; no verdict was written.'
     exit 1
 }

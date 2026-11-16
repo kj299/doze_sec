@@ -14,11 +14,12 @@ are a separate, machine-specific record of changes each audit made.
 **Now.**
 - **`tools/sticky_keys_check.ps1`** grades the logon screen's own setting (`HKEY_USERS\.DEFAULT`), as the owner chose.
   - Grades: on, or not set (Windows' default is on), is the same WARNING and row; off is `[OK]`; the user's own setting is `[INFO]`.
-  - A key that could not be read is a raised `NOT performed` row, or a counted deferral for a refused standard user.
+  - A key that could not be read is a raised `NOT performed` row on any token. Users can read the logon screen's key, so a refusal there is the tampering shape, not the token's limit.
+  - The remediation fix now acts on the setting that is graded. It turns the logon screen's shortcut off even when the value is absent, and changes the user's own setting only when it is on. Its undo puts back exactly the values the audit saw. It triggers only off the finding row, never a gap row; `lint_remediation` accepts an UNDO built from those values only when the same line assigns it.
   - The tile states Section 13's verdict.
 - **`tools/system_dll_sig_check.ps1`** requires a valid signature from `O=Microsoft Corporation`.
   - Any other signer, NotSigned, HashMismatch or NotTrusted is the same WARNING, with each file's status, signer, size and time.
-  - A signature or folder that could not be read is a raised gap, never counted as unsigned.
+  - A signature or folder that could not be read is a raised gap, never counted as unsigned. So is finding none of the nine names anywhere, which is a failed look on any Windows.
   - CI plants a Microsoft-signed `version.dll`, a `winhttp.dll` with one byte changed, and a non-PE file.
 
 ### Secure Boot (Section 13) and the password-spray check (Section 17): a failed read is a gap

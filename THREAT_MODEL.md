@@ -447,7 +447,9 @@ Found during the v7.1 coverage review; tracked for future work:
   `tools/system_dll_sig_check.ps1` requires a valid `O=Microsoft Corporation`
   signature, lists every other status as the WARNING with the file's
   details, and raises a signature it could not read as a gap. Residual: nine
-  names in four folders only, not every directory a program searches.
+  names in four folders only, not every directory a program searches; and a
+  valid chain to an attacker-installed root CA with that organisation name
+  would pass (the old check had the same weakness).
 - ~~Section 13's Secure Boot check printed `[INFO] Secure Boot query not
   supported (may be legacy BIOS)` for any failure, on any token, and the
   no-admin bat skipped it; Section 17's password-spray check printed `[INFO]

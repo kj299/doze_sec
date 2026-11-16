@@ -802,7 +802,7 @@ jobs:
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
           out=$(pwsh -NoProfile -File tools/system_dll_sig_check.ps1 -SelfTest); echo "$out"
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 12 ] || { echo "only $n system-dll case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 13 ] || { echo "only $n system-dll case(s)"; exit 1; }
           for n in 'UnknownError (the signature could not be read): a raised gap, NEVER counted as unsigned' \
                    'a valid signer whose name merely contains "Microsoft": the WARNING, not a pass'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }

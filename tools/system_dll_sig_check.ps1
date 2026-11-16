@@ -92,6 +92,11 @@ function Get-DllVerdict {
             }
         }
     }
+    # System32 holds several of these names on every Windows: finding none
+    # anywhere is a failed look (a filtered or redirected view), never an all-clear.
+    if ($checked -eq 0 -and $hits.Count -eq 0 -and $unchecked.Count -eq 0) {
+        [void]$unchecked.Add('none of the nine names was found in any folder that answered, although System32 holds several of them on every Windows')
+    }
     if ($hits.Count) {
         [void]$out.Add('[WARNING][T1574.001] Unsigned/suspicious DLLs in system paths:')
         foreach ($h in $hits) { [void]$out.Add($h) }
@@ -112,7 +117,7 @@ function Get-DllVerdict {
 function Read-DllDir {
     param([string]$Dir)
     $d = @{ Dir = $Dir; State = 'ok'; Error = ''; Files = @() }
-    if (-not $Dir) { $d.State = 'missing'; return $d }
+    if (-not $Dir -or $Dir -like '*(not set)') { $d.State = 'missing'; return $d }
     try { $null = Get-Item -LiteralPath $Dir -Force -ErrorAction Stop }
     catch [System.Management.Automation.ItemNotFoundException] { $d.State = 'missing'; return $d }
     catch { $d.State = 'unreadable'; $d.Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message); return $d }
@@ -168,13 +173,15 @@ if ($SelfTest) {
     T 'a folder that does not exist (32-bit Windows): said, not graded' ((-not $v.Gap) -and ($v.Lines -join ' ') -match 'Not present on this PC, so not checked: C:\\Windows\\SysWOW64') ($v.Lines -join ' | ')
     $v = Get-DllVerdict @((D @((F ('version.dll' + [char]10 + '[OK] No suspicious') 'NotSigned' ''))))
     T 'a line break in a path cannot forge an [OK] line' ($v.Hit -and @($v.Lines | Where-Object { $_ -match '^\[OK\]' }).Count -eq 0) ($v.Lines -join ' | ')
+    $v = Get-DllVerdict @((D @()), @{ Dir = 'C:\nowhere'; State = 'missing'; Error = ''; Files = @() })
+    T 'no file of these names found anywhere: a raised gap, never "[OK] ... (0 file(s) checked)"' ($v.Gap -and ($v.Lines -join ' ') -notmatch '\[OK\]' -and ($v.Lines -join ' ') -match 'none of the nine names was found') ($v.Lines -join ' | ')
     if ($fails) { Write-Output "[FAIL] $fails system_dll_sig_check self-test expectation(s) unmet"; exit 1 }
     Write-Output '[OK] system_dll_sig_check self-test: a DLL Microsoft did not sign is the WARNING, a signature that could not be read is a raised gap and never "unsigned", and a folder that could not be listed is a gap.'
     exit 0
 }
 
 # --- live ---------------------------------------------------------------------
-if (-not $Dirs) { $Dirs = @((Join-Path $env:SystemRoot 'System32'), (Join-Path $env:SystemRoot 'SysWOW64'), $env:ProgramFiles, ${env:ProgramFiles(x86)}) }
+if (-not $Dirs) { $Dirs = @((Join-Path $env:SystemRoot 'System32'), (Join-Path $env:SystemRoot 'SysWOW64'), $env:ProgramFiles, $(if (${env:ProgramFiles(x86)}) { ${env:ProgramFiles(x86)} } else { '%ProgramFiles(x86)% (not set)' })) }
 $v = $null
 try { $v = Get-DllVerdict @($Dirs | ForEach-Object { Read-DllDir ([string]$_) }) } catch { $v = $null }
 if ($null -eq $v -or @($v.Lines).Count -eq 0) {

@@ -7,7 +7,7 @@ $ErrorActionPreference = 'Stop'
 $st = (.\tools\system_dll_sig_check.ps1 -SelfTest) -join "`n"
 if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'system_dll_sig_check -SelfTest failed' }
 $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-if ($n -lt 12) { throw "system_dll_sig_check self-test ran only $n case(s)" }
+if ($n -lt 13) { throw "system_dll_sig_check self-test ran only $n case(s)" }
 function RunD([hashtable]$Extra) {
   $md = Join-Path $env:TEMP ("dz_ci_dll_{0}_{1}" -f $PID, [guid]::NewGuid().ToString('N').Substring(0, 6)); New-Item -ItemType Directory -Path $md -Force | Out-Null
   try {
@@ -40,11 +40,17 @@ try {
   $r = RunD @{ Dirs = @("$dir\a") }
   Write-Host "MEASURED: a winhttp.dll with one byte changed reads: $(@($r.Out -split "`n" | Where-Object { $_ -match 'winhttp' }) -join ' | ')"
   if ($r.Markers -ne 'dz_sysdll_hit' -or $r.Out -notmatch '(?m)^\[WARNING\]\[T1574\.001\] Unsigned/suspicious DLLs in system paths:' -or $r.Out -notmatch 'winhttp\.dll \[SIG: (HashMismatch|NotSigned)\]') { throw "a tampered winhttp.dll was not the WARNING naming it: [$($r.Markers)] $($r.Out)" }
-  # A file Windows cannot evaluate (not a PE image): never [OK], never silent.
-  Set-Content -LiteralPath "$dir\a\dbghelp.dll" -Value 'not a dll' -Encoding ASCII
-  $r = RunD @{ Dirs = @("$dir\a") }
-  Write-Host "MEASURED: a text file named dbghelp.dll reads: $(@($r.Out -split "`n" | Where-Object { $_ -match 'dbghelp' }) -join ' | ')"
-  if ($r.Out -notmatch 'dbghelp\.dll' -or $r.Markers -notmatch 'dz_sysdll_(hit|gap)') { throw "a non-PE dbghelp.dll was neither listed as a hit nor raised as a gap: [$($r.Markers)] $($r.Out)" }
+  # A file Windows cannot evaluate (not a PE image), ALONE in its folder so
+  # the tampered twin above cannot supply the marker: never [OK], never
+  # silent. Windows decides the status; it is MEASURED and must land in the
+  # bucket the rule gives it (UnknownError and the like: a gap; NotSigned: a hit).
+  New-Item -ItemType Directory -Path "$dir\b" -Force | Out-Null
+  Set-Content -LiteralPath "$dir\b\dbghelp.dll" -Value 'not a dll' -Encoding ASCII
+  $sig = [string](Get-AuthenticodeSignature -LiteralPath "$dir\b\dbghelp.dll").Status
+  $r = RunD @{ Dirs = @("$dir\b") }
+  Write-Host "MEASURED: a text file named dbghelp.dll: Windows says $sig; the tool reads [$($r.Markers)] $(@($r.Out -split "`n" | Where-Object { $_ -match 'dbghelp' }) -join ' | ')"
+  $want = $(if (@('NotSigned', 'HashMismatch', 'NotTrusted') -contains $sig) { 'dz_sysdll_hit' } else { 'dz_sysdll_gap' })
+  if ($r.Markers -ne $want -or $r.Out -notmatch 'dbghelp\.dll' -or $r.Out -match '(?m)^\[OK\]') { throw "a non-PE dbghelp.dll (status $sig) was not [$want] naming it: [$($r.Markers)] $($r.Out)" }
   # A folder this account is refused: a gap, never [OK].
   New-Item -ItemType Directory -Path "$dir\locked" -Force | Out-Null
   & icacls.exe "$dir\locked" /deny ('*' + [Security.Principal.WindowsIdentity]::GetCurrent().User.Value + ':(RD)') | Out-Null

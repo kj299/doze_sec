@@ -18,15 +18,15 @@ function RunK([hashtable]$Extra) {
   } finally { Remove-Item $md -Recurse -Force -EA SilentlyContinue }
 }
 function Expect($r, [string]$State, [string]$Markers, [string]$Pattern, [string]$What) {
-  if ($r.State -ne $State -or $r.Markers -ne $Markers -or $r.Out -notmatch $Pattern) { throw ("{0}: expected {1} [{2}] matching {3}; got {4} [{5}] {6}" -f $What, $State, $Markers, $Pattern, $r.State, $r.Markers, $r.Out) }
+  if ($r.State -notlike ($State + '*') -or $r.Markers -ne $Markers -or $r.Out -notmatch $Pattern) { throw ("{0}: expected {1} [{2}] matching {3}; got {4} [{5}] {6}" -f $What, $State, $Markers, $Pattern, $r.State, $r.Markers, $r.Out) }
   Write-Host ("sticky keys: {0} -> {1} [{2}]" -f $What, $r.State, $r.Markers)
 }
 # LIVE: the runner's own logon-screen setting, MEASURED, and graded -- an
 # administrator can always read HKEY_USERS\.DEFAULT, so never a gap.
 $r = RunK @{}
 Write-Host "MEASURED: the runner's logon-screen Sticky Keys state is $($r.State) [$($r.Markers)]"
-if ($r.State -notmatch '^sticky=(on|off)$') { throw "the runner's logon-screen setting was not graded: $($r.State) [$($r.Markers)] $($r.Out)" }
-if (($r.State -eq 'sticky=on') -ne ($r.Markers -eq 'dz_sticky_hit')) { throw "the state and its marker disagree: $($r.State) [$($r.Markers)]" }
+if ($r.State -notmatch '^sticky=(on|off),lf=(\d+|-),uf=(\d+|-)$') { throw "the runner's logon-screen setting was not graded: $($r.State) [$($r.Markers)] $($r.Out)" }
+if (($r.State -like 'sticky=on,*') -ne ($r.Markers -eq 'dz_sticky_hit')) { throw "the state and its marker disagree: $($r.State) [$($r.Markers)]" }
 $root = "HKCU:\Software\dz_ci_sk_$PID"
 try {
   New-Item -Path "$root\logon" -Force | Out-Null; New-Item -Path "$root\user" -Force | Out-Null
@@ -37,7 +37,7 @@ try {
   Set-ItemProperty -Path "$root\logon" -Name Flags -Value '506'; Set-ItemProperty -Path "$root\user" -Name Flags -Value '510'
   Expect (RunK $base) 'sticky=off' '' '(?m)^\[OK\] Sticky Keys shortcut disabled at the logon screen' 'the logon screen off (506) while this user is on -- the logon screen decides'
   Remove-ItemProperty -Path "$root\logon" -Name Flags
-  Expect (RunK $base) 'sticky=on' 'dz_sticky_hit' 'Windows'' default applies, which is on' 'the logon value absent (Windows'' default)'
+  Expect (RunK $base) 'sticky=on,lf=-,' 'dz_sticky_hit' 'Windows'' default applies, which is on' 'the logon value absent (Windows'' default), recorded as not set for the undo'
   New-ItemProperty -Path "$root\logon" -Name Flags -Value 'abc' -PropertyType String | Out-Null
   Expect (RunK $base) 'sticky=gap' 'dz_sticky_gap' '(?m)^\[WARNING\] Sticky Keys check NOT performed -- the logon screen''s Flags value is not a number' 'a Flags value that is not a number'
   Set-ItemProperty -Path "$root\logon" -Name Flags -Value '510'
@@ -52,7 +52,7 @@ try {
   if ($denied) {
     Expect (RunK $base) 'sticky=gap' 'dz_sticky_gap' '(?m)^\[WARNING\] Sticky Keys check NOT performed -- the logon screen''s setting' 'the logon key refused to an administrator (a gap)'
     $b2 = $base.Clone(); $b2.Elevated = 0
-    Expect (RunK $b2) 'sticky=deferred' 'dz_sticky_deferred' '(?m)^\[DEFERRED - ADMIN REQUIRED\] Sticky Keys check' 'the logon key refused to a standard-user token (a counted deferral)'
+    Expect (RunK $b2) 'sticky=gap' 'dz_sticky_gap' '(?m)^\[WARNING\] Sticky Keys check NOT performed' 'the logon key refused on a standard-user token is still a gap (Users can read .DEFAULT)'
   } else { Write-Host '[ SKIP ] denied-key case not run: this account can still read the key through the deny rule; the self-test pins the judgement' }
   Write-Host 'sticky keys: the logon screen decides, absent is the default (on), a value that is not a number or a key that cannot be read is a gap'
 } catch {

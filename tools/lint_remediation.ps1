@@ -160,7 +160,15 @@ function Invoke-Check {
                 if ($callAt -lt 0) { $callAt = $payload.IndexOf('addenforce ') }
                 $tail = if ($callAt -ge 0) { $payload.Substring($callAt) } else { $payload }
                 $args = [regex]::Matches($tail, "'(?:[^']|'')*'|`"(?:[^`"]|`"`")*`"")
-                if ($args.Count -lt 3) {
+                # An UNDO built from what the audit observed (Sticky Keys puts
+                # back the exact Flags it saw) is passed as a variable. It
+                # counts only when the same line assigns that variable, so a
+                # reversal is still stated here, never left out.
+                $nVar = 0
+                foreach ($m in [regex]::Matches(($tail -replace "'(?:[^']|'')*'", "''"), '\s(\$[A-Za-z_][A-Za-z0-9_]*)\s*\}')) {
+                    if ($payload -match ([regex]::Escape($m.Groups[1].Value) + '\s*=')) { $nVar++ }
+                }
+                if (($args.Count + $nVar) -lt 3) {
                     $fail += ("{0}: this rule supplies no UNDO argument -- pass '' if there is genuinely no reversal, so the file says so: {1}" -f $b, $t.Substring(0, [Math]::Min(110, $t.Length)))
                 }
             }
@@ -247,6 +255,11 @@ if ($SelfTest) {
         @{ Name = 'a fix with no UNDO argument'
            Find = [regex]::Escape('addfix ''Update Defender signatures'' "Update-MpSignature" ''''')
            Repl = 'addfix ''Update Defender signatures'' "Update-MpSignature"'
+           Expect = 'supplies no UNDO argument'
+           BothBats = $true },
+        @{ Name = 'a fix whose UNDO variable is dropped (the observed-values undo of Sticky Keys)'
+           Find = [regex]::Escape("Re-enable: Settings, Accessibility, Keyboard.''' `$skundo }")
+           Repl = "Re-enable: Settings, Accessibility, Keyboard.''' }"
            Expect = 'supplies no UNDO argument'
            BothBats = $true },
         @{ Name = 'a ledger trigger that can never fire'
