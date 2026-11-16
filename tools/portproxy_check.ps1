@@ -119,7 +119,7 @@ function Get-PortProxyVerdict {
             $lport = ConvertTo-PrintableText $le.Port
             $state = ''
             if ($null -ne $Listening -and $lport) {
-                $state = $(if (@($Listening) -contains $lport) { ' -- port ' + $lport + ' is listening now' } else { ' -- port ' + $lport + ' is not listening now' })
+                $state = $(if (@($Listening) -contains $lport) { ' -- a process is listening on port ' + $lport + ' now' } else { ' -- nothing is listening on port ' + $lport + ' now' })
             }
             [void]$out.Add(('[INFO]   ' + $r.Kind + ': ' + (ConvertTo-PrintableText $r.Listen) + ' -> ' + (ConvertTo-PrintableText $r.Connect) + $state))
         }
@@ -183,11 +183,11 @@ if ($SelfTest) {
     $v = Get-PortProxyVerdict -Keys @(K 'v4tov4' 'ok'; K 'v4tov6' 'ok'; K 'v6tov4'; K 'v6tov6')
     T 'the EMPTY key Windows leaves behind once the rules are gone: [OK], not a finding' ((-not $v.Hit) -and $v.State -eq 'pp=none,n=0') ($v.Lines -join ' | ')
     $v = Get-PortProxyVerdict -Keys @(K 'v4tov4' 'ok' @($one); K 'v4tov6'; K 'v6tov4'; K 'v6tov6') -Iphlp @{ Status = 'Running'; Error = '' } -Listening @('4444', '135'); $t = $v.Lines -join "`n"
-    T 'a v4tov4 rule: the WARNING the bats always printed, the rule named listen -> connect, listening said' ($v.Hit -and $v.State -eq 'pp=rules,n=1' -and $t -match '(?m)^\[WARNING\] netsh portproxy rules ACTIVE\. Volt Typhoon C2 tunnel IOC\.$' -and $t -match 'v4tov4: 0\.0\.0\.0/4444 -> 203\.0\.113\.7/443 -- port 4444 is listening now' -and $t -match 'IP Helper \(iphlpsvc\).*is Running') $t
+    T 'a v4tov4 rule: the WARNING the bats always printed, the rule named listen -> connect, listening said' ($v.Hit -and $v.State -eq 'pp=rules,n=1' -and $t -match '(?m)^\[WARNING\] netsh portproxy rules ACTIVE\. Volt Typhoon C2 tunnel IOC\.$' -and $t -match 'v4tov4: 0\.0\.0\.0/4444 -> 203\.0\.113\.7/443 -- a process is listening on port 4444 now' -and $t -match 'IP Helper \(iphlpsvc\).*is Running') $t
     $v = Get-PortProxyVerdict -Keys @(K 'v4tov4'; K 'v4tov6'; K 'v6tov4' 'ok' @(@{ Listen = '::/8080'; Connect = '10.0.0.5/80' }); K 'v6tov6')
     T 'a rule in v6tov4 alone is found (all four kinds are read, not only v4tov4)' ($v.Hit -and ($v.Lines -join ' ') -match 'v6tov4: ::/8080 -> 10\.0\.0\.5/80') ($v.Lines -join ' | ')
     $v = Get-PortProxyVerdict -Keys @(K 'v4tov4' 'ok' @($one); K 'v4tov6'; K 'v6tov4'; K 'v6tov6') -Iphlp @{ Status = 'Stopped'; Error = '' } -Listening @('135')
-    T 'IP Helper stopped and the port not listening: still the WARNING (the rule comes back when it starts)' ($v.Hit -and ($v.Lines -join ' ') -match 'is not listening now' -and ($v.Lines -join ' ') -match 'is Stopped; a stopped service applies them again') ($v.Lines -join ' | ')
+    T 'IP Helper stopped and the port not listening: still the WARNING (the rule comes back when it starts)' ($v.Hit -and ($v.Lines -join ' ') -match 'nothing is listening on port 4444 now' -and ($v.Lines -join ' ') -match 'is Stopped; a stopped service applies them again') ($v.Lines -join ' | ')
     $v = Get-PortProxyVerdict -Keys @(K 'v4tov4' 'unreadable' -Err 'IOException: x'; K 'v4tov6'; K 'v6tov4'; K 'v6tov6')
     T 'a subkey that could not be read: a raised gap, never [OK]' ($v.Gap -and (-not $v.Hit) -and $v.State -eq 'pp=gap,n=0' -and ($v.Lines -join ' ') -match '^\[WARNING\] Portproxy check NOT performed -- the PortProxy registry key could not be read for v4tov4' -and ($v.Lines -join ' ') -notmatch '\[OK\]') ($v.Lines -join ' | ')
     $v = Get-PortProxyVerdict -Keys @(K 'v4tov4' 'denied' -Err 'SecurityException: denied'; K 'v4tov6'; K 'v6tov4'; K 'v6tov6') -IsElevated $false; $t = $v.Lines -join "`n"
@@ -218,6 +218,11 @@ if ($Elevated -lt 0) {
     try { if ((New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { $Elevated = 1 } } catch {}
 }
 $keys = @($script:Kinds | ForEach-Object { Read-ProxyKind $_ })
+if (@($keys | Where-Object { $_ -and $_.Kind }).Count -ne $script:Kinds.Count) {
+    # An [OK] must mean every kind was read; anything less is no verdict.
+    'portproxy_check: not every portproxy kind was read; no verdict was written.'
+    exit 1
+}
 $iphlp = $null
 $listening = $null
 if (@($keys | Where-Object { $_.State -eq 'ok' -and @($_.Rules).Count -gt 0 }).Count -gt 0) {
@@ -235,9 +240,11 @@ if ($null -eq $v -or [string]$v.State -notmatch '^pp=(rules|none|gap|deferred),n
     exit 1
 }
 foreach ($l in $v.Lines) { $l }
+# The state first: when it cannot be saved the bat raises "produced no
+# verdict", and a marker written before it would raise the hit beside that.
+try { Set-Content -LiteralPath $StateFile -Value $v.State -Encoding ASCII -ErrorAction Stop }
+catch { ('portproxy_check: the verdict above could not be saved for the dashboard (' + (ConvertTo-PrintableText $_.Exception.Message) + ').'); exit 1 }
 if ($v.Hit) { Write-Marker -Name 'portproxy_hit' -Sev 'hit' }
 if ($v.Gap) { Write-Marker -Name 'portproxy_gap' -Sev 'WARNING' }
 if ($v.Deferred -gt 0) { Write-Marker -Name 'portproxy_deferred' -Sev ([string]$v.Deferred) }
-try { Set-Content -LiteralPath $StateFile -Value $v.State -Encoding ASCII -ErrorAction Stop }
-catch { ('portproxy_check: the verdict above could not be saved for the dashboard (' + (ConvertTo-PrintableText $_.Exception.Message) + ').'); exit 1 }
 exit 0

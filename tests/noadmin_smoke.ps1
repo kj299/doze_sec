@@ -510,6 +510,7 @@ try {
     # The portproxy rules used to be skipped wholesale on this token. They live
     # in an HKLM Services key: the check must run, and the tile must say so.
     Assert ($text1 -notmatch 'netsh portproxy requires admin') 'the portproxy check is not skipped on a standard-user token' 'the section-wide portproxy deferral is back'
+    Assert ($text1 -notmatch '(?m)^\[WARNING\] Portproxy check (NOT performed|produced no verdict)') 'the portproxy rules were read on a standard-user token, no gap' 'the portproxy check raised a gap on a standard-user token (the key is readable by Users, or the bat did not hand the tool a usable command line)'
     Assert ($text1 -notmatch 'netsh portproxy (tunnel )?check deferred') 'no portproxy tile claims the check was deferred' 'a portproxy tile still says deferred'
     # Trusted Locations and Trusted Documents are this user's own (HKCU) and
     # the machine's Office keys (HKLM, readable by Users): a gap here is a defect.

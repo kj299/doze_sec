@@ -2511,7 +2511,7 @@ set "_LRO="
 if "%READ_SIGNED_OUT%"=="1" if "%READONLY_MODE%"=="0" set "_LSO=-LoadSignedOut"
 if "%READONLY_MODE%"=="1" set "_LRO=-ReadOnly"
 if exist "%SCRIPT_DIR%tools\persistence_eval.ps1" (
-    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\persistence_eval.ps1" -Part OtherAccounts -MarkerFile "%TEMP%\dz_persist_other_hit.txt" -GapFile "%TEMP%\dz_persist_other_gap.txt" -DeferredFile "%TEMP%\dz_persist_other_deferred.txt" -DoneFile "%TEMP%\dz_persist_other_done.txt" %_LSO% %_LRO%>> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\persistence_eval.ps1" -Part OtherAccounts -MarkerFile "%TEMP%\dz_persist_other_hit.txt" -GapFile "%TEMP%\dz_persist_other_gap.txt" -DeferredFile "%TEMP%\dz_persist_other_deferred.txt" -DoneFile "%TEMP%\dz_persist_other_done.txt" %_LSO% %_LRO% >> "%REPORT%" 2>&1
 ) else (
     echo [WARNING] tools\persistence_eval.ps1 not found -- Other accounts' Run-key check NOT performed.>> "%REPORT%"
     call :dz_finding WARNING 5 T1547.001 "Other accounts' Run-key check NOT performed - tool missing"
@@ -4738,7 +4738,7 @@ del "%TEMP%\dz_portproxy_deferred.txt" 2>nul
 del "%TEMP%\dz_portproxy_state.txt" 2>nul
 echo  Command: powershell -File tools\portproxy_check.ps1   [reads HKLM\SYSTEM\CurrentControlSet\Services\PortProxy, where netsh stores the rules]>> "%REPORT%"
 if exist "%SCRIPT_DIR%tools\portproxy_check.ps1" (
-    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\portproxy_check.ps1" -Elevated %IS_ADMIN%>> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\portproxy_check.ps1">> "%REPORT%" 2>&1
 ) else (
     echo [WARNING] tools\portproxy_check.ps1 not found -- portproxy check NOT performed.>> "%REPORT%"
     call :dz_finding WARNING 17 T1090 "Portproxy check NOT performed - tool missing"

@@ -2,7 +2,8 @@
 # It adds one portproxy rule on 127.0.0.1:53220 with netsh (removed in
 # finally and proven gone by the same reader) and writes throwaway keys under
 # HKCU\Software\dz_ci_pp_<pid>. It lives in .github/ so it never reaches a USB
-# stick.
+# stick. Not for a person's own machine: it changes the machine's portproxy
+# rules; tests\cleanup_selftest.ps1 knows the harness's port 53219, not this one.
 $ErrorActionPreference = 'Stop'
 $st = (.\tools\portproxy_check.ps1 -SelfTest) -join "`n"
 if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'portproxy_check -SelfTest failed' }
@@ -27,6 +28,14 @@ function Expect($r, [string]$State, [string]$Markers, [string]$Pattern, [string]
 $r = RunP @{}
 Write-Host "MEASURED: the runner's portproxy state is $($r.State) [$($r.Markers)]"
 Expect $r 'pp=none,n=0' '' '(?m)^\[OK\] No portproxy rules \(read from the registry' "the runner's own PortProxy key"
+# As the bats call it: no -Elevated, the tool asks the token itself.
+$md = Join-Path $env:TEMP ("dz_ci_pp_auto_{0}" -f $PID); New-Item -ItemType Directory -Path $md -Force | Out-Null
+try {
+  $o = (& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\tools\portproxy_check.ps1 -MarkerDir $md) -join "`n"; $rc = $LASTEXITCODE
+  $sf = Join-Path $md 'dz_portproxy_state.txt'; $s = $(if (Test-Path $sf) { (Get-Content $sf -Raw).Trim() } else { '' })
+  if ($rc -ne 0 -or $s -ne 'pp=none,n=0') { throw "the tool called as the bats call it (a new powershell, no -Elevated) gave no verdict: exit $rc, state '$s': $o" }
+  Write-Host "portproxy: called as the bats call it -> $s"
+} finally { Remove-Item $md -Recurse -Force -EA SilentlyContinue }
 
 $root = "HKCU:\Software\dz_ci_pp_$PID"
 $planted = $false
