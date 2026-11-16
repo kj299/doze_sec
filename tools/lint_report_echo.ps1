@@ -244,11 +244,11 @@ if ($SelfTest) {
            From = '"(Get-MpPreference).AttackSurfaceReductionRules_Ids"'
            To   = '"Get-MpPreference).AttackSurfaceReductionRules_Ids"' },
         @{ Name = 'printed PowerShell command does not parse'
-           From = "(Get-ItemProperty 'HKCU:\Control Panel\Accessibility\StickyKeys' -Name Flags).Flags"
-           To   = "(Get-ItemProperty 'HKCU:\Control Panel\Accessibility\StickyKeys -Name Flags).Flags" },
+           From = "(Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' -Name EnableScriptBlockLogging).EnableScriptBlockLogging"
+           To   = "(Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging -Name EnableScriptBlockLogging).EnableScriptBlockLogging" },
         @{ Name = 'short severity tag [WARN] on the %PSRUN% path'
-           From = "Write-Output '[WARNING] Sticky Keys shortcut ENABLED"
-           To   = "Write-Output '[WARN] Sticky Keys shortcut ENABLED" },
+           From = "Write-Output '[WARNING] No ASR rules configured"
+           To   = "Write-Output '[WARN] No ASR rules configured" },
         @{ Name = 'short severity tag [CRIT] on the %PSRUN% path'
            From = "('[WARNING] '+`$b+' - not found in System32')"
            To   = "('[CRIT] '+`$b+' - not found in System32')" },

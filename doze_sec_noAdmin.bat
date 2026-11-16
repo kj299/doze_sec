@@ -216,6 +216,7 @@ set "UAC_STATE=ungraded"
 set "RDP_STATE=ungraded"
 set "ACCIFEO_STATE=ungraded"
 set "ACCBIN_STATE=ungraded"
+set "STICKY_STATE=ungraded"
 set "SECBOOT_STATE=ungraded"
 set "UNQUOTED_STATE=ungraded"
 set "PORTPROXY_STATE=ungraded"
@@ -4083,16 +4084,39 @@ call :dz_ps_scan 13 T1546.008 "Accessibility binary is not validly Microsoft-sig
 
 echo.>> "%REPORT%"
 echo --- [T1546.008] Sticky Keys Shortcut Status --->> "%REPORT%"
-echo  Command: powershell -Command "(Get-ItemProperty 'HKCU:\Control Panel\Accessibility\StickyKeys' -Name Flags).Flags">> "%REPORT%"
-echo $stickyFlags = (Get-ItemProperty 'HKCU:\Control Panel\Accessibility\StickyKeys' -Name Flags -EA SilentlyContinue).Flags > "%PSRUN%"
-echo $utilFlags   = (Get-ItemProperty 'HKCU:\Control Panel\Accessibility\UtilityManager' -Name Flags -EA SilentlyContinue).Flags >> "%PSRUN%"
-echo if ($null -ne $stickyFlags) { >> "%PSRUN%"
-echo   if (($stickyFlags -band 0x04) -gt 0) { >> "%PSRUN%"
-echo     Write-Output '[WARNING] Sticky Keys shortcut ENABLED (Shift x5 activates at login screen)' >> "%PSRUN%"
-echo     Write-Output '       Disable: Settings ^> Accessibility ^> Keyboard ^> Sticky Keys shortcut OFF' >> "%PSRUN%"
-echo   } else { Write-Output '[OK] Sticky Keys shortcut disabled (sethc.exe not triggerable at login)' } >> "%PSRUN%"
-echo } else { Write-Output '[INFO] Sticky Keys flags not set in registry (default: shortcut enabled on fresh installs)' } >> "%PSRUN%"
-call :dz_ps_scan 13 T1546.008 "Sticky Keys shortcut enabled - Shift x5 triggers sethc.exe at the logon screen"
+del "%TEMP%\dz_sticky_hit.txt" 2>nul
+del "%TEMP%\dz_sticky_gap.txt" 2>nul
+del "%TEMP%\dz_sticky_deferred.txt" 2>nul
+del "%TEMP%\dz_sticky_state.txt" 2>nul
+echo  Command: powershell -File tools\sticky_keys_check.ps1   [the logon screen: HKEY_USERS\.DEFAULT\Control Panel\Accessibility\StickyKeys Flags; this account: HKCU]>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\sticky_keys_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\sticky_keys_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\sticky_keys_check.ps1 not found -- Sticky Keys check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 13 T1546.008 "Sticky Keys check NOT performed - tool missing"
+)
+if exist "%TEMP%\dz_sticky_hit.txt" (
+    call :dz_finding WARNING 13 T1546.008 "Sticky Keys shortcut enabled - Shift x5 triggers sethc.exe at the logon screen"
+    del "%TEMP%\dz_sticky_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_sticky_gap.txt" (
+    call :dz_finding WARNING 13 T1546.008 "Sticky Keys check NOT performed - the logon screen setting could not be read"
+    del "%TEMP%\dz_sticky_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_sticky_deferred.txt" (
+    set "_SKDEF=0"
+    set /p _SKDEF=<"%TEMP%\dz_sticky_deferred.txt"
+    set /a DEFERRED_COUNT+=!_SKDEF!
+    del "%TEMP%\dz_sticky_deferred.txt" 2>nul
+)
+set "_TS="
+if exist "%TEMP%\dz_sticky_state.txt" set /p _TS=<"%TEMP%\dz_sticky_state.txt"
+del "%TEMP%\dz_sticky_state.txt" 2>nul
+if defined _TS if "!_TS:~0,7!"=="sticky=" set "STICKY_STATE=!_TS!"
+if not "!STICKY_STATE:~0,7!"=="sticky=" if exist "%SCRIPT_DIR%tools\sticky_keys_check.ps1" (
+    echo [WARNING] Sticky Keys check produced no verdict -- NOT performed: tools\sticky_keys_check.ps1 ran but wrote no usable verdict.>> "%REPORT%"
+    call :dz_finding WARNING 13 T1546.008 "Sticky Keys check produced no verdict - NOT performed"
+)
 echo.>> "%REPORT%"
 
 echo --- Office Macro Policy (T1204.002 - malicious macro documents) --->> "%REPORT%"
@@ -5762,23 +5786,29 @@ if not defined _PC2OK if exist "%SCRIPT_DIR%tools\named_pipe_check.ps1" (
 :: --- [CTI] DLL Search Order Hijacking (T1574.001) ---
 echo.>> "%REPORT%"
 echo --- [CTI][T1574.001] DLL Search Order Hijacking - Suspicious DLLs in System Paths --->> "%REPORT%"
-echo  Command: powershell -Command "foreach($dll in 'version.dll','winhttp.dll','dbghelp.dll','dbgcore.dll','wer.dll','ualapi.dll','WTSAPI32.dll','msasn1.dll','npmproxy.dll'){ Get-AuthenticodeSignature $env:SystemRoot\System32\$dll }"   [also SysWOW64 and both Program Files trees]>> "%REPORT%"
-echo $suspDlls = @('version.dll','winhttp.dll','dbghelp.dll','dbgcore.dll','wer.dll','ualapi.dll','WTSAPI32.dll','msasn1.dll','npmproxy.dll') > "%PSRUN%"
-echo $sysDirs = @("$env:SystemRoot\System32","$env:SystemRoot\SysWOW64","$env:ProgramFiles","${env:ProgramFiles(x86)}") >> "%PSRUN%"
-echo $hits = @() >> "%PSRUN%"
-echo foreach ($dir in $sysDirs) { >> "%PSRUN%"
-echo   foreach ($dll in $suspDlls) { >> "%PSRUN%"
-echo     $f = Join-Path $dir $dll >> "%PSRUN%"
-echo     if (Test-Path $f) { >> "%PSRUN%"
-echo       $sig = Get-AuthenticodeSignature $f -EA SilentlyContinue >> "%PSRUN%"
-echo       if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'Microsoft') { >> "%PSRUN%"
-echo         $hits += $f + ' [SIG: ' + $sig.Status + ']' >> "%PSRUN%"
-echo       } >> "%PSRUN%"
-echo     } >> "%PSRUN%"
-echo   } >> "%PSRUN%"
-echo } >> "%PSRUN%"
-echo if ($hits.Count -gt 0) { '[WARNING][T1574.001] Unsigned/suspicious DLLs in system paths:'; $hits ^| ForEach-Object { '  '+$_ } } else { '[OK] No suspicious unsigned DLLs found in system paths.' } >> "%PSRUN%"
-call :dz_ps_scan 18 T1574.001 "Unsigned or suspicious DLLs in system paths"
+del "%TEMP%\dz_sysdll_hit.txt" 2>nul
+del "%TEMP%\dz_sysdll_gap.txt" 2>nul
+del "%TEMP%\dz_sysdll_done.txt" 2>nul
+echo  Command: powershell -File tools\system_dll_sig_check.ps1   [version.dll, winhttp.dll, dbghelp.dll and six more in System32, SysWOW64 and both Program Files roots]>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\system_dll_sig_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\system_dll_sig_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\system_dll_sig_check.ps1 not found -- system-path DLL signature check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 18 T1574.001 "System-path DLL signature check NOT performed - tool missing"
+)
+if exist "%TEMP%\dz_sysdll_hit.txt" (
+    call :dz_finding WARNING 18 T1574.001 "Unsigned or suspicious DLLs in system paths"
+    del "%TEMP%\dz_sysdll_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_sysdll_gap.txt" (
+    call :dz_finding WARNING 18 T1574.001 "System-path DLL signature check NOT performed - a signature or folder could not be read"
+    del "%TEMP%\dz_sysdll_gap.txt" 2>nul
+)
+if not exist "%TEMP%\dz_sysdll_done.txt" if exist "%SCRIPT_DIR%tools\system_dll_sig_check.ps1" (
+    echo [WARNING] System-path DLL signature check produced no verdict -- NOT performed: tools\system_dll_sig_check.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 18 T1574.001 "System-path DLL signature check produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_sysdll_done.txt" 2>nul
 
 :: --- [CTI] LOLBin Download/Execute Chains (T1105+T1059) ---
 echo.>> "%REPORT%"
@@ -6283,8 +6313,7 @@ echo. >> "%PSRUN%"
 echo sec 'ACCESSIBILITY BINARY INTEGRITY  T1546.008  (Section 13)' >> "%PSRUN%"
 echo $ai='%ACCIFEO_STATE%';if($ai -like 'ifeo=hijack*'){ck 'CRIT' 'IFEO Debugger hijack on an accessibility binary' 'Pressing Shift x5 or Win+U at login = SYSTEM shell. Section 13 lists the binary and the value. Delete the Debugger value in HKLM\...\IFEO\[binary]'}elseif($ai -eq 'ifeo=clean'){ck 'PASS' 'No IFEO Debugger hijacks on accessibility binaries - T1546.008'}else{ck 'INFO' 'Accessibility IFEO Debugger: NOT graded -- Section 13 could not read it'} >> "%PSRUN%"
 echo $ab='%ACCBIN_STATE%';if($ab -like 'bins=bad,*'){ck 'CRIT' 'Accessibility binary signature INVALID (Section 17)' 'Binaries may have been replaced with cmd.exe. Run: sfc /scannow or restore from WinRE.'}elseif($ab -like 'bins=missing,*'){ck 'WARN' 'Accessibility binary MISSING (Section 17)' 'Windows ships it. Run: sfc /scannow'}elseif($ab -like 'bins=ok,*'){ck 'PASS' 'All accessibility binaries present carry valid Microsoft signatures'}else{ck 'INFO' 'Accessibility binary signatures: NOT graded -- Section 17 could not read them'} >> "%PSRUN%"
-echo $sf = (Get-ItemProperty 'HKCU:\Control Panel\Accessibility\StickyKeys' -Name Flags -EA SilentlyContinue).Flags >> "%PSRUN%"
-echo if ($null -ne $sf -and ($sf -band 0x04) -gt 0) { ck 'WARN' 'Sticky Keys shortcut enabled (Shift x5 triggers at login screen)' 'Reduces attack surface: Settings ^> Accessibility ^> Keyboard ^> Sticky Keys shortcut OFF' } else { ck 'PASS' 'Sticky Keys shortcut disabled (no unauthenticated login-screen trigger)' } >> "%PSRUN%"
+echo $sk='%STICKY_STATE%';if($sk -like 'sticky=on*'){ck 'WARN' 'Sticky Keys shortcut enabled at the logon screen - Section 13' 'Shift x5 opens it before anyone signs in. Settings: Accessibility, Keyboard, Sticky Keys shortcut OFF; the remediation turns it off for the logon screen too.'}elseif($sk -like 'sticky=off*'){ck 'PASS' 'Sticky Keys shortcut disabled at the logon screen - Section 13'}elseif($sk -like 'sticky=deferred*'){ck 'INFO' 'Sticky Keys: NOT graded -- deferred, needs admin - Section 13'}else{ck 'INFO' 'Sticky Keys: NOT graded -- Section 13 could not read the logon screen setting'} >> "%PSRUN%"
 echo. >> "%PSRUN%"
 
 :: ===== DISK HEALTH ===================================================

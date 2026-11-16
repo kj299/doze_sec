@@ -437,6 +437,17 @@ Found during the v7.1 coverage review; tracked for future work:
   read elsewhere; a signed-out account's Startup folder and per-user COM
   hijacks are not); a run without `-readSignedOut`, a `-readonly` or a standard-user run names signed-out
   accounts without reading them.
+- ~~Section 13's Sticky Keys check graded only the signed-in user's setting
+  while saying "activates at login screen", and printed `[INFO] ... not set
+  in registry` for a read that failed; Section 18's system-DLL check counted
+  a signature it could not read as unsigned and passed any valid signer whose
+  name contained "Microsoft".~~ **Closed:** `tools/sticky_keys_check.ps1`
+  grades the logon screen's own setting (`HKEY_USERS\.DEFAULT`; absent is
+  Windows' default, on) and lists the user's as INFO; an unread key is a gap.
+  `tools/system_dll_sig_check.ps1` requires a valid `O=Microsoft Corporation`
+  signature, lists every other status as the WARNING with the file's
+  details, and raises a signature it could not read as a gap. Residual: nine
+  names in four folders only, not every directory a program searches.
 - ~~Section 13's Secure Boot check printed `[INFO] Secure Boot query not
   supported (may be legacy BIOS)` for any failure, on any token, and the
   no-admin bat skipped it; Section 17's password-spray check printed `[INFO]

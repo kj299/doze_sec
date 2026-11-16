@@ -1472,6 +1472,18 @@ jobs:
           & .\.github\ci\secure_boot_states.ps1
           exit $LASTEXITCODE
 
+      - name: sticky_keys_check.ps1 -SelfTest + the runner's own logon-screen setting and every value through the real reader (the logon screen decides; a key that cannot be read is a raised gap)
+        shell: powershell
+        run: |
+          & .\.github\ci\sticky_keys_states.ps1
+          exit $LASTEXITCODE
+
+      - name: system_dll_sig_check.ps1 -SelfTest + the runner's own system folders and a scratch folder with look-alikes (a tampered DLL is the WARNING; a signature that cannot be read is a gap, never 'unsigned')
+        shell: powershell
+        run: |
+          & .\.github\ci\system_dll_sig_states.ps1
+          exit $LASTEXITCODE
+
       - name: named_pipe_check.ps1 -SelfTest + live (a C2 pipe list that could not be read is a raised gap, never an all-clear)
         shell: powershell
         run: |
@@ -2382,7 +2394,7 @@ jobs:
           # fail is not a guard.
           $rep = Join-Path $env:TEMP ("dz_pfr_rep_{0}.txt" -f $PID)
           $led = [System.IO.Path]::ChangeExtension($rep, '.ledger')
-          '[WARNING] Sticky Keys shortcut ENABLED (Shift x5 activates at login screen)' | Set-Content -LiteralPath $rep -Encoding ASCII
+          '[WARNING] Sticky Keys shortcut ENABLED at the logon screen (Shift x5 opens it before anyone signs in; Flags 510 in the system default profile) (T1546.008)' | Set-Content -LiteralPath $rep -Encoding ASCII
           'WARNING|13|T1486|System drive not encrypted with BitLocker' | Set-Content -LiteralPath $led -Encoding ASCII
           .\tests\assert_printed_findings_raised.ps1 -Report $rep | Write-Host
           if ($LASTEXITCODE -eq 0) { throw 'a printed finding with no matching ledger row did NOT fail the assertion' }
