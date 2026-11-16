@@ -1702,7 +1702,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'defender_exclusions_check.ps1 -SelfTest failed' }
           $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
           if ($n -lt 10) { throw "defender_exclusions_check self-test ran only $n case(s)" }
-          foreach ($must in 'one path: WARNING naming T1562.001', 'Get-MpPreference failed: one [SKIPPED], not graded', 'an item that starts with a severity tag never starts a report line with one') {
+          foreach ($must in 'one path: WARNING naming T1562.001', 'Get-MpPreference failed, no other antivirus: a raised gap', 'an item that starts with a severity tag never starts a report line with one') {
             if ($st -notmatch [regex]::Escape($must)) { throw ("defender_exclusions_check self-test no longer covers: {0}" -f $must) }
           }
           Write-Host "defender_exclusions_check -SelfTest OK ($n cases)"

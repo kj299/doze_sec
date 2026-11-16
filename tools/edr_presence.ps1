@@ -34,12 +34,21 @@
 #
 # MARKER: severity word to $env:TEMP\dz_edr.txt; the caller raises via
 # :dz_finding. No marker when nothing is installed-but-stopped.
+# A service Get-Service cannot find is asked of the service manager itself
+# (sc.exe query): ServiceController answers "does not exist" for ANY failure
+# (CLAUDE.md, the ZTHelper case), so a service whose DACL hides it from this
+# token would read as "not installed". Exit 1060 is the SCM's own "does not
+# exist"; anything else is a service this token could not check. On a
+# standard-user token that is a counted deferral (dz_edr_deferred.txt);
+# elevated it is a raised gap (dz_edr_gap.txt).
 #
 # Windows PowerShell 5.1 compatible. Read-only. Executed by helpers-ps51 CI.
 
 [CmdletBinding()]
 param(
-    [string]$MarkerDir = $env:TEMP
+    [string]$MarkerDir = $env:TEMP,
+    # 1/0 from the caller, or -1: ask the token.
+    [int]$Elevated = -1
 )
 
 $ErrorActionPreference = 'Continue'
@@ -103,10 +112,21 @@ $edrServices = @{
     'VelociraptorService' = 'Velociraptor'
 }
 
+if ($Elevated -lt 0) {
+    $Elevated = 0
+    try { if ((New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { $Elevated = 1 } } catch {}
+}
 $found = @()
+$unprobed = New-Object System.Collections.ArrayList
 foreach ($svcName in $edrServices.Keys) {
     $svc = $null
-    try { $svc = Get-Service -Name $svcName -EA Stop } catch { continue }
+    try { $svc = Get-Service -Name $svcName -EA Stop } catch {
+        # Ask the SCM: only its own 1060 means the service is not there.
+        $code = -1
+        try { $null = & sc.exe query $svcName 2>&1; $code = $LASTEXITCODE } catch { $code = -1 }
+        if ($code -ne 1060) { [void]$unprobed.Add(('{0} ({1}, sc.exe exit {2})' -f $edrServices[$svcName], $svcName, $code)) }
+        continue
+    }
     if (-not $svc) { continue }
     $inspected++
     $label = $edrServices[$svcName]
@@ -194,8 +214,20 @@ if (-not $sysmonSvc -and -not $sysmonDrv) {
 }
 
 # ---- Summary --------------------------------------------------------------
+if ($unprobed.Count -gt 0) {
+    $names = (@($unprobed | Select-Object -First 5) -join '; ') + $(if ($unprobed.Count -gt 5) { ('; and ' + ($unprobed.Count - 5) + ' more') } else { '' })
+    if ($Elevated -ne 1) {
+        ('[DEFERRED - ADMIN REQUIRED] ' + $unprobed.Count + ' endpoint-agent service(s) could not be checked from this standard-user token: ' + $names + '. An audit run as administrator checks them.')
+        Write-Marker -Name 'edr_deferred' -Sev ([string]$unprobed.Count)
+    } else {
+        ('[WARNING] Endpoint-agent check NOT performed in full -- ' + $unprobed.Count + ' service(s) could not be queried: ' + $names + ', so an agent installed but stopped would go unseen (T1562.001).')
+        Write-Marker -Name 'edr_gap' -Sev 'WARNING'
+    }
+}
 if ($found.Count -gt 0) {
     "[INFO] Endpoint telemetry beyond Defender: $($found -join ', ')."
+} elseif ($unprobed.Count -gt 0) {
+    '[INFO] No third-party EDR agent was detected among the services that could be checked (see the line above).'
 } else {
     '[INFO] No third-party EDR agent was detected. Defender alone is the whole of this machine''s endpoint telemetry, so a clean result here rests on Defender being healthy and honest -- see the Defender checks above.'
 }

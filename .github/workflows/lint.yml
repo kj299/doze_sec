@@ -1013,16 +1013,31 @@ jobs:
             [ "$(grep -c 'LOGCLEAR_STATE=sec=ungraded' "$b")" -eq 1 ] || { echo "$b: LOGCLEAR_STATE must be reset exactly once, before Section 16"; exit 1; }
           done
           echo 'both bats: the no-verdict path raises, both gap markers are read, one reset of the state'
-      - name: defender_exclusions_check -- every exclusion is WARNING and named; none is OK; unqueryable is SKIPPED, never OK
+      - name: defender_exclusions_check -- every exclusion is WARNING and named; none is OK; unqueryable is a raised gap or a counted deferral, never OK
         run: |
           out=$(pwsh -NoProfile -File tools/defender_exclusions_check.ps1 -SelfTest); echo "$out"
           for n in 'one path: WARNING naming T1562.001' \
-                   'Get-MpPreference failed: one [SKIPPED], not graded, no severity invented' \
+                   'Get-MpPreference failed, no other antivirus: a raised gap (never [SKIPPED]-and-silent)' \
+                   'a standard user sees "N/A: Must be an administrator": three counted deferrals, NO exclusion WARNING' \
+                   'the placeholder on an ADMINISTRATOR token: a raised gap, never an exclusion and never a deferral' \
                    'an item that starts with a severity tag never starts a report line with one' \
                    'a single string (not an array) is one exclusion'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
-          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 10 ] || { echo "only $n case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 16 ] || { echo "only $n case(s)"; exit 1; }
+          out=$(pwsh -NoProfile -File tools/defender_core_check.ps1 -SelfTest); echo "$out"
+          for n in 'Get-MpComputerStatus failed, no other antivirus: a raised gap (never [SKIPPED]-and-silent)' \
+                   'Get-MpComputerStatus REFUSED to a standard-user token: a counted deferral, no gap' \
+                   'the same refusal ELEVATED: a raised gap (the token does not explain it)' \
+                   'Defender does not answer and Security Center names another enabled antivirus: INFO naming it, no gap' \
+                   'only Get-MpPreference failed: the FLAGS gap marker, never the core-status one' \
+                   'Security Center could not be asked (Windows Server): the line says so, never "names no other"'; do
+            echo "$out" | grep -qF "$n" || { echo "core case gone: $n"; exit 1; }
+          done
+          grep -qF 'goto :sec9_noadmin' doze_sec_noAdmin.bat && { echo 'doze_sec_noAdmin.bat: Section 9 is skipped wholesale on a standard-user token again'; exit 1; }
+          for b in doze_sec.bat doze_sec_noAdmin.bat; do
+            for m in dz_defcore_gap dz_defcore_deferred dz_defflags_gap dz_defcore_why dz_defexcl_gap dz_defexcl_deferred dz_defexcl_why dz_edr_gap dz_edr_deferred dz_asr_unread; do grep -qF "%TEMP%\\$m.txt" "$b" || { echo "$b: $m is never read"; exit 1; }; done
+          done
       - name: module_inspect -- lsass denied on a standard-user token is DEFERRED; elevated with LSA Protection off it is a raised gap
         run: |
           out=$(pwsh -NoProfile -File tools/module_inspect.ps1 -SelfTest); echo "$out"

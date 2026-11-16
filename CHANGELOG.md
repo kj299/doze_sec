@@ -6,6 +6,20 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Defender on a standard-user token (Section 9): checked, not skipped
+**Before.** `doze_sec_noAdmin.bat` jumped past the whole of Section 9 on a standard-user token with one "Defender cmdlets require administrator" line. Defender's real-time status, the policies that disable it, an EDR agent installed but stopped, exclusions and ASR rules were never reported on a standard-user run, and the Defender dashboard tiles read deferred. In both bats, a Defender query that failed printed `[SKIPPED] ... NOT evaluated` and raised nothing.
+
+**Now.**
+- Section 9 runs on both tokens; only Defender's detection history (`Get-MpThreatDetection`) is deferred, and counted. The dashboard tiles state Section 9's verdict on both tokens.
+- `defender_core_check` and `defender_exclusions_check` take the token into account. A query refused to a standard-user token is `[DEFERRED - ADMIN REQUIRED]`, counted. Any other failure is a raised `NOT performed` row, unless Windows Security Center names another enabled antivirus, which is `[INFO]` naming it.
+- A standard user's `Get-MpPreference` answers with "N/A: Must be an administrator to view exclusions" in place of each list. That text is a deferral, never an exclusion; on an administrator token it is a gap.
+- **Measured on a runner:** `Get-MpComputerStatus` shows a standard-user token real-time, on-access and Tamper Protection as OFF while the administrator token reads them ON. On that token a FALSE for those three is not graded: real-time comes from Windows Security Center's own entry for Defender (absent on Windows Server, where it is a counted deferral), and on-access and tamper are deferred. A TRUE is trusted. The second CI round measured `Get-MpPreference` too: it shows that token `DisableRealtimeMonitoring` as SET on the same clean runner. On a standard-user token the disable flags are graded from their Group Policy values (readable by any account, and how a policy turns Defender off), the raw value Defender showed is printed, and the local settings are a counted deferral.
+- The tiles state WHY a Defender check was not graded (refused to this token, another antivirus registered, or a failure) instead of guessing "a third-party AV may own protection". The disable-flags half has its own gap row, so the ledger never says core status was not checked when only the flags were.
+- "Windows Security Center names no other antivirus" is said only when Security Center answered; where it could not be asked (Windows Server) the line says that.
+- The ASR block, now reached on a standard-user token, raises its unread case (a deferral, a gap, or nothing when another antivirus is registered) instead of an unraised `[INFO]`.
+- `edr_presence` asks the service manager (`sc.exe query`) about a service `Get-Service` cannot find: only its own 1060 means "not installed". A service this token cannot check is a counted deferral, or a raised gap when elevated.
+- Found by the per-`goto` search of the no-admin bat, which also listed four smaller items for later (see `docs/design/backlog.md`).
+
 ### Office Trusted Locations: the "policy locations only" setting is read
 **Before.** #285 did not read the Group Policy setting "Allow mix of policy and user locations". When that policy is Disabled, Office allows only Trusted Locations defined by policy, yet each location the user had set was still raised as a WARNING saying its macros run unprompted.
 

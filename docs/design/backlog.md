@@ -888,3 +888,15 @@ Signature Check" block reads the same seven signatures that
 `accessibility_backdoor_check -Part Binaries` reads in Section 17. They grade
 alike (a missing binary is a WARNING in both), but they are two reads; fold
 the Section 13 block into the tool.
+
+## The no-admin bat's standard-user jumps (searched 2026-11-15)
+Its 38 staged blocks match `doze_sec.bat`'s, so the per-block results above carry over. Its 22 `if "%IS_ADMIN%"=="0" goto` jumps were read one by one. Most are true deferrals: the Security log, bcdedit, BitLocker, `C:\Windows\Temp`, Get-MpThreatDetection. The others:
+
+| Jump or line | What it hid | State |
+|---|---|---|
+| Section 9, the whole section | Defender status, disable flags, EDR agents, exclusions, ASR | DONE 2026-11-15: the section runs, only the detection history is deferred |
+| Section 17 portproxy (both bats) | the rule check matches the English word "Listen", so a non-English Windows, or a failed `netsh`, prints `[OK]`; the no-admin bat defers it although the PortProxy registry key is readable | open |
+| Section 13 Secure Boot | deferred on a standard user; `HKLM\SYSTEM\CurrentControlSet\Control\SecureBoot\State` (written at boot) is readable | open |
+| Section 17 password spray | the deferral line is printed but not added to `DEFERRED_COUNT` | open |
+| Section 7 unquoted service paths (both bats) | a failed `Get-CimInstance Win32_Service` prints `[SKIPPED] ... NOT performed` and raises nothing | open |
+
