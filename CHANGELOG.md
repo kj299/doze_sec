@@ -6,6 +6,15 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Port forwarding (portproxy, Section 17): read from where Windows keeps the rules
+**Before.** The Volt Typhoon portproxy check ran `netsh interface portproxy show all | findstr /c:"Listen"` and printed `[OK] No netsh portproxy rules.` when the word was not found. netsh's column headers are localized, so on a non-English Windows a rule never matched, and a netsh that failed read the same. `doze_sec_noAdmin.bat` skipped the check on a standard-user token. The dashboard tile ran netsh again and graded a rule CRIT where the section graded WARNING, and the remediation keyed off the tile's text.
+
+**Now.**
+- `tools/portproxy_check.ps1` reads the rules from `HKLM\SYSTEM\CurrentControlSet\Services\PortProxy\<v4tov4|v4tov6|v6tov4|v6tov6>\tcp`, where netsh stores them. CI adds a real rule with netsh, finds it there, deletes it, and reads it gone.
+- Any rule is the same counted WARNING (17/T1090), with each rule listed listen -> connect, whether its port is listening now and the IP Helper service's state. The empty key Windows leaves once rules are deleted is not a finding.
+- A key that could not be read is a raised `NOT performed` row; on a standard-user token a refused key is a counted deferral. The check runs on both tokens.
+- The tile states Section 17's verdict (WARN, as the section; NOT graded when it was not read), and the list-only fix triggers off the ledger.
+
 ### Defender on a standard-user token (Section 9): checked, not skipped
 **Before.** `doze_sec_noAdmin.bat` jumped past the whole of Section 9 on a standard-user token with one "Defender cmdlets require administrator" line. Defender's real-time status, the policies that disable it, an EDR agent installed but stopped, exclusions and ASR rules were never reported on a standard-user run, and the Defender dashboard tiles read deferred. In both bats, a Defender query that failed printed `[SKIPPED] ... NOT evaluated` and raised nothing.
 

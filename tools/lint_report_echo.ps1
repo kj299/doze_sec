@@ -113,6 +113,16 @@ function Invoke-Lint {
                 $bad += "${name}:${ln}: 'echo <value>>file' with no space -- if the value is a digit cmd reads it as a redirection HANDLE, prints 'ECHO is off.' and writes nothing; write the redirection first: >'file' echo %VAR%"
             }
 
+            # 4b -- the same trap on a COMMAND line. portproxy_check was first
+            # called as  ...portproxy_check.ps1" -Elevated %IS_ADMIN%>> "%REPORT%"
+            # IS_ADMIN is one digit, so cmd took it as the handle being
+            # redirected and PowerShell got -Elevated with no value: the tool
+            # failed on every run, and in doze_sec.bat IS_ADMIN is not even
+            # set. An argument variable needs a space before the redirection.
+            if ($lines[$i] -notmatch '(?i)\becho[\s.]' -and $lines[$i] -match '\s%[A-Za-z_][A-Za-z_0-9]*%>>?') {
+                $bad += "${name}:${ln}: a %VAR% argument directly before '>' -- if it expands to one digit cmd reads it as a redirection HANDLE and the command never receives it; put a space before the redirection"
+            }
+
             # 5 -- a report paragraph must reach the report in full.
             # Two three-line prose blocks had '>> "%REPORT%"' on the LAST line
             # only: the first two printed to the console and the report began
@@ -248,6 +258,9 @@ if ($SelfTest) {
         @{ Name = 'exit code written as echo N>file (digit read as a handle; the file stays empty)'
            From = 'if defined DOZE_EXIT_FILE 2>nul >"%DOZE_EXIT_FILE%" echo %EXIT_CODE%'
            To   = 'if defined DOZE_EXIT_FILE echo %EXIT_CODE%>"%DOZE_EXIT_FILE%" 2>nul' },
+        @{ Name = 'a %VAR% argument directly before >> on a command line (a one-digit value is read as a handle)'
+           From = 'portproxy_check.ps1">> "%REPORT%"'
+           To   = 'portproxy_check.ps1" -Elevated %IS_ADMIN%>> "%REPORT%"' },
         @{ Name = 'report prose line lost to the console (redirect missing inside a redirected paragraph)'
            From = 'echo  Every persistence check reads a registry key or a file on disk. An implant>> "%REPORT%"'
            To   = 'echo  Every persistence check reads a registry key or a file on disk. An implant' }
