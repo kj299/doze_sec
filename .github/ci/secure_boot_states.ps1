@@ -7,7 +7,7 @@ $ErrorActionPreference = 'Stop'
 $st = (.\tools\secure_boot_check.ps1 -SelfTest) -join "`n"
 if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'secure_boot_check -SelfTest failed' }
 $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-if ($n -lt 13) { throw "secure_boot_check self-test ran only $n case(s)" }
+if ($n -lt 14) { throw "secure_boot_check self-test ran only $n case(s)" }
 function RunS([hashtable]$Extra) {
   $md = Join-Path $env:TEMP ("dz_ci_sb_{0}_{1}" -f $PID, [guid]::NewGuid().ToString('N').Substring(0, 6)); New-Item -ItemType Directory -Path $md -Force | Out-Null
   try {

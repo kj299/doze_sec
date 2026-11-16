@@ -60,7 +60,6 @@ $whyTable = [ordered]@{
     'AppInit_DLLs check NOT performed' = 'The audit could not read the AppInit_DLLs key, so a DLL injected into every GUI process would go unseen. This is missing coverage, not a pass.'
     'Script Block Logging check NOT performed' = 'The audit could not read the PowerShell logging policy key, so it cannot say whether PowerShell commands are recorded. This is missing coverage, not a pass.'
     'UAC check NOT performed' = 'The audit could not read the UAC policy key, or a value in it is not one Windows defines, so it cannot say whether elevation prompts. This is missing coverage, not a pass.'
-    'produced no verdict -- NOT performed' = 'A helper script ran but did not hand back a verdict, so this check was not performed. This is missing coverage, not a pass; a security product blocking the helper is one cause.'
     'AMSI bypass attempts detected' = 'A PowerShell script block recorded on this PC contains text used to switch off AMSI, the interface that lets antivirus read scripts before they run. Security tools and their test scripts contain the same text; look at which script each event names before deciding.'
     'AMSI-bypass check .* NOT performed' = 'The PowerShell event log could not be read, so the audit cannot say whether an attempt to switch off script scanning was recorded. This is missing coverage, not a pass.'
     'Suspicious service installations found' = 'Windows recorded a service being installed from a temp, download or public folder, or one that runs through a script host. Malware installs services this way to survive a restart; some installers do it briefly too. Check each service name and file listed.'
@@ -207,6 +206,9 @@ $whyTable = [ordered]@{
     'NEW (service|scheduled task|kernel driver|autorun/persistence value) since baseline' = 'Something registered to run since the baseline was saved. The reason in parentheses says why it was not forgiven (unsigned, staging path, suspicious argument, a COM-handler task outside the Windows paths). A validly signed install you recognise is noise; an unsigned binary, a staging path or a suspicious argument is persistence matching no signature.'
     'CHANGED (service|scheduled task|kernel driver|autorun/persistence value) since baseline' = 'A registered item points somewhere else than when the baseline was saved. Compare the was/now lines beneath it: a path that differs only in a version segment, with the new binary validly signed, is an update; a new directory, a new signer, an unsigned binary, a changed start mode or a changed argument is a replaced binary or a repointed command.'
     'CHANGED listening port since baseline' = 'A listener changed owner or moved from loopback to a network-reachable address. Read was/now: the same port now bound to 0.0.0.0 or :: is reachable from outside; a new owner outside the system RPC processes is a process taking over a port.'
+    # Last on purpose: the table is ordered and the first match wins, so a
+    # check's own 'produced no verdict' note above must be reached first.
+    'produced no verdict -- NOT performed' = 'A helper script ran but did not hand back a verdict, so this check was not performed. This is missing coverage, not a pass; a security product blocking the helper is one cause.'
 }
 
 function Get-WhyMatters {

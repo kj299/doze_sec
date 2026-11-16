@@ -154,7 +154,7 @@ function Get-EventScanVerdict {
         return @{ Lines = @($out.ToArray()); Hit = $false; Gap = $true; Deferred = 0 }
     }
     $scope = ([string]$Scan.Total + ' event(s) read from the ' + $c.Log + ' log (newest ' + [string]$c.Max + ' at most)')
-    $noText = if ([int]$Scan.NoText -gt 0) { ('[INFO] ' + [string]$Scan.NoText + ' event(s) had no text Windows could render, so they were NOT examined.') } else { '' }
+    $noText = if ([int]$Scan.NoText -gt 0) { $(if ($Check -eq 'Spray') { ('[INFO] ' + [string]$Scan.NoText + ' failed sign-in record(s) had no readable account name, so they were NOT examined.') } else { ('[INFO] ' + [string]$Scan.NoText + ' event(s) had no text Windows could render, so they were NOT examined.') }) } else { '' }
     if ($Check -eq 'ScriptBlockList') {
         $shown = @($Scan.Shown)
         if ([int]$Scan.Total -eq 0) { [void]$out.Add('[OK] No PS Script Block events found.') }
@@ -230,7 +230,9 @@ function Read-Events {
     }
     $recs = New-Object System.Collections.ArrayList
     foreach ($e in $evts) {
-        $msg = $null; try { $msg = $e.Message } catch { $msg = $null }
+        # The spray check reads the account name from the record's fields;
+        # rendering 200 localized messages it never reads would only cost time.
+        $msg = $null; if ($Id -ne 4625) { try { $msg = $e.Message } catch { $msg = $null } }
         $path = ''; try { if ($e.Properties.Count -ge 5) { $path = [string]$e.Properties[4].Value } } catch { $path = '' }
         $time = ''; try { $time = $e.TimeCreated.ToString('s') } catch { $time = '' }
         $target = $null

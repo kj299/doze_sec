@@ -48,14 +48,29 @@ Write-Host 'event scan: a log that cannot be read is a raised gap for all four c
 # itself, the part the reader needs. A runner that does not audit failed
 # sign-ins records nothing, and that is declared, never passed.
 $names = @(1..11 | ForEach-Object { 'dzci_spray_{0}_{1}' -f $PID, $_ })
-. {
+# A child scope (&, not .): the Continue below must not outlive the plant.
+& {
   $ErrorActionPreference = 'Continue'
   foreach ($nm in $names) { & net.exe use '\\127.0.0.1\IPC$' /user:$nm 'dz-not-a-password' 2>&1 | Out-Null }
   & net.exe use '\\127.0.0.1\IPC$' /delete /y 2>&1 | Out-Null
 }
 $seen = 0
-try { $seen = @(Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 4625 } -MaxEvents 200 -ErrorAction Stop | Where-Object { $_.ToXml() -match ('dzci_spray_' + $PID + '_') }).Count } catch { if ($_.FullyQualifiedErrorId -notmatch 'NoMatchingEventsFound') { throw } }
+for ($i = 0; $i -lt 10 -and $seen -lt 11; $i++) {
+  if ($i) { Start-Sleep -Seconds 1 }
+  try { $seen = @(Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 4625 } -MaxEvents 200 -ErrorAction Stop | Where-Object { $_.ToXml() -match ('dzci_spray_' + $PID + '_') }).Count } catch { if ($_.FullyQualifiedErrorId -notmatch 'NoMatchingEventsFound') { throw } }
+}
 Write-Host "MEASURED: failed sign-ins recorded for the planted names: $seen of $($names.Count)"
+# A skip is allowed only when failed-logon auditing is provably off: the
+# Logon subcategory read by its GUID (its name is localized), CSV column 5.
+$auditFail = $null
+& {
+  $ErrorActionPreference = 'Continue'
+  $csv = @(& auditpol.exe /get '/subcategory:{0CCE9215-69AE-11D9-BED3-505054503030}' /r 2>$null)
+  if ($LASTEXITCODE -eq 0 -and $csv.Count -ge 2) { $script:auditSetting = [string](($csv[1] -split ',')[4]) }
+}
+if ($script:auditSetting) { $auditFail = ($script:auditSetting -match 'Failure') }
+Write-Host "MEASURED: Logon auditing setting on the runner: '$($script:auditSetting)'"
+if ($seen -lt 11 -and $auditFail -ne $false) { throw "only $seen of 11 planted failed sign-ins were found, and failed-logon auditing is not provably off ('$($script:auditSetting)') -- the real-record spray case cannot be allowed to skip on that" }
 if ($seen -ge 11) {
   $r = RunE 'Spray' @{}
   if ($r.Markers -ne 'dz_spray_hit' -or $r.Out -notmatch '(?m)^\[WARNING\] High unique account count - possible password spray attack$' -or $r.Out -notmatch ('dzci_spray_' + $PID + '_')) { throw "eleven real failed sign-ins under eleven names were not the spray WARNING naming them: [$($r.Markers)] $($r.Out)" }

@@ -450,7 +450,10 @@ Found during the v7.1 coverage review; tracked for future work:
   record's own fields, raises an unreadable log as a gap and counts a
   standard-user refusal as a deferral. Residual: the spray rule still looks
   at the newest 200 failures whatever their age (the line states the span),
-  and a spray that stays under eleven names is not graded.
+  and a spray that stays under eleven names is not graded. On a
+  standard-user token Secure Boot is read from the registry record alone,
+  which an administrator can rewrite; elevated, the firmware's own setting
+  decides and a disagreement is printed.
 - ~~Section 7's unquoted-service-path scan printed a bare table with no
   severity and raised nothing, matched a space anywhere in the command line
   (arguments included), read Win32_Service (which leaves out a service whose

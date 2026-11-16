@@ -770,7 +770,7 @@ jobs:
       - name: Event logs, accessibility IFEO and OpenSSH -- a log, key or service that did not answer is a raised gap, never an all-clear
         run: |
           out=$(pwsh -NoProfile -File tools/event_scan_check.ps1 -SelfTest); echo "$out"
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 24 ] || { echo "only $n event-scan case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 30 ] || { echo "only $n event-scan case(s)"; exit 1; }
           for n in 'AMSI, the log could not be read: a raised gap, never "[OK] No AMSI bypass patterns"' \
                    '7045, the System log could not be read: a raised gap, never "[OK] No suspicious service installations"' \
                    '7045, the same service NAME without the marker is the finding (a name is not an exclusion)' \
@@ -796,7 +796,7 @@ jobs:
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
           out=$(pwsh -NoProfile -File tools/secure_boot_check.ps1 -SelfTest); echo "$out"
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 13 ] || { echo "only $n secure-boot case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 14 ] || { echo "only $n secure-boot case(s)"; exit 1; }
           for n in 'UEFI and nothing answered: a raised gap, never "[INFO] ... may be legacy BIOS"' \
                    'the firmware and the registry disagree: the firmware decides, the difference is INFO, never a grade' \
                    'a standard-user token: the registry decides, on'; do

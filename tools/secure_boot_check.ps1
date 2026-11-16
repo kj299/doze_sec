@@ -102,6 +102,10 @@ function Get-SecureBootVerdict {
     }
     $cVal = $null; $cWhy = 'not asked'
     $cDenied = $false
+    if ($null -ne $Confirm -and $Confirm.NotSupported -and $null -eq $regVal) {
+        [void]$out.Add('[INFO] This PC''s firmware does not support Secure Boot (Confirm-SecureBootUEFI: not supported on this platform), so nothing checks the boot loader before Windows starts. It is a property of the hardware, not a setting someone turned off.')
+        return @{ Lines = @($out.ToArray()); Hit = $false; Gap = $false; Deferred = 0; State = 'sb=bios' }
+    }
     if ($null -ne $Confirm) {
         if ($null -ne $Confirm.Value) { $cVal = [bool]$Confirm.Value }
         else { $cWhy = ('failed: ' + (ConvertTo-PrintableText ([string]$Confirm.Error))); $cDenied = [bool]$Confirm.Denied }
@@ -122,7 +126,7 @@ function Get-SecureBootVerdict {
     if ($val) { [void]$out.Add('[OK] Secure Boot ENABLED.') } else { [void]$out.Add('[WARNING] Secure Boot DISABLED.') }
     [void]$out.Add(('[INFO] Read from ' + $src + '.'))
     if ($null -ne $cVal -and $null -ne $regVal -and $cVal -ne $regVal) {
-        [void]$out.Add(('[INFO] The registry record disagrees: UEFISecureBootEnabled says ' + $(if ($regVal) { 'on' } else { 'off' }) + '. It is written at boot, so a change since the last restart shows here; the firmware''s own setting above is what is in force.'))
+        [void]$out.Add(('[INFO] The registry record disagrees: UEFISecureBootEnabled says ' + $(if ($regVal) { 'on' } else { 'off' }) + '. The two should always agree -- Secure Boot cannot change without a restart -- so a difference means the record was rewritten after boot (administrators can write it) or the firmware is in Setup Mode. The firmware''s own setting above is what is in force.'))
     }
     return @{ Lines = @($out.ToArray()); Hit = (-not $val); Gap = $false; Deferred = 0; State = $(if ($val) { 'sb=on' } else { 'sb=off' }) }
 }
@@ -145,7 +149,7 @@ if ($SelfTest) {
         if ($Ok) { Write-Output "[OK]   $Name" } else { Write-Output "[FAIL] $Name$(if ($Got) { ": $Got" })"; $script:fails++ }
     }
     function Rg { param([string]$State = 'present', $Value = 1, [string]$Err = '') @{ State = $State; Value = $Value; Kind = 'DWord'; Error = $Err } }
-    function Cf { param($Value = $true, [string]$Err = '', [bool]$Denied = $false) @{ Value = $Value; Error = $Err; Denied = $Denied } }
+    function Cf { param($Value = $true, [string]$Err = '', [bool]$Denied = $false, [bool]$NotSupported = $false) @{ Value = $Value; Error = $Err; Denied = $Denied; NotSupported = $NotSupported } }
     $v = Get-SecureBootVerdict 2 (Cf $true) (Rg); $t = $v.Lines -join "`n"
     T 'UEFI, the firmware says on: [OK] ENABLED, naming the source' ($v.State -eq 'sb=on' -and -not $v.Hit -and $t -match '(?m)^\[OK\] Secure Boot ENABLED\.$' -and $t -match 'Confirm-SecureBootUEFI') $t
     $v = Get-SecureBootVerdict 2 (Cf $false) (Rg -Value 0); $t = $v.Lines -join "`n"
@@ -160,7 +164,9 @@ if ($SelfTest) {
     T 'the firmware and the registry disagree: the firmware decides, the difference is INFO, never a grade' ($v.State -eq 'sb=on' -and -not $v.Hit -and $t -match '(?m)^\[INFO\] The registry record disagrees: UEFISecureBootEnabled says off') $t
     $v = Get-SecureBootVerdict 2 (Cf $null 'InvalidOperationException: x') (Rg -Value 0)
     T 'Confirm-SecureBootUEFI failed when elevated: the registry answers, and off is still the WARNING' ($v.Hit -and $v.State -eq 'sb=off' -and ($v.Lines -join ' ') -match 'UEFISecureBootEnabled, what Windows read') ($v.Lines -join ' | ')
-    $v = Get-SecureBootVerdict 2 (Cf $null 'PlatformNotSupportedException: x') (Rg -State 'absent'); $t = $v.Lines -join "`n"
+    $v = Get-SecureBootVerdict 2 (Cf $null 'PlatformNotSupportedException: Cmdlet not supported on this platform' -NotSupported $true) (Rg -State 'absent'); $t = $v.Lines -join "`n"
+    T 'UEFI firmware that does not support Secure Boot (the platform says so): INFO, a fact, not a gap' ((-not ($v.Gap -or $v.Hit)) -and $t -match 'firmware does not support Secure Boot') $t
+    $v = Get-SecureBootVerdict 2 (Cf $null 'InvalidOperationException: x') (Rg -State 'absent'); $t = $v.Lines -join "`n"
     T 'UEFI and nothing answered: a raised gap, never "[INFO] ... may be legacy BIOS"' ($v.Gap -and $v.State -eq 'sb=gap' -and $t -match '(?m)^\[WARNING\] Secure Boot check NOT performed -- this PC boots in UEFI mode' -and $t -notmatch 'legacy BIOS' -and $t -notmatch '\[OK\]') $t
     $v = Get-SecureBootVerdict 0 (Cf $null 'x') (Rg -State 'unreadable' -Err 'IOException: y')
     T 'firmware type unknown and nothing answered: a gap that says the type was not read' ($v.Gap -and ($v.Lines -join ' ') -match 'firmware type could not be read') ($v.Lines -join ' | ')
@@ -186,7 +192,7 @@ $fw = $(if ($FirmwareType -gt 0) { $FirmwareType } else { Get-FirmwareTypeLive }
 $confirm = $null
 if ($Elevated -eq 1 -and $fw -ne 1 -and -not $NoConfirm) {
     try { $confirm = @{ Value = [bool](Confirm-SecureBootUEFI -ErrorAction Stop); Error = ''; Denied = $false } }
-    catch { $confirm = @{ Value = $null; Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message); Denied = ($_.Exception -is [System.UnauthorizedAccessException]) } }
+    catch { $confirm = @{ Value = $null; Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message); Denied = ($_.Exception -is [System.UnauthorizedAccessException]); NotSupported = ($_.Exception -is [System.PlatformNotSupportedException]) } }
 }
 $reg = Read-RegValueState -KeyPath $StateKey -Name 'UEFISecureBootEnabled'
 $v = $null

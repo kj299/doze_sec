@@ -518,6 +518,10 @@ try {
     Assert ($text1 -notmatch '(?m)^\[WARNING\] Unquoted service path check NOT performed -- the service registry') 'the service registry was listed on a standard-user token' 'the unquoted-path check could not list the service registry on a standard-user token'
     # Windows records Secure Boot in an HKLM value a standard user reads: it is graded here, never deferred.
     Assert ($text1 -notmatch '(?m)^\[WARNING\] Secure Boot check (NOT performed|produced no verdict)|(?m)^\[DEFERRED - ADMIN REQUIRED\] Secure Boot check') 'Secure Boot was graded on a standard-user token' 'Secure Boot was not graded on a standard-user token'
+    # The Security log is the first log this tool reads that a standard user cannot: a gap there is the
+    # deferral misread, which would put a ledger row on every standard-user run.
+    Assert ($text1 -notmatch '(?m)^\[WARNING\] Password-spray check .*(NOT performed|produced no verdict)') 'no password-spray gap on a standard-user token (a refused Security log is a deferral)' 'the password-spray check raised a gap on a standard-user token: the refusal was not read as one'
+    Assert ($text1 -match '(?m)^\[DEFERRED - ADMIN REQUIRED\] Password-spray check|(?m)^\[OK\] No password-spray pattern') 'the password-spray check deferred (or read the log) on a standard-user token' 'the password-spray check said neither'
     Assert ($text1 -notmatch 'Confirm-SecureBootUEFI requires admin|Security event log \(4625\) requires admin') 'the old section-wide Secure Boot and spray deferrals are gone' 'an old section-wide deferral is back'
     Assert ($text1 -notmatch 'netsh portproxy (tunnel )?check deferred') 'no portproxy tile claims the check was deferred' 'a portproxy tile still says deferred'
     # Trusted Locations and Trusted Documents are this user's own (HKCU) and
