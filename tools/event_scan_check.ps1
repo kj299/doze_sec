@@ -6,6 +6,11 @@
 #                           staging path or through a script host, T1543.003.
 #   -Check ScriptBlockList  Section 17: the listing of recent Script Block
 #                           events that are not the audit's own.
+#   -Check Spray            Section 17: failed sign-ins (Security 4625) spread
+#                           over many accounts, T1110.003. It printed "[INFO] No
+#                           4625 events or insufficient privileges." for a log
+#                           it could not read, and the no-admin bat's deferral
+#                           of it was never counted.
 #
 # Each was an inline block built on
 #   $evts = Get-WinEvent -FilterHashtable @{...} -EA SilentlyContinue
@@ -30,18 +35,19 @@
 #   * an event whose text Windows could not render is counted and said --
 #     it was not examined.
 # Markers: dz_amsiev_hit / _gap / _deferred, dz_svc7045_hit / _gap /
-# _deferred, dz_sblist_gap / _deferred; and dz_<name>_done, written last on
+# _deferred, dz_sblist_gap / _deferred, dz_spray_hit / _gap / _deferred;
+# and dz_<name>_done, written last on
 # every run -- the bat raises a "produced no verdict" row when it is absent.
 #
 # Usage:
-#   powershell -File tools\event_scan_check.ps1 -Check <AmsiBypass|ServiceInstalls|ScriptBlockList> [-MarkerDir <dir>] [-Elevated 0|1] [-SblState <sbl=on|sbl=off|...>]
+#   powershell -File tools\event_scan_check.ps1 -Check <AmsiBypass|ServiceInstalls|ScriptBlockList|Spray> [-MarkerDir <dir>] [-Elevated 0|1] [-SblState <sbl=on|sbl=off|...>]
 #   powershell -File tools\event_scan_check.ps1 -SelfTest   (reads no log)
 #
 # Windows PowerShell 5.1 compatible; pure ASCII. Read-only.
 
 [CmdletBinding()]
 param(
-    [ValidateSet('AmsiBypass', 'ServiceInstalls', 'ScriptBlockList')]
+    [ValidateSet('AmsiBypass', 'ServiceInstalls', 'ScriptBlockList', 'Spray')]
     [string]$Check,
     [string]$MarkerDir = $env:TEMP,
     [int]$Elevated = -1,
@@ -79,6 +85,7 @@ $script:Checks = @{
     AmsiBypass      = @{ Log = 'Microsoft-Windows-PowerShell/Operational'; Id = 4104; Max = 500; What = 'AMSI-bypass check (Script Block events)'; Tech = 'T1562.001'; Miss = 'an AMSI bypass recorded there would go unseen' }
     ServiceInstalls = @{ Log = 'System'; Id = 7045; Max = 50; What = 'Service-install check (Event 7045)'; Tech = 'T1543.003'; Miss = 'a service installed from a staging path would go unseen' }
     ScriptBlockList = @{ Log = 'Microsoft-Windows-PowerShell/Operational'; Id = 4104; Max = 200; What = 'Script Block event listing'; Tech = 'T1059.001'; Miss = 'recent PowerShell activity is not shown' }
+    Spray           = @{ Log = 'Security'; Id = 4625; Max = 200; What = 'Password-spray check (Event 4625)'; Tech = 'T1110.003'; Miss = 'failed sign-ins spread over many accounts would go unseen' }
 }
 # The audit's own script blocks, by the path the event records.
 $script:SelfPath = 'AuditPS_\d{8}_\d{6}\.ps1|doze_sec_noAdmin\.bat|doze_sec\.bat'
@@ -92,17 +99,29 @@ $script:AmsiPatterns = @('AmsiUtils', 'amsiInitFailed', 'AmsiScanBuffer', 'SetPr
 # The harness's own plants, by the MARKER in the image path -- never by a
 # service name, which an attacker could borrow.
 $script:OwnMarker = 'dz_selftest|dz_evil|dzsmoke|dz_probe'
+# More distinct accounts than this among the newest failed sign-ins is the
+# spray shape the bats always graded.
+$script:SprayAccounts = 10
 $script:SuspInstall = '\\Temp\\|\\AppData\\|\\Users\\Public\\|\\Downloads\\|cmd\.exe|powershell|mshta|regsvr32'
 
 # PURE. Turns raw records into what the verdict needs. $Records: @( @{ Time;
 # Message; Path } ); Message is $null when Windows could not render it.
 function Get-EventScan {
     param([string]$Check, $Records)
-    $scan = @{ Total = 0; Own = 0; NoText = 0; Hits = (New-Object System.Collections.ArrayList); Shown = (New-Object System.Collections.ArrayList) }
+    $scan = @{ Total = 0; Own = 0; NoText = 0; Hits = (New-Object System.Collections.ArrayList); Shown = (New-Object System.Collections.ArrayList); Targets = (New-Object System.Collections.ArrayList); First = ''; Last = '' }
     foreach ($r in @($Records)) {
         if ($null -eq $r) { continue }
         $scan.Total++
         $msg = $r.Message
+        if ($Check -eq 'Spray') {
+            $tm = [string]$r.Time
+            if ($tm) { if (-not $scan.First -or $tm -lt $scan.First) { $scan.First = $tm }; if (-not $scan.Last -or $tm -gt $scan.Last) { $scan.Last = $tm } }
+            $tg = ([string]$r.Target).Trim()
+            if ($null -eq $r.Target) { $scan.NoText++; continue }
+            if (-not $tg -or $tg -eq '-') { continue }
+            if (@($scan.Targets | Where-Object { $_ -ieq $tg }).Count -eq 0) { [void]$scan.Targets.Add($tg) }
+            continue
+        }
         if ($Check -eq 'ServiceInstalls') {
             if ($null -eq $msg -or -not [string]$msg) { $scan.NoText++; continue }
             if ([string]$msg -match $script:OwnMarker) { $scan.Own++; continue }
@@ -135,7 +154,7 @@ function Get-EventScanVerdict {
         return @{ Lines = @($out.ToArray()); Hit = $false; Gap = $true; Deferred = 0 }
     }
     $scope = ([string]$Scan.Total + ' event(s) read from the ' + $c.Log + ' log (newest ' + [string]$c.Max + ' at most)')
-    $noText = if ([int]$Scan.NoText -gt 0) { ('[INFO] ' + [string]$Scan.NoText + ' event(s) had no text Windows could render, so they were NOT examined.') } else { '' }
+    $noText = if ([int]$Scan.NoText -gt 0) { $(if ($Check -eq 'Spray') { ('[INFO] ' + [string]$Scan.NoText + ' failed sign-in record(s) had no readable account name, so they were NOT examined.') } else { ('[INFO] ' + [string]$Scan.NoText + ' event(s) had no text Windows could render, so they were NOT examined.') }) } else { '' }
     if ($Check -eq 'ScriptBlockList') {
         $shown = @($Scan.Shown)
         if ([int]$Scan.Total -eq 0) { [void]$out.Add('[OK] No PS Script Block events found.') }
@@ -149,6 +168,19 @@ function Get-EventScanVerdict {
         }
         [void]$out.Add(('[INFO] ' + $scope + '; ' + [string]$Scan.Own + ' were the audit''s own and are not listed.'))
         return @{ Lines = @($out.ToArray()); Hit = $false; Gap = $false; Deferred = 0 }
+    }
+    if ($Check -eq 'Spray') {
+        $n = @($Scan.Targets).Count
+        $span = $(if ([string]$Scan.First) { ', from ' + [string]$Scan.First + ' to ' + [string]$Scan.Last } else { '' })
+        if ($n -gt $script:SprayAccounts) {
+            [void]$out.Add('[WARNING] High unique account count - possible password spray attack')
+            [void]$out.Add(('[INFO]   ' + $n + ' distinct account names among the newest ' + [string]$Scan.Total + ' failed sign-in(s)' + $span + ': ' + ((@($Scan.Targets | Select-Object -First 20 | ForEach-Object { ConvertTo-PrintableText ([string]$_) })) -join ', ') + $(if ($n -gt 20) { ', ...' } else { '' }) + '. Many names tried from one place is a spray; names that do not exist on this PC are typical of one.'))
+        } else {
+            [void]$out.Add(('[OK] No password-spray pattern: ' + [string]$Scan.Total + ' failed sign-in(s) against ' + $n + ' account name(s)' + $span + ' (more than ' + $script:SprayAccounts + ' is the spray shape).'))
+        }
+        [void]$out.Add(('[INFO] ' + $scope + '.'))
+        if ($noText) { [void]$out.Add($noText) }
+        return @{ Lines = @($out.ToArray()); Hit = ($n -gt $script:SprayAccounts); Gap = $false; Deferred = 0 }
     }
     $hits = @($Scan.Hits | Where-Object { [string]$_ })
     if ($Check -eq 'ServiceInstalls' -and [int]$Scan.Own -gt 0) {
@@ -198,10 +230,18 @@ function Read-Events {
     }
     $recs = New-Object System.Collections.ArrayList
     foreach ($e in $evts) {
-        $msg = $null; try { $msg = $e.Message } catch { $msg = $null }
+        # The spray check reads the account name from the record's fields;
+        # rendering 200 localized messages it never reads would only cost time.
+        $msg = $null; if ($Id -ne 4625) { try { $msg = $e.Message } catch { $msg = $null } }
         $path = ''; try { if ($e.Properties.Count -ge 5) { $path = [string]$e.Properties[4].Value } } catch { $path = '' }
         $time = ''; try { $time = $e.TimeCreated.ToString('s') } catch { $time = '' }
-        [void]$recs.Add(@{ Time = $time; Message = $msg; Path = $path })
+        $target = $null
+        if ($Id -eq 4625) {
+            # TargetUserName by its field NAME in the record's XML: the
+            # rendered message is localized, the field names are not.
+            try { $x = [xml]$e.ToXml(); $target = [string](@($x.Event.EventData.Data | Where-Object { $_.Name -eq 'TargetUserName' })[0].'#text') } catch { $target = $null }
+        }
+        [void]$recs.Add(@{ Time = $time; Message = $msg; Path = $path; Target = $target })
     }
     return @{ Error = ''; Denied = $false; Records = @($recs.ToArray()) }
 }
@@ -272,6 +312,21 @@ if ($SelfTest) {
     T 'listing, an external script block is listed with its ID and path, and no [OK]' ($t -match '(?m)^TimeCreated: 2026-11-12T10:02:00$' -and $t -match '(?m)^  Path: C:\\Scripts\\backup\.ps1$' -and $t -notmatch '\[OK\]') $t
     $v = V 'ScriptBlockList' @() @{ Error = 'EventLogException: x'; Denied = $false }; $t = $v.Lines -join "`n"
     T 'listing, the log could not be read: a raised gap, never "[OK] No PS Script Block events found."' ($v.Gap -and $t -match '(?m)^\[WARNING\] Script Block event listing NOT performed -- ' -and $t -notmatch '\[OK\]') $t
+    function F { param([string]$Who, [string]$When = '2026-11-15T09:00:00') @{ Time = $When; Message = 'An account failed to log on.'; Path = ''; Target = $Who } }
+    $eleven = @(1..11 | ForEach-Object { F ('user' + $_) })
+    $v = V 'Spray' $eleven; $t = $v.Lines -join "`n"
+    T 'spray: 11 distinct accounts among the failures is the WARNING the bats always printed, with the names' ($v.Hit -and $t -match '(?m)^\[WARNING\] High unique account count - possible password spray attack$' -and $t -match '11 distinct account names' -and $t -match 'user1, user2') $t
+    $ten = @(1..10 | ForEach-Object { F ('user' + $_) }) + @(F 'USER1') + @(F '-') + @(F '')
+    $v = V 'Spray' $ten; $t = $v.Lines -join "`n"
+    T 'spray: 10 distinct accounts (a name in another case, "-" and an empty name are not new accounts): [OK] with the counts' ((-not $v.Hit) -and $t -match '(?m)^\[OK\] No password-spray pattern: 13 failed sign-in\(s\) against 10 account name\(s\)') $t
+    $v = V 'Spray' @(); $t = $v.Lines -join "`n"
+    T 'spray: a readable Security log with no failed sign-ins is [OK] that says 0' ((-not ($v.Hit -or $v.Gap)) -and $t -match '(?m)^\[OK\] No password-spray pattern: 0 failed sign-in') $t
+    $v = V 'Spray' @() @{ Error = 'EventLogException: The handle is invalid'; Denied = $false }; $t = $v.Lines -join "`n"
+    T 'spray: the Security log could not be read: a raised gap, never "[INFO] No 4625 events or insufficient privileges"' ($v.Gap -and $t -match '(?m)^\[WARNING\] Password-spray check \(Event 4625\) NOT performed -- ' -and $t -notmatch '\[OK\]|insufficient privileges') $t
+    $v = V 'Spray' @() @{ Error = 'UnauthorizedAccessException: denied'; Denied = $true } $false; $t = $v.Lines -join "`n"
+    T 'spray: refused to a standard-user token: a counted deferral, not a row' ((-not $v.Gap) -and $v.Deferred -eq 1 -and $t -match '(?m)^\[DEFERRED - ADMIN REQUIRED\] Password-spray check') $t
+    $v = V 'Spray' @(@{ Time = 't'; Message = ''; Path = ''; Target = $null })
+    T 'spray: a record whose account name could not be read is said as not examined' (($v.Lines -join ' ') -match 'NOT examined') ($v.Lines -join ' | ')
     $v = V 'ServiceInstalls' @() @{ Error = ('bad' + [char]10 + '[OK] fine'); Denied = $false }
     T 'a control character in an error message cannot start a report line' (@($v.Lines | Where-Object { $_ -match '^\[OK\] fine' }).Count -eq 0) ($v.Lines -join ' | ')
     if ($fails) { Write-Output "[FAIL] $fails event_scan_check self-test expectation(s) unmet"; exit 1 }
@@ -280,7 +335,7 @@ if ($SelfTest) {
 }
 
 # --- live ---------------------------------------------------------------------
-if (-not $Check) { 'event_scan_check: -Check is required (AmsiBypass, ServiceInstalls or ScriptBlockList).'; exit 1 }
+if (-not $Check) { 'event_scan_check: -Check is required (AmsiBypass, ServiceInstalls, ScriptBlockList or Spray).'; exit 1 }
 if ($Elevated -lt 0) {
     $Elevated = 0
     try { if ((New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { $Elevated = 1 } } catch {}
@@ -310,6 +365,11 @@ if ($Check -eq 'AmsiBypass') {
     if ($v.Gap) { Write-Marker -Name 'svc7045_gap' -Sev 'WARNING' }
     if ($v.Deferred -gt 0) { Write-Marker -Name 'svc7045_deferred' -Sev ([string]$v.Deferred) }
     Write-Marker -Name 'svc7045_done' -Sev 'done'
+} elseif ($Check -eq 'Spray') {
+    if ($v.Hit) { Write-Marker -Name 'spray_hit' -Sev 'hit' }
+    if ($v.Gap) { Write-Marker -Name 'spray_gap' -Sev 'WARNING' }
+    if ($v.Deferred -gt 0) { Write-Marker -Name 'spray_deferred' -Sev ([string]$v.Deferred) }
+    Write-Marker -Name 'spray_done' -Sev 'done'
 } else {
     if ($v.Gap) { Write-Marker -Name 'sblist_gap' -Sev 'WARNING' }
     if ($v.Deferred -gt 0) { Write-Marker -Name 'sblist_deferred' -Sev ([string]$v.Deferred) }

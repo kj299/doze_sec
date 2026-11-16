@@ -6,7 +6,7 @@ $ErrorActionPreference = 'Stop'
 $st = (.\tools\event_scan_check.ps1 -SelfTest) -join "`n"
 if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'event_scan_check -SelfTest failed' }
 $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-if ($n -lt 24) { throw "event_scan_check self-test ran only $n case(s)" }
+if ($n -lt 30) { throw "event_scan_check self-test ran only $n case(s)" }
 function RunE([string]$Check, [hashtable]$Extra) {
   $md = Join-Path $env:TEMP ("dz_ci_evscan_{0}_{1}" -f $PID, [guid]::NewGuid().ToString('N').Substring(0, 6)); New-Item -ItemType Directory -Path $md -Force | Out-Null
   try {
@@ -18,7 +18,7 @@ function RunE([string]$Check, [hashtable]$Extra) {
 }
 # LIVE: the runner's real logs. Each check must ANSWER (an administrator can
 # read both logs): a verdict line, and never a gap.
-foreach ($c in 'AmsiBypass', 'ServiceInstalls', 'ScriptBlockList') {
+foreach ($c in 'AmsiBypass', 'ServiceInstalls', 'ScriptBlockList', 'Spray') {
   $r = RunE $c @{}
   Write-Host ("MEASURED: {0} on the runner's own log: markers [{1}]" -f $c, $r.Markers)
   if ($r.Markers -match '_gap|_deferred' -or $r.Out -match 'NOT performed') { throw "$c could not read a log an administrator can read: $($r.Out)" }
@@ -37,11 +37,45 @@ Write-Host "MEASURED: Script Block events naming this tool's own file: $mine ; s
 if ($ownSaid -lt 0) { throw "the AMSI check did not say how many events were its own: $($r.Out)" }
 if ($mine -gt 0 -and $ownSaid -lt 1) { throw "PowerShell logged this tool's own script block and the tool did not set it aside: it would report itself as an AMSI bypass" }
 # THE READ THAT FAILS, through the real reader: a log that does not exist.
-foreach ($c in @(@('AmsiBypass', 'dz_amsiev_gap'), @('ServiceInstalls', 'dz_svc7045_gap'), @('ScriptBlockList', 'dz_sblist_gap'))) {
+foreach ($c in @(@('AmsiBypass', 'dz_amsiev_gap'), @('ServiceInstalls', 'dz_svc7045_gap'), @('ScriptBlockList', 'dz_sblist_gap'), @('Spray', 'dz_spray_gap'))) {
   $r = RunE $c[0] @{ LogName = 'dz-ci-no-such-log/Operational' }
   if ($r.Markers -ne $c[1] -or $r.Out -match '(?m)^\[OK\]' -or $r.Out -notmatch '(?m)^\[WARNING\] .* NOT performed -- ') { throw "$($c[0]): a log that cannot be read was not a raised gap: [$($r.Markers)] $($r.Out)" }
 }
-Write-Host 'event scan: a log that cannot be read is a raised gap for all three checks, never an all-clear'
+Write-Host 'event scan: a log that cannot be read is a raised gap for all four checks, never an all-clear'
+# A REAL SPRAY, read from real 4625 records: eleven failed sign-ins to this
+# runner's own IPC$ share under names that do not exist (no account is locked
+# out, nothing is created). It proves TargetUserName is read from the record
+# itself, the part the reader needs. A runner that does not audit failed
+# sign-ins records nothing, and that is declared, never passed.
+$names = @(1..11 | ForEach-Object { 'dzci_spray_{0}_{1}' -f $PID, $_ })
+# A child scope (&, not .): the Continue below must not outlive the plant.
+& {
+  $ErrorActionPreference = 'Continue'
+  foreach ($nm in $names) { & net.exe use '\\127.0.0.1\IPC$' /user:$nm 'dz-not-a-password' 2>&1 | Out-Null }
+  & net.exe use '\\127.0.0.1\IPC$' /delete /y 2>&1 | Out-Null
+}
+$seen = 0
+for ($i = 0; $i -lt 10 -and $seen -lt 11; $i++) {
+  if ($i) { Start-Sleep -Seconds 1 }
+  try { $seen = @(Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 4625 } -MaxEvents 200 -ErrorAction Stop | Where-Object { $_.ToXml() -match ('dzci_spray_' + $PID + '_') }).Count } catch { if ($_.FullyQualifiedErrorId -notmatch 'NoMatchingEventsFound') { throw } }
+}
+Write-Host "MEASURED: failed sign-ins recorded for the planted names: $seen of $($names.Count)"
+# A skip is allowed only when failed-logon auditing is provably off: the
+# Logon subcategory read by its GUID (its name is localized), CSV column 5.
+$auditFail = $null
+& {
+  $ErrorActionPreference = 'Continue'
+  $csv = @(& auditpol.exe /get '/subcategory:{0CCE9215-69AE-11D9-BED3-505054503030}' /r 2>$null)
+  if ($LASTEXITCODE -eq 0 -and $csv.Count -ge 2) { $script:auditSetting = [string](($csv[1] -split ',')[4]) }
+}
+if ($script:auditSetting) { $auditFail = ($script:auditSetting -match 'Failure') }
+Write-Host "MEASURED: Logon auditing setting on the runner: '$($script:auditSetting)'"
+if ($seen -lt 11 -and $auditFail -ne $false) { throw "only $seen of 11 planted failed sign-ins were found, and failed-logon auditing is not provably off ('$($script:auditSetting)') -- the real-record spray case cannot be allowed to skip on that" }
+if ($seen -ge 11) {
+  $r = RunE 'Spray' @{}
+  if ($r.Markers -ne 'dz_spray_hit' -or $r.Out -notmatch '(?m)^\[WARNING\] High unique account count - possible password spray attack$' -or $r.Out -notmatch ('dzci_spray_' + $PID + '_')) { throw "eleven real failed sign-ins under eleven names were not the spray WARNING naming them: [$($r.Markers)] $($r.Out)" }
+  Write-Host 'event scan: eleven real failed sign-ins are the spray WARNING, the account names read from the records themselves'
+} else { Write-Host "[ SKIP ] real-spray case not run: this runner recorded $seen of 11 failed sign-ins (failed-logon auditing off); the self-test pins the judgement" }
 # A REAL 7045, both directions. The malign twin: a service whose image path
 # is under C:\Users\Public. The benign twin: the same install carrying the
 # harness MARKER in its image path, which must be excluded and counted.

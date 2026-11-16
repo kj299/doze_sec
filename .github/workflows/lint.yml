@@ -770,7 +770,7 @@ jobs:
       - name: Event logs, accessibility IFEO and OpenSSH -- a log, key or service that did not answer is a raised gap, never an all-clear
         run: |
           out=$(pwsh -NoProfile -File tools/event_scan_check.ps1 -SelfTest); echo "$out"
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 24 ] || { echo "only $n event-scan case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 30 ] || { echo "only $n event-scan case(s)"; exit 1; }
           for n in 'AMSI, the log could not be read: a raised gap, never "[OK] No AMSI bypass patterns"' \
                    '7045, the System log could not be read: a raised gap, never "[OK] No suspicious service installations"' \
                    '7045, the same service NAME without the marker is the finding (a name is not an exclusion)' \
@@ -794,6 +794,30 @@ jobs:
           for n in 'Get-Service failed and the service manager was never asked: a raised gap, never "[OK] OpenSSH Server not installed"' \
                    'sshd running and the keys file unreadable: said as NOT counted, never "0 key(s)"'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          out=$(pwsh -NoProfile -File tools/secure_boot_check.ps1 -SelfTest); echo "$out"
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 14 ] || { echo "only $n secure-boot case(s)"; exit 1; }
+          for n in 'UEFI and nothing answered: a raised gap, never "[INFO] ... may be legacy BIOS"' \
+                   'the firmware and the registry disagree: the firmware decides, the difference is INFO, never a grade' \
+                   'a standard-user token: the registry decides, on'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          out=$(pwsh -NoProfile -File tools/event_scan_check.ps1 -SelfTest)
+          for n in 'spray: the Security log could not be read: a raised gap, never "[INFO] No 4625 events or insufficient privileges"' \
+                   'spray: refused to a standard-user token: a counted deferral, not a row'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          for b in doze_sec.bat doze_sec_noAdmin.bat; do
+            grep -qF 'sec13_secboot_noadmin' "$b" && { echo "$b: the Secure Boot check is skipped on a standard-user token again"; exit 1; }
+            grep -qF 'sec17_spray_noadmin' "$b" && { echo "$b: the password-spray check is skipped on a standard-user token again"; exit 1; }
+            grep -qF "may be legacy BIOS" "$b" && { echo "$b: the inline Secure Boot block (every failure read as 'may be legacy BIOS') is back"; exit 1; }
+            grep -qF "Id=4625} -MaxEvents 200 -EA SilentlyContinue > " "$b" && { echo "$b: the silenced 4625 spray read is back"; exit 1; }
+            for w in 'Secure Boot check produced no verdict' 'Password-spray check produced no verdict'; do
+              grep -qF "$w" "$b" || { echo "$b: lost its no-verdict backstop: $w"; exit 1; }
+            done
+            for m in secboot_hit secboot_gap secboot_deferred spray_hit spray_gap spray_deferred; do
+              grep -qF "if exist \"%TEMP%\\dz_$m.txt\" (" "$b" || { echo "$b: the dz_$m marker is never read"; exit 1; }
+            done
           done
           out=$(pwsh -NoProfile -File tools/unquoted_service_check.ps1 -SelfTest); echo "$out"
           n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 34 ] || { echo "only $n unquoted-service case(s)"; exit 1; }

@@ -216,6 +216,7 @@ set "UAC_STATE=ungraded"
 set "RDP_STATE=ungraded"
 set "ACCIFEO_STATE=ungraded"
 set "ACCBIN_STATE=ungraded"
+set "SECBOOT_STATE=ungraded"
 set "UNQUOTED_STATE=ungraded"
 set "PORTPROXY_STATE=ungraded"
 set "SSHD_STATE=ungraded"
@@ -3816,15 +3817,39 @@ if errorlevel 1 echo  LocalAccountTokenFilterPolicy: no value returned by reg qu
 
 echo.>> "%REPORT%"
 echo --- Secure Boot --->> "%REPORT%"
-echo  Command: powershell -Command "try{$sb=Confirm-SecureBootUEFI; if($sb){'[OK] Secure Boot ENABLED.'}else{'[WARNING] Secure Boot DISABLED.'}}catch{'[INFO] Secure Boot query not supported (may be legacy BIOS).'}">> "%REPORT%"
-if "%IS_ADMIN%"=="0" goto :sec13_secboot_noadmin
-echo try{$sb=Confirm-SecureBootUEFI; if($sb){'[OK] Secure Boot ENABLED.'}else{'[WARNING] Secure Boot DISABLED.'}}catch{'[INFO] Secure Boot query not supported (may be legacy BIOS).'} > "%PSRUN%"
-call :dz_ps_scan 13 T1542.001 "Secure Boot is disabled"
-goto :sec13_secboot_done
-:sec13_secboot_noadmin
-echo  [DEFERRED - ADMIN REQUIRED] Confirm-SecureBootUEFI requires admin.>> "%REPORT%"
-set /a DEFERRED_COUNT+=1
-:sec13_secboot_done
+del "%TEMP%\dz_secboot_hit.txt" 2>nul
+del "%TEMP%\dz_secboot_gap.txt" 2>nul
+del "%TEMP%\dz_secboot_deferred.txt" 2>nul
+del "%TEMP%\dz_secboot_state.txt" 2>nul
+echo  Command: powershell -File tools\secure_boot_check.ps1   [Confirm-SecureBootUEFI when elevated; HKLM\SYSTEM\CurrentControlSet\Control\SecureBoot\State UEFISecureBootEnabled; the firmware type]>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\secure_boot_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\secure_boot_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\secure_boot_check.ps1 not found -- Secure Boot check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 13 T1542.001 "Secure Boot check NOT performed - tool missing"
+)
+if exist "%TEMP%\dz_secboot_hit.txt" (
+    call :dz_finding WARNING 13 T1542.001 "Secure Boot is disabled"
+    del "%TEMP%\dz_secboot_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_secboot_gap.txt" (
+    call :dz_finding WARNING 13 T1542.001 "Secure Boot check NOT performed - its state could not be read"
+    del "%TEMP%\dz_secboot_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_secboot_deferred.txt" (
+    set "_SBDEF=0"
+    set /p _SBDEF=<"%TEMP%\dz_secboot_deferred.txt"
+    set /a DEFERRED_COUNT+=!_SBDEF!
+    del "%TEMP%\dz_secboot_deferred.txt" 2>nul
+)
+set "_TS="
+if exist "%TEMP%\dz_secboot_state.txt" set /p _TS=<"%TEMP%\dz_secboot_state.txt"
+del "%TEMP%\dz_secboot_state.txt" 2>nul
+if defined _TS if "!_TS:~0,3!"=="sb=" set "SECBOOT_STATE=!_TS!"
+if not "!SECBOOT_STATE:~0,3!"=="sb=" if exist "%SCRIPT_DIR%tools\secure_boot_check.ps1" (
+    echo [WARNING] Secure Boot check produced no verdict -- NOT performed: tools\secure_boot_check.ps1 ran but wrote no usable verdict.>> "%REPORT%"
+    call :dz_finding WARNING 13 T1542.001 "Secure Boot check produced no verdict - NOT performed"
+)
 
 echo.>> "%REPORT%"
 echo --- BitLocker --->> "%REPORT%"
@@ -4930,20 +4955,36 @@ set "_AAD_HIT="
 
 echo.>> "%REPORT%"
 echo --- [ALL ACTORS] Password Spray Analysis (Event 4625 unique accounts) --->> "%REPORT%"
-echo  Command: powershell -Command "Get-WinEvent -FilterHashtable @{LogName='Security';Id=4625} -MaxEvents 200 -EA SilentlyContinue">> "%REPORT%"
-if "%IS_ADMIN%"=="0" goto :sec17_spray_noadmin
-echo $evts=Get-WinEvent -FilterHashtable @{LogName='Security';Id=4625} -MaxEvents 200 -EA SilentlyContinue > "%PSRUN%"
-echo if($evts){ >> "%PSRUN%"
-echo   $xml=$evts ^| ForEach-Object {[xml]$_.ToXml()} >> "%PSRUN%"
-echo   $accts=$xml ^| ForEach-Object {$_.Event.EventData.Data ^| Where-Object {$_.Name -eq 'TargetUserName'} ^| ForEach-Object {$_.'#text'}} ^| Sort-Object -Unique >> "%PSRUN%"
-echo   Write-Output ('Unique target accounts in last 200 failed logins: '+$accts.Count) >> "%PSRUN%"
-echo   if($accts.Count -gt 10){'[WARNING] High unique account count - possible password spray attack'} >> "%PSRUN%"
-echo }else{'[INFO] No 4625 events or insufficient privileges.'} >> "%PSRUN%"
-call :dz_ps_scan 17 T1110.003 "High unique account count in logon failures - possible password spray"
-goto :sec17_spray_done
-:sec17_spray_noadmin
-echo  [DEFERRED - ADMIN REQUIRED] Security event log (4625) requires admin.>> "%REPORT%"
-:sec17_spray_done
+del "%TEMP%\dz_spray_hit.txt" 2>nul
+del "%TEMP%\dz_spray_gap.txt" 2>nul
+del "%TEMP%\dz_spray_deferred.txt" 2>nul
+del "%TEMP%\dz_spray_done.txt" 2>nul
+echo  Command: powershell -File tools\event_scan_check.ps1 -Check Spray>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\event_scan_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\event_scan_check.ps1" -Check Spray>> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\event_scan_check.ps1 not found -- password-spray check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 17 T1110.003 "Password-spray check NOT performed - tool missing"
+)
+if exist "%TEMP%\dz_spray_hit.txt" (
+    call :dz_finding WARNING 17 T1110.003 "High unique account count in logon failures - possible password spray"
+    del "%TEMP%\dz_spray_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_spray_gap.txt" (
+    call :dz_finding WARNING 17 T1110.003 "Password-spray check NOT performed - the Security log could not be read"
+    del "%TEMP%\dz_spray_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_spray_deferred.txt" (
+    set "_SPDEF=0"
+    set /p _SPDEF=<"%TEMP%\dz_spray_deferred.txt"
+    set /a DEFERRED_COUNT+=!_SPDEF!
+    del "%TEMP%\dz_spray_deferred.txt" 2>nul
+)
+if not exist "%TEMP%\dz_spray_done.txt" if exist "%SCRIPT_DIR%tools\event_scan_check.ps1" (
+    echo [WARNING] Password-spray check produced no verdict -- NOT performed: tools\event_scan_check.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 17 T1110.003 "Password-spray check produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_spray_done.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- [DPRK] RMM Tool Processes (Diamond/Jade Sleet IOC) --->> "%REPORT%"
@@ -6264,7 +6305,7 @@ echo sec 'DEFERRED CHECKS  (Re-run as Administrator for full audit)' >> "%PSRUN%
 echo ck 'INFO' 'Security Event Log analysis deferred' >> "%PSRUN%"
 echo ck 'INFO' 'Firewall rule listing deferred (the firewall state is graded in Section 8)' >> "%PSRUN%"
 echo ck 'INFO' 'Windows Defender detection history deferred; Section 9 names anything else this token was refused' >> "%PSRUN%"
-echo ck 'INFO' 'BitLocker and Secure Boot verification deferred' >> "%PSRUN%"
+echo ck 'INFO' 'BitLocker verification deferred (Secure Boot is graded in Section 13)' >> "%PSRUN%"
 echo ck 'INFO' 'SMB server configuration check deferred' >> "%PSRUN%"
 echo ck 'INFO' 'bcdedit driver signature check deferred' >> "%PSRUN%"
 echo ck 'INFO' 'F8 boot menu and System Restore Point deferred' >> "%PSRUN%"
