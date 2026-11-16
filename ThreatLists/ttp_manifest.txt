@@ -1,4 +1,4 @@
-# Last verified by doze_sec: 2026-11-13 03:09:35 sha256:5E335F0A6F3708E1
+# Last verified by doze_sec: 2026-11-16 10:54:55 sha256:E83C9BD2FA8959B7
 # SENTINEL-X CTI -- TTP Manifest (MITRE ATT&CK v14+)
 # Updated: 2026-03-29
 # Source: MDDR 2024-2025, CISA KEV, Mandiant M-Trends 2025, CrowdStrike Threat Report 2025
@@ -135,6 +135,7 @@ T1564.002|Defense Evasion|Hidden Users|-|Sec 10 stalkerware (hidden account)
 T1564.004|Defense Evasion|NTFS File Attributes (Alternate Data Streams)|-|Sec 14 ADS scan in TEMP
 T1574|Persistence|Hijack Execution Flow|-|Sec 4 module_inspect / Sec 7 services
 T1574.001|Persistence|DLL Search Order Hijacking|-|Sec 4 module_inspect
+T1574.009|Persistence|Path Interception by Unquoted Path|-|Sec 7 unquoted_service_check
 #
 # === PRE-OS BOOT (boot-chain configuration audit) ===
 T1542|Defense Evasion|Pre-OS Boot|BlackLotus,CosmicStrand|Sec 13 boot_chain_check

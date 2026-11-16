@@ -2,7 +2,7 @@
 
 Windows 10/11 security forensic audit tool with SENTINEL-X CTI integration.
 
-**Version 7.3** | 18-section audit | 90 MITRE ATT&CK techniques detected | 10 IOC categories
+**Version 7.3** | 18-section audit | 91 MITRE ATT&CK techniques detected | 10 IOC categories
 
 Detection-and-response aid, not real-time protection — see [THREAT_MODEL.md](THREAT_MODEL.md) for exactly what is and is not covered.
 
@@ -114,7 +114,7 @@ Temp path check, admin detection, OS version, OS compatibility, Safe Mode, log d
 | 4 | Running processes | No | LOLBins, RMM tools, suspicious paths, system-process names outside their directory or started by the wrong parent (T1036), a system process that is a copy of its parent (an LSASS copy: T1003.001), loaded-module inspection (DLLs inside running processes: staging-path, unsigned, non-Microsoft in core security processes — T1055/T1574) |
 | 5 | Startup and persistence | No | Run keys, Startup folders, Winlogon, IFEO debuggers, AppInit/AppCert DLLs, logon/unlock vectors (Notify, Credential Providers, Network Provider DLLs), netsh helpers, print processors and port monitors, BITS jobs (including one queued to upload a file off the machine, T1048, and what BITS recorded about transfers that already finished), PowerShell profiles, time providers |
 | 6 | Scheduled tasks | No | Malicious tasks, action-path detection (PS CSV, Task-To-Run column only) |
-| 7 | Windows services | Partial | Authenticode signature gating per service binary (vendor allowlist + revocation + expiry + bad-path). A binary that is absent, or present but unreadable (WindowsApps is ACL'd to TrustedInstaller), or validly signed by a vendor outside the short allowlist, is reported as context rather than a finding -- it stays a WARNING when the path is a staging directory, the cert is expired or revoked, or the binary is unsigned; unusual accounts | MSIX/AppX packages under `C:\Program Files\WindowsApps\` are catalog-signed, so the inner binary reads as unsigned; the package's own `SignatureKind` is consulted instead (see "Catalog signing: what is covered" below)
+| 7 | Windows services | Partial | Authenticode signature gating per service binary (vendor allowlist + revocation + expiry + bad-path). A binary that is absent, or present but unreadable (WindowsApps is ACL'd to TrustedInstaller), or validly signed by a vendor outside the short allowlist, is reported as context rather than a finding -- it stays a WARNING when the path is a staging directory, the cert is expired or revoked, or the binary is unsigned; unusual accounts; unquoted service paths read from each service's registry ImagePath and graded by exploitability (a file already where Windows looks first is CRITICAL, a folder a non-administrator can write is a WARNING, an admin-only folder is INFO) | MSIX/AppX packages under `C:\Program Files\WindowsApps\` are catalog-signed, so the inner binary reads as unsigned; the package's own `SignatureKind` is consulted instead (see "Catalog signing: what is covered" below)
 | 8 | Firewall configuration | Yes | Disabled profiles, risky rules |
 | 9 | Defender and AV status | Yes | Disabled Defender, exclusions, tamper; ASR rules audit (per-rule mode + key-rule warnings); endpoint telemetry inventory (third-party EDR agents and Sysmon — an agent **installed but not running** is flagged, absence is reported as context) |
 | 10 | SMB, RDP, remote access | Partial | SMBv1, NLA bypass, open RDP, covert-monitoring check (accounts hidden from the sign-in screen, silent RDP shadowing, camera/mic/location consent inventory, consumer monitoring/spouseware products) |
@@ -221,7 +221,7 @@ Plain-text IOC files. One entry per line. `#` = comment.
 | `ioc_domains.txt` | 21 | Domain fragment | C2 infra, tunneling (bare TLDs and legit DoH endpoints removed) |
 | `ioc_hashes.txt` | 11 | `SHA256\|Family\|Source` | BYOVD drivers, CS loaders, ransomware |
 | `ioc_lolbins.txt` | 52 | Command fragment | certutil, mshta, regsvr32, encoded PS (overbroad PS aliases removed) |
-| `ttp_manifest.txt` | 107 | `TechID\|Tactic\|Name\|Actors\|Detection` | MITRE ATT&CK v14+ mapping |
+| `ttp_manifest.txt` | 108 | `TechID\|Tactic\|Name\|Actors\|Detection` | MITRE ATT&CK v14+ mapping |
 
 Counts are for the shipped baseline (`-updateTTP` grows the runtime copies). Re-derive anytime: `grep -cv "^#" ThreatLists/<file>` (or PowerShell `(Get-Content <file> | Where-Object {$_ -notmatch '^\s*(#|$)'}).Count`).
 

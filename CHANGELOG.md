@@ -6,6 +6,16 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Unquoted service paths (Section 7): graded by whether they can be exploited
+**Before.** The check listed any service whose command line was unquoted and contained a space anywhere, arguments included, as a bare table with no severity. It raised nothing, so an unquoted service path never reached the ledger, `FINDINGS COUNTED` or the exit code. A failed `Get-CimInstance Win32_Service` printed an unraised `[SKIPPED]`. cmd also ate the `^` in its "starts with a quote" test, so a path with a quoted argument was skipped.
+
+**Now.** `tools/unquoted_service_check.ps1` reads each process service's `ImagePath` from the registry, which a standard user can read and which leaves no service out. It walks the path the way CreateProcess does to find the places Windows tries before the real program, and grades each one (T1574.009, the owner's choice):
+- **CRITICAL** when a file already sits at one of those places. The file's size, times and signature are printed beneath.
+- **WARNING** when the folder's permissions let a non-administrator create a file there. The line names who can.
+- **INFO** when only administrators can. The line gives the path, since quoting it is the vendor's fix.
+
+A space only in the arguments is not graded, and neither is a driver. A Services key that could not be listed is a raised `NOT performed` row; a service key refused to a standard-user token is a counted deferral. CI builds the three cases on real folders whose permissions are set with `icacls`.
+
 ### Port forwarding (portproxy, Section 17): read from where Windows keeps the rules
 **Before.** The Volt Typhoon portproxy check ran `netsh interface portproxy show all | findstr /c:"Listen"` and printed `[OK] No netsh portproxy rules.` when the word was not found. netsh's column headers are localized, so on a non-English Windows a rule never matched, and a netsh that failed read the same. `doze_sec_noAdmin.bat` skipped the check on a standard-user token. The dashboard tile ran netsh again and graded a rule CRIT where the section graded WARNING, and the remediation keyed off the tile's text.
 

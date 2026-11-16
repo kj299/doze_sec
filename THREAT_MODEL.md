@@ -13,7 +13,7 @@ user a safe, reviewable path to fix it. The protection chain it supports:
    Secure Boot, BitLocker, SmartScreen. doze_sec *audits that these are on
    and untampered* (Sections 8, 9, 13) rather than duplicating them.
 2. **Detection** is doze_sec's core job: 14 pre-flight checks + 18 audit
-   sections + a CTI-driven IOC sweep (Section 18) covering 90 MITRE ATT&CK
+   sections + a CTI-driven IOC sweep (Section 18) covering 91 MITRE ATT&CK
    techniques and 282 indicators across 10 IOC categories. (The manifest maps
    107 techniques; the 19-technique difference is documented-but-not-yet-
    detected, and `attack_matrix.ps1` lists it on every run so the gap between
@@ -437,6 +437,23 @@ Found during the v7.1 coverage review; tracked for future work:
   read elsewhere; a signed-out account's Startup folder and per-user COM
   hijacks are not); a run without `-readSignedOut`, a `-readonly` or a standard-user run names signed-out
   accounts without reading them.
+- ~~Section 7's unquoted-service-path scan printed a bare table with no
+  severity and raised nothing, matched a space anywhere in the command line
+  (arguments included), read Win32_Service (which leaves out a service whose
+  DACL denies the token), and printed an unraised `[SKIPPED]` when the query
+  failed -- the `[SKIPPED]` listed as a fix earlier in this file was not
+  one.~~ **Closed:** `tools/unquoted_service_check.ps1` reads each process
+  service's ImagePath from the registry, finds the places Windows tries before
+  the real program (`<prefix>.exe` for each space in the program's own path),
+  and grades by exploitability: a file already at one of them is CRITICAL
+  (T1574.009), a folder whose permissions let a non-administrator create a
+  file is a WARNING, an admin-only folder is INFO. A Services key that could
+  not be listed is a raised gap; a service key refused to a standard-user
+  token is a counted deferral. Residual: deny entries are not subtracted, so
+  a folder can read as writable when a deny rule blocks it (the safe
+  direction); write access granted to a specific non-administrator account
+  other than the auditing one is not counted; and a scheduled task's or Run
+  key's unquoted path is not graded here.
 - ~~Section 17 decided whether portproxy rules exist by finding the English
   column header "Listen" in netsh's output, so a rule on a non-English Windows,
   or a netsh that failed, printed `[OK] No netsh portproxy rules.`; the

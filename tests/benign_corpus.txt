@@ -816,6 +816,13 @@ maxsev    = WARNING
 proof     = ci:proxy_check.ps1 -SelfTest + the runner's own proxy settings, every state through the real reader, and a real WinHTTP proxy found by asking Windows (a key that cannot be read is a raised gap); field:a proxy a workplace, VPN, antivirus product or developer tool set on purpose is a state only a real machine produces
 signature = (Web proxy in effect for |Machine-wide WinHTTP proxy in effect)
 note      = A web proxy or auto-config (PAC) script carries every web request of the account through someone's server. Workplaces set one by Group Policy, VPN clients and some antivirus products install one, and Fiddler, Burp and similar developer tools run one on 127.0.0.1. Adware and banking trojans set the same values, and the audit cannot tell which. The owner decided (2026-11-14) that any proxy in effect is a counted WARNING, so the line names the account, the server or script address, and the store it was read from. Automatic proxy detection alone is the Windows default and stays [INFO]; CI pins that twin beside a planted proxy. Verify: Settings > Network and internet > Proxy for the per-user setting, netsh winhttp show proxy for the machine-wide one; ask whoever manages the PC whether they set it.
+[unquoted-service-admin-only]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:unquoted_service_check.ps1 -SelfTest + the runner's own services and real scratch folders (a file already where Windows looks first is CRITICAL, a folder Users can write is a WARNING, an admin-only folder is INFO, an unread key is a gap)
+signature = Unquoted service path, not exploitable as installed
+note      = Many vendors register a service under Program Files without quoting its path. Windows would try C:\Program.exe or C:\Program Files\<Vendor>.exe first, but on a stock install only administrators can create a file there, so the path is a careless install, not a way in. It is listed as [INFO] with the path. It becomes a WARNING when a non-administrator may create a file in one of those folders, and CRITICAL when a file already sits there; CI pins all three on real folders. Verify: icacls on the folder named in the line.
+
 [portproxy-set-on-purpose]
 class     = ADVISE
 maxsev    = WARNING
