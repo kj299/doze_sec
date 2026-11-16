@@ -869,7 +869,9 @@ Class A -- a failed read reaches `[OK]` (15 blocks):
 
 Class B -- fails loud or to `[INFO]` (2): unsigned DLLs in system paths (a
 failed signature read counts as unsigned); Sticky Keys (a failed read prints
-`[INFO] ... not set`).
+`[INFO] ... not set`). DONE 2026-11-16: `tools/system_dll_sig_check.ps1`
+(an unread signature is a gap, never "unsigned") and `tools/sticky_keys_check.ps1`
+(the logon screen's setting decides; an unread key is a gap).
 
 Class C -- not a defect (5): the named-pipe, service and scheduled-task IOC
 matches (each already has a NOT-performed branch); module logging and

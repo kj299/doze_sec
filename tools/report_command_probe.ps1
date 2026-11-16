@@ -35,7 +35,7 @@ param(
     [string]$Report,
     [int]$TimeoutSeconds = 8,
     [int]$BudgetSeconds = 420,
-    [int]$MinProbed = 120,   # the real run executes 136; see readonly-field-test
+    [int]$MinProbed = 120,   # standalone default; CI derives it from the report (90% of its non-helper Command: lines)
     [switch]$ClassifyOnly,
     [switch]$SelfTest
 )

@@ -5,7 +5,7 @@
 # SECTION raise anything at all", which is the right question for it and the
 # wrong one here. Section 13 of the owner's 2026-09-06 21:59 report printed
 #
-#   [WARNING] Sticky Keys shortcut ENABLED (Shift x5 activates at login screen)
+#   [WARNING] Sticky Keys shortcut ENABLED at the logon screen (Shift x5 opens it before anyone signs in; Flags 510 in the system default profile) (T1546.008)
 #
 # and the section did have a ledger row -- for BitLocker, T1486. So verdict_audit
 # said [OK] while the Sticky Keys finding reached neither FINDINGS COUNTED, the
@@ -279,7 +279,7 @@ if ($SelfTest) {
     function T { param([string]$n, [bool]$ok, [string]$d)
         if ($ok) { "[OK]   $n" } else { $script:fail++; "[FAIL] $n" + $(if ($d) { ": $d" }) } }
 
-    $printedLine = '[WARNING] Sticky Keys shortcut ENABLED (Shift x5 activates at login screen)'
+    $printedLine = '[WARNING] Sticky Keys shortcut ENABLED at the logon screen (Shift x5 opens it before anyone signs in; Flags 510 in the system default profile) (T1546.008)'
     $goodLedger  = @('WARNING|13|T1486|System drive not encrypted with BitLocker',
                      'WARNING|13|T1546.008|Sticky Keys shortcut enabled - Shift x5 triggers sethc.exe at the logon screen')
     $ownersLedger = @('WARNING|13|T1486|System drive not encrypted with BitLocker')

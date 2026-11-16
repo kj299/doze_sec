@@ -1472,6 +1472,18 @@ jobs:
           & .\.github\ci\secure_boot_states.ps1
           exit $LASTEXITCODE
 
+      - name: sticky_keys_check.ps1 -SelfTest + the runner's own logon-screen setting and every value through the real reader (the logon screen decides; a key that cannot be read is a raised gap)
+        shell: powershell
+        run: |
+          & .\.github\ci\sticky_keys_states.ps1
+          exit $LASTEXITCODE
+
+      - name: system_dll_sig_check.ps1 -SelfTest + the runner's own system folders and a scratch folder with look-alikes (a tampered DLL is the WARNING; a signature that cannot be read is a gap, never 'unsigned')
+        shell: powershell
+        run: |
+          & .\.github\ci\system_dll_sig_states.ps1
+          exit $LASTEXITCODE
+
       - name: named_pipe_check.ps1 -SelfTest + live (a C2 pipe list that could not be read is a raised gap, never an all-clear)
         shell: powershell
         run: |
@@ -2382,7 +2394,7 @@ jobs:
           # fail is not a guard.
           $rep = Join-Path $env:TEMP ("dz_pfr_rep_{0}.txt" -f $PID)
           $led = [System.IO.Path]::ChangeExtension($rep, '.ledger')
-          '[WARNING] Sticky Keys shortcut ENABLED (Shift x5 activates at login screen)' | Set-Content -LiteralPath $rep -Encoding ASCII
+          '[WARNING] Sticky Keys shortcut ENABLED at the logon screen (Shift x5 opens it before anyone signs in; Flags 510 in the system default profile) (T1546.008)' | Set-Content -LiteralPath $rep -Encoding ASCII
           'WARNING|13|T1486|System drive not encrypted with BitLocker' | Set-Content -LiteralPath $led -Encoding ASCII
           .\tests\assert_printed_findings_raised.ps1 -Report $rep | Write-Host
           if ($LASTEXITCODE -eq 0) { throw 'a printed finding with no matching ledger row did NOT fail the assertion' }
@@ -3557,13 +3569,24 @@ jobs:
           $rep = Get-ChildItem 'C:\SecurityAudit\SecurityReport_*.txt' -EA SilentlyContinue |
                  Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if (-not $rep) { throw 'no report to probe -- the field test did not produce one' }
-          $out = (.\tools\report_command_probe.ps1 -Report $rep.FullName -MinProbed 120) -join "`n"
+          # The floor is DERIVED from the report, never a constant: it was a fixed
+          # 120, and moving two printed checks into tools (#291) took the count
+          # to 119 with nothing wrong. Count the report's own Command: lines that
+          # are not helper invocations (the probe skips those by rule, with the
+          # same pattern), and require 90% of them to have executed.
+          $lines = @(Get-Content -LiteralPath $rep.FullName | ForEach-Object { $m2 = [regex]::Match($_, '^\s*Command:\s*(\S.*?)\s*$'); if ($m2.Success) { $m2.Groups[1].Value } })
+          $helper = '(?i)(^|\s)(powershell[^"]*\s)?-?-?File?\s*tools\\[a-z0-9_]+\.ps1|(?i)^tools\\[a-z0-9_]+\.ps1'
+          $runnable = @($lines | Where-Object { $_ -notmatch $helper }).Count
+          if ($runnable -lt 60) { throw "only $runnable runnable Command: line(s) in the report -- it is empty or truncated, and the probe would pass on nothing" }
+          $floor = [int][Math]::Floor($runnable * 0.9)
+          $out = (.\tools\report_command_probe.ps1 -Report $rep.FullName -MinProbed $floor) -join "`n"
           Write-Host $out
           if ($LASTEXITCODE -ne 0) { throw 'a command the report tells a reader to run does not run' }
           # Guard the guard: a probe that skipped everything would pass vacuously.
           $m = [regex]::Match($out, "(\d+) 'Command:' line\(s\): (\d+) executed, (\d+) skipped")
           if (-not $m.Success) { throw 'report_command_probe did not report what it did -- the extractor regressed' }
-          if ([int]$m.Groups[2].Value -lt 120) { throw "only $($m.Groups[2].Value) command(s) executed -- a clean result means nothing" }
+          Write-Host "MEASURED: $runnable runnable Command: line(s) in the report; floor $floor; executed $($m.Groups[2].Value)"
+          if ([int]$m.Groups[2].Value -lt $floor) { throw "only $($m.Groups[2].Value) of $runnable runnable command(s) executed (floor $floor) -- a clean result means nothing" }
           if ([int]$m.Groups[3].Value -lt 6)   { throw "only $($m.Groups[3].Value) skipped -- the mutating lines must still be recognised and refused" }
           foreach ($must in @('the RunOnce resume key', 'the INIT 9 connectivity probe', 'the INIT 10 self-update check')) {
             if ($out -notmatch [regex]::Escape($must)) { throw ("probe did not declare the expected skip: {0}" -f $must) }

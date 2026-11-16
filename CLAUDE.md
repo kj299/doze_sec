@@ -179,6 +179,9 @@ That floor is derived from the bats (an independent count of block starts,
 and the lint must have scanned 90% of them), never a constant: it was a fixed
 100, and the first change that moved six inline blocks into tools -- the work
 this whole section asks for -- failed it at 96. Both jobs carry the guard.
+The report-command probe's floor was the second such constant (120
+executed): moving two printed checks into tools took it to 119 with nothing
+wrong. It is now 90% of the report's own non-helper `Command:` lines.
 `tests/detection_selftest.ps1` closes the loop at runtime: any section whose
 body prints a finding must declare `ISSUES FOUND`.
 

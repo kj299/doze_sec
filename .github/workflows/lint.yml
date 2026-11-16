@@ -795,6 +795,30 @@ jobs:
                    'sshd running and the keys file unreadable: said as NOT counted, never "0 key(s)"'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
+          out=$(pwsh -NoProfile -File tools/sticky_keys_check.ps1 -SelfTest); echo "$out"
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 11 ] || { echo "only $n sticky-keys case(s)"; exit 1; }
+          for n in "logon screen off (506) while this user has it on: [OK] -- the logon screen decides, the user line is INFO" \
+                   'the logon key could not be read: a raised gap, never "[INFO] ... not set in registry"'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          out=$(pwsh -NoProfile -File tools/system_dll_sig_check.ps1 -SelfTest); echo "$out"
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 13 ] || { echo "only $n system-dll case(s)"; exit 1; }
+          for n in 'UnknownError (the signature could not be read): a raised gap, NEVER counted as unsigned' \
+                   'a valid signer whose name merely contains "Microsoft": the WARNING, not a pass'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          for b in doze_sec.bat doze_sec_noAdmin.bat; do
+            grep -qF 'stickyFlags' "$b" && { echo "$b: the inline Sticky Keys block (HKCU only, silenced read) is back"; exit 1; }
+            grep -qF 'suspDlls' "$b" && { echo "$b: the inline system-DLL block (an unread signature counted as unsigned) is back"; exit 1; }
+            grep -qF "Accessibility\StickyKeys' -Name Flags -EA SilentlyContinue).Flags >> " "$b" && { echo "$b: the Sticky Keys tile re-measures again"; exit 1; }
+            grep -qF "echo \$sk='%STICKY_STATE%'" "$b" || { echo "$b: the Sticky Keys tile no longer reads Section 13's verdict"; exit 1; }
+            for w in 'Sticky Keys check produced no verdict' 'System-path DLL signature check produced no verdict'; do
+              grep -qF "$w" "$b" || { echo "$b: lost its no-verdict backstop: $w"; exit 1; }
+            done
+            for m in sticky_hit sticky_gap sticky_deferred sysdll_hit sysdll_gap; do
+              grep -qF "if exist \"%TEMP%\\dz_$m.txt\" (" "$b" || { echo "$b: the dz_$m marker is never read"; exit 1; }
+            done
+          done
           out=$(pwsh -NoProfile -File tools/secure_boot_check.ps1 -SelfTest); echo "$out"
           n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 14 ] || { echo "only $n secure-boot case(s)"; exit 1; }
           for n in 'UEFI and nothing answered: a raised gap, never "[INFO] ... may be legacy BIOS"' \
