@@ -15,7 +15,7 @@ user a safe, reviewable path to fix it. The protection chain it supports:
 2. **Detection** is doze_sec's core job: 14 pre-flight checks + 18 audit
    sections + a CTI-driven IOC sweep (Section 18) covering 91 MITRE ATT&CK
    techniques and 282 indicators across 10 IOC categories. (The manifest maps
-   107 techniques; the 19-technique difference is documented-but-not-yet-
+   108 techniques; the 17-technique difference is documented-but-not-yet-
    detected, and `attack_matrix.ps1` lists it on every run so the gap between
    what is described and what is implemented stays visible.)
 3. **Response** is user-gated by design: a severity-sorted report (text +
@@ -449,11 +449,19 @@ Found during the v7.1 coverage review; tracked for future work:
   (T1574.009), a folder whose permissions let a non-administrator create a
   file is a WARNING, an admin-only folder is INFO. A Services key that could
   not be listed is a raised gap; a service key refused to a standard-user
-  token is a counted deferral. Residual: deny entries are not subtracted, so
-  a folder can read as writable when a deny rule blocks it (the safe
-  direction); write access granted to a specific non-administrator account
-  other than the auditing one is not counted; and a scheduled task's or Run
-  key's unquoted path is not graded here.
+  token is a counted deferral. The search order is Microsoft's documented
+  one (a prefix is tried as-is when its last component has a dot, with .exe
+  appended when not), so a service path with no .exe and arguments never
+  reads its own program as planted. Any principal other than SYSTEM,
+  Administrators, TrustedInstaller and the per-service NT SERVICE accounts
+  that may create a file, rewrite the folder's permissions or owns the
+  folder counts; a folder that does not exist yet is judged by the nearest
+  one that does, where creating a subfolder counts. A folder whose
+  permissions could not be read is a gap, never "only administrators".
+  Residual: deny entries are not subtracted (the safe direction, said in the
+  line); an NT SERVICE account with write access is not counted; a \??\ or
+  relative service path is counted as not graded; and a scheduled task's or
+  Run key's unquoted path is not graded here.
 - ~~Section 17 decided whether portproxy rules exist by finding the English
   column header "Listen" in netsh's output, so a rule on a non-English Windows,
   or a netsh that failed, printed `[OK] No netsh portproxy rules.`; the

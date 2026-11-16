@@ -821,7 +821,7 @@ class     = QUIET
 maxsev    = INFO
 proof     = ci:unquoted_service_check.ps1 -SelfTest + the runner's own services and real scratch folders (a file already where Windows looks first is CRITICAL, a folder Users can write is a WARNING, an admin-only folder is INFO, an unread key is a gap)
 signature = Unquoted service path, not exploitable as installed
-note      = Many vendors register a service under Program Files without quoting its path. Windows would try C:\Program.exe or C:\Program Files\<Vendor>.exe first, but on a stock install only administrators can create a file there, so the path is a careless install, not a way in. It is listed as [INFO] with the path. It becomes a WARNING when a non-administrator may create a file in one of those folders, and CRITICAL when a file already sits there; CI pins all three on real folders. Verify: icacls on the folder named in the line.
+note      = Many vendors register a service under Program Files without quoting its path. Windows would try C:\Program.exe or C:\Program Files\<Vendor>.exe first, but on a stock install only administrators can put a file there (the permissions of each folder are read, the nearest existing one when a folder is missing), so the path is a careless install, not a way in. It is listed as [INFO] with the path. It becomes a WARNING when a non-administrator may create a file in one of those folders, and CRITICAL when a file already sits there; CI pins all three on real folders. Verify: icacls on the folder named in the line.
 
 [portproxy-set-on-purpose]
 class     = ADVISE

@@ -796,10 +796,13 @@ jobs:
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
           out=$(pwsh -NoProfile -File tools/unquoted_service_check.ps1 -SelfTest); echo "$out"
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 23 ] || { echo "only $n unquoted-service case(s)"; exit 1; }
-          for n in 'a space only in the ARGUMENTS: the program path has none, so it is not graded' \
-                   "C:\\ as Windows ships it (create subfolders only, Modify inherit-only): no non-administrator can create C:\\Program.exe" \
-                   'a folder whose permissions could not be read: WARNING stated as not known, never INFO or [OK]' \
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 34 ] || { echo "only $n unquoted-service case(s)"; exit 1; }
+          for n in 'a space only in the ARGUMENTS: nothing to intercept' \
+                   "Microsoft's own example: program.exe, sub.exe, sub dir\\program.exe, program name.exe, in that order" \
+                   'svchost -k netsvcs (no .exe, arguments, no space in the path): nothing to intercept, the real program is never "planted"' \
+                   "C:\\ as Windows ships it (create subfolders only, Modify inherit-only): no one but administrators can create C:\\Program.exe" \
+                   'a folder one ordinary account may write (bob, with SYSTEM): bob counts, whoever runs the audit' \
+                   'permissions that could not be read: a raised GAP naming the folder, never a hijack row, never INFO, never [OK]' \
                    'the Services key could not be listed: a raised gap, never [OK]' \
                    'a DENY entry grants nothing'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }

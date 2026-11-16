@@ -7,7 +7,7 @@ $ErrorActionPreference = 'Stop'
 $st = (.\tools\unquoted_service_check.ps1 -SelfTest) -join "`n"
 if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'unquoted_service_check -SelfTest failed' }
 $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-if ($n -lt 23) { throw "unquoted_service_check self-test ran only $n case(s)" }
+if ($n -lt 34) { throw "unquoted_service_check self-test ran only $n case(s)" }
 function RunU([hashtable]$Extra) {
   $md = Join-Path $env:TEMP ("dz_ci_uq_{0}_{1}" -f $PID, [guid]::NewGuid().ToString('N').Substring(0, 6)); New-Item -ItemType Directory -Path $md -Force | Out-Null
   try {
@@ -53,6 +53,9 @@ try {
   Copy-Item -LiteralPath (Join-Path $env:SystemRoot 'System32\whoami.exe') -Destination "$dir\A B\svc.exe"
   Copy-Item -LiteralPath (Join-Path $env:SystemRoot 'System32\whoami.exe') -Destination "$dir\svc2.exe"
   Icacls @($dir, '/inheritance:r', '/grant:r', '*S-1-5-32-544:(OI)(CI)F', '*S-1-5-18:(OI)(CI)F')
+  # The owner counts too (an owner can rewrite the permissions): make it
+  # Administrators explicitly rather than trust the runner's default owner.
+  Icacls @($dir, '/setowner', '*S-1-5-32-544')
   New-Item -Path "$root\a" -Force | Out-Null
   function Svc([string]$Name, [string]$Image, [int]$Type = 16) {
     New-Item -Path "$root\a\$Name" -Force | Out-Null
@@ -68,7 +71,7 @@ try {
   Icacls @($dir, '/grant', '*S-1-5-32-545:(W)')
   $r = RunU @{ ServicesRoot = "$root\a" }
   Expect $r 'uq=warn,n=1' 'dz_unquoted_warn' ('(?m)^\[WARNING\] Unquoted service path a non-administrator can hijack -- service dzci_unquoted') 'Users may create files where Windows looks first'
-  if ($r.Out -notmatch ([regex]::Escape("$dir\A.exe") + ' first') -or $r.Out -notmatch '\(writable by Users\)') { throw "the WARNING does not name the place and who can write it: $($r.Out)" }
+  if ($r.Out -notmatch ([regex]::Escape("$dir\A.exe") + ' -- its folder lets [^;]*Users create it')) { throw "the WARNING does not name the place and who can write it: $($r.Out)" }
   # The attack done: a file at C:\dz_ci_uq_<pid>\A.exe.
   Copy-Item -LiteralPath (Join-Path $env:SystemRoot 'System32\whoami.exe') -Destination "$dir\A.exe"
   $r = RunU @{ ServicesRoot = "$root\a" }
@@ -86,7 +89,7 @@ try {
     try { $null = (Get-Item -LiteralPath "$root\b\dzci_locked" -ErrorAction Stop).GetValueNames() } catch { $denied = $true }
   } catch { Write-Host ("[ SKIP ] the deny ACL could not be set on this image ({0})" -f $_.Exception.Message) }
   if ($denied) {
-    Expect (RunU @{ ServicesRoot = "$root\b" }) 'uq=gap,n=0' 'dz_unquoted_gap' '(?m)^\[WARNING\] Unquoted service path check NOT performed -- 1 service key\(s\) could not be read: dzci_locked' 'a service key this account is denied'
+    Expect (RunU @{ ServicesRoot = "$root\b" }) 'uq=gap,n=0' 'dz_unquoted_gap' '(?m)^\[WARNING\] Unquoted service path check NOT performed -- 1 service\(s\) could not be graded: dzci_locked \(its service key' 'a service key this account is denied'
   } else { Write-Host '[ SKIP ] denied-key case not run: this account can still read the key through the deny rule; the self-test pins the judgement' }
   # The Services root itself missing: a raised gap, never [OK].
   Expect (RunU @{ ServicesRoot = "$root\nosuch" }) 'uq=gap,n=0' 'dz_unquoted_gap' '(?m)^\[WARNING\] Unquoted service path check NOT performed -- the service registry' 'a Services root that cannot be listed'
