@@ -795,6 +795,25 @@ jobs:
                    'sshd running and the keys file unreadable: said as NOT counted, never "0 key(s)"'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
+          out=$(pwsh -NoProfile -File tools/portproxy_check.ps1 -SelfTest); echo "$out"
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 14 ] || { echo "only $n portproxy case(s)"; exit 1; }
+          for n in 'a subkey that could not be read: a raised gap, never [OK]' \
+                   'a rule in v6tov4 alone is found (all four kinds are read, not only v4tov4)' \
+                   'the EMPTY key Windows leaves behind once the rules are gone: [OK], not a finding' \
+                   'denied on a standard-user token: a counted deferral, not a row, never [OK]'; do
+            echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
+          done
+          for b in doze_sec.bat doze_sec_noAdmin.bat; do
+            grep -qF 'findstr /c:"Listen"' "$b" && { echo "$b: the portproxy verdict reads netsh's English column header again"; exit 1; }
+            grep -qF 'sec17_portproxy_noadmin' "$b" && { echo "$b: the portproxy check is skipped on a standard-user token again"; exit 1; }
+            grep -qF 'echo $pp=(netsh interface portproxy' "$b" && { echo "$b: the portproxy tile re-measures with netsh again"; exit 1; }
+            grep -qF "echo \$ppS='%PORTPROXY_STATE%'" "$b" || { echo "$b: the portproxy tile no longer reads Section 17's verdict"; exit 1; }
+            grep -qF "echo if(led 'WARNING' '17' 'T1090' 'netsh portproxy rules ACTIVE')" "$b" || { echo "$b: the portproxy fix no longer triggers off the ledger"; exit 1; }
+            grep -qF 'Portproxy check produced no verdict' "$b" || { echo "$b: the portproxy check lost its no-verdict backstop"; exit 1; }
+            for m in portproxy_hit portproxy_gap portproxy_deferred; do
+              grep -qF "if exist \"%TEMP%\\dz_$m.txt\" (" "$b" || { echo "$b: the dz_$m marker is never read"; exit 1; }
+            done
+          done
           for b in doze_sec.bat doze_sec_noAdmin.bat; do
             grep -qF "Id=4104} -MaxEvents 500 -EA SilentlyContinue > " "$b" && { echo "$b: the silenced AMSI event read is back"; exit 1; }
             grep -qF "Id=4104} -MaxEvents 200 -EA SilentlyContinue > " "$b" && { echo "$b: the silenced Script Block listing is back"; exit 1; }

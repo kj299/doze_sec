@@ -816,6 +816,12 @@ maxsev    = WARNING
 proof     = ci:proxy_check.ps1 -SelfTest + the runner's own proxy settings, every state through the real reader, and a real WinHTTP proxy found by asking Windows (a key that cannot be read is a raised gap); field:a proxy a workplace, VPN, antivirus product or developer tool set on purpose is a state only a real machine produces
 signature = (Web proxy in effect for |Machine-wide WinHTTP proxy in effect)
 note      = A web proxy or auto-config (PAC) script carries every web request of the account through someone's server. Workplaces set one by Group Policy, VPN clients and some antivirus products install one, and Fiddler, Burp and similar developer tools run one on 127.0.0.1. Adware and banking trojans set the same values, and the audit cannot tell which. The owner decided (2026-11-14) that any proxy in effect is a counted WARNING, so the line names the account, the server or script address, and the store it was read from. Automatic proxy detection alone is the Windows default and stays [INFO]; CI pins that twin beside a planted proxy. Verify: Settings > Network and internet > Proxy for the per-user setting, netsh winhttp show proxy for the machine-wide one; ask whoever manages the PC whether they set it.
+[portproxy-set-on-purpose]
+class     = ADVISE
+maxsev    = WARNING
+proof     = ci:portproxy_check.ps1 -SelfTest + the runner's own PortProxy key, every state through the real reader, and a real rule added and deleted with netsh (a key that cannot be read is a raised gap); field:a WSL2, Docker or Hyper-V port forward set on purpose is a state only a real machine produces
+signature = netsh portproxy rules ACTIVE
+note      = A portproxy rule makes this PC relay connections on one port to another address. Volt Typhoon uses it to hide command-and-control traffic behind a compromised machine; WSL2 helpers, Docker and Hyper-V lab setups create the same rules on purpose, and the audit cannot tell which. Any rule stays a counted WARNING, and each one is listed listen -> connect beneath it, with whether its port is listening now. The empty PortProxy key Windows leaves once the rules are deleted is not a finding; CI pins that twin beside a planted rule. Verify: netsh interface portproxy show all; delete only a rule you do not recognise.
 [rmm-installed-on-purpose]
 class     = ADVISE
 maxsev    = WARNING

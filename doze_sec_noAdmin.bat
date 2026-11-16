@@ -216,6 +216,7 @@ set "UAC_STATE=ungraded"
 set "RDP_STATE=ungraded"
 set "ACCIFEO_STATE=ungraded"
 set "ACCBIN_STATE=ungraded"
+set "PORTPROXY_STATE=ungraded"
 set "SSHD_STATE=ungraded"
 set "RMM_STATE=ungraded"
 set "REBOOT_AGE=unknown"
@@ -4730,20 +4731,40 @@ echo ====================================================================>> "%RE
 echo.>> "%REPORT%"
 echo --- [VOLT TYPHOON] netsh PortProxy C2 Tunnel Rules --->> "%REPORT%"
 echo  Command: netsh interface portproxy show all>> "%REPORT%"
-if "%IS_ADMIN%"=="0" goto :sec17_portproxy_noadmin
 netsh interface portproxy show all>> "%REPORT%" 2>&1
-netsh interface portproxy show all 2>nul | findstr /c:"Listen" >nul 2>&1
-if !errorlevel! equ 0 (
-    echo [WARNING] netsh portproxy rules ACTIVE. Volt Typhoon C2 tunnel IOC.>> "%REPORT%"
-    call :dz_finding WARNING 17 T1090 "netsh portproxy rules ACTIVE - Volt Typhoon C2 tunnel IOC"
+del "%TEMP%\dz_portproxy_hit.txt" 2>nul
+del "%TEMP%\dz_portproxy_gap.txt" 2>nul
+del "%TEMP%\dz_portproxy_deferred.txt" 2>nul
+del "%TEMP%\dz_portproxy_state.txt" 2>nul
+echo  Command: powershell -File tools\portproxy_check.ps1   [reads HKLM\SYSTEM\CurrentControlSet\Services\PortProxy, where netsh stores the rules]>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\portproxy_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\portproxy_check.ps1" -Elevated %IS_ADMIN%>> "%REPORT%" 2>&1
 ) else (
-    echo [OK] No netsh portproxy rules.>> "%REPORT%"
+    echo [WARNING] tools\portproxy_check.ps1 not found -- portproxy check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 17 T1090 "Portproxy check NOT performed - tool missing"
 )
-goto :sec17_portproxy_done
-:sec17_portproxy_noadmin
-echo  [DEFERRED - ADMIN REQUIRED] netsh portproxy requires admin.>> "%REPORT%"
-set /a DEFERRED_COUNT+=1
-:sec17_portproxy_done
+if exist "%TEMP%\dz_portproxy_hit.txt" (
+    call :dz_finding WARNING 17 T1090 "netsh portproxy rules ACTIVE - Volt Typhoon C2 tunnel IOC"
+    del "%TEMP%\dz_portproxy_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_portproxy_gap.txt" (
+    call :dz_finding WARNING 17 T1090 "Portproxy check NOT performed - the PortProxy key could not be read"
+    del "%TEMP%\dz_portproxy_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_portproxy_deferred.txt" (
+    set "_PPDEF=0"
+    set /p _PPDEF=<"%TEMP%\dz_portproxy_deferred.txt"
+    set /a DEFERRED_COUNT+=!_PPDEF!
+    del "%TEMP%\dz_portproxy_deferred.txt" 2>nul
+)
+set "_TS="
+if exist "%TEMP%\dz_portproxy_state.txt" set /p _TS=<"%TEMP%\dz_portproxy_state.txt"
+del "%TEMP%\dz_portproxy_state.txt" 2>nul
+if defined _TS if "!_TS:~0,3!"=="pp=" set "PORTPROXY_STATE=!_TS!"
+if not "!PORTPROXY_STATE:~0,3!"=="pp=" if exist "%SCRIPT_DIR%tools\portproxy_check.ps1" (
+    echo [WARNING] Portproxy check produced no verdict -- NOT performed: tools\portproxy_check.ps1 ran but wrote no usable verdict.>> "%REPORT%"
+    call :dz_finding WARNING 17 T1090 "Portproxy check produced no verdict - NOT performed"
+)
 
 echo.>> "%REPORT%"
 echo --- [VOLT TYPHOON] LOLBin Abuse in Event 4688 --->> "%REPORT%"
@@ -6114,11 +6135,10 @@ echo if($lc -match 'sys=cleared'){ck 'WARN' 'An event log was cleared - Event 10
 echo if($isAdmin -eq '1'){ >> "%PSRUN%"
 echo $ae='%ACCTEV_STATE%';if($ae -match 'e4720=(\d+)'){if([int]$matches[1] -gt 0){ck 'WARN' ("New local accounts created: "+$matches[1]+" events (Section 16)") 'Review account names in Section 16'}else{ck 'PASS' 'No new local account creation events - 4720 (Section 16)'}}elseif($ae -match 'e4720=deferred'){ck 'INFO' 'New-account events (4720): NOT graded -- deferred, needs admin (Section 16)'}else{ck 'INFO' 'New-account events (4720): NOT graded -- Section 16 could not read the Security log'} >> "%PSRUN%"
 echo if($ae -match 'e4732=(\d+)'){if([int]$matches[1] -gt 0){ck 'WARN' ("Users added to Administrators: "+$matches[1]+" events (Section 16)") 'Review account names in Section 16'}else{ck 'PASS' 'No unexpected additions to Administrators group - 4732 (Section 16)'}}elseif($ae -match 'e4732=deferred'){ck 'INFO' 'Privileged-group events (4732): NOT graded -- deferred, needs admin (Section 16)'}else{ck 'INFO' 'Privileged-group events (4732): NOT graded -- Section 16 could not read the Security log'} >> "%PSRUN%"
-echo $pp=(netsh interface portproxy show all 2^>$null)^|Out-String;if($pp -match '\d+\.\d+'){ck 'CRIT' 'netsh portproxy tunnel rules are ACTIVE' 'Volt Typhoon C2 IOC. Remove: netsh interface portproxy reset. See Section 17.'}else{ck 'PASS' 'No netsh portproxy tunnel rules (Volt Typhoon check)'} >> "%PSRUN%"
 echo }else{ >> "%PSRUN%"
 echo ck 'INFO' 'Security event log analysis deferred (requires admin)' >> "%PSRUN%"
-echo ck 'INFO' 'netsh portproxy check deferred (requires admin)' >> "%PSRUN%"
 echo } >> "%PSRUN%"
+echo $ppS='%PORTPROXY_STATE%';if($ppS -like 'pp=rules*'){ck 'WARN' 'netsh portproxy tunnel rules are ACTIVE - Section 17' 'Volt Typhoon C2 IOC, or a WSL2/Docker/Hyper-V forward. Section 17 lists each rule; delete only one you do not recognise.'}elseif($ppS -like 'pp=none*'){ck 'PASS' 'No netsh portproxy tunnel rules - Section 17'}elseif($ppS -like 'pp=deferred*'){ck 'INFO' 'netsh portproxy rules: NOT graded -- deferred, needs admin - Section 17'}else{ck 'INFO' 'netsh portproxy rules: NOT graded -- Section 17 could not read them'} >> "%PSRUN%"
 echo $pc='%PIPES_CS_STATE%';if($pc -match 'cs=(\d+)'){if([int]$matches[1] -gt 0){ck 'WARN' ('Cobalt Strike default named pipes present: '+$matches[1]+' (Section 17)') 'Possible active C2. See Section 17 for the pipe names.'}else{ck 'PASS' 'No Cobalt Strike default named pipes detected (Section 17)'}}else{ck 'INFO' 'Cobalt Strike named pipes: NOT graded -- Section 17 could not list the pipes'} >> "%PSRUN%"
 echo $ws='%WMISUB_STATE%';if($ws -match 'filter=(\d+)'){if([int]$matches[1] -gt 0){ck 'WARN' ('Non-default WMI EventFilter subscriptions present: '+$matches[1]+' (Section 17)') 'Stealthy reboot-persistent implant. See Section 17 for the filters and their queries.'}else{ck 'PASS' 'No non-default WMI permanent EventFilter subscriptions (Section 17)'}}elseif($ws -match 'filter=deferred'){ck 'INFO' 'WMI EventFilter subscriptions: NOT graded -- deferred, needs admin (Section 17)'}else{ck 'INFO' 'WMI EventFilter subscriptions: NOT graded -- Section 17 could not query root\subscription'} >> "%PSRUN%"
 if "%PROCPATH_STATE%"=="warn" echo ck 'WARN' 'Suspicious process paths: %PROCPATH_BAD% of %PROCPATH_TOTAL% in the Section 4 process snapshot' 'Running from Temp, Downloads, Users\Public or $Recycle, or not validly signed: %PROCPATH_NAMES%. Full paths in Section 4. This tile reports the Section 4 grade itself -- it does not enumerate the process list a second time.' >> "%PSRUN%"
@@ -6210,7 +6230,6 @@ echo ck 'INFO' 'Firewall rule listing deferred (the firewall state is graded in 
 echo ck 'INFO' 'Windows Defender detection history deferred; Section 9 names anything else this token was refused' >> "%PSRUN%"
 echo ck 'INFO' 'BitLocker and Secure Boot verification deferred' >> "%PSRUN%"
 echo ck 'INFO' 'SMB server configuration check deferred' >> "%PSRUN%"
-echo ck 'INFO' 'netsh portproxy tunnel check deferred' >> "%PSRUN%"
 echo ck 'INFO' 'bcdedit driver signature check deferred' >> "%PSRUN%"
 echo ck 'INFO' 'F8 boot menu and System Restore Point deferred' >> "%PSRUN%"
 echo } >> "%PSRUN%"
@@ -6324,7 +6343,7 @@ rem so the -or cannot queue it twice.
 rem tests\assert_printed_findings_raised.ps1 fails the build while the ledger
 rem row is missing, so this cannot be quietly forgotten.
 echo if(led 'WARNING' '13' 'T1546.008' 'Sticky Keys'^){ addfix 'Disable the Shift-x5 Sticky Keys shortcut (this user AND the logon screen)' 'foreach ($h in @(''HKCU:\Control Panel\Accessibility\StickyKeys'',''Registry::HKEY_USERS\.DEFAULT\Control Panel\Accessibility\StickyKeys'')) { $cur = (Get-ItemProperty -LiteralPath $h -Name Flags -EA SilentlyContinue).Flags; if ($null -ne $cur) { Set-ItemProperty -LiteralPath $h -Name Flags -Value ([string]([int]$cur -band -bnot 0x04)) -Force } }; Write-Host ''Sticky Keys itself is unchanged; only the Shift-x5 shortcut is off. Re-enable: Settings ^> Accessibility ^> Keyboard.''' 'foreach ($h in @(''HKCU:\Control Panel\Accessibility\StickyKeys'',''Registry::HKEY_USERS\.DEFAULT\Control Panel\Accessibility\StickyKeys'')) { $cur = (Get-ItemProperty -LiteralPath $h -Name Flags -EA SilentlyContinue).Flags; if ($null -ne $cur) { Set-ItemProperty -LiteralPath $h -Name Flags -Value ([string]([int]$cur -bor 0x04)) -Force } }' } >> "%PSRUN%"
-echo if($joined -match 'portproxy tunnel rules are ACTIVE'){ addfix 'Review netsh portproxy rules (LISTS ONLY -- reset would delete WSL/dev forwards too)' 'netsh interface portproxy show all; Write-Host ''Delete ONLY the rule you do not recognise: netsh interface portproxy delete v4tov4 listenport=^<port^> listenaddress=^<addr^>. WSL2 and Hyper-V port forwarding look identical to this IOC.''' '' } >> "%PSRUN%"
+echo if(led 'WARNING' '17' 'T1090' 'netsh portproxy rules ACTIVE'){ addfix 'Review netsh portproxy rules (LISTS ONLY -- reset would delete WSL/dev forwards too)' 'netsh interface portproxy show all; Write-Host ''Delete ONLY the rule you do not recognise: netsh interface portproxy delete v4tov4 listenport=^<port^> listenaddress=^<addr^>. WSL2 and Hyper-V port forwarding look identical to this IOC.''' '' } >> "%PSRUN%"
 echo if(led 'WARNING' '17' 'T1546.003' 'Non-default WMI EventFilter'){ addfix 'Review non-default WMI EventFilter subscriptions (LISTS ONLY -- deletion is manual on purpose)' 'Get-CimInstance -Namespace root/subscription -ClassName __EventFilter -EA SilentlyContinue ^| Where-Object { -not (($_.Name -eq ''SCM Event Log Filter'' -and $_.Query -like ''*MSFT_SCMEventLogEvent*'') -or ($_.Name -in @(''BVTConsumer'',''BVTFilter'',''RmAssistEventLog''))) } ^| Format-List Name,Query; Write-Host ''Review each filter above. A permanent WMI subscription is normal for management agents (ConfigMgr, Dell/HP/Lenovo, EDR). Delete one only after you know what registered it: Get-CimInstance -Namespace root/subscription -ClassName __EventFilter ^| Where-Object Name -eq ^<name^> ^| Remove-CimInstance''' '' } >> "%PSRUN%"
 echo if($joined -match 'Accessibility binary signature INVALID'){ addfix 'Restore corrupted system binaries' "sfc /scannow; DISM /Online /Cleanup-Image /RestoreHealth" '' } >> "%PSRUN%"
 echo if(led 'CRITICAL' '9' 'T1562.001' 'Defender core protection disabled'){ addfix 'Re-enable Defender real-time protection' "Set-MpPreference -DisableRealtimeMonitoring `$false" '' } >> "%PSRUN%"

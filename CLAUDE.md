@@ -705,7 +705,12 @@ branch; `lint.yml` pins this one. **The third instance was Section 9**, found
 by the per-`goto` search of the no-admin bat (2026-11-15): one jump skipped
 Defender's status, its disable flags, the EDR agents, exclusions and ASR, so a
 standard-user run never reported real-time protection switched off. It now
-runs; only the detection history is gated. And a standard user's
+runs; only the detection history is gated. **The fourth was Section 17's
+portproxy check** (2026-11-16), deferred as "netsh portproxy requires admin"
+while the rules sit in an HKLM Services key a standard user reads; it also
+decided by finding netsh's English column header, so it read clean on every
+non-English Windows. Read where Windows STORES a setting, never the words a
+tool prints about it. And a standard user's
 `Get-MpPreference` ANSWERS, putting "N/A: Must be an administrator" where each
 exclusion list would be: a placeholder like that is a deferral, never data --
 read the value's shape before treating it as a finding. **And an answer is

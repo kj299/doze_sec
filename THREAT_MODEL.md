@@ -437,6 +437,21 @@ Found during the v7.1 coverage review; tracked for future work:
   read elsewhere; a signed-out account's Startup folder and per-user COM
   hijacks are not); a run without `-readSignedOut`, a `-readonly` or a standard-user run names signed-out
   accounts without reading them.
+- ~~Section 17 decided whether portproxy rules exist by finding the English
+  column header "Listen" in netsh's output, so a rule on a non-English Windows,
+  or a netsh that failed, printed `[OK] No netsh portproxy rules.`; the
+  no-admin bat skipped the check on a standard-user token.~~ **Closed:**
+  `tools/portproxy_check.ps1` reads the rules from
+  `HKLM\SYSTEM\CurrentControlSet\Services\PortProxy\<kind>\tcp`, where netsh
+  stores them (CI adds and deletes a real rule with netsh and finds it there),
+  for all four kinds. Any rule is the counted WARNING (T1090), each listed
+  listen -> connect with whether its port is listening; an empty leftover key
+  is no rule; a key that could not be read is a raised gap, or a counted
+  deferral when a standard-user token is refused. The dashboard tile states
+  that verdict (WARN, as the section) instead of re-running netsh and grading
+  CRIT. Residual: other ways to relay traffic (an SSH or RDP tunnel, a
+  third-party relay, a `netsh interface portproxy` rule added and removed
+  between audits) are not seen by this check.
 - ~~Section 3 listed the proxy settings with no severity, printed `[OK] No
   proxy settings in registry` when the Internet Settings read failed, read
   only the audit's own account, and never read the machine-wide WinHTTP

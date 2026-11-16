@@ -1454,6 +1454,12 @@ jobs:
           & .\.github\ci\proxy_states.ps1
           exit $LASTEXITCODE
 
+      - name: portproxy_check.ps1 -SelfTest + the runner's own PortProxy key, every state through the real reader, and a real rule added and deleted with netsh (a key that cannot be read is a raised gap)
+        shell: powershell
+        run: |
+          & .\.github\ci\portproxy_states.ps1
+          exit $LASTEXITCODE
+
       - name: named_pipe_check.ps1 -SelfTest + live (a C2 pipe list that could not be read is a raised gap, never an all-clear)
         shell: powershell
         run: |
