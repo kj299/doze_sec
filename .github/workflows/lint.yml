@@ -1275,6 +1275,14 @@ jobs:
         run: pwsh -NoProfile -File tools/lint_ps51_portability.ps1
       - name: The lint must fail on each reintroduced class, and not on prose
         run: pwsh -NoProfile -File tools/lint_ps51_portability.ps1 -SelfTest
+      # Defender's AMSI scanner blocked tools\event_scan_check.ps1 as a
+      # Trojan on the first real PC it ran on: its source held the words it
+      # searches for, and a textbook bypass as test data. GitHub's runners run
+      # Defender with real-time off, so only a text rule can catch it here.
+      - name: No file holds text Defender's AMSI scanner reads as an attack
+        run: |
+          pwsh -NoProfile -File tools/lint_amsi_text.ps1 -SelfTest
+          pwsh -NoProfile -File tools/lint_amsi_text.ps1
 
   docs-drift-lint:
     name: "Docs lint: the README matches the code"

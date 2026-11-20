@@ -124,7 +124,20 @@ Write-Host ('Section 5 (BITS history): ' + (($text -split "`r?`n" | Where-Object
 # is graded; the check must have reached a verdict naming what it
 # read, and no row may exist with nothing planted.
 if ($text -match '\[(WARNING|CRITICAL)\] An archive made on this machine ') { throw ('the archive-staging check raised on a clean runner: {0}' -f (($text -split "`r?`n" | Where-Object { $_ -match 'An archive made on this machine|^\s+(format|download mark|packs):' }) -join ' | ')) }
-if ($text -notmatch '\[OK\] (\d+ archive\(s\) examined across|No archives in the) \d+ staging folder\(s\)|\[INFO\] (\d+ archive\(s\) examined across|No archives in the) \d+ staging folder\(s\)[^\r\n]*before [^\r\n]* stopped it') { throw 'the archive-staging check printed no coverage verdict in the real audit (elevated: every staging folder must be readable)' }
+if ($text -notmatch '\[OK\] (\d+ archive\(s\) examined across|No archives in the) \d+ staging folder\(s\)|\[INFO\] (\d+ archive\(s\) examined across|No archives in the) \d+ staging folder\(s\)[^\r\n]*before [^\r\n]* stopped it') {
+  # Print what Section 14 actually said: a bare throw here once failed a run
+  # whose cause could not be read from the log (the report is in the
+  # artifact only), so the next failure must name its own cause.
+  $arLines = @(); $inAr = $false
+  foreach ($ln in ($text -split "`r?`n")) {
+    if ($ln -match '^--- \[T1560\] Archives made on this machine') { $inAr = $true; continue }
+    if ($inAr -and $ln -match '^(---|=====| \[SECTION )') { break }
+    if ($inAr -and $ln.Trim()) { $arLines += $ln.Trim() }
+    if ($arLines.Count -ge 40) { break }
+  }
+  $shown = $(if ($arLines.Count) { $arLines -join ' | ' } else { '(the subsection header was not found in the report)' })
+  throw ('the archive-staging check printed no coverage verdict in the real audit (elevated: every staging folder must be readable). Section 14 printed: ' + $shown)
+}
 if ($text -match 'could not be listed by an administrator -- archives there were NOT checked|could not be read by an administrator -- they were NOT checked') { throw ('an administrator could not read a staging folder or file on a clean runner: {0}' -f (($text -split "`r?`n" | Where-Object { $_ -match 'by an administrator' }) -join ' | ')) }
 $ledArch = Join-Path 'C:\SecurityAudit' ('SecurityReport_' + $stem + '.ledger')
 if ((Test-Path -LiteralPath $ledArch) -and @(Get-Content -LiteralPath $ledArch | Where-Object { $_ -match '\|14\|T1560\|' }).Count) { throw 'a T1560 ledger row on a clean runner' }

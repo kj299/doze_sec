@@ -769,6 +769,21 @@ borrow). The same review found the Defender detection history had become
 what it caught before another antivirus took over: **a mode is a reason to
 reinterpret a failed query, never a reason not to ask.**
 
+**A security tool's own source must never hold a working attack sample.**
+`tools\event_scan_check.ps1` carried the words it searches Script Block logs
+for and, as self-test data, a textbook AMSI-bypass line. On the first real PC
+it ran on, Defender's AMSI scanner read the file before PowerShell ran it and
+blocked it as `Trojan:PowerShell/Fleisnam.D` (Severe): four checks produced no
+verdict, and the owner's Protection history gained a detection for our own
+file. Every CI job passed, because GitHub's runners run Defender with real-time
+protection off -- the one machine the defect could not appear on. Build such
+strings at run time from fragments (`'Am' + 'si' + 'Utils'`);
+`tools\lint_amsi_text.ps1` fails on the contiguous form in any tracked file,
+and the helpers job asks AMSI itself to scan every `.ps1` once it has shown the
+scanner detects Microsoft's test sample (a declared SKIP otherwise, never a
+pass). A Defender detection of a doze_sec file is a bug to report, never
+something to exclude.
+
 **`File.Exists` is not "not installed".** `[IO.File]::Exists` and
 `[IO.Directory]::Exists` return `false` for a path this account may not
 read, and never throw, so a store that refused us read as a browser that is

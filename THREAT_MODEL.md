@@ -598,6 +598,17 @@ Found during the v7.1 coverage review; tracked for future work:
   (little, when Script Block Logging is off -- the line says so), and nine
   further blocks of the same class are still open
   (`docs/design/backlog.md`, "The per-block search").
+- ~~On a PC with Defender real-time protection on, `tools/event_scan_check.ps1`
+  was blocked by the AMSI scanner as a Trojan (its source held the bypass
+  words and a textbook bypass as test data), so its four checks never ran
+  on a real machine.~~ **Closed:** the text is assembled at run time,
+  `tools/lint_amsi_text.ps1` keeps the contiguous form out of every file,
+  and the helpers job asks AMSI to scan every `.ps1`. Residual: Defender's
+  signatures change, so a file that scans clean today can be flagged
+  later. The CI scan runs only when the runner's scanner detects
+  Microsoft's test sample (a declared SKIP otherwise), and a field run
+  still declares the miss: the tool's no-verdict backstop row, and
+  Section 16's Defender event listing.
 - ~~Section 10 (RDP/NLA) fell through a failed read to `[OK] RDP enabled
   with NLA.` and read only the local setting; the Section 14 and 17 file
   walks (alternate data streams, large HTML/HTA, Outlook `.msg`/`.oft`)

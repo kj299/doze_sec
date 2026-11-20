@@ -6,6 +6,12 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Defender no longer reads `tools/event_scan_check.ps1` as malware
+On a real Windows 11 PC with Defender's real-time protection on, the AMSI scanner blocked `tools\event_scan_check.ps1` as `Trojan:PowerShell/Fleisnam.D`. Its source held the names of the bypass techniques it searches for and, as self-test data, a textbook bypass line. PowerShell refused to run it, so the AMSI-bypass, service-install, password-spray and Script Block checks each produced no verdict. The backstop rows declared that rather than reading clean. CI never saw it: GitHub's runners run Defender with real-time protection off.
+- The words and the test data are now assembled at run time. The checks' behaviour and their 30 self-test cases are unchanged.
+- `tools/lint_amsi_text.ps1` (in `lint.yml`) fails on any tracked text file holding the contiguous form.
+- A helpers step asks AMSI itself to scan every `.ps1`, once it has shown the scanner detects Microsoft's own test sample. If the scanner does not, the step is a declared `[ SKIP ]`.
+
 ### Defender's LSASS-read check (Section 12): a refusal on a standard-user token is a deferral, and each gap names its own cause
 A clean standard-user run raised `Defender LSASS-read records NOT checked - its log unreadable`. `tools/asr_lsass_events.ps1` raised four different causes through one gap marker, all under that wording. The causes are an unreadable log, an unreadable per-rule exclusion list, records it could not parse and a rule mode it does not know. Its exclusion read had no deferral branch, so a standard-user token, which Defender's own settings refuse, raised a gap that the token explained.
 
