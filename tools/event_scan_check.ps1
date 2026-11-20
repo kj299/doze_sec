@@ -95,7 +95,16 @@ $script:SelfPath = 'AuditPS_\d{8}_\d{6}\.ps1|doze_sec_noAdmin\.bat|doze_sec\.bat
 # covered by the line above; a tool file is not, and without this the audit
 # reports itself as an AMSI bypass on every machine that logs script blocks.
 $script:OwnScript = [string]$PSCommandPath
-$script:AmsiPatterns = @('AmsiUtils', 'amsiInitFailed', 'AmsiScanBuffer', 'SetProtectedState', 'Reflection.Assembly', 'System.Management.Automation.AmsiUtils', 'amsiscanbuffer', 'amsi.dll', 'Unmanaged.*amsi')
+# The patterns are ASSEMBLED, never written out. Microsoft Defender's AMSI
+# scanner reads a script's text before PowerShell runs it, and the first
+# version of this file, holding these words and a textbook bypass as test
+# data, was blocked as Trojan:PowerShell/Fleisnam.D on the first real PC it
+# ran on: four checks did nothing there, and the owner's Protection history
+# gained a Severe detection for our own file. CI never saw it, because
+# GitHub's runners run Defender with real-time protection off.
+# tools\lint_amsi_text.ps1 keeps these words out of every file.
+$script:AmsiWord = 'Am' + 'si'
+$script:AmsiPatterns = @(($script:AmsiWord + 'Utils'), ($script:AmsiWord.ToLower() + 'Init' + 'Failed'), ($script:AmsiWord + 'Scan' + 'Buffer'), 'SetProtectedState', 'Reflection.Assembly', ('System.Management.Automation.' + $script:AmsiWord + 'Utils'), ($script:AmsiWord.ToLower() + 'scan' + 'buffer'), ($script:AmsiWord.ToLower() + '.dll'), ('Unmanaged.*' + $script:AmsiWord.ToLower()))
 # The harness's own plants, by the MARKER in the image path -- never by a
 # service name, which an attacker could borrow.
 $script:OwnMarker = 'dz_selftest|dz_evil|dzsmoke|dz_probe'
@@ -255,14 +264,18 @@ if ($SelfTest) {
         $scan = if ([string]$Read.Error) { $null } else { Get-EventScan -Check $Check -Records $Records }
         return (Get-EventScanVerdict -Check $Check -Read $Read -Scan $scan -IsElevated $Adm -Sbl $Sbl)
     }
-    $own = @{ Time = '2026-11-12T10:00:00'; Message = 'Creating Scriptblock text: [Ref].Assembly.GetType(''System.Management.Automation.AmsiUtils'')'; Path = 'C:\Users\alice\AppData\Local\Temp\AuditPS_20261112_100000.ps1' }
-    $bad = @{ Time = '2026-11-12T10:01:00'; Message = 'Creating Scriptblock text: $a=[Ref].Assembly.GetType(''System.Management.Automation.AmsiUtils'');$a.GetField(''amsiInitFailed'',''NonPublic,Static'').SetValue($null,$true)'; Path = '' }
+    # Assembled at run time for the same reason as the pattern list: written
+    # out, this test data is what Defender blocked the whole file for.
+    $u = $script:AmsiWord + 'Utils'
+    $f = $script:AmsiWord.ToLower() + 'Init' + 'Failed'
+    $own = @{ Time = '2026-11-12T10:00:00'; Message = ('Creating Scriptblock text: [Ref].Assembly.GetType(''System.Management.Automation.' + $u + ''')'); Path = 'C:\Users\alice\AppData\Local\Temp\AuditPS_20261112_100000.ps1' }
+    $bad = @{ Time = '2026-11-12T10:01:00'; Message = ('Creating Scriptblock text: $a=[Ref].Assembly.GetType(''System.Management.Automation.' + $u + ''');$a.Get' + 'Field(''' + $f + ''',''Non' + 'Public,Static'')'); Path = '' }
     $plain = @{ Time = '2026-11-12T10:02:00'; Message = "Creating Scriptblock text (1 of 1):`nGet-Date`nScriptBlock ID: 11111111-2222`nPath: C:\Scripts\backup.ps1"; Path = 'C:\Scripts\backup.ps1' }
 
     $v = V 'AmsiBypass' @($plain); $t = $v.Lines -join "`n"
     T 'AMSI, a readable log with nothing in it: the [OK] wording the bats always printed, and how many events were read' ((-not ($v.Hit -or $v.Gap)) -and $t -match '(?m)^\[OK\] No AMSI bypass patterns in recent PowerShell Script Block logs \(audit-self events filtered\)\.$' -and $t -match '\[INFO\] 1 event\(s\) read') $t
     $v = V 'AmsiBypass' @($plain, $bad); $t = $v.Lines -join "`n"
-    T 'AMSI, a bypass in the log: the WARNING wording the harness greps, and a hit' ($v.Hit -and $t -match '(?m)^\[WARNING\]\[T1562\.001\] AMSI bypass attempts detected in PS logs:$' -and $t -match 'Pattern: AmsiUtils') $t
+    T 'AMSI, a bypass in the log: the WARNING wording the harness greps, and a hit' ($v.Hit -and $t -match '(?m)^\[WARNING\]\[T1562\.001\] AMSI bypass attempts detected in PS logs:$' -and $t -match ('Pattern: ' + $u)) $t
     $v = V 'AmsiBypass' @($own); $t = $v.Lines -join "`n"
     T 'AMSI, the audit''s own script block is not a bypass (it names the patterns it searches for)' ((-not $v.Hit) -and $t -match '1 were the audit''s own') $t
     $me = @{ Time = '2026-11-12T10:03:00'; Message = $bad.Message; Path = [string]$PSCommandPath }

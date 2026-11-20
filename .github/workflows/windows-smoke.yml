@@ -87,6 +87,11 @@ jobs:
           if ($bad) { $bad | ForEach-Object { Write-Host "PARSE ERROR  $_" }; exit 1 }
           Write-Host "All tools/*.ps1 + tests/*.ps1 parse clean under Windows PowerShell $($PSVersionTable.PSVersion)"
           exit 0
+      - name: Defender's AMSI scanner reads none of our PowerShell files as malicious (declared SKIP when the runner's scanner detects nothing)
+        shell: powershell
+        run: |
+          & .\.github\ci\amsi_scan.ps1
+          exit $LASTEXITCODE
 
       - name: scheduled_tasks_full.ps1 (real Get-ScheduledTask + Authenticode)
         shell: powershell

@@ -212,6 +212,13 @@ field_test ends with one of:
   Send the console output; the reason is in it.
 - Any other `FAIL`: send everything; that is a bug in the tool.
 
+If Windows Security reports a threat in a doze_sec file (Protection history,
+or a report line saying a script "has been blocked by your antivirus
+software"), that is a bug in the tool: its own text looked like an attack to
+Defender. **Do not add a Defender exclusion or allow the item** -- an exclusion
+is exactly what an intruder would want on that machine. Send the report;
+delete the copy.
+
 ## Step 5: bring the results back
 
 Copy these folders onto the USB stick, **outside** `E:\doze_sec`, for example
