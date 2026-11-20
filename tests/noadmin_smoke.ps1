@@ -133,6 +133,18 @@ function Assert {
 # detection harness but tolerant of PARTIAL verdicts (deferral is clean).
 function Assert-LedgerConsistency {
     param([string]$Text, [string[]]$Ledger, [string]$Label)
+    # Print every row, so a count that moves can be explained from the log
+    # alone (run 437 counted 13 on a clean runner and the log could not say
+    # which row was new).
+    $rows = @($Ledger | Where-Object { $_ })
+    if ($rows.Count -eq 0) { Write-Host ("  MEASURED: {0} ledger is empty" -f $Label) }
+    $rn = 0
+    foreach ($row in $rows) {
+        $rn++
+        $shown = ($row -replace '[\x00-\x1F\x7F]', ' ')
+        if ($shown.Length -gt 300) { $shown = $shown.Substring(0, 300) + '...' }
+        Write-Host ("  MEASURED: {0} ledger row {1}: {2}" -f $Label, $rn, $shown)
+    }
     $secBad = 0
     for ($n = 1; $n -le 18; $n++) {
         $inLedger = [bool](@($Ledger | Where-Object { $_ -match ('^(CRITICAL|WARNING)\|{0}\|' -f $n) }).Count)
