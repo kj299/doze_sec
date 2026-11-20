@@ -51,15 +51,37 @@ try {
   $f = Join-Path $dir 'dz_test_sample.com'
   $t = 'X5O!P%@AP[4\PZX54(P^)7CC)7}$' + 'EICAR' + '-STANDARD' + '-ANTIVIRUS' + '-TEST-FILE!$H+H*'
   [IO.File]::WriteAllText($f, $t, [Text.Encoding]::ASCII)
+  # MEASURE the engine before reading anything into an empty history: the
+  # first run found nothing after a custom scan and could not say why.
+  $cs = $null
+  try { $cs = Get-MpComputerStatus -ErrorAction Stop } catch { Write-Host ("MEASURED: Get-MpComputerStatus did not answer: {0}" -f $_.Exception.Message) }
+  if ($cs) { Write-Host ("MEASURED: AMRunningMode={0} AntivirusEnabled={1} AMServiceEnabled={2} RealTimeProtectionEnabled={3} signatures {4}" -f $cs.AMRunningMode, $cs.AntivirusEnabled, $cs.AMServiceEnabled, $cs.RealTimeProtectionEnabled, $cs.AntivirusSignatureVersion) }
+  try { Write-Host ("MEASURED: exclusions after the lift: [{0}]" -f ((@((Get-MpPreference -ErrorAction Stop).ExclusionPath) | Where-Object { $_ }) -join '; ')) } catch { }
+  # Ask the engine itself, independent of the history: exit code 2 is
+  # "threat found"; -DisableRemediation leaves the file for the scan below.
+  $mp = Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe'
+  $mpExit = $null
+  if (Test-Path -LiteralPath $mp) {
+    $mpOut = & $mp -Scan -ScanType 3 -File $f -DisableRemediation 2>&1
+    $mpExit = $LASTEXITCODE
+    Write-Host ("MEASURED: MpCmdRun file scan exit {0}: {1}" -f $mpExit, ((@($mpOut) | Select-Object -Last 3) -join ' | '))
+  } else { Write-Host ("MEASURED: {0} not found" -f $mp) }
   Start-MpScan -ScanType CustomScan -ScanPath $dir -ErrorAction Stop
   $hit = $null
-  foreach ($i in 1..20) {
+  foreach ($i in 1..40) {
     $hit = @(Get-MpThreatDetection -ErrorAction SilentlyContinue | Where-Object { @($_.Resources) -match [regex]::Escape($dir) })
     if ($hit.Count) { break }
     Start-Sleep -Seconds 3
   }
+  $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-Windows Defender/Operational'; Id = 1116, 1117; StartTime = (Get-Date).AddMinutes(-10) } -ErrorAction SilentlyContinue | Where-Object { $_.Message -match [regex]::Escape($dir) })
+  Write-Host ("MEASURED: Defender events 1116/1117 naming the folder: {0}; the test file still exists: {1}" -f $ev.Count, (Test-Path -LiteralPath $f))
+  $engineOff = (-not $cs) -or ($cs.AntivirusEnabled -ne $true) -or ([string]$cs.AMRunningMode -ne 'Normal') -or ($mpExit -ne 2)
   if (-not $hit -or -not $hit.Count) {
-    throw 'Defender recorded no detection for the test file after a custom scan of a folder no exclusion covers -- the live path of the check would go untested'
+    if ($engineOff) {
+      Write-Host '[ SKIP ] Defender''s engine did not detect the test file on this runner (the MEASURED lines above say why), so there is no real record to read; the self-test pins the judgement'
+    } else {
+      throw 'Defender''s engine detects the test file (MpCmdRun exit 2) but no record reached the detection history the check reads -- its live path would go untested'
+    }
   } else {
     $planted = $true
     Write-Host ("MEASURED: Defender recorded the test file: status {0}, ActionSuccess {1}" -f $hit[0].ThreatStatusID, $hit[0].ActionSuccess)
