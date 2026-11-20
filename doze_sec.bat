@@ -233,6 +233,7 @@ set "SECBOOT_STATE=ungraded"
 set "UNQUOTED_STATE=ungraded"
 set "PORTPROXY_STATE=ungraded"
 set "SSHD_STATE=ungraded"
+set "MPDET_STATE=ungraded"
 set "RMM_STATE=ungraded"
 set "REBOOT_AGE=unknown"
 set "BITLOCKER_STATE=ungraded"
@@ -3516,9 +3517,46 @@ del "%TEMP%\dz_asr_hit.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- Defender Threat Detection History --->> "%REPORT%"
-echo  Command: powershell -Command "Get-MpThreatDetection">> "%REPORT%"
-echo Get-MpThreatDetection ^| Select-Object ActionSuccess,InitialDetectionTime,ThreatID,DomainUser,ProcessName ^| Format-Table -AutoSize > "%PSRUN%"
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+del "%TEMP%\dz_mpdet_crit.txt" 2>nul
+del "%TEMP%\dz_mpdet_warn.txt" 2>nul
+del "%TEMP%\dz_mpdet_gap.txt" 2>nul
+del "%TEMP%\dz_mpdet_deferred.txt" 2>nul
+del "%TEMP%\dz_mpdet_state.txt" 2>nul
+set "_MPOA="
+if "!DEFCORE_WHYF!"=="otherav" set "_MPOA=-OtherAv"
+echo  Command: powershell -File tools\defender_detections_check.ps1>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\defender_detections_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\defender_detections_check.ps1" !_MPOA!>> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\defender_detections_check.ps1 not found -- Defender detection history NOT checked.>> "%REPORT%"
+    call :dz_finding WARNING 9 T1204.002 "Defender detection history NOT checked - tool missing"
+)
+if exist "%TEMP%\dz_mpdet_crit.txt" (
+    call :dz_finding CRITICAL 9 T1204.002 "Defender detected malware it did not remove"
+    del "%TEMP%\dz_mpdet_crit.txt" 2>nul
+)
+if exist "%TEMP%\dz_mpdet_warn.txt" (
+    call :dz_finding WARNING 9 T1204.002 "Defender detected and removed malware"
+    del "%TEMP%\dz_mpdet_warn.txt" 2>nul
+)
+if exist "%TEMP%\dz_mpdet_gap.txt" (
+    call :dz_finding WARNING 9 T1204.002 "Defender detection history NOT checked - it could not be read"
+    del "%TEMP%\dz_mpdet_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_mpdet_deferred.txt" (
+    set "_MPDEF=0"
+    set /p _MPDEF=<"%TEMP%\dz_mpdet_deferred.txt"
+    set /a DEFERRED_COUNT+=!_MPDEF!
+    del "%TEMP%\dz_mpdet_deferred.txt" 2>nul
+)
+set "_TS="
+if exist "%TEMP%\dz_mpdet_state.txt" set /p _TS=<"%TEMP%\dz_mpdet_state.txt"
+del "%TEMP%\dz_mpdet_state.txt" 2>nul
+if defined _TS if "!_TS:~0,4!"=="det=" set "MPDET_STATE=!_TS!"
+if not "!MPDET_STATE:~0,4!"=="det=" if exist "%SCRIPT_DIR%tools\defender_detections_check.ps1" (
+    echo [WARNING] Defender detection history produced no verdict -- NOT performed: tools\defender_detections_check.ps1 ran but wrote no usable verdict.>> "%REPORT%"
+    call :dz_finding WARNING 9 T1204.002 "Defender detection history produced no verdict - NOT performed"
+)
 echo.>> "%REPORT%"
 
 :: ====================================================================
@@ -6423,6 +6461,7 @@ echo $dcWhy='%DEFCORE_WHYS%';$dxWhy='%DEFEXCL_WHY%' >> "%PSRUN%"
 echo if($dcGraded -ne '1' -and ($dcWhy -eq 'deferred' -or $dcWhy -eq 'stdmasked')){ck 'INFO' 'Real-time protection: NOT graded on this standard-user token -- Defender does not show it truthfully to this token (Section 9)' 'Run the audit as administrator to grade it.'}elseif($dcGraded -ne '1' -and $dcWhy -eq 'otherav'){ck 'INFO' 'Real-time protection: Defender is not the antivirus here -- Windows Security Center names another (Section 9)' 'Verify that product is running and current.'}elseif($dcGraded -ne '1'){ck 'INFO' 'Real-time protection: NOT graded -- Section 9 could not query Defender' 'Get-MpComputerStatus failed in Section 9 and no other antivirus is known. Open Windows Security and look.'}elseif($dcPassive){ck 'INFO' ('Defender in '+$dcMode+' -- another antivirus product is in control (Section 9)') 'Defender real-time flags read off by design while another product is primary. Verify that product is running and current.'}elseif($dcRt -eq '1'){ck 'PASS' 'Real-time protection enabled'}else{ck 'CRIT' 'Real-time protection DISABLED' 'Run: Set-MpPreference -DisableRealtimeMonitoring $false'} >> "%PSRUN%"
 echo if($dcGraded -ne '1' -or $dcWhy -eq 'stdmasked'){ck 'INFO' ('Tamper protection and signature age: NOT graded -- '+$(if($dcWhy -eq 'deferred' -or $dcWhy -eq 'stdmasked'){'Defender does not show them truthfully to this standard-user token'}elseif($dcWhy -eq 'otherav'){'another antivirus is registered'}else{'Section 9 could not query Defender'})+' (Section 9)')}else{if($dcTamper -eq '1'){ck 'PASS' 'Tamper protection enabled'}else{ck 'WARN' 'Tamper protection disabled' 'Enable via Windows Security ^> Virus and threat protection settings'};if($dcSigAge -lt 0){ck 'INFO' 'Signature age: not reported by Defender (Section 9)'}elseif($dcSigAge -gt 7){ck 'WARN' "Signatures are $dcSigAge days old -- updates are not arriving (Section 9)" 'Run: Update-MpSignature'}else{ck 'PASS' "Signatures current ($dcSigAge days old)"}} >> "%PSRUN%"
 echo if($dxGraded -ne '1' -and $dxWhy -eq 'deferred'){ck 'INFO' 'Defender exclusions: NOT graded on this standard-user token -- Defender withholds the lists from it (Section 9)' 'Run the audit as administrator to see them.'}elseif($dxGraded -ne '1' -and $dxWhy -eq 'otherav'){ck 'INFO' 'Defender exclusions: Defender is not the antivirus here -- Windows Security Center names another (Section 9)'}elseif($dxGraded -ne '1'){ck 'INFO' 'Defender exclusions: NOT graded -- Section 9 could not read the lists' 'See the Defender exclusions block in Section 9 for why.'}else{if($dxPaths -gt 0){ck 'WARN' "Defender path exclusions configured: $dxPaths (Section 9)" 'Exclusions hide whatever they cover from Defender. Verify each is legitimate; the list is in Section 9.'}else{ck 'PASS' 'No Defender path exclusions configured (Section 9)'};if($dxProcs -gt 0){ck 'WARN' "Defender process exclusions configured: $dxProcs (Section 9)" 'Verify each is legitimate; the list is in Section 9.'}else{ck 'PASS' 'No Defender process exclusions configured (Section 9)'};if($dxExts -gt 0){ck 'WARN' "Defender extension exclusions configured: $dxExts (Section 9)" 'An excluded extension is unscanned wherever it appears. Verify each; the list is in Section 9.'}else{ck 'PASS' 'No Defender extension exclusions configured (Section 9)'}} >> "%PSRUN%"
+echo $mdS='%MPDET_STATE%';if($mdS -like 'det=active*'){ck 'CRIT' 'Defender detected malware it did NOT remove - Section 9' 'Section 9 names each threat, its file and why it is still there. Open Windows Security, Protection history; never answer a detection with an exclusion.'}elseif($mdS -like 'det=removed*'){ck 'WARN' 'Defender detected and removed malware on this PC - Section 9' 'Section 9 names each threat and file. Ask how it arrived; a file you recognise, such as a test sample, can be one.'}elseif($mdS -like 'det=none*'){ck 'PASS' 'Defender has no detection on record - Section 9'}elseif($mdS -like 'det=deferred*'){ck 'INFO' 'Defender detection history: NOT graded on this standard-user token - Section 9' 'Run the audit as administrator to read it.'}elseif($mdS -like 'det=otherav*'){ck 'INFO' 'Defender detection history: not applicable -- another antivirus is in force - Section 9'}else{ck 'INFO' 'Defender detection history: NOT graded -- Section 9 could not read it'} >> "%PSRUN%"
 echo. >> "%PSRUN%"
 
 :: ===== ATTACK SURFACE ================================================

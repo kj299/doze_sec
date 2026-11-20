@@ -768,6 +768,11 @@ borrow). The same review found the Defender detection history had become
 "not consulted" in passive mode, where Defender still holds the record of
 what it caught before another antivirus took over: **a mode is a reason to
 reinterpret a failed query, never a reason not to ask.**
+And that history was printed but never GRADED: a raw `Get-MpThreatDetection`
+table, so a Severe detection on WIN11-02 reached no row. The strongest
+compromise signal on most PCs is Defender's own record of what it caught;
+`tools/defender_detections_check.ps1` raises it (not removed is CRITICAL,
+removed is a WARNING).
 
 **A security tool's own source must never hold a working attack sample.**
 `tools\event_scan_check.ps1` carried the words it searches Script Block logs

@@ -302,8 +302,16 @@ try {
             # detection from before another antivirus took over is exactly
             # the evidence wanted. Only a FAILED query looks at the mode.
             try {
-                $d = @(Get-MpThreatDetection -ErrorAction Stop | Where-Object { [string]$_.ThreatName -match 'AccessibilityEscalation' })
-                if ($d.Count -gt 0) { $def = @{ State = 'found'; Rows = @($d | ForEach-Object { ([string]$_.ThreatName + '  action succeeded: ' + [string]$_.ActionSuccess + '  first seen: ' + [string]$_.InitialDetectionTime) }); Error = '' } }
+                # A detection record (MSFT_MpThreatDetection) carries no
+                # ThreatName: the name lives on the threat (Get-MpThreat),
+                # joined by ThreatID. Filtering the detection on ThreatName
+                # matched nothing on every machine and printed "[OK] No ...
+                # detections on record" having compared nothing.
+                $names = @{}
+                $hist = @(Get-MpThreatDetection -ErrorAction Stop)
+                if ($hist.Count) { foreach ($t in @(Get-MpThreat -ErrorAction Stop)) { $names[[string]$t.ThreatID] = [string]$t.ThreatName } }
+                $d = @($hist | Where-Object { $names[[string]$_.ThreatID] -match 'AccessibilityEscalation' })
+                if ($d.Count -gt 0) { $def = @{ State = 'found'; Rows = @($d | ForEach-Object { ($names[[string]$_.ThreatID] + '  action succeeded: ' + [string]$_.ActionSuccess + '  first seen: ' + [string]$_.InitialDetectionTime) }); Error = '' } }
                 else { $def = @{ State = 'none'; Rows = @(); Error = '' } }
             } catch {
                 $err = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message)

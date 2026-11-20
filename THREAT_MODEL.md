@@ -598,6 +598,14 @@ Found during the v7.1 coverage review; tracked for future work:
   (little, when Script Block Logging is off -- the line says so), and nine
   further blocks of the same class are still open
   (`docs/design/backlog.md`, "The per-block search").
+- ~~Section 9 printed Defender's detection history as a raw table, with no
+  verdict and no row, so a Severe detection, or malware Defender failed to
+  remove, raised nothing.~~ **Closed:** `tools/defender_detections_check.ps1`
+  grades it. Not removed is CRITICAL, removed is a WARNING, unreadable is a
+  raised gap, and refused on a standard-user token is a counted deferral.
+  Residual: Defender keeps this history for a limited time, so an old
+  detection can age out; a third-party antivirus's own history is not
+  read; and Defender's verdict is only as good as its signatures.
 - ~~On a PC with Defender real-time protection on, `tools/event_scan_check.ps1`
   was blocked by the AMSI scanner as a Trojan (its source held the bypass
   words and a textbook bypass as test data), so its four checks never ran

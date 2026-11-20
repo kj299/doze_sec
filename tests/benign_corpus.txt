@@ -829,6 +829,12 @@ maxsev    = WARNING
 proof     = ci:portproxy_check.ps1 -SelfTest + the runner's own PortProxy key, every state through the real reader, and a real rule added and deleted with netsh (a key that cannot be read is a raised gap); field:a WSL2, Docker or Hyper-V port forward set on purpose is a state only a real machine produces
 signature = netsh portproxy rules ACTIVE
 note      = A portproxy rule makes this PC relay connections on one port to another address. Volt Typhoon uses it to hide command-and-control traffic behind a compromised machine; WSL2 helpers, Docker and Hyper-V lab setups create the same rules on purpose, and the audit cannot tell which. Any rule stays a counted WARNING, and each one is listed listen -> connect beneath it, with whether its port is listening now. The empty PortProxy key Windows leaves once the rules are deleted is not a finding; CI pins that twin beside a planted rule. Verify: netsh interface portproxy show all; delete only a rule you do not recognise.
+[defender-detected-recognised-file]
+class     = ADVISE
+maxsev    = WARNING
+proof     = ci:defender_detections_check.ps1 -SelfTest + the runner's real history and a planted test-file detection (unremoved is CRITICAL, removed a WARNING, unreadable a raised gap); field:a detection of a file the person recognises (an antivirus test sample, a security tool flagged by name, or this audit's own file on 2026-11-20) is a state only a real machine's history holds
+signature = Defender detected and removed 
+note      = Defender's history keeps what it removed for a limited time, so a removed detection of something harmless can read as a WARNING for days: an antivirus test file, a password tool or scanner flagged by name, or (once, on WIN11-02 on 2026-11-20) this audit's own tools\event_scan_check.ps1, which Defender read as a Trojan before that was fixed. The audit cannot tell those from real malware that was removed, so it stays a counted WARNING naming the file. Only a detection Defender did NOT remove is CRITICAL. Verify: Windows Security > Virus & threat protection > Protection history, and Get-MpThreatDetection | Format-List ThreatID,Resources,InitialDetectionTime,ThreatStatusID. Never answer one with an exclusion.
 [rmm-installed-on-purpose]
 class     = ADVISE
 maxsev    = WARNING
