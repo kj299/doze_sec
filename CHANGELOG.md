@@ -14,7 +14,7 @@ Section 9 used to print a raw `Get-MpThreatDetection` table, with no verdict and
   - each line names the threat, its severity, every file, the action, the time, the user and the process.
 - An empty history is `[OK]`. A history that could not be read is a raised gap. On a standard-user token it is a counted deferral. When another antivirus is in force and Defender does not answer, the line is INFO.
 - A dashboard tile reads the section's verdict, and the analyst notes cover the new lines.
-- CI plants a real detection, the standard antivirus test file found by a custom scan, and asserts it is named by its path.
+- CI plants a real detection, the standard antivirus test file found by a Defender file scan (`MpCmdRun`), and asserts it is named by its path.
 
 ### Defender no longer reads `tools/event_scan_check.ps1` as malware
 On a real Windows 11 PC with Defender's real-time protection on, the AMSI scanner blocked `tools\event_scan_check.ps1` as `Trojan:PowerShell/Fleisnam.D`. Its source held the names of the bypass techniques it searches for and, as self-test data, a textbook bypass line. PowerShell refused to run it, so the AMSI-bypass, service-install, password-spray and Script Block checks each produced no verdict. The backstop rows declared that rather than reading clean. CI never saw it: GitHub's runners run Defender with real-time protection off.

@@ -2,7 +2,7 @@
 # Reads the runner's real Defender detection history, then plants a REAL
 # detection: the industry-standard antivirus test file (harmless by design,
 # detected by every engine) written into a scratch folder and scanned with a
-# Defender custom scan. Defender quarantines it. The scratch folder is removed
+# Defender file scan (MpCmdRun). Defender quarantines it. The scratch folder is removed
 # in finally; the DETECTION RECORD stays in this runner's Defender history
 # (Remove-MpThreat acts only on active threats), so no later step in this job
 # may run the full audit and expect a clean Section 9. A Defender path
@@ -66,7 +66,14 @@ try {
     $mpExit = $LASTEXITCODE
     Write-Host ("MEASURED: MpCmdRun file scan exit {0}: {1}" -f $mpExit, ((@($mpOut) | Select-Object -Last 3) -join ' | '))
   } else { Write-Host ("MEASURED: {0} not found" -f $mp) }
-  Start-MpScan -ScanType CustomScan -ScanPath $dir -ErrorAction Stop
+  # The plant: the engine path measured to work, with remediation ON, so
+  # Defender quarantines the file and writes its record. Round 2 measured
+  # Start-MpScan's custom scan leaving the file in place with no record,
+  # while this same engine detected it (exit 2).
+  if (Test-Path -LiteralPath $mp) {
+    $mpOut2 = & $mp -Scan -ScanType 3 -File $f 2>&1
+    Write-Host ("MEASURED: MpCmdRun file scan with remediation, exit {0}: {1}" -f $LASTEXITCODE, ((@($mpOut2) | Select-Object -Last 3) -join ' | '))
+  }
   $hit = $null
   foreach ($i in 1..40) {
     $hit = @(Get-MpThreatDetection -ErrorAction SilentlyContinue | Where-Object { @($_.Resources) -match [regex]::Escape($dir) })
