@@ -6,6 +6,9 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### The standard-user CI job prints its ledger rows
+On run 437 the standard-user job counted 13 findings on a clean runner, one more than before #290, and its log could not say which row was new: `tests/noadmin_smoke.ps1` asserted the counts but never printed the rows. It now prints each row (`MEASURED: run 1 ledger row <n>: ...`) for both runs, so a count that moves can be explained from the log alone. Test-only; no change to the tool.
+
 ### Sticky Keys (Section 13) and system-path DLL signatures (Section 18): a failed read is a gap
 **Before.**
 - **Sticky Keys.** The check read only the signed-in user's setting while saying "Shift x5 activates at login screen". The logon screen uses the system's default profile instead. A read that failed printed `[INFO] Sticky Keys flags not set in registry`. The dashboard tile read the setting again, and a failed read there was PASS.
