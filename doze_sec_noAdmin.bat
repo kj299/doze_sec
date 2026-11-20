@@ -3668,6 +3668,9 @@ echo  settings can have Windows write LSASS's memory to a file, which would hold
 echo  credentials in it.>> "%REPORT%"
 del "%TEMP%\dz_asrlsass.txt" 2>nul
 del "%TEMP%\dz_asrlsass_gap.txt" 2>nul
+del "%TEMP%\dz_asrlsass_exgap.txt" 2>nul
+del "%TEMP%\dz_asrlsass_recgap.txt" 2>nul
+del "%TEMP%\dz_asrlsass_modegap.txt" 2>nul
 del "%TEMP%\dz_asrlsass_deferred.txt" 2>nul
 rem The rule's mode was measured once, in Section 9. A second Get-MpPreference
 rem here would be a second opinion, not a summary.
@@ -3705,8 +3708,30 @@ if exist "%TEMP%\dz_asrlsass_gap.txt" (
     call :dz_finding !_GAPSEV! 12 T1003.001 "Defender LSASS-read records NOT checked - its log unreadable"
     del "%TEMP%\dz_asrlsass_gap.txt" 2>nul
 )
+if exist "%TEMP%\dz_asrlsass_exgap.txt" (
+    rem Its own row, worded for its own cause: the per-rule exclusion list.
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_asrlsass_exgap.txt"
+    call :dz_finding !_GAPSEV! 12 T1003.001 "Defender LSASS-rule exclusions NOT checked - the exclusion list could not be read"
+    del "%TEMP%\dz_asrlsass_exgap.txt" 2>nul
+)
+if exist "%TEMP%\dz_asrlsass_recgap.txt" (
+    rem Its own row, worded for its own cause: records that could not be parsed.
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_asrlsass_recgap.txt"
+    call :dz_finding !_GAPSEV! 12 T1003.001 "Defender LSASS-read records NOT all checked - some records could not be read"
+    del "%TEMP%\dz_asrlsass_recgap.txt" 2>nul
+)
+if exist "%TEMP%\dz_asrlsass_modegap.txt" (
+    rem Its own row, worded for its own cause: a rule mode this check does not know.
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_asrlsass_modegap.txt"
+    call :dz_finding !_GAPSEV! 12 T1003.001 "Defender LSASS-read records NOT checked - the rule mode is not one this check knows"
+    del "%TEMP%\dz_asrlsass_modegap.txt" 2>nul
+)
 if exist "%TEMP%\dz_asrlsass_deferred.txt" (
-    rem A standard-user token may not read Defender's log: a deferral, counted,
+    rem A standard-user token may not read Defender's log or its settings: a
+    rem deferral per refused source, counted,
     rem never a ledger row.
     set "_ARDEF=0"
     set /p _ARDEF=<"%TEMP%\dz_asrlsass_deferred.txt"

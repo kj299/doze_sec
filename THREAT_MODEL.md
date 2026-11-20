@@ -249,7 +249,10 @@ and 13 verify exactly that.
     the check prints `[SKIPPED]` and raises nothing -- Section 9 raises the
     rule's state, and an empty log then means nothing. A program excluded
     from the rule can read LSASS leaving no event at all, so the per-rule
-    exclusions are read and raised. Which of the event's two fields names
+    exclusions are read and raised. A standard-user token is refused both
+    the log and those exclusions (Defender's own settings deny it), and each
+    refusal is a counted deferral there, never a row; elevated, each is its
+    own raised gap, worded for what could not be read. Which of the event's two fields names
     the accessing program is not fixed (a real capture has them the reverse
     way round from the public detection rule), so whichever is not lsass.exe
     is reported, and when neither is, both are printed as unresolved.

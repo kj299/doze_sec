@@ -674,6 +674,15 @@ try {
         ('Section 12 printed: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'memory dump of lsass|Dump settings for' }) -join ' | '))
     Assert ($text1 -match '\[OK\] No program tried to read LSASS memory|\[SKIPPED\] .* records NOT checked|\[DEFERRED - ADMIN REQUIRED\] Defender''s rule against reading LSASS memory') 'Section 12 stated a verdict for Defender''s LSASS-read records on a standard-user token' `
         ('Section 12 printed: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'reading LSASS memory' }) -join ' | '))
+    # MEASURED: what this token was shown of Defender's LSASS-read rule (its
+    # log and its per-rule exclusion list). A clean standard-user run raised
+    # "Defender LSASS-read records NOT checked - its log unreadable" while the
+    # cause was never printed; the tool now raises one row per cause and
+    # defers a refusal on this token, so a row here is a real gap to read.
+    Write-Host ('  MEASURED: Section 12 LSASS-read rule lines on a standard-user token: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'reading LSASS memory|excluded from Defender' } | ForEach-Object { $_.Trim() }) -join ' | '))
+    $lsassGapRows = @($ledger1 | Where-Object { $_ -match '\|12\|T1003\.001\|Defender LSASS-(read records|rule exclusions) NOT' })
+    Assert ($lsassGapRows.Count -eq 0) 'no Defender LSASS-read gap row on a clean standard-user run (a refusal this token explains is a deferral)' `
+        ('rows: ' + ($lsassGapRows -join ' | '))
     # A file queued to LEAVE the machine over BITS (Section 5, T1048). A
     # standard-user token sees only its own jobs -- Get-BitsTransfer -AllUsers
     # needs admin and the tool falls back -- so the verdict may cover less, but

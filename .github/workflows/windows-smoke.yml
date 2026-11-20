@@ -2642,7 +2642,7 @@ jobs:
           $st = (.\tools\asr_lsass_events.ps1 -SelfTest) -join "`n"
           if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'asr_lsass_events.ps1 -SelfTest failed' }
           $nst = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($nst -lt 42) { throw "asr_lsass_events self-test ran only $nst case(s)" }
+          if ($nst -lt 48) { throw "asr_lsass_events self-test ran only $nst case(s)" }
           Write-Host "asr_lsass_events -SelfTest OK ($nst cases)"
           # The runner's real Defender log. The rule's mode decides what an
           # empty log means, so each mode is asserted for the right line: no

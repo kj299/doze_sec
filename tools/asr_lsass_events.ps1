@@ -43,6 +43,10 @@
 #
 # MARKERS: dz_asrlsass.txt (highest severity), dz_asrlsass_gap.txt (the channel
 # could not be read by an administrator; its own ledger row),
+# dz_asrlsass_exgap.txt (the per-rule exclusion list could not be read),
+# dz_asrlsass_recgap.txt (records that could not be parsed),
+# dz_asrlsass_modegap.txt (a rule mode this check does not know) -- each its
+# own ledger row, worded for its own cause,
 # dz_asrlsass_deferred.txt (a count a standard-user token could not perform,
 # added to DEFERRED_COUNT, never a ledger row).
 #
@@ -108,6 +112,20 @@ function Get-AsrAccessor {
     return @{ Accessor = ''; Certain = $false }
 }
 
+# PURE: whether an exception (or any exception inside it) is a refusal by the
+# object's access rules, as opposed to the object not answering at all.
+function Test-RefusedError {
+    param($Exception)
+    $x = $Exception
+    $depth = 0
+    while ($null -ne $x -and $depth -lt 8) {
+        if ($x -is [System.Security.SecurityException] -or $x -is [System.UnauthorizedAccessException]) { return $true }
+        $x = $x.InnerException
+        $depth++
+    }
+    return $false
+}
+
 # PURE: the records, graded.
 #   Records     @( @{ Time; Id; RuleId; Path; ProcessName; CommandLine; User } )
 #   RuleMode    block | audit | off | notconfigured | ungraded
@@ -118,9 +136,13 @@ function Get-AsrAccessor {
 function Get-AsrEventReport {
     param($Records, [string]$RuleMode = 'ungraded', $Exclusions = @(), [long]$Total = 0,
           $Oldest = $null, $Newest = $null, [string]$ReadError = '', [bool]$IsElevated = $true,
-          [long]$Unreadable = 0, [bool]$Truncated = $false, [string]$ExclusionError = '')
+          [long]$Unreadable = 0, [bool]$Truncated = $false, [string]$ExclusionError = '',
+          [bool]$ExclusionDenied = $false)
     $out = New-Object System.Collections.ArrayList
-    $sev = 'OK'; $gapSev = 'OK'; $deferred = 0
+    # One gap severity per cause, each raised as its own ledger row with its
+    # own words: a single gap marker raised every cause as "its log
+    # unreadable", a row naming something the tool never observed.
+    $sev = 'OK'; $gapSev = 'OK'; $exGapSev = 'OK'; $recGapSev = 'OK'; $modeGapSev = 'OK'; $deferred = 0
     $ruleName = 'Defender''s rule against reading LSASS memory ("Block credential stealing from the Windows local security authority subsystem")'
 
     # An exclusion on this rule lets a program read LSASS leaving no record, so
@@ -133,9 +155,18 @@ function Get-AsrEventReport {
 
     # An exclusion list that could not be read is the one state in which an
     # empty log proves nothing at all, so it is said before anything else.
+    # On a standard-user token a REFUSAL is explained by the token: Defender's
+    # own settings deny that token, as Get-MpPreference withholds its exclusion
+    # lists from it. That is a counted deferral, never a ledger row. Elevated,
+    # or any other failure, it stays a raised gap.
     if ($ExclusionError) {
-        [void]$out.Add(('[WARNING] The programs excluded from ' + $ruleName + ' were NOT checked -- the exclusion list could not be read (' + (ConvertTo-PrintableText $ExclusionError) + '). An excluded program can read LSASS memory and leave no record here.'))
-        $gapSev = 'WARNING'
+        if ($ExclusionDenied -and -not $IsElevated) {
+            [void]$out.Add(('[DEFERRED - ADMIN REQUIRED] The programs excluded from ' + $ruleName + ' were not read: Defender''s settings are not readable from a standard-user token (' + (ConvertTo-PrintableText $ExclusionError) + ') -- re-run as administrator.'))
+            $deferred++
+        } else {
+            [void]$out.Add(('[WARNING] The programs excluded from ' + $ruleName + ' were NOT checked -- the exclusion list could not be read (' + (ConvertTo-PrintableText $ExclusionError) + '). An excluded program can read LSASS memory and leave no record here.'))
+            $exGapSev = 'WARNING'
+        }
     }
     # The mode is read now and ACTED ON below, after the records are graded:
     # whatever the mode says about an empty log, a record in hand is an
@@ -165,7 +196,7 @@ function Get-AsrEventReport {
             $gapSev = 'WARNING'
         } else {
             [void]$out.Add(('[DEFERRED - ADMIN REQUIRED] ' + $ruleName + ': the Defender Operational log is not readable from a standard-user token (' + (ConvertTo-PrintableText $ReadError) + ') -- re-run as administrator.'))
-            $deferred = 1
+            $deferred++
         }
     }
 
@@ -247,7 +278,7 @@ function Get-AsrEventReport {
     }
     if ($Unreadable -gt 0) {
         [void]$out.Add(('[WARNING] ' + $Unreadable + ' record(s) in the Defender log could not be read and were skipped -- NOT graded, not cleared.'))
-        $gapSev = 'WARNING'
+        $recGapSev = 'WARNING'
     }
     if ($Truncated) {
         [void]$out.Add(('[INFO] Only the newest ' + $Total + ' attack-surface-reduction record(s) were read; older ones were not.'))
@@ -257,8 +288,8 @@ function Get-AsrEventReport {
         # An unrecognised mode is not assumed to be blocking: that wording
         # would claim protection this check cannot see.
         [void]$out.Add(('[WARNING] ' + $ruleName + ' records NOT checked -- Section 9 reported its mode as ''' + (ConvertTo-PrintableText $mode) + ''', which this check does not recognise, so what an empty log means here cannot be said.'))
-        $gapSev = 'WARNING'
-        return @{ Lines = @($out.ToArray()); Sev = $sev; GapSev = $gapSev; Deferred = $deferred; Hits = $hits }
+        $modeGapSev = 'WARNING'
+        return @{ Lines = @($out.ToArray()); Sev = $sev; GapSev = $gapSev; ExGapSev = $exGapSev; RecGapSev = $recGapSev; ModeGapSev = $modeGapSev; Deferred = $deferred; Hits = $hits }
     }
     if ($mode -eq 'off' -or $mode -eq 'notconfigured' -or $mode -eq 'ungraded') {
         $why = switch ($mode) {
@@ -271,7 +302,7 @@ function Get-AsrEventReport {
         # it, and reporting a gap or a deferral for a log that would be empty
         # anyway overstates what is missing.
         [void]$out.Add(('[SKIPPED] ' + $ruleName + ' records NOT checked -- ' + $why + ', so nothing more is written here and an empty log means nothing. Section 9 reports the rule''s state; turning it on is what makes this evidence exist.'))
-        return @{ Lines = @($out.ToArray()); Sev = $sev; GapSev = $gapSev; Deferred = $deferred; Hits = $hits }
+        return @{ Lines = @($out.ToArray()); Sev = $sev; GapSev = $gapSev; ExGapSev = $exGapSev; RecGapSev = $recGapSev; ModeGapSev = $modeGapSev; Deferred = $deferred; Hits = $hits }
     }
 
     # The all-clear is withheld whenever the read failed or was deferred: "I
@@ -289,7 +320,7 @@ function Get-AsrEventReport {
         if ($mode -eq 'warn') { $modeText = 'in warn mode (it asks the person at the keyboard, who can allow it; Microsoft documents that this rule does not support warn mode)' }
         [void]$out.Add(('[OK] No program tried to read LSASS memory: ' + $ruleName + ' is ' + $modeText + ', and none of the ' + $Total + ' attack-surface-reduction record(s) in the Defender log, ' + $span + ', names it.'))
     }
-    return @{ Lines = @($out.ToArray()); Sev = $sev; GapSev = $gapSev; Deferred = $deferred; Hits = $hits }
+    return @{ Lines = @($out.ToArray()); Sev = $sev; GapSev = $gapSev; ExGapSev = $exGapSev; RecGapSev = $recGapSev; ModeGapSev = $modeGapSev; Deferred = $deferred; Hits = $hits }
 }
 
 if ($SelfTest) {
@@ -378,15 +409,15 @@ if ($SelfTest) {
     T 'a read that failed part-way keeps the program it already found, and still declares the gap' ($r.Sev -eq 'WARNING' -and $r.GapSev -eq 'WARNING' -and $r.Hits -eq 1 -and $j -match 'C:\\x\\grab\.exe tried to read LSASS memory' -and $j -match 'only partly' -and $j -notmatch '\[OK\]') $j
     $r = Get-AsrEventReport -Records @() -RuleMode 'block' -Total 9 -Unreadable 4
     $j = $r.Lines -join "`n"
-    T 'records that could not be read are declared as not graded, and withhold the all-clear' ($r.GapSev -eq 'WARNING' -and $j -match '\[WARNING\] 4 record\(s\) in the Defender log could not be read and were skipped -- NOT graded, not cleared' -and $j -notmatch '\[OK\]') $j
+    T 'records that could not be read are declared as not graded, and withhold the all-clear' ($r.RecGapSev -eq 'WARNING' -and $r.GapSev -eq 'OK' -and $j -match '\[WARNING\] 4 record\(s\) in the Defender log could not be read and were skipped -- NOT graded, not cleared' -and $j -notmatch '\[OK\]') $j
     $r = Get-AsrEventReport -Records @() -RuleMode 'block' -Total 20000 -Truncated $true -Oldest $t0 -Newest $t0
     T 'a read that stopped at the cap says so, and may still print the all-clear for what it read' ($r.Sev -eq 'OK' -and ($r.Lines -join "`n") -match '\[INFO\] Only the newest 20000 attack-surface-reduction record\(s\) were read' -and ($r.Lines -join "`n") -match '\[OK\]') ($r.Lines -join ' | ')
     $r = Get-AsrEventReport -Records @() -RuleMode 'block' -ExclusionError 'Requested registry access is not allowed.'
     $j = $r.Lines -join "`n"
-    T 'an exclusion list that could not be read is a raised gap, and withholds the all-clear it cannot claim' ($r.GapSev -eq 'WARNING' -and $j -match 'The programs excluded from .* were NOT checked' -and $j -match 'can read LSASS memory and leave no record here' -and $j -notmatch '\[OK\]') $j
+    T 'an exclusion list that could not be read is a raised gap, and withholds the all-clear it cannot claim' ($r.ExGapSev -eq 'WARNING' -and $r.GapSev -eq 'OK' -and $j -match 'The programs excluded from .* were NOT checked' -and $j -match 'can read LSASS memory and leave no record here' -and $j -notmatch '\[OK\]') $j
     $r = Get-AsrEventReport -Records @() -RuleMode 'enforced' -Total 3
     $j = $r.Lines -join "`n"
-    T 'a mode this check does not recognise is a declared gap, never assumed to be blocking' ($r.GapSev -eq 'WARNING' -and $j -match 'which this check does not recognise' -and $j -notmatch 'is blocking' -and $j -notmatch '\[OK\]') $j
+    T 'a mode this check does not recognise is a declared gap, never assumed to be blocking' ($r.ModeGapSev -eq 'WARNING' -and $r.GapSev -eq 'OK' -and $j -match 'which this check does not recognise' -and $j -notmatch 'is blocking' -and $j -notmatch '\[OK\]') $j
     # Whatever the mode, a record in hand is graded: the mode only decides what
     # an EMPTY log would have meant.
     foreach ($m in @('off', 'notconfigured', 'ungraded', 'enforced')) {
@@ -415,6 +446,21 @@ if ($SelfTest) {
     $r = Get-AsrEventReport -Records @() -RuleMode 'block' -ReadError 'Attempted to perform an unauthorized operation.' -IsElevated $false
     T 'on a standard-user token the same channel is a counted deferral, never a ledger row, and never an all-clear' ($r.Sev -eq 'OK' -and $r.GapSev -eq 'OK' -and $r.Deferred -eq 1 -and ($r.Lines -join "`n") -match '^\[DEFERRED - ADMIN REQUIRED\]' -and ($r.Lines -join "`n") -notmatch '\[OK\]') ($r.Lines -join ' | ')
 
+    # The exclusion list on a standard-user token (the row a clean standard-user
+    # run raised as "its log unreadable").
+    $r = Get-AsrEventReport -Records @() -RuleMode 'block' -Total 3 -ExclusionError 'Requested registry access is not allowed.' -ExclusionDenied $true -IsElevated $false
+    $j = $r.Lines -join "`n"
+    T 'on a standard-user token a REFUSED exclusion list is a counted deferral: no gap, no row, and still no all-clear' ($r.Deferred -eq 1 -and $r.ExGapSev -eq 'OK' -and $r.GapSev -eq 'OK' -and $j -match '^\[DEFERRED - ADMIN REQUIRED\] The programs excluded from ' -and $j -notmatch '\[OK\]') $j
+    $r = Get-AsrEventReport -Records @() -RuleMode 'block' -Total 3 -ExclusionError 'Requested registry access is not allowed.' -ExclusionDenied $true -IsElevated $true
+    T 'the same refusal elevated is the exclusion gap: the token explains nothing there' ($r.ExGapSev -eq 'WARNING' -and $r.Deferred -eq 0 -and ($r.Lines -join "`n") -match 'were NOT checked') ($r.Lines -join ' | ')
+    $r = Get-AsrEventReport -Records @() -RuleMode 'block' -Total 3 -ExclusionError 'The handle is invalid.' -ExclusionDenied $false -IsElevated $false
+    T 'on a standard-user token a failure that is NOT a refusal is still the exclusion gap' ($r.ExGapSev -eq 'WARNING' -and $r.Deferred -eq 0) ($r.Lines -join ' | ')
+    $r = Get-AsrEventReport -Records @() -RuleMode 'block' -Total 3 -ReadError 'denied' -ExclusionError 'Requested registry access is not allowed.' -ExclusionDenied $true -IsElevated $false
+    T 'a refused log AND a refused exclusion list on a standard-user token are two deferrals, no gap' ($r.Deferred -eq 2 -and $r.GapSev -eq 'OK' -and $r.ExGapSev -eq 'OK') ($r.Lines -join ' | ')
+    $r = Get-AsrEventReport -Records @() -RuleMode 'block' -Total 3 -ReadError 'The specified channel could not be found.'
+    T 'an unreadable log raises only the log gap, never the exclusion, record or mode gap' ($r.GapSev -eq 'WARNING' -and $r.ExGapSev -eq 'OK' -and $r.RecGapSev -eq 'OK' -and $r.ModeGapSev -eq 'OK') ''
+    T 'Test-RefusedError: a registry refusal and an access denial are refusals; a missing key and a broken handle are not' ((Test-RefusedError (New-Object System.Security.SecurityException 'Requested registry access is not allowed.')) -and (Test-RefusedError (New-Object System.UnauthorizedAccessException 'x')) -and (Test-RefusedError (New-Object System.Management.Automation.RuntimeException 'outer', (New-Object System.Security.SecurityException 'inner'))) -and -not (Test-RefusedError (New-Object System.IO.IOException 'The handle is invalid.')) -and -not (Test-RefusedError $null)) ''
+
     T 'a control character in a field cannot start a report line' ((((Get-AsrEventReport -Records @((NewRec ('C:\a' + [char]10 + '[OK] fake') $L)) -RuleMode 'block' -Total 1).Lines -join "`n") -notmatch '(?m)^\[OK\] fake')) ''
 
     if ($fails) { Write-Output "[FAIL] $fails asr_lsass_events self-test expectation(s) unmet"; exit 1 }
@@ -437,6 +483,7 @@ if ($Elevated -lt 0) {
 # here lets a program read LSASS leaving no event at all.
 $exclusions = New-Object System.Collections.ArrayList
 $exclusionError = ''
+$exclusionDenied = $false
 foreach ($base in @('HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Windows Defender Exploit Guard\ASR\ASROnlyPerRuleExclusions',
                     'HKLM:\SOFTWARE\Microsoft\Windows Defender\Windows Defender Exploit Guard\ASR\ASROnlyPerRuleExclusions')) {
     $k = $base + '\' + $RuleId
@@ -449,7 +496,7 @@ foreach ($base in @('HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Windows 
     } catch {
         # Swallowing this was the one failure that makes an empty log
         # meaningless: an excluded program leaves no record at all.
-        if (-not $exclusionError) { $exclusionError = $_.Exception.Message }
+        if (-not $exclusionError) { $exclusionError = $_.Exception.Message; $exclusionDenied = (Test-RefusedError $_.Exception) }
     }
 }
 
@@ -492,8 +539,11 @@ try {
 
 $report = Get-AsrEventReport -Records @($records.ToArray()) -RuleMode $RuleMode -Exclusions @($exclusions.ToArray()) `
     -Total $total -Oldest $oldest -Newest $newest -ReadError $readError -IsElevated ($Elevated -eq 1) `
-    -Unreadable $unreadable -Truncated $truncated -ExclusionError $exclusionError
+    -Unreadable $unreadable -Truncated $truncated -ExclusionError $exclusionError -ExclusionDenied $exclusionDenied
 foreach ($l in $report.Lines) { $l }
 Write-Marker -Name 'asrlsass' -Sev $report.Sev
 if ($report.GapSev -ne 'OK') { Write-Marker -Name 'asrlsass_gap' -Sev $report.GapSev }
+if ($report.ExGapSev -ne 'OK') { Write-Marker -Name 'asrlsass_exgap' -Sev $report.ExGapSev }
+if ($report.RecGapSev -ne 'OK') { Write-Marker -Name 'asrlsass_recgap' -Sev $report.RecGapSev }
+if ($report.ModeGapSev -ne 'OK') { Write-Marker -Name 'asrlsass_modegap' -Sev $report.ModeGapSev }
 if ($report.Deferred -gt 0) { Write-Marker -Name 'asrlsass_deferred' -Sev ([string]$report.Deferred) }

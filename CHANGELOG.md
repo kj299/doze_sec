@@ -6,6 +6,13 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Defender's LSASS-read check (Section 12): a refusal on a standard-user token is a deferral, and each gap names its own cause
+A clean standard-user run raised `Defender LSASS-read records NOT checked - its log unreadable`. `tools/asr_lsass_events.ps1` raised four different causes through one gap marker, all under that wording. The causes are an unreadable log, an unreadable per-rule exclusion list, records it could not parse and a rule mode it does not know. Its exclusion read had no deferral branch, so a standard-user token, which Defender's own settings refuse, raised a gap that the token explained.
+
+- A refused exclusion read on a standard-user token is now `[DEFERRED - ADMIN REQUIRED]`, counted, with no row. The all-clear is still withheld. Elevated, or for any other failure, it is still the gap.
+- Each cause writes its own marker (`dz_asrlsass_gap`, `_exgap`, `_recgap`, `_modegap`). Both bats raise each one as its own row, worded for what could not be read.
+- `tests/noadmin_smoke.ps1` prints what that token was shown of the rule and asserts there is no such gap row on a clean standard-user run.
+
 ### The standard-user CI job prints its ledger rows
 On run 437 the standard-user job counted 13 findings on a clean runner, one more than before #290, and its log could not say which row was new: `tests/noadmin_smoke.ps1` asserted the counts but never printed the rows. It now prints each row (`MEASURED: run 1 ledger row <n>: ...`) for both runs, so a count that moves can be explained from the log alone. Test-only; no change to the tool.
 
