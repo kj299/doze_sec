@@ -1,4 +1,4 @@
-# file_walk_check.ps1 -- three checks that walk a folder tree and used to
+# file_walk_check.ps1 -- six checks that walk a folder tree and used to
 # read a folder they could not open as a folder with nothing in it:
 #   -Check TempAds     Section 14: alternate data streams on files under TEMP
 #                      (T1564.004).
@@ -6,6 +6,10 @@
 #                      (HTML smuggling staging, T1027.006).
 #   -Check OutlookMsg  Section 17: .msg/.oft files written in the last 90 days
 #                      under the user's Outlook data folder (T1566.001).
+#   -Check RansomExt   Section 18: files with known ransomware extensions in
+#                      the user's folders, Public and TEMP (T1486).
+#   -Check TokenCache  Section 18: the cloud token-cache listing.
+#   -Check CredStores  Section 18: the browser credential-store listing.
 #
 # Each was an inline line built on
 #   Get-ChildItem -Recurse ... -EA SilentlyContinue
@@ -40,14 +44,15 @@
 #   * a folder path too long for the ordinary form is asked for again in the
 #     \\?\ form before it is called unreadable;
 #   * the time budget is per check: 180 s for the stream read (one call per
-#     file), 60 s for the other two.
+#     file), 120 s for RansomExt, 30 s for CredStores, 60 s for the others.
 # Markers: dz_ads_hit / dz_ads_gap, dz_htmltemp_hit / _gap,
-# dz_outlookmsg_hit / _gap; and
+# dz_outlookmsg_hit / _gap, dz_ransom_hit / _gap, dz_tokencache_gap,
+# dz_credstore_gap; and
 # dz_<name>_done, written last on every run -- the bat raises a
 # "produced no verdict" row when it is absent.
 #
 # Usage:
-#   powershell -File tools\file_walk_check.ps1 -Check <TempAds|TempHtml|OutlookMsg> [-MarkerDir <dir>] [-Elevated 0|1] [-BudgetSeconds <n>]
+#   powershell -File tools\file_walk_check.ps1 -Check <TempAds|TempHtml|OutlookMsg|RansomExt|TokenCache|CredStores> [-MarkerDir <dir>] [-Elevated 0|1] [-BudgetSeconds <n>]
 #   powershell -File tools\file_walk_check.ps1 -SelfTest   (walks nothing)
 #
 # Windows PowerShell 5.1 compatible; pure ASCII. Read-only.

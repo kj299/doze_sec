@@ -47,9 +47,12 @@
 # dz_macro_deferred.txt (a count, for DEFERRED_COUNT: another account's
 # registry refused to a standard-user token), and dz_macro_done.txt when the
 # tool reached its end (the bat raises "produced no verdict" without it).
+# With -Part Trust (Trusted Locations and Trusted Documents):
+# dz_trustloc_hit.txt, dz_trustdoc_hit.txt, dz_trustloc_gap.txt,
+# dz_trustloc_deferred.txt and dz_trustloc_done.txt.
 #
 # Usage:
-#   powershell -File tools\office_macro_check.ps1 [-MarkerDir <dir>]
+#   powershell -File tools\office_macro_check.ps1 [-Part Policy|Trust] [-MarkerDir <dir>]
 #   powershell -File tools\office_macro_check.ps1 -SelfTest   (reads nothing)
 #
 # Windows PowerShell 5.1 compatible; pure ASCII. Read-only.

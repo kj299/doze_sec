@@ -38,6 +38,8 @@
 #                   same key is still the hijack. Get-IfeoVerdict holds the
 #                   rule and -SelfTest pins both sides.
 #
+# -Part Default (when -Part is not given) runs every check described above.
+#
 # OTHER ACCOUNTS (-Part OtherAccounts). Section 5 used to LIST other accounts'
 # Run values as [INFO], grade none of them, print [OK] when HKEY_USERS or a key
 # could not be read, hide any value named PS*, count the audit's own account

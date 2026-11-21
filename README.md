@@ -15,7 +15,7 @@ Standalone batch script that audits a Windows workstation for nation-state TTPs,
 | Script | Requires Admin | Description |
 |--------|:-:|-------------|
 | `doze_sec.bat` | Yes | Full 18-section audit with all checks |
-| `doze_sec_noAdmin.bat` | No | Adaptive audit. Admin-only checks marked `[DEFERRED]` |
+| `doze_sec_noAdmin.bat` | No | Adaptive audit. Admin-only checks marked `[DEFERRED]`. Run without elevation it needs the `-noAdmin` switch; without it the script stops with exit code 1 |
 
 ## Quick Start
 
@@ -61,7 +61,7 @@ doze_sec.bat -help
 | `-baseline` | Both | Capture/refresh a **baseline snapshot** of security-relevant state (drivers, services, scheduled tasks, autoruns, listening ports, local admins, root CAs). Once a baseline exists, every later run reports what is NEW, CHANGED or REMOVED — the strongest signal available against a targeted implant that matches no known signature. Capture it as early as possible: **a baseline taken on an already-compromised PC records the implant as normal** |
 | `-noBaseline` | Both | Skip baseline capture and differential analysis |
 | `-updateTTP` | Admin only | Refresh ThreatLists/ via SENTINEL-X CTI skill (requires Claude Code CLI) |
-| `-resetTTP` | Both | Restore the runtime ThreatLists (`C:\SecurityAudit`) to the pristine shipped baseline before the audit, so a prior `-updateTTP` pull cannot leave stale indicators behind. Combine with `-updateTTP` for a clean slate then a fresh pull |
+| `-resetTTP` | Admin only | Restore the runtime ThreatLists (`C:\SecurityAudit`) to the pristine shipped baseline before the audit, so a prior `-updateTTP` pull cannot leave stale indicators behind. Combine with `-updateTTP` for a clean slate then a fresh pull |
 | `-importTTP <file>` | Admin only | Merge TTP rows from a pipe-delimited file (offline alternative to `-updateTTP`; no Claude CLI needed) |
 | `-vt` | Both | Section 18j+18l: query VirusTotal for SHA256 of priority files + remote IP reputation. Requires `~/.vt_token` |
 | `-dnsprobe` | Both | Section 3: active DNS integrity probe. Resolves a fixed list of **legitimate** update/security domains and flags DNS/HOSTS blackholing (T1562.001). Never resolves attacker/C2 domains. Off by default |
@@ -71,7 +71,7 @@ doze_sec.bat -help
 | `-readSignedOut` | Both | Section 5: also read the Run keys of accounts that are not signed in, from a copy of their registry taken from a Volume Shadow Copy (elevated only; refused with `-readonly`). **Warning:** if shadow-copy storage is full, Windows deletes the oldest restore point to make room, and on a work PC security software or IT may raise an intrusion alert (`esentutl /vss` is also how attackers copy locked files). Off by default |
 | `-readonly` | Both | Inspect only: changes nothing on this machine outside the output folder and the temp folder, and makes no network connections. Skips the RunOnce resume key, the F8 boot-menu change, the restore point and the update checks; refuses `-vt`, `-dnsprobe`, `-updateTTP` and `-importTTP`. Used by `tests\field_test.ps1` for false-positive hunting on a real machine |
 | `-selftest` | Both | Test-harness mode: writes every output under `C:\SecurityAudit\selftest\` (or `%USERPROFILE%\SecurityAudit\selftest\`) and stamps the report `*** TEST RUN -- every finding below was planted ***`, so a report of planted findings can never be mistaken for, or auto-diffed against, a real audit. Used by `tests\detection_selftest.ps1`; not for real audits |
-| `-help` | Both | Show usage guide with section descriptions |
+| `-help` | Both | Show usage guide with section descriptions (`--help` and `/?` also work) |
 
 ## Output Files
 
@@ -89,7 +89,7 @@ Every run produces (timestamped, so multiple runs don't clobber each other):
 | `C:\SecurityAudit\Remediation_<TS>_undo.ps1` | when findings exist | The reversals. Every fix in the two scripts above states its undo, and this collects them |
 | `C:\SecurityAudit\SecurityReport_<TS>.ledger` | when findings exist | **The findings ledger** - `SEVERITY\|SECTION\|CODE\|MESSAGE`, one line per raised finding. Every verdict the tool produces derives from it: the per-section `CLEAN`/`ISSUES FOUND` lines, `FINDINGS COUNTED`, the summary header, the exit code, and which remediation commands are queued. If the report and the summary ever disagree, this file is the arbiter |
 | `C:\SecurityAudit\SecurityReport_<TS>.txt.sha256` | yes | Tamper-evidence digest of the text and HTML reports. Record it somewhere off this device; verify later with `Get-FileHash <file> -Algorithm SHA256` |
-| `C:\SecurityAudit\baseline.snapshot` | with `-baseline` | Saved system state for the next run's `-diff` comparison |
+| `C:\SecurityAudit\baseline.snapshot` | with `-baseline` | Saved system state; the next run compares against it automatically (skip with `-noBaseline`) |
 | `C:\SecurityAudit\selftest\` | detection harness only | Quarantine for harness runs. A report of planted findings must never be mistaken for a real audit, so it never lands beside one |
 | `C:\SecurityAudit\SmartData\` | yes | SMART disk-health snapshots |
 | `C:\SecurityAudit\EventExports\` | yes | Windows event log exports |
@@ -106,26 +106,28 @@ Temp path check, admin detection, OS version, OS compatibility, Safe Mode, log d
 
 ### Security Audit (1-18)
 
+"Partial" means the section runs on a standard-user token and grades what that token can read; the checks that need administrator print `[DEFERRED - ADMIN REQUIRED]` and are counted.
+
 | # | Section | Admin Required | Key Detections |
 |---|---------|:-:|----------------|
 | 1 | System identity and patch level | No | Unpatched OS, CVE exposure |
 | 2 | User accounts and privilege audit | No | Rogue accounts, SID anomalies |
-| 3 | Network configuration and connections | No | C2 callbacks, DNS anomalies, open shares; web proxy in effect for any signed-in account and the machine-wide WinHTTP proxy (T1090) |
-| 4 | Running processes | No | LOLBins, RMM tools, suspicious paths, system-process names outside their directory or started by the wrong parent (T1036), a system process that is a copy of its parent (an LSASS copy: T1003.001), loaded-module inspection (DLLs inside running processes: staging-path, unsigned, non-Microsoft in core security processes — T1055/T1574) |
-| 5 | Startup and persistence | No | Run keys, Startup folders, Winlogon, IFEO debuggers, AppInit/AppCert DLLs, logon/unlock vectors (Notify, Credential Providers, Network Provider DLLs), netsh helpers, print processors and port monitors, BITS jobs (including one queued to upload a file off the machine, T1048, and what BITS recorded about transfers that already finished), PowerShell profiles, time providers |
+| 3 | Network configuration and connections | Partial | C2 callbacks, DNS anomalies, open shares; web proxy in effect for any signed-in account and the machine-wide WinHTTP proxy (T1090) |
+| 4 | Running processes | Partial | LOLBins, RMM tools, suspicious paths, system-process names outside their directory or started by the wrong parent (T1036), a system process that is a copy of its parent (an LSASS copy: T1003.001), loaded-module inspection (DLLs inside running processes: staging-path, unsigned, non-Microsoft in core security processes — T1055/T1574) |
+| 5 | Startup and persistence | Partial | Run keys (this account's, the machine's, and every other signed-in account's), Startup folders, Winlogon, IFEO debuggers, AppInit/AppCert DLLs, logon/unlock vectors (Notify, Credential Providers, Network Provider DLLs), netsh helpers, print processors and port monitors, BITS jobs (including one queued to upload a file off the machine, T1048, and what BITS recorded about transfers that already finished), PowerShell profiles, time providers |
 | 6 | Scheduled tasks | No | Malicious tasks, action-path detection (PS CSV, Task-To-Run column only) |
 | 7 | Windows services | Partial | Authenticode signature gating per service binary (vendor allowlist + revocation + expiry + bad-path). A binary that is absent, or present but unreadable (WindowsApps is ACL'd to TrustedInstaller), or validly signed by a vendor outside the short allowlist, is reported as context rather than a finding -- it stays a WARNING when the path is a staging directory, the cert is expired or revoked, or the binary is unsigned; unusual accounts; unquoted service paths read from each service's registry ImagePath and graded by exploitability (a file already where Windows looks first is CRITICAL, a folder a non-administrator can write is a WARNING, an admin-only folder is INFO) | MSIX/AppX packages under `C:\Program Files\WindowsApps\` are catalog-signed, so the inner binary reads as unsigned; the package's own `SignatureKind` is consulted instead (see "Catalog signing: what is covered" below)
-| 8 | Firewall configuration | Yes | Disabled profiles, risky rules |
-| 9 | Defender and AV status | Yes | Disabled Defender, exclusions, tamper; ASR rules audit (per-rule mode + key-rule warnings); endpoint telemetry inventory (third-party EDR agents and Sysmon — an agent **installed but not running** is flagged, absence is reported as context) |
-| 10 | SMB, RDP, remote access | Partial | SMBv1, NLA bypass, open RDP, covert-monitoring check (accounts hidden from the sign-in screen, silent RDP shadowing, camera/mic/location consent inventory, consumer monitoring/spouseware products) |
-| 11 | PowerShell security | Partial | Unrestricted execution, logging gaps |
-| 12 | Credential and LSASS protection | No | PPL disabled, WDigest, Credential Guard, a copy of LSASS in the Security log (Event 4688: lsass.exe created by lsass.exe, the record credential-dumping tools leave; needs process-creation auditing), programs Defender caught reading LSASS memory (its ASR events 1121/1122, and any program excluded from that rule), and the settings that would write LSASS's memory to a file (silent process exit, Windows Error Reporting) or a dump of it already on disk |
-| 13 | System hardening | Partial | UAC, BitLocker, SecureBoot, test signing; Office macro policy (VBAWarnings, MOTW macro block), Office Trusted Locations outside Office's defaults and macros enabled in downloaded documents (Trusted Documents), Mark-of-the-Web preservation, SmartScreen; boot-chain config audit (bcdedit nointegritychecks/bootdebug/kernel-debug, Secure Boot setup mode, dbx revocation-list population, HVCI state — T1542; config only, not a firmware scan) |
-| 14 | Suspicious files | No | ADS streams, double extensions, recent EXE/DLL/PS/VBS in user `%TEMP%` and `C:\Windows\Temp` (admin); archives made on this machine (no Mark of the Web) in Downloads, temp folders, Public, ProgramData or a recycle bin that are password-protected, split into volumes or pack credential files (T1560; ZIP, RAR, 7z and CAB headers parsed from the format owners' specifications, a 7z's LZMA-compressed header decoded; a self-extracting program's appended archive read past its code, a validly signed installer left out; a forged mark does not clear the strongest shape outside Downloads) |
+| 8 | Firewall configuration | Partial | A disabled profile (the effective state, Group Policy included) or the firewall service not running; inbound and outbound rules are listed, not graded, and listing them needs administrator |
+| 9 | Defender and AV status | Partial | Disabled Defender, exclusions, tamper; Defender's own detection history (a detection it did not remove is CRITICAL, one it removed a WARNING); ASR rules audit (per-rule mode + key-rule warnings); endpoint telemetry inventory (third-party EDR agents and Sysmon — an agent **installed but not running** is flagged, absence is reported as context) |
+| 10 | SMB, RDP, remote access | Partial | SMBv1, NLA bypass, open RDP, WinRM running, OpenSSH Server (listed here, graded in Section 18), covert-monitoring check (accounts hidden from the sign-in screen, silent RDP shadowing, camera/mic/location consent inventory, consumer monitoring/spouseware products) |
+| 11 | PowerShell security | Partial | Unrestricted execution, logging gaps, the PowerShell v2 engine (the AMSI downgrade path) |
+| 12 | Credential and LSASS protection | Partial | PPL disabled, WDigest, the NTLM level (LmCompatibilityLevel), Credential Guard, a copy of LSASS in the Security log (Event 4688: lsass.exe created by lsass.exe, the record credential-dumping tools leave; needs process-creation auditing), programs Defender caught reading LSASS memory (its ASR events 1121/1122, and any program excluded from that rule), and the settings that would write LSASS's memory to a file (silent process exit, Windows Error Reporting) or a dump of it already on disk |
+| 13 | System hardening | Partial | UAC, BitLocker, SecureBoot, test signing; the Sticky Keys shortcut at the logon screen and debugger hijacks or replaced binaries behind the logon-screen accessibility tools (T1546.008); Office macro policy (VBAWarnings, MOTW macro block), Office Trusted Locations outside Office's defaults and macros enabled in downloaded documents (Trusted Documents), Mark-of-the-Web preservation, SmartScreen; boot-chain config audit (bcdedit nointegritychecks/bootdebug/kernel-debug, Secure Boot setup mode, dbx revocation-list population, HVCI state — T1542; config only, not a firmware scan) |
+| 14 | Suspicious files | Partial | ADS streams, double extensions, recent EXE/DLL/PS/VBS in user `%TEMP%` and `C:\Windows\Temp` (admin); archives made on this machine (no Mark of the Web) in Downloads, temp folders, Public, ProgramData or a recycle bin that are password-protected, split into volumes or pack credential files (T1560; ZIP, RAR, 7z and CAB headers parsed from the format owners' specifications, a 7z's LZMA-compressed header decoded; a self-extracting program's appended archive read past its code, a validly signed installer left out; a forged mark does not clear the strongest shape outside Downloads) |
 | 15 | Installed software and drivers | No | Unsigned drivers, vulnerable software; browser-extension inventory (T1176) — flags sideloaded/dev-mode, malware-favored permissions, policy force-installs across Chrome/Edge/Brave/Vivaldi/Firefox |
 | 16 | Event log anomalies | Partial | Log clearing (1102), brute force (4625), lateral (4624); audit-policy visibility check (flags when process-creation/logon/account auditing or command-line logging is OFF, so clean event results are not misread as safe); event-log gap check (records missing from the middle of a log's numbering, a disabled or undersized log — the deletions that leave no 1102 behind) |
-| 17 | Nation-state threat indicators | No | MDDR 2023-2025 TTPs, portproxy, WMI persistence (CommandLine + ActiveScript consumers; SCM defaults allowlisted by Name+Query); baseline differential analysis (NEW/CHANGED/REMOVED drivers, services, tasks, autoruns, ports, admins, root CAs vs a saved snapshot); cross-API consistency check (processes/services/tasks read via independent APIs — rootkit indicator T1014 — plus Tarrask hidden-task detection) |
-| 18 | CTI-driven IOC sweep | No | SENTINEL-X file-based + inline CTI checks; kernel-driver audit (BYOVD by SHA256 + expanded name set + Authenticode catch-all over loaded and dropped drivers, so a renamed/relocated vulnerable driver cannot evade) |
+| 17 | Nation-state threat indicators | Partial | MDDR 2023-2025 TTPs, portproxy, WMI persistence (CommandLine + ActiveScript consumers; SCM defaults allowlisted by Name+Query); baseline differential analysis (NEW/CHANGED/REMOVED drivers, services, tasks, autoruns, ports, admins, root CAs vs a saved snapshot); cross-API consistency check (processes/services/tasks read via independent APIs — rootkit indicator T1014 — plus Tarrask hidden-task detection) |
+| 18 | CTI-driven IOC sweep | Partial | SENTINEL-X file-based + inline CTI checks; kernel-driver audit (BYOVD by SHA256 + expanded name set + Authenticode catch-all over loaded and dropped drivers, so a renamed/relocated vulnerable driver cannot evade) |
 
 
 ### Catalog signing: what is covered, and what is not
@@ -202,8 +204,8 @@ A sub-check that cannot run prints `[WARNING] ... NOT performed` and raises it a
 - Cloud CLI token theft (Azure/AWS/GCP)
 - OpenSSH server lateral movement surface
 - LOLBin download cradles in Event 4688 (admin only)
-- AMSI bypass patterns in PowerShell logs (admin only)
-- Suspicious service installs from Event 7045 (admin only)
+- AMSI bypass patterns in PowerShell logs
+- Suspicious service installs from Event 7045
 - Explicit credential logons from Event 4648 (admin only)
 
 ## ThreatLists/
@@ -255,9 +257,9 @@ Full tactic-by-tactic and threat-class coverage matrices — including explicit 
 
 Code 8 fires when a CRITICAL finding reaches the findings ledger (`SecurityReport_<TS>.ledger`), which is also what makes the summary verdict read ACTION REQUIRED - both derive from the same record, so they cannot disagree. It outranks 2, 4, and 6 — critical findings are the most actionable signal — but never the fatal/abort codes 1, 3, 5, 7. Automation can treat 0 as clean, 2/6 as review, 8 as incident-response trigger.
 
-**Code 1** is a *pre-flight abort* — the audit never started, so there is no report to read (it prints `Exit code: 1 -- audit did not run` to the console). It also fires when another doze_sec audit is already running with the same temp or output folder (the console says so, names it, and says how to clear a lock left by an audit interrupted in an open Command Prompt). Otherwise it fires when the environment can't support a run: the `tools\` helper folder is missing (you copied only the `.bat`, or the download is incomplete), Windows PowerShell cannot be located, or the admin script (`doze_sec.bat`) was launched without elevation. Fix the named cause and re-run from the release folder — code 1 is never a security finding, only "could not run here." (Contrast code 5, which specifically means the script was launched from a TEMP directory.)
+**Code 1** is a *pre-flight abort* — the audit never started, so there is no report to read (it prints `Exit code: 1 -- audit did not run` to the console). The one exception is `AUDIT NOT PERFORMED` (PowerShell would not run the audit's helper scripts on this machine): that run does write a short report, which says nothing was audited and why. It also fires when another doze_sec audit is already running with the same temp or output folder (the console says so, names it, and says how to clear a lock left by an audit interrupted in an open Command Prompt). Otherwise it fires when the environment can't support a run: the `tools\` helper folder is missing (you copied only the `.bat`, or the download is incomplete), Windows PowerShell cannot be located, or the admin script (`doze_sec.bat`) was launched without elevation. Fix the named cause and re-run from the release folder — code 1 is never a security finding, only "could not run here." (Contrast code 5, which specifically means the script was launched from a TEMP directory.)
 
-Checks that cannot run (missing IOC list, failed process/pipe/service/DNS enumeration) now report `[SKIPPED]` in the report instead of looking clean, and the TOP FINDINGS block carries a COVERAGE NOTE with the skipped count.
+Most checks that cannot run (a missing IOC list, a failed pipe or service enumeration, a log or registry key that did not answer) print `[WARNING] ... NOT performed` and are counted as findings instead of looking clean. Six older lines (Section 4's process checks and the VPN-client check) still print `[SKIPPED] ... NOT performed` when the process list cannot be read: they appear in the COVERAGE NOTE but are not counted as findings. On a standard-user token a check that needs administrator prints `[DEFERRED - ADMIN REQUIRED]` and is counted separately. `[SKIPPED]` is kept for gaps that raise nothing, and the TOP FINDINGS block carries a COVERAGE NOTE with the counts.
 
 ## Output
 
@@ -621,7 +623,7 @@ Whenever `~/.vt_token` exists **and** network is available, every audit run also
 
 To skip the pre-flight check (e.g. for fast iteration during development), pass `-noVtSelf`. The script will still run, just without the integrity gate.
 
-This check runs on the SAME 4-lookups-per-minute free-tier rate limit as `-vt`, so combining `-vt` with the pre-flight check uses ~24 of the 500 daily lookups per audit run.
+This check runs on the SAME 4-lookups-per-minute free-tier rate limit as `-vt`, so combining `-vt` with the pre-flight check uses up to 34 of the 500 daily lookups per audit run (the pre-flight check alone uses 4).
 
 ## Self-Update and IOC Download from a Private Repo
 
@@ -686,9 +688,9 @@ Two activities, two scripts, and they must not be mixed up:
 
 | On | Run | What it does |
 |----|-----|--------------|
-| **The machine you are sitting at** | `.\tests\field_test.ps1` (any PowerShell; elevated is better) | Runs the audit with `-readonly` -- nothing changes outside `C:\SecurityAudit\` and the temp folder, no network connections -- proves that before and after (RunOnce key, boot configuration, restore points), checks the report against `tests\benign_corpus.txt`, and prints every finding for you to adjudicate. Plants nothing. |
+| **The machine you are sitting at** | `.\tests\field_test.ps1` (any PowerShell; elevated is better) | Runs the audit with `-readonly` -- nothing changes outside `C:\SecurityAudit\` (`%USERPROFILE%\SecurityAudit\` when not elevated) and the temp folder, no network connections -- proves that before and after (RunOnce key, boot configuration, restore points), checks the report against `tests\benign_corpus.txt`, and prints every finding for you to adjudicate. Plants nothing. |
 | **Someone else's machine, or a work PC** | `docs\second-machine.md` | The same `field_test.ps1`, carried over on a USB stick made by `tools\make_usb_stick.ps1` (see [Running from a USB stick](#running-from-a-usb-stick)): a paste-in preflight that says whether the machine will let the audit run, the warnings to read first (IT alerts, the owner's privacy), what to bring back, and how to leave nothing behind. |
-| **A throwaway VM or CI only** | `.\tests\manual_ci.ps1` (elevated) | The detection harness: plants ~30 known-bad artifacts, runs the audit, asserts every one is detected, removes them. Never on a daily-driver machine -- see `docs\recovery.md`. |
+| **A throwaway VM or CI only** | `.\tests\manual_ci.ps1` (elevated) | The detection harness: plants about 39 known-bad artifacts, runs the audit, asserts every one is detected, removes them. Never on a daily-driver machine -- see `docs\recovery.md`. |
 
 **Reporting a false positive.** A finding that turns out to be something
 legitimate on your machine is a bug in the tool. Record it in
@@ -709,7 +711,7 @@ Run the lint before committing batch changes (built-in PowerShell, works on ever
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\lint_batch_comments.ps1
 ```
 
-CI runs the same check on every push and pull request. See `CLAUDE.md` for the full list of cmd.exe parsing traps this repo has hit.
+CI runs the same check on every pull request and on every push to `main`. See `CLAUDE.md` for the full list of cmd.exe parsing traps this repo has hit.
 
 ## Roadmap
 

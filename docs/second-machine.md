@@ -126,7 +126,8 @@ again.
   `E:\doze_sec` to `C:\Users\<name>\doze_sec`. **Not into Documents:** OneDrive
   may sync Documents, which would upload the tool to the owner's cloud and keep
   it there after you delete it. **Not into a Temp folder:** the audit refuses to
-  run from Temp (exit code 5).
+  run when its own folder is the Temp folder itself (exit code 5), and Windows
+  cleans Temp, so a copy in a folder under it can lose files mid-run.
 
 ## Step 3: preflight. Paste this in before running anything
 
@@ -205,7 +206,9 @@ never writes into its own folder.
 field_test ends with one of:
 
 - `OK: read-only run verified...`: everything worked.
-- `FAIL: ... AUDIT NOT PERFORMED`: PowerShell would not run the audit's
+- A line `[FAIL   ] AUDIT NOT PERFORMED -- ...`, and a last line `FAIL: the
+  audit could not run its checks on this machine (not a finding about the
+  machine).`: PowerShell would not run the audit's
   helper scripts on this machine, so nothing was audited. **Stop there and do
   not try to work around it** (for example by copying the tool somewhere else
   to dodge a policy on removable drives): it is the PC owner's or IT's control.

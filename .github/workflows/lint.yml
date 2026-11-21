@@ -1311,6 +1311,10 @@ jobs:
       # page. Nothing read the prose, so nothing caught it.
       - name: Run lint_docs_drift.ps1
         run: pwsh -NoProfile -File tools/lint_docs_drift.ps1
+      # The rules added on 2026-11-21 (the script a switch works in, the indicator
+      # total, a tool header naming every mode) each fail on a mutated copy.
+      - name: lint_docs_drift.ps1 fails on each drift it was written for
+        run: pwsh -NoProfile -File tools/lint_docs_drift.ps1 -SelfTest
 
   report-echo-lint:
     name: "Report lint: every printed line reaches the report and every printed command runs"

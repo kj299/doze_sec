@@ -7015,8 +7015,10 @@ rem :dz_ps_scan call sites. Office macro policy, Secure Boot, AMSI-bypass
 rem traces, RDP shadowing and the nation-state TTP blocks all printed findings
 rem that reached neither the ledger, FINDINGS COUNTED nor the exit code. Only
 rem checks carrying a marker backstop survived, and that is what masked it: the
-rem ASR block raises the same message from its marker precisely WHEN the grade
-rem came back OK, so its ledger row looked like proof the grader worked.
+rem ASR block raised the same message from its marker precisely WHEN the grade
+rem came back OK, so its ledger row looked like proof the grader worked. (The
+rem ASR check has since become tools\asr_rules_check.ps1 and no longer comes
+rem through this routine.)
 rem
 rem Measured, not argued. On a runner, against the same file: the bare-relative
 rem invocation graded WARNING and this quoted-absolute one graded OK.

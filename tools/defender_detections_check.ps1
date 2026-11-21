@@ -29,7 +29,7 @@
 # State: dz_mpdet_state.txt  det=<none|removed|active|gap|deferred|otherav>,n=<count>
 #
 # Usage:
-#   powershell -File tools\defender_detections_check.ps1 [-MarkerDir <dir>] [-StateFile <path>] [-Elevated 0|1]
+#   powershell -File tools\defender_detections_check.ps1 [-MarkerDir <dir>] [-StateFile <path>] [-Elevated 0|1] [-OtherAv]
 #   powershell -File tools\defender_detections_check.ps1 -SelfTest   (queries nothing)
 #
 # Windows PowerShell 5.1 compatible; pure ASCII. Read-only.
