@@ -598,6 +598,14 @@ Found during the v7.1 coverage review; tracked for future work:
   (little, when Script Block Logging is off -- the line says so), and nine
   further blocks of the same class are still open
   (`docs/design/backlog.md`, "The per-block search").
+- ~~On a standard-user token the ASR check graded the rule list Defender
+  showed that token, so a masked (empty) answer read as "No ASR rules
+  configured" and raised a row.~~ **Closed:** `tools/asr_rules_check.ps1`
+  grades a rule only where a store shows it and defers a rule no readable
+  store shows. Residual: the MDM value's registry name comes from the
+  Policy CSP's setting name, not a first-party registry reference; if it is
+  wrong, an MDM-managed standard-user run defers the rule rather than
+  grading it. Elevated runs read the effective rules from Defender.
 - ~~Section 9 printed Defender's detection history as a raw table, with no
   verdict and no row, so a Severe detection, or malware Defender failed to
   remove, raised nothing.~~ **Closed:** `tools/defender_detections_check.ps1`

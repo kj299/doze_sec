@@ -1122,7 +1122,22 @@ jobs:
           done
           grep -qF 'goto :sec9_noadmin' doze_sec_noAdmin.bat && { echo 'doze_sec_noAdmin.bat: Section 9 is skipped wholesale on a standard-user token again'; exit 1; }
           for b in doze_sec.bat doze_sec_noAdmin.bat; do
-            for m in dz_defcore_gap dz_defcore_deferred dz_defflags_gap dz_defcore_why dz_defexcl_gap dz_defexcl_deferred dz_defexcl_why dz_edr_gap dz_edr_deferred dz_asr_unread; do grep -qF "%TEMP%\\$m.txt" "$b" || { echo "$b: $m is never read"; exit 1; }; done
+            for m in dz_defcore_gap dz_defcore_deferred dz_defflags_gap dz_defcore_why dz_defexcl_gap dz_defexcl_deferred dz_defexcl_why dz_edr_gap dz_edr_deferred dz_asr_hit dz_asr_gap dz_asr_deferred dz_asr_state; do grep -qF "%TEMP%\\$m.txt" "$b" || { echo "$b: $m is never read"; exit 1; }; done
+          done
+      - name: asr_rules_check -- on a standard-user token a rule no readable store shows is deferred, never "No ASR rules configured"
+        run: |
+          out=$(pwsh -NoProfile -File tools/asr_rules_check.ps1 -SelfTest); echo "$out"
+          [ "$(echo "$out" | grep -c '^\[OK\]   ')" -ge 18 ] || { echo 'asr_rules_check self-test shrank'; exit 1; }
+          for n in 'standard token, an empty answer and the local store refused: a counted deferral' \
+                   'standard token, every store answered with nothing: the absence is known' \
+                   'standard token on an MDM-managed PC: a rule not found is deferred' \
+                   'a placeholder or a non-GUID is never a rule' \
+                   'elevated, Get-MpPreference failed: a raised gap'; do
+            echo "$out" | grep -qF "$n" || { echo "asr case gone: $n"; exit 1; }
+          done
+          for b in doze_sec.bat doze_sec_noAdmin.bat; do
+            grep -qF 'dz_asr_unread' "$b" && { echo "$b: the ASR rules are read by an inline block again"; exit 1; }
+            grep -qF 'tools\asr_rules_check.ps1' "$b" || { echo "$b: asr_rules_check is not called"; exit 1; }
           done
       - name: module_inspect -- lsass denied on a standard-user token is DEFERRED; elevated with LSA Protection off it is a raised gap
         run: |

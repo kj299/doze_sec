@@ -3098,85 +3098,47 @@ echo.>> "%REPORT%"
 echo --- Attack Surface Reduction Rules Audit (T1566.001 / T1003.001 / T1068) --->> "%REPORT%"
 echo THREAT: With no ASR rules in Block mode, Office-macro droppers, LSASS credential>> "%REPORT%"
 echo theft, and vulnerable-driver loads are stopped by signature detection alone.>> "%REPORT%"
-echo  Command: powershell -Command "(Get-MpPreference).AttackSurfaceReductionRules_Ids">> "%REPORT%"
+echo  Command: powershell -File tools\asr_rules_check.ps1>> "%REPORT%"
 del "%TEMP%\dz_asr_hit.txt" 2>nul
+del "%TEMP%\dz_asr_gap.txt" 2>nul
+del "%TEMP%\dz_asr_deferred.txt" 2>nul
+del "%TEMP%\dz_asr_state.txt" 2>nul
 del "%TEMP%\dz_asr_lsass_mode.txt" 2>nul
-del "%TEMP%\dz_asr_unread.txt" 2>nul
-echo try { $p = Get-MpPreference -ErrorAction Stop } catch { Write-Output '[INFO] Get-MpPreference did not answer, so the ASR rules were not read -- the Defender checks above say why.'; Set-Content -LiteralPath (Join-Path $env:TEMP 'dz_asr_unread.txt') -Value 'unread' -Encoding ASCII; exit 0 } > "%PSRUN%"
-echo $ids = @(); if ($p.AttackSurfaceReductionRules_Ids) { $ids = @($p.AttackSurfaceReductionRules_Ids) } >> "%PSRUN%"
-echo $acts = @(); if ($p.AttackSurfaceReductionRules_Actions) { $acts = @($p.AttackSurfaceReductionRules_Actions) } >> "%PSRUN%"
-echo $names = @{} >> "%PSRUN%"
-echo $names['56a863a9-875e-4185-98a7-b882c64b5ce5'] = 'Block abuse of exploited vulnerable signed drivers' >> "%PSRUN%"
-echo $names['7674ba52-37eb-4a4f-a9a1-f0f9a1619a2c'] = 'Block Adobe Reader from creating child processes' >> "%PSRUN%"
-echo $names['d4f940ab-401b-4efc-aadc-ad5f3c50688a'] = 'Block all Office applications from creating child processes' >> "%PSRUN%"
-echo $names['9e6c4e1f-7d60-472f-ba1a-a39ef669e4b2'] = 'Block credential stealing from LSASS' >> "%PSRUN%"
-echo $names['be9ba2d9-53ea-4cdc-84e5-9b1eeee46550'] = 'Block executable content from email client and webmail' >> "%PSRUN%"
-echo $names['01443614-cd74-433a-b99e-2ecdc07bfc25'] = 'Block executables unless they meet prevalence, age, or trusted-list criteria' >> "%PSRUN%"
-echo $names['5beb7efe-fd9a-4556-801d-275e5ffc04cc'] = 'Block execution of potentially obfuscated scripts' >> "%PSRUN%"
-echo $names['d3e037e1-3eb8-44c8-a917-57927947596d'] = 'Block JavaScript or VBScript from launching downloaded executable content' >> "%PSRUN%"
-echo $names['3b576869-a4ec-4529-8536-b80a7769e899'] = 'Block Office applications from creating executable content' >> "%PSRUN%"
-echo $names['75668c1f-73b5-4cf0-bb93-3ecf5cb7cc84'] = 'Block Office applications from injecting code into other processes' >> "%PSRUN%"
-echo $names['26190899-1602-49e8-8b27-eb1d0a1ce869'] = 'Block Office communication apps from creating child processes' >> "%PSRUN%"
-echo $names['e6db77e5-3df2-4cf1-b95a-636979351e5b'] = 'Block persistence through WMI event subscription' >> "%PSRUN%"
-echo $names['d1e49aac-8f56-4280-b9ba-993a6d77406c'] = 'Block process creations from PSExec and WMI commands' >> "%PSRUN%"
-echo $names['33ddedf1-c6e0-47cb-833e-de6133960387'] = 'Block rebooting machine in Safe Mode' >> "%PSRUN%"
-echo $names['b2b3f03d-6a65-4f7b-a9c7-1c7ef74a9ba4'] = 'Block untrusted and unsigned processes that run from USB' >> "%PSRUN%"
-echo $names['c0033c00-d16d-4114-a5a0-dc9b3a7d2ceb'] = 'Block use of copied or impersonated system tools' >> "%PSRUN%"
-echo $names['a8f5898e-1dc8-49a9-9878-85004b8a61e6'] = 'Block webshell creation for servers' >> "%PSRUN%"
-echo $names['92e97fa1-2edf-4476-bdd6-9dd0b4dddc7b'] = 'Block Win32 API calls from Office macros' >> "%PSRUN%"
-echo $names['c1db55ab-c21a-4637-bb3f-a12568109d35'] = 'Use advanced protection against ransomware' >> "%PSRUN%"
-echo $modeMap = @{0='Disabled'; 1='Block'; 2='Audit'; 6='Warn'} >> "%PSRUN%"
-echo if ($ids.Count -eq 0) { >> "%PSRUN%"
-echo   Write-Output '[WARNING] No ASR rules configured. All Defender attack-surface-reduction rules are inactive.' >> "%PSRUN%"
-rem Add-MpPreference APPENDS one rule. Set-MpPreference REPLACES the whole
-rem array, so advising it would silently wipe every other ASR rule an admin
-rem or MDM had configured.
-echo   Write-Output '          Enable per rule: Add-MpPreference -AttackSurfaceReductionRules_Ids GUID -AttackSurfaceReductionRules_Actions Enabled' >> "%PSRUN%"
-echo   Write-Output '          (Add-, not Set-: Set-MpPreference replaces the whole rule array.)' >> "%PSRUN%"
-echo } else { >> "%PSRUN%"
-echo   for ($i = 0; $i -lt $ids.Count; $i++) { >> "%PSRUN%"
-echo     $id = ([string]$ids[$i]).ToLowerInvariant() >> "%PSRUN%"
-echo     $nm = $names[$id]; if (-not $nm) { $nm = 'Unknown or custom rule ' + $id } >> "%PSRUN%"
-echo     $ac = [int]$acts[$i] >> "%PSRUN%"
-echo     $md = $modeMap[$ac]; if (-not $md) { $md = 'Mode ' + $ac } >> "%PSRUN%"
-echo     $tag = '[INFO]'; if ($ac -eq 1) { $tag = '[OK]  ' } >> "%PSRUN%"
-echo     Write-Output ($tag + ' ' + $md.PadRight(8) + ' ' + $nm) >> "%PSRUN%"
-echo   } >> "%PSRUN%"
-echo } >> "%PSRUN%"
-echo $keyRules = @{} >> "%PSRUN%"
-echo $keyRules['9e6c4e1f-7d60-472f-ba1a-a39ef669e4b2'] = 'Block credential stealing from LSASS' >> "%PSRUN%"
-echo $keyRules['56a863a9-875e-4185-98a7-b882c64b5ce5'] = 'Block abuse of exploited vulnerable signed drivers' >> "%PSRUN%"
-echo $keyRules['3b576869-a4ec-4529-8536-b80a7769e899'] = 'Block Office applications from creating executable content' >> "%PSRUN%"
-echo $keyRules['92e97fa1-2edf-4476-bdd6-9dd0b4dddc7b'] = 'Block Win32 API calls from Office macros' >> "%PSRUN%"
-echo $keyRules['c1db55ab-c21a-4637-bb3f-a12568109d35'] = 'Use advanced protection against ransomware' >> "%PSRUN%"
-echo $lowIds = @($ids ^| ForEach-Object { ([string]$_).ToLowerInvariant() }) >> "%PSRUN%"
-echo foreach ($k in $keyRules.Keys) { >> "%PSRUN%"
-echo   $ix = [array]::IndexOf($lowIds, $k) >> "%PSRUN%"
-echo   if ($ix -lt 0 -or [int]$acts[$ix] -ne 1) { Write-Output ('[WARNING] Key ASR rule not in Block mode: ' + $keyRules[$k]); Set-Content -LiteralPath "$env:TEMP\dz_asr_hit.txt" -Value hit } >> "%PSRUN%"
-echo } >> "%PSRUN%"
-echo $lsassIx = [array]::IndexOf($lowIds, '9e6c4e1f-7d60-472f-ba1a-a39ef669e4b2') >> "%PSRUN%"
-echo $lsassMode = 'notconfigured'; if ($lsassIx -ge 0) { $la = [int]$acts[$lsassIx]; $lsassMode = 'off'; if ($la -eq 1) { $lsassMode = 'block' }; if ($la -eq 2) { $lsassMode = 'audit' }; if ($la -eq 6) { $lsassMode = 'warn' } } >> "%PSRUN%"
-echo Set-Content -LiteralPath "$env:TEMP\dz_asr_lsass_mode.txt" -Value $lsassMode -Encoding ASCII >> "%PSRUN%"
-call :dz_ps_scan 9 T1562.001 "Defender ASR rules absent or not in Block mode"
-rem Belt and braces. If grading returned OK but the block set its marker,
-rem the grade was wrong and the finding would vanish -- which is exactly
-rem what happened in the field. Raise from the marker instead, and only
-rem then, so a correct grade never double-counts.
-if /i "!DZ_BLKSEV!"=="OK" if exist "%TEMP%\dz_asr_hit.txt" call :dz_finding WARNING 9 T1562.001 "Defender ASR rules absent or not in Block mode"
-if exist "%TEMP%\dz_asr_unread.txt" (
-    rem The ASR rules come from the same Get-MpPreference the core check asked:
-    rem its reason decides. Refused to a standard user is a deferral; another
-    rem enabled antivirus is the [INFO] above; anything else is a raised gap.
-    del "%TEMP%\dz_asr_unread.txt" 2>nul
-    if "!DEFCORE_WHYF!"=="deferred" (
-        echo [DEFERRED - ADMIN REQUIRED] Defender ASR rules not read: Get-MpPreference was refused to this standard-user token.>> "%REPORT%"
-        set /a DEFERRED_COUNT+=1
-    ) else if not "!DEFCORE_WHYF!"=="otherav" (
-        echo [WARNING] Defender ASR rules check NOT performed -- Get-MpPreference did not answer, so ASR rules switched off would go unseen.>> "%REPORT%"
-        call :dz_finding WARNING 9 T1562.001 "Defender ASR rules check NOT performed - Get-MpPreference did not answer"
-    )
+rem The rules were a staged block that graded whatever Get-MpPreference
+rem returned. A standard-user token is shown masked Defender settings, so an
+rem empty rule list there was read as "no rules": the tool grades only what
+rem a store really showed, and defers the rest.
+set "_ASROA="
+if "!DEFCORE_WHYF!"=="otherav" set "_ASROA=-OtherAv"
+if exist "%SCRIPT_DIR%tools\asr_rules_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\asr_rules_check.ps1" !_ASROA!>> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\asr_rules_check.ps1 not found -- Defender ASR rules check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 9 T1562.001 "Defender ASR rules check NOT performed - tool missing"
 )
-del "%TEMP%\dz_asr_hit.txt" 2>nul
+if exist "%TEMP%\dz_asr_hit.txt" (
+    call :dz_finding WARNING 9 T1562.001 "Defender ASR rules absent or not in Block mode"
+    del "%TEMP%\dz_asr_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_asr_gap.txt" (
+    call :dz_finding WARNING 9 T1562.001 "Defender ASR rules check NOT performed - Get-MpPreference did not answer"
+    del "%TEMP%\dz_asr_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_asr_deferred.txt" (
+    set "_ASRDEF=0"
+    set /p _ASRDEF=<"%TEMP%\dz_asr_deferred.txt"
+    set /a DEFERRED_COUNT+=!_ASRDEF!
+    del "%TEMP%\dz_asr_deferred.txt" 2>nul
+)
+set "_TS="
+if exist "%TEMP%\dz_asr_state.txt" set /p _TS=<"%TEMP%\dz_asr_state.txt"
+del "%TEMP%\dz_asr_state.txt" 2>nul
+set "ASR_STATE=ungraded"
+if defined _TS if "!_TS:~0,4!"=="asr=" set "ASR_STATE=!_TS!"
+if not "!ASR_STATE:~0,4!"=="asr=" if exist "%SCRIPT_DIR%tools\asr_rules_check.ps1" (
+    echo [WARNING] Defender ASR rules check produced no verdict -- NOT performed: tools\asr_rules_check.ps1 ran but wrote no usable verdict.>> "%REPORT%"
+    call :dz_finding WARNING 9 T1562.001 "Defender ASR rules check produced no verdict - NOT performed"
+)
 
 echo.>> "%REPORT%"
 echo --- Defender Threat Detection History --->> "%REPORT%"

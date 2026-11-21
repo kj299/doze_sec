@@ -6,6 +6,13 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Defender ASR rules (Section 9): a standard-user run no longer grades what Defender hides from it
+The ASR check was a staged block that asked `Get-MpPreference` and graded whatever came back. Defender answers a standard-user token with masked values (its exclusion lists read "N/A: Must be an administrator"), so an empty rule list there is not evidence. The block still printed `No ASR rules configured` and `Key ASR rule not in Block mode`, raised a row, and told Section 12 the LSASS rule was "not configured".
+- `tools/asr_rules_check.ps1` replaces the block in both bats. Elevated, `Get-MpPreference` decides as before, with the same wording and the same row.
+- On a standard-user token it uses any rule `Get-MpPreference` does show, and reads the rules from where Windows stores them: the Group Policy key, the MDM policy value and Defender's local key. A rule found in any of them is graded. A rule found in none is "not in Block" only when every store answered and the PC is not MDM-managed; otherwise it is a counted deferral, and the LSASS rule's mode is passed to Section 12 as ungraded.
+- The report line names which stores answered.
+- CI drives the standard-user path through the real readers on throwaway keys, and the standard-user job sets an ASR rule in Audit mode as administrator and asserts the run never reports it missing.
+
 ### Defender's own detection history is graded (Section 9)
 Section 9 used to print a raw `Get-MpThreatDetection` table, with no verdict and no row. So when Defender recorded a Severe Trojan on WIN11-02, nothing was raised, and malware Defender found and failed to remove would have read the same.
 - `tools/defender_detections_check.ps1` grades each detection, following the owner's decision (2026-11-20):
