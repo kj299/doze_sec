@@ -50,6 +50,11 @@ param(
     [string]$PolicyKey = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Windows Defender Exploit Guard\ASR\Rules',
     [string]$LocalKey = 'HKLM:\SOFTWARE\Microsoft\Windows Defender\Windows Defender Exploit Guard\ASR\Rules',
     [string]$MdmKey = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Defender',
+    # Defender's own copy of settings pushed by Intune or Defender security
+    # settings management (value ASRRules, same guid=n form). The name is
+    # from memory, not a first-party reference: any value in this key marks
+    # the PC as managed, so a wrong value name defers rather than warns.
+    [string]$MdmKey2 = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Policy Manager',
     [switch]$SelfTest
 )
 
@@ -174,6 +179,12 @@ function Get-AsrVerdict {
         }
         $rules = $In.Shown
     } else {
+        # Defender did not answer at all and another antivirus is the one in
+        # force: the same INFO the elevated path gives, never "no rules".
+        if ([string]$In.MpError -and $OtherAv) {
+            [void]$out.Add('[INFO] Get-MpPreference did not answer (' + (ConvertTo-PrintableText $In.MpError 160) + '), and Section 9 found another antivirus registered as the one in force, so Defender''s ASR rules are not the protection here.')
+            return @{ Lines = @($out.ToArray()); Hit = $false; Gap = $false; Deferred = 0; State = 'asr=otherav'; LsassMode = 'ungraded' }
+        }
         # Lowest precedence first, so a later store overwrites.
         foreach ($k in @($In.Shown.Keys)) { $rules[$k] = $In.Shown[$k] }
         foreach ($src in @(@{ N = 'Defender''s local settings'; R = $In.Local }, @{ N = 'the MDM policy'; R = $In.Mdm }, @{ N = 'the Group Policy key'; R = $In.Policy })) {
@@ -271,6 +282,8 @@ if ($SelfTest) {
     $v = Std @{} (K) (K 'ok' @{}) $true $all
     T 'standard token, all five in Block by MDM: OK' ((-not $v.Hit) -and $v.Deferred -eq 0) ($v.Lines -join ' | ')
 
+    $v = Get-AsrVerdict -IsElevated $false -OtherAv $true -In @{ MpError = 'The service cannot be started'; Shown = @{}; Policy = (K); Local = (K); Mdm = @{ State = 'nokey'; Present = $false; Rules = @{} } }
+    T 'standard token, Defender not answering with another antivirus in force: INFO, never "No ASR rules configured"' ((-not $v.Hit) -and $v.State -eq 'asr=otherav' -and ($v.Lines -join ' ') -notmatch 'No ASR rules') ($v.Lines -join ' | ')
     $m = ConvertTo-RuleMap @('N/A: Must be an administrator', $L, 'not-a-guid') @('1', '2', '1')
     T 'a placeholder or a non-GUID is never a rule' ($m.Count -eq 1 -and $m[$L] -eq 2) ''
     $m = ConvertTo-RuleMap @($L.ToUpper(), ('{' + $script:KeyRules[1] + '}')) @(1, 'x')
@@ -301,14 +314,16 @@ try {
 if ($Elevated -ne 1) {
     $in.Policy = Read-RuleKey $PolicyKey
     $in.Local = Read-RuleKey $LocalKey
-    try {
-        $mk = Get-Item -LiteralPath $MdmKey -ErrorAction Stop
-        $names = @($mk.GetValueNames())
-        $in.Mdm.State = 'ok'
-        $in.Mdm.Present = ($names.Count -gt 0)
-        if ($names -contains 'AttackSurfaceReductionRules') { $in.Mdm.Rules = ConvertFrom-MdmRules ([string]$mk.GetValue('AttackSurfaceReductionRules', '')) }
-    } catch [System.Management.Automation.ItemNotFoundException] { $in.Mdm.State = 'nokey'
-    } catch { $in.Mdm.State = 'denied' }
+    foreach ($src in @(@{ P = $MdmKey2; V = 'ASRRules' }, @{ P = $MdmKey; V = 'AttackSurfaceReductionRules' })) {
+        try {
+            $mk = Get-Item -LiteralPath $src.P -ErrorAction Stop
+            $names = @($mk.GetValueNames())
+            if ($in.Mdm.State -ne 'denied') { $in.Mdm.State = 'ok' }
+            if ($names.Count -gt 0) { $in.Mdm.Present = $true }
+            if ($names -contains $src.V) { $mr = ConvertFrom-MdmRules ([string]$mk.GetValue($src.V, '')); foreach ($k in @($mr.Keys)) { $in.Mdm.Rules[$k] = $mr[$k] } }
+        } catch [System.Management.Automation.ItemNotFoundException] {
+        } catch { $in.Mdm.State = 'denied' }
+    }
 }
 $v = Get-AsrVerdict -In $in -IsElevated ($Elevated -eq 1) -OtherAv ([bool]$OtherAv)
 foreach ($l in $v.Lines) { $l }

@@ -697,8 +697,9 @@ try {
     Write-Host ('  MEASURED: ASR rule stores on a standard-user token: ' + ($asrInfo -join ' | '))
     Assert ($asrInfo.Count -eq 1) 'the ASR check says which stores a standard-user token could read' 'the ASR check did not print its standard-user sources line'
     $asrRows1 = @($ledger1 | Where-Object { $_ -match '\|9\|T1562\.001\|Defender ASR rules absent or not in Block mode' })
-    $asrDef1 = [bool]($text1 -match '\[DEFERRED - ADMIN REQUIRED\] 5 key ASR rule\(s\) not graded')
-    Assert (-not ($asrDef1 -and $asrRows1.Count)) 'a fully deferred ASR check raised no row' 'the ASR check deferred all five key rules and still raised a row'
+    $asrDef1 = [bool]($text1 -match '\[DEFERRED - ADMIN REQUIRED\] \d+ key ASR rule\(s\) not graded')
+    $asrAll1 = [bool]($text1 -match '\[DEFERRED - ADMIN REQUIRED\] 5 key ASR rule\(s\) not graded')
+    Assert (-not ($asrAll1 -and $asrRows1.Count)) 'a fully deferred ASR check raised no row' 'the ASR check deferred all five key rules and still raised a row'
     Assert ($asrDef1 -or $asrRows1.Count -or ($text1 -match 'All five key ASR rules are in Block mode')) 'the ASR check stated a verdict on a standard-user token' 'the ASR check printed neither a finding, a deferral nor an all-clear'
     $lsassGapRows = @($ledger1 | Where-Object { $_ -match '\|12\|T1003\.001\|Defender LSASS-(read records|rule exclusions) NOT' })
     Assert ($lsassGapRows.Count -eq 0) 'no Defender LSASS-read gap row on a clean standard-user run (a refusal this token explains is a deferral)' `
@@ -834,12 +835,15 @@ finally {
     } else {
         Set-ItemProperty -LiteralPath $wdKey -Name UseLogonCredential -Value $wdPrior -Type DWord -EA SilentlyContinue
     }
-    if ($asrPlanted) { try { Remove-MpPreference -AttackSurfaceReductionRules_Ids $asrRule -ErrorAction Stop } catch { Write-Host ("  cleanup: the planted ASR rule could not be removed: {0}" -f $_.Exception.Message) } }
+    if ($asrPlanted) { try { Remove-MpPreference -AttackSurfaceReductionRules_Ids $asrRule -AttackSurfaceReductionRules_Actions AuditMode -ErrorAction Stop } catch { Write-Host ("  cleanup: Remove-MpPreference said: {0}" -f $_.Exception.Message) }
+        $left = @((Get-MpPreference -EA SilentlyContinue).AttackSurfaceReductionRules_Ids) -contains $asrRule
+        if ($left) { Write-Host '::error::cleanup: the planted ASR rule (LSASS, Audit mode) is still set on this machine'; $script:asrLeft = $true } else { Write-Host '  cleanup: the planted ASR rule is gone' } }
     if ($userCreated) { Remove-LocalUser -Name $UserName -EA SilentlyContinue }
     if ($daclCreated) { & sc.exe delete dzsmoke_dacl 2>&1 | Out-Null }
     if ($ifeoCreated) { Remove-Item -Path $ifeoKey -Recurse -Force -EA SilentlyContinue }
 }
 
+if ($script:asrLeft) { Write-Host 'FAIL: the planted ASR rule could not be removed -- this machine is left with the LSASS rule in Audit mode. Remove it: Remove-MpPreference -AttackSurfaceReductionRules_Ids 9e6c4e1f-7d60-472f-ba1a-a39ef669e4b2 -AttackSurfaceReductionRules_Actions AuditMode'; exit 1 }
 Write-Host ""
 if ($fail -gt 0) { Write-Host ("FAIL: {0} non-admin contract assertion(s) regressed." -f $fail); exit 1 }
 Write-Host "OK: non-admin contract holds (deferral, detection without admin, exit codes, ledger consistency)."

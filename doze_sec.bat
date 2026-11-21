@@ -6577,7 +6577,7 @@ echo if($joined -match 'Accessibility binary signature INVALID'){ addfix 'Restor
 echo if(led 'CRITICAL' '9' 'T1562.001' 'Defender core protection disabled'){ addfix 'Re-enable Defender real-time protection' "Set-MpPreference -DisableRealtimeMonitoring `$false" '' } >> "%PSRUN%"
 echo if($dcSigOld -match 'yes'){ addfix 'Update Defender signatures' "Update-MpSignature" '' } >> "%PSRUN%"
 echo if($dcTamperOff -match 'yes'){ addfix 'Enable Defender tamper protection (via Windows Security UI)' "Write-Host 'Tamper Protection is UI-managed. Open: Windows Security > Virus and threat protection > Manage settings > Tamper Protection > On'" '' } >> "%PSRUN%"
-rem ASR: the finding is report-only (Section 9, raised via :dz_ps_scan), so it
+rem ASR: the finding is report-only (Section 9, raised from its marker), so it
 rem was unreachable by the prose triggers -- this is the case that motivated
 rem ledger coverage. Add-MpPreference APPENDS; Set-MpPreference would replace
 rem the whole array and silently wipe every other ASR rule an admin or MDM set.

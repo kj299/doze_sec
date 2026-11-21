@@ -8,7 +8,7 @@ $ErrorActionPreference = 'Stop'
 $st = (.\tools\asr_rules_check.ps1 -SelfTest) -join "`n"
 if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'asr_rules_check -SelfTest failed' }
 $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-if ($n -lt 18) { throw "asr_rules_check self-test ran only $n case(s)" }
+if ($n -lt 19) { throw "asr_rules_check self-test ran only $n case(s)" }
 function RunA([hashtable]$Extra) {
   $md = Join-Path $env:TEMP ("dz_ci_asr_{0}_{1}" -f $PID, [guid]::NewGuid().ToString('N').Substring(0, 6)); New-Item -ItemType Directory -Path $md -Force | Out-Null
   try {
@@ -32,7 +32,7 @@ $L = '9e6c4e1f-7d60-472f-ba1a-a39ef669e4b2'
 $root = "HKCU:\Software\dz_ci_asr_$PID"
 try {
   New-Item -Path "$root\pol" -Force | Out-Null; New-Item -Path "$root\loc" -Force | Out-Null
-  $base = @{ Elevated = 0; PolicyKey = "$root\pol\Rules"; LocalKey = "$root\loc\Rules"; MdmKey = "$root\mdm" }
+  $base = @{ Elevated = 0; PolicyKey = "$root\pol\Rules"; LocalKey = "$root\loc\Rules"; MdmKey = "$root\mdm"; MdmKey2 = "$root\mdm2" }
   if ($shown -eq 0) {
     # No store exists, their parents answer, no MDM: the absence is KNOWN.
     Expect (RunA $base) 'asr=none' 'dz_asr_hit' 'notconfigured' '(?m)^\[WARNING\] No ASR rules configured' 'standard path, every store answered with nothing'
