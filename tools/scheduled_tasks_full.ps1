@@ -151,7 +151,6 @@ if ($Mode -ne 'Suspicious') {
     if ($enumError) { Write-Output ('[INFO] Get-ScheduledTask unavailable -- ' + (ConvertTo-OneLine $enumError)); return }
     if ($tasks.Count -eq 0) { Write-Output '[INFO] No scheduled tasks returned.'; return }
 } else {
-    $stateFile = Join-Path $MarkerDir 'dz_susptask_state.txt'
     foreach ($n in 'crit', 'gap', 'deferred', 'state') { Remove-Item -LiteralPath (Join-Path $MarkerDir ("dz_susptask_{0}.txt" -f $n)) -Force -EA SilentlyContinue }
     $ev = Get-EnumVerdict -Count $tasks.Count -ErrorText $enumError -Refused $enumRefused -IsElevated ($Elevated -eq 1)
     if ($ev.State -ne 'ok') {
@@ -287,7 +286,7 @@ if ($Mode -eq 'Suspicious') {
     Write-Marker -Name 'susptask_state' -Sev ('tasks=' + $(if ($crit.Count -gt 0) { 'crit' } else { 'ok' }) + ',n=' + [string]$crit.Count)
 
     if ($crit.Count -eq 0 -and $info.Count -eq 0) {
-        Write-Output ('[OK] No scheduled-task actions in Temp/AppData/Downloads/Public/ProgramData\update (' + [string]$tasks.Count + ' tasks read).')
+        Write-Output ('[OK] No scheduled-task actions in Temp/AppData/Downloads/Public/ProgramData\update (' + [string]$tasks.Count + ' tasks read' + $(if ($Elevated -eq 1) { '' } else { '; a standard-user token is shown only the tasks it may read, so this covers those' }) + ').')
         return
     }
 

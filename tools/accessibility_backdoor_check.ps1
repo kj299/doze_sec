@@ -29,8 +29,8 @@
 #     be the active antivirus, and [INFO] not consulted otherwise. A standard-user token cannot ask at all:
 #     [DEFERRED - ADMIN REQUIRED], counted, never a row;
 #   * a binary whose signature is not valid Microsoft -> CRITICAL (kept).
-#     A binary MISSING -> WARNING (as Section 13's signature check grades
-#     it). A signature that could not be read is a gap, never a pass.
+#     A binary MISSING -> WARNING (Windows ships all seven; since
+#     2026-11-21 this is their only signature check). A signature that could not be read is a gap, never a pass.
 # Markers: dz_accifeo_hit / _gap ; dz_accbin_hit / _missing / _gap /
 # _deferred. State files: dz_accifeo_state.txt  ifeo=<clean|hijack|gap|
 # hijack+gap> ; dz_accbin_state.txt  bins=<ok|bad|missing|gap>,def=<none|
@@ -178,8 +178,8 @@ function Get-BinariesVerdict {
         if ($null -eq $b) { continue }
         $n = [string]$b.Name; $seen[$n] = $true
         if (-not $b.Exists) {
-            # Any of the seven, as Section 13's signature check already grades it:
-            # the two sections must not disagree about the same file.
+            # Any of the seven: Windows ships every one, so a missing one was
+            # removed by something.
             $r.Missing = $true
             [void]$out.Add(('[WARNING] ' + $n + ' is MISSING from the system directory -- Windows ships it, so something removed it (T1546.008).'))
             continue
@@ -285,7 +285,7 @@ if ($SelfTest) {
     $v = Get-BinariesVerdict -Ifeo 'ifeo=clean' -Def $none -Bins (BinList @{ 'utilman.exe' = @{ Name = 'utilman.exe'; Exists = $false; Status = ''; Signer = ''; Hash = ''; Error = '' } }); $t = $v.Lines -join "`n"
     T 'utilman.exe MISSING: a WARNING of its own -- the old block printed nothing' ($v.Missing -and (-not $v.Hit) -and $v.State -eq 'bins=missing,def=none' -and $t -match '(?m)^\[WARNING\] utilman\.exe is MISSING from the system directory') $t
     $v = Get-BinariesVerdict -Ifeo 'ifeo=clean' -Def $none -Bins (BinList @{ 'Narrator.exe' = @{ Name = 'Narrator.exe'; Exists = $false; Status = ''; Signer = ''; Hash = ''; Error = '' } })
-    T 'Narrator.exe missing is the same WARNING Section 13 gives it: the two sections cannot disagree about one file' ($v.Missing -and ($v.Lines -join ' ') -match '\[WARNING\] Narrator\.exe is MISSING') ($v.Lines -join ' | ')
+    T 'Narrator.exe missing is a WARNING like any of the seven: Windows ships every one of them' ($v.Missing -and ($v.Lines -join ' ') -match '\[WARNING\] Narrator\.exe is MISSING') ($v.Lines -join ' | ')
     $v = Get-BinariesVerdict -Ifeo 'ifeo=clean' -Def $none -Bins (BinList @{ 'sethc.exe' = @{ Name = 'sethc.exe'; Exists = $true; Status = ''; Signer = ''; Hash = ''; Error = 'IOException: sharing violation' } }); $t = $v.Lines -join "`n"
     T 'a signature that could not be read is a raised gap, never a pass' ($v.Gap -and $v.State -eq 'bins=gap,def=none' -and $t -match 'NOT performed in full -- 1 binary\(ies\) could not be read: sethc\.exe' -and $t -notmatch 'carry a valid Microsoft signature') $t
     $v = Get-BinariesVerdict -Ifeo 'ifeo=clean' -Def $none -Bins @()
