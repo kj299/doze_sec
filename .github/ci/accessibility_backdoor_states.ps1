@@ -6,7 +6,7 @@ $ErrorActionPreference = 'Stop'
 $st = (.\tools\accessibility_backdoor_check.ps1 -SelfTest) -join "`n"
 if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'accessibility_backdoor_check -SelfTest failed' }
 $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-if ($n -lt 23) { throw "accessibility_backdoor_check self-test ran only $n case(s)" }
+if ($n -lt 27) { throw "accessibility_backdoor_check self-test ran only $n case(s)" }
 function RunA([string]$Part, [hashtable]$Extra) {
   $md = Join-Path $env:TEMP ("dz_ci_accbd_{0}_{1}" -f $PID, [guid]::NewGuid().ToString('N').Substring(0, 6)); New-Item -ItemType Directory -Path $md -Force | Out-Null
   try {

@@ -409,12 +409,11 @@ Found during the v7.1 coverage review; tracked for future work:
   fail closed if `Get-WMIObject` is unavailable, e.g. under PowerShell
   7). Since 2026-10-03 the checks that are tools print `[WARNING] ... NOT
   performed` and raise their own gap row; `[SKIPPED]` is kept for gaps that
-  raise nothing. STILL OPEN: six inline lines print `[SKIPPED] ... NOT
-  performed` and raise nothing -- Section 4's suspicious-path, LOLBin and
-  masquerading checks when the process list or the matcher fails, and
-  Section 17's VPN-client check. They are counted in the COVERAGE NOTE but
-  reach no ledger row, so a run where the process list could not be read
-  does not say so in its verdict. Three checks were once listed here as "intentionally left
+  raise nothing. The last six inline lines that printed an unraised
+  `[SKIPPED] ... NOT performed` (Section 4's suspicious-path, LOLBin and
+  masquerading checks when the process list or the matcher failed, and
+  Section 17's VPN-client listing) raise a gap row since 2026-11-21, and so
+  does a scheduled-task list that could not be read. Three checks were once listed here as "intentionally left
   as plain `[OK]`", and each was wrong -- a silenced read printed an
   all-clear: the Section 5 HKEY_USERS Run-key walk (now
   `tools/persistence_eval.ps1 -Part OtherAccounts`), the Section 3 proxy

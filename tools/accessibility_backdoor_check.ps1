@@ -66,6 +66,17 @@ $script:AccBins = @('sethc.exe', 'utilman.exe', 'osk.exe', 'Magnify.exe', 'Narra
 # The two whose hash and signer are printed, as the old block did.
 $script:MustExist = @('sethc.exe', 'utilman.exe')
 
+# PURE. The signer is Microsoft's only when its subject carries the
+# organisation component O=Microsoft Corporation, exactly. The rule was
+# "-match 'Microsoft'", which a validly signed binary from any signer with the
+# word in its name passed ("CN=Not Microsoft Ltd", "O=Microsoft Corporation
+# Fake"). A code-signing certificate's organisation is validated by the CA
+# that issued it, which is what makes the exact field meaningful.
+function Test-MicrosoftSigner {
+    param([string]$Subject)
+    return ([string]$Subject -cmatch '(^|,\s*)O=Microsoft Corporation\s*(,|$)')
+}
+
 function Write-Marker {
     param([string]$Name, [string]$Sev)
     # An empty value is no verdict, never a marker.
@@ -178,7 +189,7 @@ function Get-BinariesVerdict {
             [void]$out.Add(($n + ' SHA256: ' + [string]$b.Hash))
             [void]$out.Add(($n + ' Signature: ' + [string]$b.Status + ' / ' + (ConvertTo-PrintableText ([string]$b.Signer))))
         }
-        if ([string]$b.Status -ne 'Valid' -or [string]$b.Signer -notmatch 'Microsoft') {
+        if ([string]$b.Status -ne 'Valid' -or -not (Test-MicrosoftSigner ([string]$b.Signer))) {
             $r.Hit = $true
             [void]$out.Add(('[CRITICAL] ' + $n + ' may have been replaced with a non-Microsoft binary! (signature: ' + [string]$b.Status + ')'))
         }
@@ -265,6 +276,12 @@ if ($SelfTest) {
     T 'sethc.exe replaced by an unsigned binary: the CRITICAL wording kept' ($v.Hit -and $v.State -eq 'bins=bad,def=none' -and $t -match '(?m)^\[CRITICAL\] sethc\.exe may have been replaced with a non-Microsoft binary!') $t
     $v = Get-BinariesVerdict -Ifeo 'ifeo=clean' -Def $none -Bins (BinList @{ 'osk.exe' = @{ Name = 'osk.exe'; Exists = $true; Status = 'Valid'; Signer = 'CN=Evil Corp'; Hash = 'x'; Error = '' } })
     T 'a validly signed binary that is not Microsoft''s is still the finding (cmd.exe copied over it would be Microsoft''s; a third party''s is not)' ($v.Hit) ($v.Lines -join ' | ')
+    foreach ($fake in @('CN=Not Microsoft Ltd, O=Not Microsoft Ltd, C=GB', 'CN=Microsoft Windows, O=Microsoft Corporation Fake, C=US', 'CN=Microsoft Corporation')) {
+        $v = Get-BinariesVerdict -Ifeo 'ifeo=clean' -Def $none -Bins (BinList @{ 'sethc.exe' = @{ Name = 'sethc.exe'; Exists = $true; Status = 'Valid'; Signer = $fake; Hash = 'x'; Error = '' } })
+        T ('a valid signature whose subject only CONTAINS Microsoft is the finding: ' + $fake) ($v.Hit -and $v.State -eq 'bins=bad,def=none') ($v.Lines -join ' | ')
+    }
+    $v = Get-BinariesVerdict -Ifeo 'ifeo=clean' -Def $none -Bins (BinList @{ 'sethc.exe' = @{ Name = 'sethc.exe'; Exists = $true; Status = 'Valid'; Signer = 'CN=Microsoft Windows, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'; Hash = 'x'; Error = '' } })
+    T 'the subject Windows signs its own binaries with stays clean under the exact rule' ((-not $v.Hit) -and $v.State -eq 'bins=ok,def=none') ($v.Lines -join ' | ')
     $v = Get-BinariesVerdict -Ifeo 'ifeo=clean' -Def $none -Bins (BinList @{ 'utilman.exe' = @{ Name = 'utilman.exe'; Exists = $false; Status = ''; Signer = ''; Hash = ''; Error = '' } }); $t = $v.Lines -join "`n"
     T 'utilman.exe MISSING: a WARNING of its own -- the old block printed nothing' ($v.Missing -and (-not $v.Hit) -and $v.State -eq 'bins=missing,def=none' -and $t -match '(?m)^\[WARNING\] utilman\.exe is MISSING from the system directory') $t
     $v = Get-BinariesVerdict -Ifeo 'ifeo=clean' -Def $none -Bins (BinList @{ 'Narrator.exe' = @{ Name = 'Narrator.exe'; Exists = $false; Status = ''; Signer = ''; Hash = ''; Error = '' } })

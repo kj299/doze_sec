@@ -21,26 +21,145 @@
 #
 # Multi-action tasks emit Execute[N] / Arguments[N] / WorkingDirectory[N].
 #
+# A TASK LIST THAT WAS NOT READ IS NOT A CLEAN ONE (2026-11-21). -Mode
+# Suspicious used to print "[INFO] Get-ScheduledTask unavailable" or "No
+# scheduled tasks returned", write no marker, and the dashboard tile then read
+# PASS. Now, in -Mode Suspicious (Get-EnumVerdict holds the rule, -SelfTest
+# pins it):
+#   * the query failed -> a raised gap, [WARNING] ... NOT performed;
+#   * the query was REFUSED on a standard-user token -> a counted deferral
+#     ([DEFERRED - ADMIN REQUIRED]); the token explains a refusal, nothing else;
+#   * the query answered with no task at all -> a raised gap: Windows registers
+#     dozens of its own, so an empty list is a list that was not read.
+# Markers (in -MarkerDir): dz_susptask_crit.txt (the count of flagged tasks,
+# as before), dz_susptask_gap.txt, dz_susptask_deferred.txt (a count).
+# State file: dz_susptask_state.txt  tasks=<ok|crit|gap|deferred>,n=<count>;
+# the dashboard tile states it and never re-measures. Inventory and System
+# are listings and are unchanged.
+#
 # Usage:
-#   pwsh -NoProfile -ExecutionPolicy Bypass -File scheduled_tasks_full.ps1
-#   pwsh -NoProfile -ExecutionPolicy Bypass -File scheduled_tasks_full.ps1 -Mode Suspicious
-#   pwsh -NoProfile -ExecutionPolicy Bypass -File scheduled_tasks_full.ps1 -Mode System
+#   powershell -File tools\scheduled_tasks_full.ps1 [-Mode Inventory]
+#   powershell -File tools\scheduled_tasks_full.ps1 -Mode Suspicious [-MarkerDir <dir>] [-Elevated 0|1]
+#   powershell -File tools\scheduled_tasks_full.ps1 -Mode System
+#   powershell -File tools\scheduled_tasks_full.ps1 -SelfTest   (reads nothing)
+#
+# Windows PowerShell 5.1 compatible; pure ASCII. Read-only.
 
 param(
     [ValidateSet('Inventory','Suspicious','System')]
-    [string]$Mode = 'Inventory'
+    [string]$Mode = 'Inventory',
+    [string]$MarkerDir = $env:TEMP,
+    [int]$Elevated = -1,
+    [switch]$SelfTest
 )
 
 $ErrorActionPreference = 'Continue'
 
-$tasks = $null
-try { $tasks = Get-ScheduledTask -ErrorAction Stop } catch {
-    Write-Output "[INFO] Get-ScheduledTask unavailable -- $($_.Exception.Message)"
-    return
+# A refusal is the token's doing only when an exception in the chain says so:
+# an access denial (.NET), or the CIM layer's own access-denied answer.
+function Test-RefusedError {
+    param($Exception)
+    $x = $Exception
+    $depth = 0
+    while ($null -ne $x -and $depth -lt 8) {
+        if ($x -is [System.Security.SecurityException] -or $x -is [System.UnauthorizedAccessException]) { return $true }
+        if ([int]$x.HResult -eq -2147024891) { return $true }   # 0x80070005 E_ACCESSDENIED
+        if ($x.GetType().FullName -eq 'Microsoft.Management.Infrastructure.CimException') {
+            $nec = ''
+            try { $nec = [string]$x.NativeErrorCode } catch {}
+            if ($nec -eq 'AccessDenied') { return $true }
+        }
+        $x = $x.InnerException
+        $depth++
+    }
+    return $false
 }
-if (-not $tasks) {
-    Write-Output '[INFO] No scheduled tasks returned.'
-    return
+
+function ConvertTo-OneLine {
+    param([string]$Text)
+    $t = ([string]$Text) -replace '[\r\n\t]+', ' '
+    if ($t.Length -gt 200) { $t = $t.Substring(0, 200) + '...' }
+    return $t.Trim()
+}
+
+# PURE. Whether the task list was read, and what to say when it was not.
+# Returns @{ State = ok|gap|deferred; Line }.
+function Get-EnumVerdict {
+    param([int]$Count, [string]$ErrorText, [bool]$Refused, [bool]$IsElevated)
+    $miss = 'so a task launching a binary from Temp, Downloads or Public, or an unsigned one under AppData, would go unseen (T1053.005).'
+    if ($ErrorText) {
+        if ($Refused -and -not $IsElevated) {
+            return @{ State = 'deferred'; Line = ('[DEFERRED - ADMIN REQUIRED] Scheduled-task check: this token was refused the task list (' + (ConvertTo-OneLine $ErrorText) + ').') }
+        }
+        return @{ State = 'gap'; Line = ('[WARNING] Scheduled-task check NOT performed -- the task list could not be read (' + (ConvertTo-OneLine $ErrorText) + '), ' + $miss) }
+    }
+    if ($Count -lt 1) {
+        return @{ State = 'gap'; Line = ('[WARNING] Scheduled-task check NOT performed -- the task list came back empty, and Windows registers dozens of its own tasks, ' + $miss) }
+    }
+    return @{ State = 'ok'; Line = '' }
+}
+
+function Write-Marker {
+    param([string]$Name, [string]$Sev)
+    if (-not $Sev) { return }
+    if (-not (Test-Path -LiteralPath $MarkerDir)) { New-Item -ItemType Directory -Path $MarkerDir -Force -EA SilentlyContinue | Out-Null }
+    Set-Content -LiteralPath (Join-Path $MarkerDir ("dz_{0}.txt" -f $Name)) -Value $Sev -Encoding ASCII
+}
+
+if ($SelfTest) {
+    $fails = 0
+    function T { param([string]$Name, [bool]$Ok, [string]$Got) if ($Ok) { "[OK]   $Name" } else { "[FAIL] $Name -- got: $Got"; $script:fails++ } }
+    $v = Get-EnumVerdict -Count 120 -ErrorText '' -Refused $false -IsElevated $true
+    T 'a task list that answered is graded' ($v.State -eq 'ok' -and -not $v.Line) $v.Line
+    $v = Get-EnumVerdict -Count 0 -ErrorText 'The RPC server is unavailable.' -Refused $false -IsElevated $true
+    T 'a failed query is a raised gap that names the error, never an [INFO]' ($v.State -eq 'gap' -and $v.Line -match '^\[WARNING\] Scheduled-task check NOT performed -- the task list could not be read \(The RPC server is unavailable\.\)') $v.Line
+    $v = Get-EnumVerdict -Count 0 -ErrorText 'Access denied' -Refused $true -IsElevated $false
+    T 'a refusal on a standard-user token is a deferral, never a row' ($v.State -eq 'deferred' -and $v.Line -match '^\[DEFERRED - ADMIN REQUIRED\]') $v.Line
+    $v = Get-EnumVerdict -Count 0 -ErrorText 'Access denied' -Refused $true -IsElevated $true
+    T 'a refusal to an administrator is a gap: the token does not explain it' ($v.State -eq 'gap') $v.Line
+    $v = Get-EnumVerdict -Count 0 -ErrorText 'The RPC server is unavailable.' -Refused $false -IsElevated $false
+    T 'a failure that is not a refusal stays a gap on a standard-user token' ($v.State -eq 'gap') $v.Line
+    $v = Get-EnumVerdict -Count 0 -ErrorText '' -Refused $false -IsElevated $true
+    T 'an empty answer is a gap, never "[OK] No scheduled-task actions in ..."' ($v.State -eq 'gap' -and $v.Line -match 'came back empty' -and $v.Line -notmatch '\[OK\]') $v.Line
+    $v = Get-EnumVerdict -Count 0 -ErrorText ("a`r`nb" + ('x' * 400)) -Refused $false -IsElevated $true
+    T 'an error message is one line and capped' ($v.Line -notmatch "[`r`n]" -and $v.Line.Length -lt 420) $v.Line
+    $deny = New-Object System.UnauthorizedAccessException 'x'
+    T 'Test-RefusedError: an access denial, wrapped or not, is a refusal; an RPC failure and nothing are not' ((Test-RefusedError $deny) -and (Test-RefusedError (New-Object System.Management.Automation.RuntimeException 'outer', $deny)) -and -not (Test-RefusedError (New-Object System.Runtime.InteropServices.COMException 'The RPC server is unavailable.', -2147023174)) -and -not (Test-RefusedError $null)) ''
+    $e5 = New-Object System.Runtime.InteropServices.COMException 'Access is denied.', -2147024891
+    T 'Test-RefusedError: HRESULT 0x80070005 is a refusal' (Test-RefusedError $e5) ''
+    if ($fails) { "[FAIL] scheduled_tasks_full self-test: $fails case(s) failed"; exit 1 }
+    '[OK] scheduled_tasks_full self-test: a failed, refused or empty task list is a gap or a deferral, never PASS.'
+    exit 0
+}
+
+if ($Elevated -lt 0) {
+    $Elevated = 0
+    try { if ((New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { $Elevated = 1 } } catch {}
+}
+
+$tasks = @()
+$enumError = ''
+$enumRefused = $false
+try { $tasks = @(Get-ScheduledTask -ErrorAction Stop) } catch {
+    $enumError = [string]$_.Exception.Message
+    if (-not $enumError) { $enumError = 'no message' }
+    $enumRefused = Test-RefusedError $_.Exception
+}
+
+if ($Mode -ne 'Suspicious') {
+    # Listings: nothing is graded from them.
+    if ($enumError) { Write-Output ('[INFO] Get-ScheduledTask unavailable -- ' + (ConvertTo-OneLine $enumError)); return }
+    if ($tasks.Count -eq 0) { Write-Output '[INFO] No scheduled tasks returned.'; return }
+} else {
+    $stateFile = Join-Path $MarkerDir 'dz_susptask_state.txt'
+    foreach ($n in 'crit', 'gap', 'deferred', 'state') { Remove-Item -LiteralPath (Join-Path $MarkerDir ("dz_susptask_{0}.txt" -f $n)) -Force -EA SilentlyContinue }
+    $ev = Get-EnumVerdict -Count $tasks.Count -ErrorText $enumError -Refused $enumRefused -IsElevated ($Elevated -eq 1)
+    if ($ev.State -ne 'ok') {
+        Write-Output $ev.Line
+        if ($ev.State -eq 'deferred') { Write-Marker -Name 'susptask_deferred' -Sev '1' } else { Write-Marker -Name 'susptask_gap' -Sev 'WARNING' }
+        Write-Marker -Name 'susptask_state' -Sev ('tasks=' + $ev.State + ',n=0')
+        return
+    }
 }
 
 function Format-TaskBlock {
@@ -164,11 +283,11 @@ if ($Mode -eq 'Suspicious') {
         else { $crit += $t }
     }
 
-    $marker = Join-Path $env:TEMP 'dz_susptask_crit.txt'
-    if (Test-Path -LiteralPath $marker) { Remove-Item -LiteralPath $marker -Force -EA SilentlyContinue }
+    $marker = Join-Path $MarkerDir 'dz_susptask_crit.txt'
+    Write-Marker -Name 'susptask_state' -Sev ('tasks=' + $(if ($crit.Count -gt 0) { 'crit' } else { 'ok' }) + ',n=' + [string]$crit.Count)
 
     if ($crit.Count -eq 0 -and $info.Count -eq 0) {
-        Write-Output '[OK] No scheduled-task actions in Temp/AppData/Downloads/Public/ProgramData\update.'
+        Write-Output ('[OK] No scheduled-task actions in Temp/AppData/Downloads/Public/ProgramData\update (' + [string]$tasks.Count + ' tasks read).')
         return
     }
 

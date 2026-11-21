@@ -192,6 +192,8 @@ set "DNS_PROBE=0"
 set "READ_SIGNED_OUT=0"
 set "DNSPROBE_STATE="
 set "PROCPATH_STATE="
+set "SUSPTASK_STATE=ungraded"
+set "SUSPTASK_N=0"
 set "DEFCORE_MODE=unknown"
 set "DEFCORE_RT=0"
 set "DEFCORE_GRADED=0"
@@ -1991,7 +1993,8 @@ echo  Command: Get-CimInstance Win32_Process ^| select_lines.ps1 \Temp\ \AppData
 if not defined _ENUM4 goto :sec4_susp_skip
 "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_proc4.tmp" "\Temp\\" "\AppData\\" "\Downloads\\" "\Recycle" "\Users\Public">> "%REPORT%" 2>&1
 if errorlevel 2 (
-    echo [SKIPPED] select_lines.ps1 helper error -- suspicious-path check NOT performed.>> "%REPORT%"
+    echo [WARNING] Suspicious-path process check NOT performed -- tools\select_lines.ps1 failed, so a process running from Temp, Downloads or Public would go unseen.>> "%REPORT%"
+    call :dz_finding WARNING 4 T1057 "Suspicious-path process check NOT performed - the matcher failed"
 ) else if errorlevel 1 (
     echo [OK] No processes from suspicious locations.>> "%REPORT%"
     rem A real clean answer. proc_path_grade does not run on this branch, so no
@@ -2016,7 +2019,8 @@ if errorlevel 2 (
 )
 goto :sec4_susp_done
 :sec4_susp_skip
-echo [SKIPPED] Process enumeration failed -- suspicious-path check NOT performed.>> "%REPORT%"
+echo [WARNING] Suspicious-path process check NOT performed -- the process list could not be read, so a process running from Temp, Downloads or Public would go unseen.>> "%REPORT%"
+call :dz_finding WARNING 4 T1057 "Suspicious-path process check NOT performed - the process list could not be read"
 :sec4_susp_done
 
 :: Carry Section 4's verdict to the summary dashboard, the way DNSPROBE_STATE
@@ -2045,11 +2049,13 @@ echo  Command: Get-CimInstance Win32_Process ^| select_lines.ps1 mshta regsvr32 
 if not defined _ENUM4 goto :sec4_lol_skip
 "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_proc4.tmp" "mshta" "regsvr32" "certutil" "cmstp" "wscript" "cscript" "msiexec" "installutil">> "%REPORT%" 2>&1
 if errorlevel 2 (
-    echo [SKIPPED] select_lines.ps1 helper error -- LOLBin process check NOT performed.>> "%REPORT%"
+    echo [WARNING] LOLBin process check NOT performed -- tools\select_lines.ps1 failed, so a running mshta, regsvr32 or certutil would not be listed.>> "%REPORT%"
+    call :dz_finding WARNING 4 T1218.005 "LOLBin process check NOT performed - the matcher failed"
 ) else if errorlevel 1 echo [OK] No LOLBin processes currently running.>> "%REPORT%"
 goto :sec4_lol_done
 :sec4_lol_skip
-echo [SKIPPED] Process enumeration failed -- LOLBin process check NOT performed.>> "%REPORT%"
+echo [WARNING] LOLBin process check NOT performed -- the process list could not be read, so a running mshta, regsvr32 or certutil would not be listed.>> "%REPORT%"
+call :dz_finding WARNING 4 T1218.005 "LOLBin process check NOT performed - the process list could not be read"
 :sec4_lol_done
 
 echo.>> "%REPORT%"
@@ -2127,7 +2133,8 @@ if exist "%TEMP%\dz_masq_copy.txt" (
 )
 goto :sec4_masq_done
 :sec4_masq_skip
-echo [SKIPPED] Process enumeration failed -- masquerading check NOT performed.>> "%REPORT%"
+echo [WARNING] Masquerading check NOT performed -- the process list could not be read, so a system-process name running from the wrong place or parent would go unseen.>> "%REPORT%"
+call :dz_finding WARNING 4 T1036 "Masquerading check NOT performed - the process list could not be read"
 :sec4_masq_done
 del "%TEMP%\dz_proc4.tmp" 2>nul
 del "%TEMP%\dz_proc4_tree.tmp" 2>nul
@@ -2656,21 +2663,42 @@ if exist "%SCRIPT_DIR%tools\scheduled_tasks_full.ps1" (
 echo.>> "%REPORT%"
 echo --- CRITICAL: Tasks with Actions in Suspicious Paths --->> "%REPORT%"
 echo  Command: powershell -File tools\scheduled_tasks_full.ps1 -Mode Suspicious>> "%REPORT%"
-rem Clear any stale dashboard marker so the live summary reflects THIS run.
-del "%TEMP%\dz_susptask_crit.txt" 2>nul
+rem Clear every marker and the state so the dashboard reflects THIS run.
+for %%m in (crit gap deferred state) do del "%TEMP%\dz_susptask_%%m.txt" 2>nul
+set "SUSPTASK_STATE=ungraded"
+set "SUSPTASK_N=0"
 if exist "%SCRIPT_DIR%tools\scheduled_tasks_full.ps1" (
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\scheduled_tasks_full.ps1" -Mode Suspicious>> "%REPORT%" 2>&1
 ) else (
-    echo  [INFO] Helper missing; falling back to truncated schtasks CSV scan.>> "%REPORT%"
+    echo [WARNING] tools\scheduled_tasks_full.ps1 not found -- scheduled-task check NOT performed. The schtasks listing below is truncated and ungraded.>> "%REPORT%"
+    call :dz_finding WARNING 6 T1053.005 "Scheduled-task check NOT performed - tool missing"
     schtasks /query /fo CSV /v 2>nul | findstr /i /c:"\Temp" /c:"\AppData" /c:"\Downloads" /c:"\Users\Public" /c:"\ProgramData\update">> "%REPORT%" 2>&1
 )
-
-rem scheduled_tasks_full.ps1 writes this marker itself. It was only ever read
-rem by the end-of-run dashboard, so Section 6 own verdict stayed CLEAN even with
-rem a suspicious task present -- wire it here (dashboard still reads it, so it
-rem is NOT deleted).
 if exist "%TEMP%\dz_susptask_crit.txt" (
     call :dz_finding CRITICAL 6 T1053.005 "Scheduled task in a suspicious location, unsigned or hard-coded path"
+    del "%TEMP%\dz_susptask_crit.txt" 2>nul
+)
+if exist "%TEMP%\dz_susptask_gap.txt" (
+    rem The task list was not read: a gap row, never a PASS tile.
+    call :dz_finding WARNING 6 T1053.005 "Scheduled-task check NOT performed - the task list could not be read or came back empty"
+    del "%TEMP%\dz_susptask_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_susptask_deferred.txt" (
+    set "_STDEF=0"
+    set /p _STDEF=<"%TEMP%\dz_susptask_deferred.txt"
+    set /a DEFERRED_COUNT+=!_STDEF!
+    del "%TEMP%\dz_susptask_deferred.txt" 2>nul
+)
+set "SUSPTASK_LINE="
+if exist "%TEMP%\dz_susptask_state.txt" set /p SUSPTASK_LINE=<"%TEMP%\dz_susptask_state.txt"
+del "%TEMP%\dz_susptask_state.txt" 2>nul
+if defined SUSPTASK_LINE for /f "tokens=1,2,3,4 delims==," %%a in ("%SUSPTASK_LINE%") do (
+    if "%%a"=="tasks" set "SUSPTASK_STATE=%%b"
+    if "%%c"=="n" set "SUSPTASK_N=%%d"
+)
+if "!SUSPTASK_STATE!"=="ungraded" if exist "%SCRIPT_DIR%tools\scheduled_tasks_full.ps1" (
+    echo [WARNING] Scheduled-task check produced no verdict -- NOT performed: tools\scheduled_tasks_full.ps1 ran but wrote no usable verdict.>> "%REPORT%"
+    call :dz_finding WARNING 6 T1053.005 "Scheduled-task check produced no verdict - NOT performed"
 )
 
 echo.>> "%REPORT%"
@@ -4082,24 +4110,7 @@ if not "!ACCIFEO_STATE:~0,5!"=="ifeo=" if exist "%SCRIPT_DIR%tools\accessibility
 
 echo.>> "%REPORT%"
 echo --- [T1546.008] Accessibility Binary File Signature Check --->> "%REPORT%"
-echo  Command: powershell -Command "foreach($b in 'sethc.exe','utilman.exe','osk.exe','Magnify.exe','Narrator.exe','DisplaySwitch.exe','AtBroker.exe'){ Get-AuthenticodeSignature $env:SystemRoot\System32\$b }">> "%REPORT%"
-echo $accBins = @('sethc.exe','utilman.exe','osk.exe','Magnify.exe','Narrator.exe','DisplaySwitch.exe','AtBroker.exe') > "%PSRUN%"
-echo $sysDir = "$env:SystemRoot\System32" >> "%PSRUN%"
-echo $bad = @() >> "%PSRUN%"
-echo foreach ($b in $accBins) { >> "%PSRUN%"
-echo   $f = Join-Path $sysDir $b >> "%PSRUN%"
-echo   if (Test-Path $f) { >> "%PSRUN%"
-echo     $sig = Get-AuthenticodeSignature $f >> "%PSRUN%"
-echo     if ($sig.Status -eq 'Valid' -and $sig.SignerCertificate.Subject -match 'Microsoft') { >> "%PSRUN%"
-echo       Write-Output ('[OK] '+$b+' - Microsoft signature valid') >> "%PSRUN%"
-echo     } else { >> "%PSRUN%"
-echo       $bad += $b >> "%PSRUN%"
-echo       Write-Output ('[CRITICAL] '+$b+' - Signature: '+$sig.Status+' / '+$sig.SignerCertificate.Subject) >> "%PSRUN%"
-echo     } >> "%PSRUN%"
-echo   } else { Write-Output ('[WARNING] '+$b+' - not found in System32') } >> "%PSRUN%"
-echo } >> "%PSRUN%"
-echo if ($bad.Count -gt 0) { Write-Output '[^^!^^!] Replace tampered binaries: sfc /scannow or restore from WinRE.' } >> "%PSRUN%"
-call :dz_ps_scan 13 T1546.008 "Accessibility binary is not validly Microsoft-signed - possible WinRE file swap"
+echo [INFO] The seven accessibility binaries' signatures are graded once, in Section 17 (tools\accessibility_backdoor_check.ps1 -Part Binaries).>> "%REPORT%"
 
 echo.>> "%REPORT%"
 echo --- [T1546.008] Sticky Keys Shortcut Status --->> "%REPORT%"
@@ -4301,9 +4312,24 @@ set /a DEFERRED_COUNT+=1
 
 echo.>> "%REPORT%"
 echo --- HTML Smuggling: Large HTML/HTA in Downloads (Midnight Blizzard) --->> "%REPORT%"
-echo  Command: powershell -Command "Get-ChildItem -Path ([System.Environment]::GetFolderPath('UserProfile')+'\Downloads') -Recurse -Include '*.html','*.htm','*.hta' -EA SilentlyContinue">> "%REPORT%"
-echo Get-ChildItem -Path ([System.Environment]::GetFolderPath('UserProfile')+'\Downloads') -Recurse -Include '*.html','*.htm','*.hta' -EA SilentlyContinue ^| Where-Object {$_.Length -gt 200000} ^| Select-Object FullName,@{N='SizeKB';E={[math]::Round($_.Length/1024,1)}},LastWriteTime ^| Format-Table -AutoSize > "%PSRUN%"
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+for %%m in (done gap) do del "%TEMP%\dz_htmldl_%%m.txt" 2>nul
+echo  Command: powershell -File tools\file_walk_check.ps1 -Check DownloadsHtml>> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\file_walk_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\file_walk_check.ps1" -Check DownloadsHtml>> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\file_walk_check.ps1 not found -- Downloads HTML/HTA listing NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 14 T1027.006 "Downloads HTML/HTA listing NOT performed - tool missing"
+)
+if exist "%TEMP%\dz_htmldl_gap.txt" (
+    rem A listing raises nothing for what it lists, but a folder it could not read is a gap.
+    call :dz_finding WARNING 14 T1027.006 "Downloads HTML/HTA listing NOT performed in full - the Downloads folder or files in it could not be read, or the time budget ran out"
+    del "%TEMP%\dz_htmldl_gap.txt" 2>nul
+)
+if not exist "%TEMP%\dz_htmldl_done.txt" if exist "%SCRIPT_DIR%tools\file_walk_check.ps1" (
+    echo [WARNING] Downloads HTML/HTA listing produced no verdict -- NOT performed: tools\file_walk_check.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 14 T1027.006 "Downloads HTML/HTA listing produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_htmldl_done.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- Executables in Downloads --->> "%REPORT%"
@@ -4906,7 +4932,7 @@ echo  below for accounts or tenants you do not recognize, and correlate with>> "
 echo  Entra ID ^(Azure AD^) sign-in logs for impossible-travel/anomalous token use.>> "%REPORT%"
 echo  Command: reg query "HKCU\Software\Microsoft\Office\16.0\Common\Identity\Identities" /s>> "%REPORT%"
 reg query "HKCU\Software\Microsoft\Office\16.0\Common\Identity\Identities" /s>> "%REPORT%" 2>nul
-if %errorlevel% neq 0 echo [OK] No Office/AAD OAuth identity registrations found (Midnight Blizzard check clear).>> "%REPORT%"
+if %errorlevel% neq 0 echo [INFO] No Office identity registrations listed under this key -- it is absent, or it could not be read. This listing says nothing about token replay either way.>> "%REPORT%"
 
 echo.>> "%REPORT%"
 echo --- [MIDNIGHT/AQUA BLIZZARD] Large HTML/HTA in Temp (HTML Smuggling) --->> "%REPORT%"
@@ -5130,7 +5156,7 @@ echo.>> "%REPORT%"
 echo --- [VOLT TYPHOON] VPN Client Processes --->> "%REPORT%"
 echo  Command: Get-CimInstance Win32_Process ^| findstr /i vpn-client-names>> "%REPORT%"
 :: CIM instead of wmic (removed on 24H2+) so this actually runs on current
-:: Windows; [SKIPPED] only if process enumeration genuinely fails.
+:: Windows; a raised NOT-performed gap only if process enumeration genuinely fails.
 "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object { $_.Name+'  '+$_.ProcessId+'  '+$_.ExecutablePath }" > "%TEMP%\dz_pipe.tmp" 2>nul
 set "_ENUMVPN="
 for %%z in ("%TEMP%\dz_pipe.tmp") do if %%~zz GTR 100 set "_ENUMVPN=1"
@@ -5139,7 +5165,8 @@ findstr /i /c:"FortiClient" /c:"GlobalProtect" /c:"pulse" /c:"ivanti" /c:"vpncli
 if errorlevel 1 echo [OK] No targeted VPN client processes running.>> "%REPORT%"
 goto :sec17_vpn_done
 :sec17_vpn_skip
-echo [SKIPPED] Process enumeration failed -- VPN client check NOT performed.>> "%REPORT%"
+echo [WARNING] VPN client listing NOT performed -- the process list could not be read, so a running FortiClient, GlobalProtect or Pulse client would not be listed.>> "%REPORT%"
+call :dz_finding WARNING 17 T1057 "VPN client listing NOT performed - the process list could not be read"
 :sec17_vpn_done
 del "%TEMP%\dz_pipe.tmp" 2>nul
 set "_ENUMVPN="
@@ -6326,7 +6353,7 @@ echo sec 'PERSISTENCE INTEGRITY  (Sections 5, 6, 7)' >> "%PSRUN%"
 echo $ws2='%WINLOGON_STATE%';if($ws2 -like 'userinit=ok,*'){ck 'PASS' 'Winlogon Userinit clean (Section 5)'}elseif($ws2 -like 'userinit=modified,*'){ck 'CRIT' 'Winlogon Userinit MODIFIED (see Section 5 for the value)' 'Expected: userinit.exe in the Windows system32 folder, followed by a comma -- malware hijacks this at every login'}elseif($ws2 -like 'userinit=missing,*'){ck 'WARN' 'Winlogon Userinit value MISSING (Section 5)' 'It exists on every Windows. See Section 5.'}else{ck 'INFO' 'Winlogon Userinit: NOT graded -- Section 5 could not read it'} >> "%PSRUN%"
 echo if($ws2 -like '*,shell=ok,*'){ck 'PASS' 'Winlogon Shell clean (explorer.exe)'}elseif($ws2 -like '*,shell=modified,*'){ck 'CRIT' 'Winlogon Shell MODIFIED (see Section 5 for the value)' 'Expected: explorer.exe only. Fix via regedit: HKLM\...\Winlogon\Shell'}elseif($ws2 -like '*,shell=missing,*'){ck 'WARN' 'Winlogon Shell value MISSING (Section 5)' 'It exists on every Windows. See Section 5.'}else{ck 'INFO' 'Winlogon Shell: NOT graded -- Section 5 could not read it'} >> "%PSRUN%"
 echo if($ws2 -like '*,appinit=empty'){ck 'PASS' 'AppInit_DLLs empty (no injected DLL)'}elseif($ws2 -like '*,appinit=set'){ck 'CRIT' 'AppInit_DLLs set (see Section 5 for the DLL)' 'DLL loads into every GUI process. Clear AppInit_DLLs in HKLM\...\Windows immediately.'}else{ck 'INFO' 'AppInit_DLLs: NOT graded -- Section 5 could not read it'} >> "%PSRUN%"
-echo $m=Join-Path $env:TEMP 'dz_susptask_crit.txt';if(Test-Path $m){$n=(Get-Content $m -EA SilentlyContinue^|Select-Object -First 1);ck 'CRIT' ("Scheduled task(s) in suspicious locations, unsigned or hard-path: $n") 'See Section 6 for the task list and signer status.'}else{ck 'PASS' 'No unsigned scheduled tasks in suspicious locations'} >> "%PSRUN%"
+echo $st6='%SUSPTASK_STATE%';$sn6='%SUSPTASK_N%';if($st6 -eq 'crit'){ck 'CRIT' ("Scheduled task(s) in suspicious locations, unsigned or hard-path: $sn6") 'See Section 6 for the task list and signer status.'}elseif($st6 -eq 'ok'){ck 'PASS' 'No unsigned scheduled tasks in suspicious locations'}else{ck 'INFO' 'Scheduled tasks in suspicious locations were NOT graded' 'Section 6 could not read the task list; see its NOT performed or DEFERRED line. This tile states Section 6 and does not measure again.'} >> "%PSRUN%"
 echo. >> "%PSRUN%"
 
 :: ===== ACCESSIBILITY BINARY INTEGRITY (T1546.008) ====================
