@@ -680,6 +680,13 @@ try {
     # cause was never printed; the tool now raises one row per cause and
     # defers a refusal on this token, so a row here is a real gap to read.
     Write-Host ('  MEASURED: Section 12 LSASS-read rule lines on a standard-user token: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'reading LSASS memory|excluded from Defender' } | ForEach-Object { $_.Trim() }) -join ' | '))
+    # Defender's detection history needs administrator: a standard-user token
+    # is refused, which the token explains -- a counted deferral, never a row.
+    Write-Host ('  MEASURED: Defender detection history on a standard-user token: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'detection history|has no detection on record|Defender detected' } | ForEach-Object { $_.Trim() }) -join ' | '))
+    $mpdetRows = @($ledger1 | Where-Object { $_ -match '\|9\|T1204\.002\|' })
+    Assert ($mpdetRows.Count -eq 0) 'no Defender detection-history row on a clean standard-user run (a refusal is a deferral)' ('rows: ' + ($mpdetRows -join ' | '))
+    Assert ($text1 -match '\[DEFERRED - ADMIN REQUIRED\] Defender''s detection history was not read' -and $text1 -notmatch '\[OK\] Defender has no detection on record') 'the Defender detection history is a deferral on a standard-user token, never an [OK] (an empty answer there is not evidence)' `
+        ('printed: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'detection history' }) -join ' | '))
     $lsassGapRows = @($ledger1 | Where-Object { $_ -match '\|12\|T1003\.001\|Defender LSASS-(read records|rule exclusions) NOT' })
     Assert ($lsassGapRows.Count -eq 0) 'no Defender LSASS-read gap row on a clean standard-user run (a refusal this token explains is a deferral)' `
         ('rows: ' + ($lsassGapRows -join ' | '))

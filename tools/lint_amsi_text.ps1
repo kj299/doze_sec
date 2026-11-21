@@ -35,7 +35,10 @@ $script:Tokens = @(
     ($a + 'open' + 'session'),
     ($a + 'context'),
     ($a + 'session'),
-    ($a + '.dll')
+    ($a + '.dll'),
+    # The antivirus industry's standard test file: harmless, and detected by
+    # every engine, so written out it is a detection in any file that holds it.
+    ('eicar' + '-standard' + '-antivirus')
 )
 
 # PURE: the tokens a text holds, case-insensitive.

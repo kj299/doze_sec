@@ -1621,6 +1621,11 @@ jobs:
           Remove-Item $md -Recurse -Force -EA SilentlyContinue
           exit 0
 
+      - name: defender_detections_check.ps1 -SelfTest + the runner's real history and a planted test-file detection (unremoved is CRITICAL, removed a WARNING, unreadable a raised gap)
+        shell: powershell
+        run: |
+          & .\.github\ci\defender_detections_states.ps1
+          exit $LASTEXITCODE
       - name: defender_core_check.ps1 -SelfTest + live (passive mode is INFO, not a finding; the runner's real state graded)
         shell: powershell
         run: |

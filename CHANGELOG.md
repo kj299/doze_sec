@@ -6,6 +6,16 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Defender's own detection history is graded (Section 9)
+Section 9 used to print a raw `Get-MpThreatDetection` table, with no verdict and no row. So when Defender recorded a Severe Trojan on WIN11-02, nothing was raised, and malware Defender found and failed to remove would have read the same.
+- `tools/defender_detections_check.ps1` grades each detection, following the owner's decision (2026-11-20):
+  - a detection Defender did NOT remove is CRITICAL: a failed action, a threat still active, Allowed, a failed quarantine or remove, or a status code the tool does not know;
+  - a detection it removed is a WARNING;
+  - each line names the threat, its severity, every file, the action, the time, the user and the process.
+- An empty history is `[OK]`. A history that could not be read is a raised gap. On a standard-user token it is a counted deferral. When another antivirus is in force and Defender does not answer, the line is INFO.
+- A dashboard tile reads the section's verdict, and the analyst notes cover the new lines.
+- CI plants a real detection, the standard antivirus test file found by a Defender file scan (`MpCmdRun`), and asserts it is named by its path.
+
 ### Defender no longer reads `tools/event_scan_check.ps1` as malware
 On a real Windows 11 PC with Defender's real-time protection on, the AMSI scanner blocked `tools\event_scan_check.ps1` as `Trojan:PowerShell/Fleisnam.D`. Its source held the names of the bypass techniques it searches for and, as self-test data, a textbook bypass line. PowerShell refused to run it, so the AMSI-bypass, service-install, password-spray and Script Block checks each produced no verdict. The backstop rows declared that rather than reading clean. CI never saw it: GitHub's runners run Defender with real-time protection off.
 - The words and the test data are now assembled at run time. The checks' behaviour and their 30 self-test cases are unchanged.
