@@ -841,6 +841,11 @@ class: the table was built by a per-line search and was already found
 incomplete once. The per-PSRUN-block search described above has still not
 been run. Two things the last four rows left open, on purpose:
 
+- OPEN (found 2026-11-21 by the review of the documentation PR): six inline
+  lines print `[SKIPPED] ... NOT performed` and raise nothing. Section 4's
+  suspicious-path, LOLBin and masquerading checks print it when the process
+  list or `select_lines` fails, and Section 17's VPN-client check does too.
+  A run that could not read the process list reaches no ledger row for it.
 - The Downloads HTML listing in Section 14 prints files and no verdict, so it
   cannot print a false `[OK]`; it still walks with errors silenced.
 - The three walks do not follow junctions or symbolic links (a link can loop
@@ -902,7 +907,7 @@ Its 38 staged blocks matched `doze_sec.bat`'s on that date (31 each on 2026-11-2
 
 | Jump or line | What it hid | State |
 |---|---|---|
-| Section 9, the whole section | Defender status, disable flags, EDR agents, exclusions, ASR | DONE 2026-11-15: the section runs, only the detection history is deferred |
+| Section 9, the whole section | Defender status, disable flags, EDR agents, exclusions, ASR | DONE 2026-11-15: the section runs. Since 2026-11-21 no gate is left in it: the detection history and the ASR rules are tools that defer by themselves |
 | Section 17 portproxy (both bats) | the rule check matches the English word "Listen", so a non-English Windows, or a failed `netsh`, prints `[OK]`; the no-admin bat defers it although the PortProxy registry key is readable | DONE: `tools/portproxy_check.ps1` reads the PortProxy key (all four kinds) on both tokens; the tile states its verdict |
 | Section 13 Secure Boot | deferred on a standard user; `HKLM\SYSTEM\CurrentControlSet\Control\SecureBoot\State` (written at boot) is readable | DONE: `tools/secure_boot_check.ps1` grades it on both tokens; a failed query is a gap, never "may be legacy BIOS" |
 | Section 17 password spray | the deferral line is printed but not added to `DEFERRED_COUNT` | DONE: `event_scan_check -Check Spray` counts the deferral, and its silenced read (an unreadable log printed INFO) is a gap |

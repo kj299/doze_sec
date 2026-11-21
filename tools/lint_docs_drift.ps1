@@ -69,7 +69,7 @@ if ($SelfTest) {
     try {
         Invoke-OnCopy 'the unmutated copy passes' { param($d) } ''
         Invoke-OnCopy 'a switch documented as Both that one script does not handle fails' { param($d) Edit-File (Join-Path $d 'README.md') '| `-resetTTP` | Admin only |' '| `-resetTTP` | Both |' } "switch '-resetTTP' is documented as 'Both' but doze_sec_noAdmin\.bat has no handler"
-        Invoke-OnCopy 'an indicator total that does not match the lists fails' { param($d) $t = [IO.File]::ReadAllText((Join-Path $d 'THREAT_MODEL.md')); $t = [regex]::Replace($t, '(\d+)(\s+indicators\b)', { param($m) ([int]$m.Groups[1].Value + 1).ToString() + $m.Groups[2].Value }, 1); [IO.File]::WriteAllText((Join-Path $d 'THREAT_MODEL.md'), $t) } 'THREAT_MODEL\.md says \d+ indicators; the \d+ ThreatLists\\ioc_\*\.txt files hold \d+'
+        Invoke-OnCopy 'an indicator total that does not match the lists fails' { param($d) $t = [IO.File]::ReadAllText((Join-Path $d 'THREAT_MODEL.md')); $t = [regex]::Replace($t, '(\d+)(\s+indicators\b)', { param($m) ([int]$m.Groups[1].Value + 1).ToString() + $m.Groups[2].Value }); [IO.File]::WriteAllText((Join-Path $d 'THREAT_MODEL.md'), $t) } 'THREAT_MODEL\.md says \d+ indicators; the \d+ ThreatLists\\ioc_\*\.txt files hold \d+'
         Invoke-OnCopy 'a tool whose header does not mention a -Check value it accepts fails' { param($d) $f = Join-Path $d 'tools/file_walk_check.ps1'; $t = [IO.File]::ReadAllText($f); $i = $t.IndexOf('param('); [IO.File]::WriteAllText($f, ($t.Substring(0, $i).Replace('RansomExt', 'Ransom_Ext') + $t.Substring($i))) } 'tools\\file_walk_check\.ps1 accepts -Check RansomExt but its header comment never mentions it'
     } finally { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
     if ($fails) { "[FAIL] $fails lint_docs_drift self-test expectation(s) unmet"; exit 1 }
@@ -316,7 +316,7 @@ if (Test-Path -LiteralPath $tmPath) {
         foreach ($f in $iocFiles) { $sum += (Get-EntryCount $f.FullName) }
         if ([int]$im.Groups[1].Value -ne $sum) { $problems += ("THREAT_MODEL.md says {0} indicators; the {1} ThreatLists\ioc_*.txt files hold {2}" -f $im.Groups[1].Value, $iocFiles.Count, $sum) }
     }
-}
+} else { $problems += 'THREAT_MODEL.md not found -- the indicator-count check did not run' }
 
 # ---- 7. a tool's header names every -Check / -Part it accepts --------------
 # file_walk_check grew from three checks to six and office_macro_check gained
@@ -332,7 +332,9 @@ foreach ($tf in @(Get-ChildItem -LiteralPath $toolsDir -Filter '*.ps1' -ErrorAct
     $header = $(if ($pi -gt 0) { $tt.Substring(0, $pi) } else { '' })
     foreach ($v in ([regex]::Matches($vm.Groups[1].Value, "'([^']+)'"))) {
         $val = $v.Groups[1].Value
-        if ($header -notmatch ('\b' + [regex]::Escape($val) + '\b')) {
+        # On a line that names the parameter, and case-sensitive: a value such
+        # as Policy must not be satisfied by the word in a sentence.
+        if ($header -cnotmatch ('(?m)^.*-' + $vm.Groups[2].Value + '\b.*\b' + [regex]::Escape($val) + '\b')) {
             $problems += ("tools\{0} accepts -{1} {2} but its header comment never mentions it" -f $tf.Name, $vm.Groups[2].Value, $val)
         }
     }

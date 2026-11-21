@@ -7,7 +7,7 @@
 #   -Check OutlookMsg  Section 17: .msg/.oft files written in the last 90 days
 #                      under the user's Outlook data folder (T1566.001).
 #   -Check RansomExt   Section 18: files with known ransomware extensions in
-#                      the user's folders and Public (T1486).
+#                      the user's folders, Public and TEMP (T1486).
 #   -Check TokenCache  Section 18: the cloud token-cache listing.
 #   -Check CredStores  Section 18: the browser credential-store listing.
 #
@@ -44,7 +44,7 @@
 #   * a folder path too long for the ordinary form is asked for again in the
 #     \\?\ form before it is called unreadable;
 #   * the time budget is per check: 180 s for the stream read (one call per
-#     file), 60 s for the other two.
+#     file), 120 s for RansomExt, 30 s for CredStores, 60 s for the others.
 # Markers: dz_ads_hit / dz_ads_gap, dz_htmltemp_hit / _gap,
 # dz_outlookmsg_hit / _gap, dz_ransom_hit / _gap, dz_tokencache_gap,
 # dz_credstore_gap; and
