@@ -57,23 +57,25 @@ try {
   try { $cs = Get-MpComputerStatus -ErrorAction Stop } catch { Write-Host ("MEASURED: Get-MpComputerStatus did not answer: {0}" -f $_.Exception.Message) }
   if ($cs) { Write-Host ("MEASURED: AMRunningMode={0} AntivirusEnabled={1} AMServiceEnabled={2} RealTimeProtectionEnabled={3} signatures {4}" -f $cs.AMRunningMode, $cs.AntivirusEnabled, $cs.AMServiceEnabled, $cs.RealTimeProtectionEnabled, $cs.AntivirusSignatureVersion) }
   try { Write-Host ("MEASURED: exclusions after the lift: [{0}]" -f ((@((Get-MpPreference -ErrorAction Stop).ExclusionPath) | Where-Object { $_ }) -join '; ')) } catch { }
-  # Ask the engine itself, independent of the history: exit code 2 is
-  # "threat found"; -DisableRemediation leaves the file for the scan below.
+  # The plant: MpCmdRun with remediation ON, so Defender quarantines the file
+  # and writes its record. It is the FIRST scan of each file: a measuring
+  # scan (-DisableRemediation) used to run just before it, and on one run the
+  # remediation scan then answered "was skipped" 30 ms later and left the
+  # file in place -- the engine had only just scanned that file. So each
+  # attempt scans a file nothing has scanned yet, and a skipped scan is
+  # retried with a new file. Start-MpScan's custom scan was measured to leave
+  # the file with no record at all.
   $mp = Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe'
   $mpExit = $null
   if (Test-Path -LiteralPath $mp) {
-    $mpOut = & $mp -Scan -ScanType 3 -File $f -DisableRemediation 2>&1
-    $mpExit = $LASTEXITCODE
-    Write-Host ("MEASURED: MpCmdRun file scan exit {0}: {1}" -f $mpExit, ((@($mpOut) | Select-Object -Last 3) -join ' | '))
+    foreach ($try in 1..3) {
+      if ($try -gt 1) { Start-Sleep -Seconds 5; $f = Join-Path $dir ("dz_test_sample_{0}.com" -f $try); [IO.File]::WriteAllText($f, $t, [Text.Encoding]::ASCII) }
+      $mpOut = & $mp -Scan -ScanType 3 -File $f 2>&1
+      $txt = (@($mpOut) | Select-Object -Last 3) -join ' | '
+      Write-Host ("MEASURED: MpCmdRun file scan with remediation, attempt {0}, exit {1}: {2}" -f $try, $LASTEXITCODE, $txt)
+      if ($txt -match 'found [1-9]\d* threat' -or $LASTEXITCODE -eq 2) { $mpExit = 2; break }
+    }
   } else { Write-Host ("MEASURED: {0} not found" -f $mp) }
-  # The plant: the engine path measured to work, with remediation ON, so
-  # Defender quarantines the file and writes its record. Round 2 measured
-  # Start-MpScan's custom scan leaving the file in place with no record,
-  # while this same engine detected it (exit 2).
-  if (Test-Path -LiteralPath $mp) {
-    $mpOut2 = & $mp -Scan -ScanType 3 -File $f 2>&1
-    Write-Host ("MEASURED: MpCmdRun file scan with remediation, exit {0}: {1}" -f $LASTEXITCODE, ((@($mpOut2) | Select-Object -Last 3) -join ' | '))
-  }
   $hit = $null
   foreach ($i in 1..40) {
     $hit = @(Get-MpThreatDetection -ErrorAction SilentlyContinue | Where-Object { @($_.Resources) -match [regex]::Escape($dir) })
@@ -87,7 +89,7 @@ try {
     if ($engineOff) {
       Write-Host '[ SKIP ] Defender''s engine did not detect the test file on this runner (the MEASURED lines above say why), so there is no real record to read; the self-test pins the judgement'
     } else {
-      throw 'Defender''s engine detects the test file (MpCmdRun exit 2) but no record reached the detection history the check reads -- its live path would go untested'
+      throw 'Defender''s engine detected the test file (MpCmdRun found a threat) but no record reached the detection history the check reads -- its live path would go untested'
     }
   } else {
     $planted = $true
