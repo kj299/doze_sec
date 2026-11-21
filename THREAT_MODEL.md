@@ -14,7 +14,7 @@ user a safe, reviewable path to fix it. The protection chain it supports:
    and untampered* (Sections 8, 9, 13) rather than duplicating them.
 2. **Detection** is doze_sec's core job: 14 pre-flight checks + 18 audit
    sections + a CTI-driven IOC sweep (Section 18) covering 91 MITRE ATT&CK
-   techniques and 282 indicators across 10 IOC categories. (The manifest maps
+   techniques and 281 indicators across 10 IOC categories. (The manifest maps
    108 techniques; the 17-technique difference is documented-but-not-yet-
    detected, and `attack_matrix.ps1` lists it on every run so the gap between
    what is described and what is implemented stays visible.)
@@ -55,11 +55,11 @@ break untested nor drift out of sync with its test.
 | Persistence | Strong | S5 (Run/Winlogon/IFEO/AppInit/Active Setup), S6 (tasks), S7 (services), S17 (WMI subscriptions), S18 (COM hijack, registry IOCs) |
 | Privilege Escalation | Yes | S13 (UAC, accessibility binaries T1546.008), S16 (4672/4732) |
 | Defense Evasion | Strong | S4 (system-process name masquerading, T1036: by directory, and by parent -- svchost.exe not started by services.exe, lsass.exe not by wininit.exe), S9 (Defender tamper/exclusions, ASR rule state), S18 (AMSI bypass, BYOVD drivers), S16 (1102 log clear: CRITICAL when written under this PC's own name, more than 24 hours after the oldest install date this PC records, or on a PC renamed more than 24 hours after that date; a WARNING naming both names and the install date only when written under another name within that window -- the shape of image preparation. The oldest date spans feature updates, which reset the current install date: it reads each Source OS key too. Residual: an administrator-level intruder who rewrites every install-date record and the rename history can still make a clear read WARNING -- still a counted finding, with the dates printed; Event 104 names the log it cleared and follows the same test) |
-| Credential Access | Strong | S12 (LSASS PPL, WDigest, NTLM, Credential Guard; a copy of LSASS recorded in the Security log as Event 4688, lsass.exe created by lsass.exe), S4 (a copy of LSASS running now), S16 (4769 Kerberoast, 4776), S18 (browser/cloud cred stores) |
-| Discovery | Yes | S17 (4688 discovery commands: nltest, dsquery, ntdsutil) |
-| Lateral Movement | Yes | S10 (SMBv1, RDP/NLA, WinRM, sshd), S17/S18 (PsExec pipes, portproxy) |
+| Credential Access | Strong | S12 (LSASS PPL, WDigest, NTLM, Credential Guard; a copy of LSASS recorded in the Security log as Event 4688, lsass.exe created by lsass.exe), S4 (a copy of LSASS running now), S16 (4769 and 4776 events are listed for the reader, not graded: Kerberoasting T1558.003 is in the not-yet-detected set), S18 (browser/cloud cred stores) |
+| Discovery | Partial | S4 (process discovery, T1057). S17 lists 4688 discovery commands (nltest, dsquery, ntdsutil) for the reader but does not grade them: T1087, T1082 and T1016 are in the not-yet-detected set |
+| Lateral Movement | Yes | S10 (SMBv1, RDP/NLA, WinRM), S18 (OpenSSH Server running; Section 10 only lists the service), S17 (portproxy). PsExec-style pipes are matched only as C2 pipe names: SMB admin shares, T1021.002, are in the not-yet-detected set |
 | Collection | Partial | S14 (staging dirs, ADS; an archive made on this machine -- no Mark of the Web -- in a staging folder that is password-protected, split into volumes, or packs credential files, T1560, with ZIP/RAR/7z/CAB headers parsed from the format owners' specifications) |
-| Command & Control | Strong | S3 (connections, DNS cache, hosts), S18 (C2 pipes/domains, VT IP reputation, tunneling tools) |
+| Command & Control | Strong | S3 (connections, DNS cache, hosts), S18 (C2 pipes/domains, VT IP reputation). Tunneling tools are matched only by process name against the IOC list: protocol tunneling, T1572, is in the not-yet-detected set |
 | Exfiltration | Partial | S5 (a BITS job queued to upload a local file off the machine, T1048), S3/S18l (connections + IP reputation); no DLP / content inspection |
 | Impact | Strong (ransomware) | S18 (precursor commands T1490, extension survey T1486, encryptor hashes) |
 
@@ -124,9 +124,9 @@ and 13 verify exactly that.
   and several deep checks (`[DEFERRED]`, exit code 6). Full coverage
   requires the admin variant.
 - **Graceful degradation can be silent outside Section 18**: Section 18's
-  file-based IOC sub-checks now report `[SKIPPED]` (with a COVERAGE NOTE
-  count in TOP FINDINGS) when an IOC list is missing or an enumeration
-  fails, but probes in other sections still use
+  file-based IOC sub-checks print `[WARNING] ... NOT performed` and raise a
+  gap row (counted in the TOP FINDINGS COVERAGE NOTE) when an IOC list is
+  missing or an enumeration fails, but probes in other sections can still use
   `-ErrorAction SilentlyContinue` and can come back empty rather than
   failed on a locked-down host.
 - **DNS check is cache-only**: a C2 domain never resolved on the host (or
@@ -407,14 +407,14 @@ Found during the v7.1 coverage review; tracked for future work:
   (catch now emits `[SKIPPED]` so it counts in the COVERAGE NOTE), and
   the three Section 17 WMI permanent-subscription checks (which also
   fail closed if `Get-WMIObject` is unavailable, e.g. under PowerShell
-  7). Checks intentionally left as plain `[OK]` because an empty result
-  is genuinely correct, not a masked failure: the Section 5 HKEY_USERS Run-key
-  walk (informational, per-subkey `Test-Path` guarded). (The Section 3 proxy
-  block was listed here too; that was wrong -- a silenced Internet Settings
-  read printed `[OK] No proxy settings in registry` -- and it is now
-  `tools/proxy_check.ps1`, below.) (The Section 17
-  RMM checks were listed here too; that was wrong -- a silenced Uninstall
-  read printed `[OK]` -- and they are now `tools/rmm_check.ps1`, below.)
+  7). Since 2026-10-03 every one of these prints `[WARNING] ... NOT
+  performed` and raises its own gap row; `[SKIPPED]` is kept for gaps that
+  raise nothing. Three checks were once listed here as "intentionally left
+  as plain `[OK]`", and each was wrong -- a silenced read printed an
+  all-clear: the Section 5 HKEY_USERS Run-key walk (now
+  `tools/persistence_eval.ps1 -Part OtherAccounts`), the Section 3 proxy
+  block (now `tools/proxy_check.ps1`, below) and the Section 17 RMM checks
+  (now `tools/rmm_check.ps1`, below).
   Probes elsewhere may still degrade silently, but
   the high-value verdict checks across Sections 4-18 now fail visibly.
 - ~~The Section 18 ransomware-extension walk, and the browser credential-store
@@ -595,8 +595,8 @@ Found during the v7.1 coverage review; tracked for future work:
   `tools/sshd_check.ps1` separate "answered: nothing there" from "did not
   answer" and raise the second. Residual: the AMSI check matches text
   patterns in Script Block events, so it sees only what PowerShell logged
-  (little, when Script Block Logging is off -- the line says so), and nine
-  further blocks of the same class are still open
+  (little, when Script Block Logging is off -- the line says so). The nine
+  further blocks of the same class listed then have all been closed since
   (`docs/design/backlog.md`, "The per-block search").
 - ~~On a standard-user token the ASR check graded the rule list Defender
   showed that token, so a masked (empty) answer read as "No ASR rules

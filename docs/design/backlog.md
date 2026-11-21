@@ -44,7 +44,9 @@ they are unbuilt *capability*, not broken code — but leaving them undocumented
 is how a gap becomes an implicit claim. Each is recorded here with what it would
 take, so the difference between "decided against" and "forgotten" stays visible.
 
-### Confidence-calibrated section verdicts in the admin script
+### Confidence-calibrated section verdicts in the admin script -- DONE (`tools/section_coverage.ps1`, a post-pass over the finished report, called from `doze_sec.bat` after Section 18)
+
+*Status checked 2026-11-21. The text below is the original entry, kept as the record of why.*
 
 `doze_sec_noAdmin.bat` prints a `PARTIAL` verdict when a section deferred checks
 it could not run without elevation. `doze_sec.bat` has no equivalent: every
@@ -61,7 +63,7 @@ in `:dz_section_clean`, and a third verdict state between CLEAN and ISSUES
 FOUND. The ledger already carries the raises; the skips would need their own
 counter.
 
-### Per-section PARTIAL in the admin script — measured, and not worth building yet
+### Per-section PARTIAL in the admin script — measured, and not worth building yet (superseded: `tools/section_coverage.ps1` now calibrates each section's verdict; status checked 2026-11-21)
 
 Recorded with evidence rather than built. Across five real reports from the
 owner's machine (three 09-05, two 08-30), every admin run contained exactly
@@ -194,7 +196,9 @@ is no denominator anywhere, so "3 skipped" cannot be read as 3-of-12 or 3-of-200
 central register of how many checks a run *tried*, so this is a real piece of
 plumbing rather than a formatting change.
 
-### Timestamps on persistence findings
+### Timestamps on persistence findings -- DONE (`Get-RegKeyLastWrite` and file times in `persistence_eval`, `startup_eval` and `logon_persistence`; status checked 2026-11-21)
+
+*The text below is the original entry.*
 
 No persistence detector surfaces the registry key's last-write time or the
 backing file's timestamps. For someone reconstructing *when* a device was
@@ -359,7 +363,8 @@ the DNS probe) have never run in the field.
    October Patch Tuesday tests the churn rule #215 pinned.
 4. **Close T1036 masquerading** (system-process names outside their canonical
    directory) and **relabel T1219/T1218** on the RMM and LOLBin checks that
-   already exist.
+   already exist. *DONE: `tools/masquerade_check.ps1` (T1036) and
+   `tools/rmm_check.ps1` (T1219); status checked 2026-11-21.*
 
 ### P2 -- hygiene
 
@@ -574,7 +579,8 @@ the seed step's tie rule (ties go to the shipped file) did the right thing
 only by luck of the rule's direction. A content change to a shipped list is a
 new verification and should carry a new date, and a lint (`lint_docs_drift`
 or a small check beside `threat_list_seed`) could compare each shipped list's
-header date against its last content-changing commit. Not built yet: the
+header date against its last content-changing commit. (Written before the
+lint existed; it is built now, as the heading says.) At the time: the
 rule as it stands is safe (the shipped file wins a tie), and the cost is one
 `replaced` line in the provenance paragraph the first run after a release.
 
@@ -845,8 +851,8 @@ been run. Two things the last four rows left open, on purpose:
 
 The search the paragraph above asked for: every staged PowerShell block (lines
 echoed into `%PSRUN%`) that silences an error (`-EA SilentlyContinue`, an empty
-`catch{}`, `2>$null`) AND can print `[OK]`. `doze_sec.bat` has 54 staged
-blocks; 22 matched. Each was read and classed by one question: **if the
+`catch{}`, `2>$null`) AND can print `[OK]`. `doze_sec.bat` had 54 staged
+blocks on 2026-11-11 (31 on 2026-11-21, as blocks moved into tools); 22 matched. Each was read and classed by one question: **if the
 silenced call fails, which line prints?**
 
 Class A -- a failed read reaches `[OK]` (15 blocks):
@@ -882,8 +888,8 @@ processes (`Get-Process -Name` not finding a name IS the answer).
 prints `[RMM RUNNING] <tool> PID:<n>` and `[RMM INSTALLED] <name>` under tags
 outside the severity vocabulary, with no raise: a running remote-access tool
 is counted nowhere. The owner decided 2026-11-11: both running and installed
-become a counted WARNING. Not yet done; it needs word-bounded name matching
-first (`Atera` matches inside "Lateral" today).
+become a counted WARNING. Done in `tools/rmm_check.ps1`, which matches names
+on word boundaries (`Atera` no longer matches inside "Lateral").
 
 **Still a second measurement.** Section 13's "Accessibility Binary File
 Signature Check" block reads the same seven signatures that
@@ -892,7 +898,7 @@ alike (a missing binary is a WARNING in both), but they are two reads; fold
 the Section 13 block into the tool.
 
 ## The no-admin bat's standard-user jumps (searched 2026-11-15)
-Its 38 staged blocks match `doze_sec.bat`'s, so the per-block results above carry over. Its 22 `if "%IS_ADMIN%"=="0" goto` jumps were read one by one. Most are true deferrals: the Security log, bcdedit, BitLocker, `C:\Windows\Temp`, Get-MpThreatDetection. The others:
+Its 38 staged blocks matched `doze_sec.bat`'s on that date (31 each on 2026-11-21), so the per-block results above carry over. Its 22 `if "%IS_ADMIN%"=="0" goto` jumps (18 remain on 2026-11-21) were read one by one. Most are true deferrals: the Security log, bcdedit, BitLocker, `C:\Windows\Temp`, Get-MpThreatDetection. The others:
 
 | Jump or line | What it hid | State |
 |---|---|---|

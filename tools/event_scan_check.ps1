@@ -1,10 +1,10 @@
-# event_scan_check.ps1 -- three checks that read an event log and used to read
+# event_scan_check.ps1 -- four checks that read an event log and used to read
 # a log they could not open as a log with nothing in it:
 #   -Check AmsiBypass       Section 18: AMSI-bypass patterns in PowerShell
 #                           Script Block events (4104), T1562.001.
 #   -Check ServiceInstalls  Section 18: service installs (System 7045) from a
 #                           staging path or through a script host, T1543.003.
-#   -Check ScriptBlockList  Section 17: the listing of recent Script Block
+#   -Check ScriptBlockList  Section 16: the listing of recent Script Block
 #                           events that are not the audit's own.
 #   -Check Spray            Section 17: failed sign-ins (Security 4625) spread
 #                           over many accounts, T1110.003. It printed "[INFO] No

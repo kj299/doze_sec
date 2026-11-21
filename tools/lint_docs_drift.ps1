@@ -36,10 +36,46 @@
 
 [CmdletBinding()]
 param(
-    [string]$Root = (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
+    [string]$Root = (Split-Path -Parent (Split-Path -Parent $PSCommandPath)),
+    [switch]$SelfTest
 )
 
 $ErrorActionPreference = 'Stop'
+
+if ($SelfTest) {
+    # Each rule added on 2026-11-21 must FAIL on the drift it was written for.
+    # A copy of the files the lint reads is mutated and the lint run on it.
+    $src = Split-Path -Parent $PSScriptRoot
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ('dz_docs_drift_' + [guid]::NewGuid().ToString('N'))
+    $fails = 0
+    function Invoke-OnCopy {
+        param([string]$Name, [scriptblock]$Mutate, [string]$Expect)
+        $d = Join-Path $tmp ([guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path (Join-Path $d 'tools') -Force | Out-Null
+        foreach ($f in @('README.md', 'THREAT_MODEL.md', 'doze_sec.bat', 'doze_sec_noAdmin.bat')) { Copy-Item -LiteralPath (Join-Path $src $f) -Destination $d }
+        Copy-Item -LiteralPath (Join-Path $src 'ThreatLists') -Destination $d -Recurse
+        Copy-Item -Path (Join-Path $src 'tools/*.ps1') -Destination (Join-Path $d 'tools')
+        & $Mutate $d
+        $o = (& $PSCommandPath -Root $d 2>&1 | Out-String)
+        $code = $LASTEXITCODE
+        if ($Expect) { $ok = ($code -ne 0 -and $o -match $Expect) } else { $ok = ($code -eq 0) }
+        if ($ok) { "[OK]   $Name" } else { "[FAIL] $Name (exit $code): " + (($o -split "`r?`n" | Where-Object { $_ -match '^\s+- ' }) -join ' | '); $script:fails++ }
+    }
+    function Edit-File { param([string]$Path, [string]$From, [string]$To)
+        $t = [IO.File]::ReadAllText($Path)
+        if (-not $t.Contains($From)) { throw "self-test anchor not found in ${Path}: $From" }
+        [IO.File]::WriteAllText($Path, $t.Replace($From, $To))
+    }
+    try {
+        Invoke-OnCopy 'the unmutated copy passes' { param($d) } ''
+        Invoke-OnCopy 'a switch documented as Both that one script does not handle fails' { param($d) Edit-File (Join-Path $d 'README.md') '| `-resetTTP` | Admin only |' '| `-resetTTP` | Both |' } "switch '-resetTTP' is documented as 'Both' but doze_sec_noAdmin\.bat has no handler"
+        Invoke-OnCopy 'an indicator total that does not match the lists fails' { param($d) $t = [IO.File]::ReadAllText((Join-Path $d 'THREAT_MODEL.md')); $t = [regex]::Replace($t, '(\d+)(\s+indicators\b)', { param($m) ([int]$m.Groups[1].Value + 1).ToString() + $m.Groups[2].Value }, 1); [IO.File]::WriteAllText((Join-Path $d 'THREAT_MODEL.md'), $t) } 'THREAT_MODEL\.md says \d+ indicators; the \d+ ThreatLists\\ioc_\*\.txt files hold \d+'
+        Invoke-OnCopy 'a tool whose header does not mention a -Check value it accepts fails' { param($d) $f = Join-Path $d 'tools/file_walk_check.ps1'; $t = [IO.File]::ReadAllText($f); $i = $t.IndexOf('param('); [IO.File]::WriteAllText($f, ($t.Substring(0, $i).Replace('RansomExt', 'Ransom_Ext') + $t.Substring($i))) } 'tools\\file_walk_check\.ps1 accepts -Check RansomExt but its header comment never mentions it'
+    } finally { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
+    if ($fails) { "[FAIL] $fails lint_docs_drift self-test expectation(s) unmet"; exit 1 }
+    '[OK] lint_docs_drift self-test: a switch in the wrong script, a wrong indicator total and a tool header missing a mode each fail the lint, and the unmutated tree passes.'
+    exit 0
+}
 
 $problems = @()
 $checks = 0
@@ -161,7 +197,6 @@ if ($referenced.Count -eq 0) {
 }
 
 # ---- report ----------------------------------------------------------------
-"Checked $checks documented claim(s) against the code: $($implemented.Count) implemented switch(es), $($referenced.Count) referenced technique(s)."
 
 # ---------------------------------------------------------------------------
 # 4. ARTIFACT PARITY -- every file the audit writes into the output folder is
@@ -234,10 +269,81 @@ foreach ($a in $readmeNorm) {
         $artProblems += ("the README Output Files table lists C:\SecurityAudit\{0} but no bat writes it" -f $a)
     }
 }
+# ---- 5. a switch works in the script the README says it works in ----------
+# Rule 1 asks only whether SOME bat handles a switch. The README listed
+# -resetTTP as "Both" while doze_sec_noAdmin.bat had no handler for it and
+# ignored it silently; rule 1 passed.
+$batText = @{}
+foreach ($n in @('doze_sec.bat', 'doze_sec_noAdmin.bat')) {
+    $bp = Join-Path $Root $n
+    if (Test-Path -LiteralPath $bp) { $batText[$n] = Get-Content -LiteralPath $bp -Raw }
+}
+$scopeRows = 0
+$inSwitches = $false
+foreach ($ln in ($readme -split "`r?`n")) {
+    if ($ln -match '^##\s') { $inSwitches = ($ln -match '^##\s+Switches\s*$') ; continue }
+    if (-not $inSwitches) { continue }
+    $m = [regex]::Match($ln, '^\|\s*`(-[A-Za-z][A-Za-z]*)[^|]*\|\s*([^|]+?)\s*\|')
+    if (-not $m.Success) { continue }
+    $sw = $m.Groups[1].Value; $scope = $m.Groups[2].Value
+    $need = @()
+    if ($scope -match '^Both$') { $need = @('doze_sec.bat', 'doze_sec_noAdmin.bat') }
+    elseif ($scope -match '^Admin only$') { $need = @('doze_sec.bat') }
+    elseif ($scope -match '^noAdmin only$') { $need = @('doze_sec_noAdmin.bat') }
+    else { $problems += "switch '$sw': the README's script column says '$scope', which this lint does not know (Both, Admin only, noAdmin only)"; continue }
+    $scopeRows++
+    foreach ($n in $need) {
+        if (-not $batText.ContainsKey($n)) { continue }
+        if ($batText[$n] -notmatch ('"%~1"\s*==\s*"' + [regex]::Escape($sw) + '"')) {
+            $problems += "switch '$sw' is documented as '$scope' but $n has no handler for it -- it is silently ignored there"
+        }
+    }
+}
+if ($scopeRows -lt 10) { $problems += "only $scopeRows Switches-table row(s) carried a script column -- the per-script check would pass vacuously" } else { $checks++ }
+
+# ---- 6. the indicator count in THREAT_MODEL.md -----------------------------
+# "N indicators" drifted to 282 when a list lost an entry; the README's
+# per-file table (rule 2) was right and nothing compared the total.
+if (Test-Path -LiteralPath $tmPath) {
+    $tmText = Get-Content -LiteralPath $tmPath -Raw
+    $im = [regex]::Match($tmText, '(\d+)\s+indicators\b')
+    $iocFiles = @(Get-ChildItem -LiteralPath (Join-Path $Root 'ThreatLists') -Filter 'ioc_*.txt' -ErrorAction SilentlyContinue)
+    if (-not $im.Success) { $problems += 'THREAT_MODEL.md no longer states an "N indicators" total -- the indicator-count check has nothing to compare' }
+    elseif ($iocFiles.Count -eq 0) { $problems += 'no ThreatLists\ioc_*.txt file found -- the indicator-count check would pass vacuously' }
+    else {
+        $checks++
+        $sum = 0
+        foreach ($f in $iocFiles) { $sum += (Get-EntryCount $f.FullName) }
+        if ([int]$im.Groups[1].Value -ne $sum) { $problems += ("THREAT_MODEL.md says {0} indicators; the {1} ThreatLists\ioc_*.txt files hold {2}" -f $im.Groups[1].Value, $iocFiles.Count, $sum) }
+    }
+}
+
+# ---- 7. a tool's header names every -Check / -Part it accepts --------------
+# file_walk_check grew from three checks to six and office_macro_check gained
+# -Part Trust while their headers still described the first version.
+$toolsDir = Join-Path $Root 'tools'
+$modeTools = 0
+foreach ($tf in @(Get-ChildItem -LiteralPath $toolsDir -Filter '*.ps1' -ErrorAction SilentlyContinue)) {
+    $tt = Get-Content -LiteralPath $tf.FullName -Raw
+    $vm = [regex]::Match($tt, '\[ValidateSet\(([^)]*)\)\]\s*(?:\[[A-Za-z\[\]]+\]\s*)?\$(Check|Part)\b')
+    if (-not $vm.Success) { continue }
+    $modeTools++
+    $pi = $tt.IndexOf('param(')
+    $header = $(if ($pi -gt 0) { $tt.Substring(0, $pi) } else { '' })
+    foreach ($v in ([regex]::Matches($vm.Groups[1].Value, "'([^']+)'"))) {
+        $val = $v.Groups[1].Value
+        if ($header -notmatch ('\b' + [regex]::Escape($val) + '\b')) {
+            $problems += ("tools\{0} accepts -{1} {2} but its header comment never mentions it" -f $tf.Name, $vm.Groups[2].Value, $val)
+        }
+    }
+}
+if ($modeTools -lt 3) { $problems += "only $modeTools tool(s) with a -Check/-Part ValidateSet were found -- the header check would pass vacuously" } else { $checks++ }
+
+"Checked $checks documented claim(s) against the code: $($implemented.Count) implemented switch(es), $($referenced.Count) referenced technique(s)."
 $problems += $artProblems
 
 if ($problems.Count -eq 0) {
-    '[OK] Documentation matches the code -- switches, list counts, technique counts and output artifacts all agree.'
+    '[OK] Documentation matches the code -- switches (and the script each works in), list counts, the indicator total, technique counts, output artifacts and tool headers all agree.'
     exit 0
 }
 ''

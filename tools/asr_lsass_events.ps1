@@ -55,7 +55,7 @@
 [CmdletBinding()]
 param(
     [string]$MarkerDir = '',
-    # block | audit | off | notconfigured | ungraded, measured in Section 9.
+    # block | audit | warn | off | notconfigured | ungraded, measured in Section 9.
     [string]$RuleMode = 'ungraded',
     [string]$RuleId = '9e6c4e1f-7d60-472f-ba1a-a39ef669e4b2',
     [int]$MaxRecords = 20000,
@@ -128,7 +128,7 @@ function Test-RefusedError {
 
 # PURE: the records, graded.
 #   Records     @( @{ Time; Id; RuleId; Path; ProcessName; CommandLine; User } )
-#   RuleMode    block | audit | off | notconfigured | ungraded
+#   RuleMode    block | audit | warn | off | notconfigured | ungraded
 #   Exclusions  @( 'path or program excluded from THIS rule' )
 #   Total       how many 1121/1122 records were read in all (any rule)
 #   Oldest/Newest  the span the log covers, or $null

@@ -549,9 +549,9 @@ this reason.
 module imports), so a helper several tools need is copied into each.
 `tools/lint_shared_copies.ps1` pins the copies of `Get-RegKeyLastWrite`,
 `Get-WhenLine`, `Write-WhenCaveat`, the harness's `Remove-HostsMarkerLines`
-(in `tests\`: the cold cleanup must run standalone) and `Expand-CmdEscapes`
+(in `tests\`: the cold cleanup must run standalone), `Expand-CmdEscapes`
 (`tests\section18_gaps.ps1` renders staged blocks with `lint_remediation`'s
-copy) byte-identical (comments included); `pending_reboot_check`'s copy had already lost a line when it was
+copy) and five more (ten in all; the lint's manifest is the list) byte-identical (comments included); `pending_reboot_check`'s copy had already lost a line when it was
 added. When a helper is copied into a second script, add its name to the lint's
 manifest. With two copies there is no majority, so a drifted pair names both.
 
@@ -708,7 +708,8 @@ branch; `lint.yml` pins this one. **The third instance was Section 9**, found
 by the per-`goto` search of the no-admin bat (2026-11-15): one jump skipped
 Defender's status, its disable flags, the EDR agents, exclusions and ASR, so a
 standard-user run never reported real-time protection switched off. It now
-runs; only the detection history is gated. **The fourth was Section 17's
+runs with no gate left in it: the detection history and the ASR rules are
+tools that defer by themselves on a token that cannot be shown them. **The fourth was Section 17's
 portproxy check** (2026-11-16), deferred as "netsh portproxy requires admin"
 while the rules sit in an HKLM Services key a standard user reads; it also
 decided by finding netsh's English column header, so it read clean on every
@@ -1100,7 +1101,8 @@ treat a missing job as a failure, never as "still queued". New CI step bodies
 go in `.github/ci/*.ps1` (excluded from the USB stick, like the rest of
 `.github`) and are called from the step; `lint.yml` fails when a workflow
 file passes 505,000 bytes. Eighteen more bodies were moved in 2026-11 (the
-file had 409 bytes left); it is now about 284,000 bytes, and lint fails it
+file had 409 bytes left); it was then about 284,000 bytes (about 292,000 by
+2026-11-21), and lint fails it
 at 400,000 so the room cannot be spent unnoticed again. A body that uses
 `$PSScriptRoot`, `$PSCommandPath`, `$MyInvocation`, a `${{ }}` expression or
 a non-ASCII character stays inline: each means something else in a file.
