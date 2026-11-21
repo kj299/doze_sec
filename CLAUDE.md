@@ -729,7 +729,11 @@ On that token a FALSE is not evidence (masking only ever reads off); real-time
 is graded from Windows Security Center's own entry for Defender, and what has
 no second source is deferred. The second round measured `Get-MpPreference`
 showing the same token `DisableRealtimeMonitoring` SET: every field a token
-may be shown masked needs that treatment, not only the first one CI catches.
+may be shown masked needs that treatment, not only the first one CI catches. The ASR
+rule list was the next, found by reading every Defender reader for the same
+shape (2026-11-21): an empty list on that token printed "No ASR rules
+configured". `tools/asr_rules_check.ps1` grades a rule only where a store
+shows it and defers the rest.
 
 **A walk has three ways to read clean without looking, and a review found
 all three in one tool before it shipped.** `tools/file_walk_check.ps1`

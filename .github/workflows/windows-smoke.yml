@@ -1621,6 +1621,11 @@ jobs:
           Remove-Item $md -Recurse -Force -EA SilentlyContinue
           exit 0
 
+      - name: asr_rules_check.ps1 -SelfTest + the runner's real rules and the standard-user path through the real readers (a rule no readable store shows is deferred, never 'No ASR rules configured')
+        shell: powershell
+        run: |
+          & .\.github\ci\asr_rules_states.ps1
+          exit $LASTEXITCODE
       - name: defender_detections_check.ps1 -SelfTest + the runner's real history and a planted test-file detection (unremoved is CRITICAL, removed a WARNING, unreadable a raised gap)
         shell: powershell
         run: |

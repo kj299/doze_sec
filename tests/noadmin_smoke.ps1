@@ -61,6 +61,7 @@ $Touches = @(
     'service:seclogon startup type -> Manual and started (not reverted; Manual is the Windows default)',
     'file:<repo> ACL grant BUILTIN\Users (OI)(CI)RX (not reverted; read/execute on a checkout)',
     'registry:HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest\UseLogonCredential (restored to the prior value in finally)',
+    'defender:ASR rule 9e6c4e1f-7d60-472f-ba1a-a39ef669e4b2 (the LSASS rule) set to Audit mode before run 2, only when the runner has no setting for it; removed in finally',
     'service:dzsmoke_dacl (a demand-start service whose DACL denies BUILTIN\Users, never started; deleted in finally)',
     'registry:HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\dzsmoke_ifeo.exe (an empty IFEO subkey whose DACL denies BUILTIN\Users ReadKey; no Debugger value; deleted in finally)'
 )
@@ -210,6 +211,8 @@ function Assert-LedgerConsistency {
 }
 
 $wdKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest'
+$asrRule = '9e6c4e1f-7d60-472f-ba1a-a39ef669e4b2'
+$asrPlanted = $false
 $wdPrior = (Get-ItemProperty -LiteralPath $wdKey -Name UseLogonCredential -EA SilentlyContinue).UseLogonCredential
 $userCreated = $false
 $daclCreated = $false
@@ -687,6 +690,17 @@ try {
     Assert ($mpdetRows.Count -eq 0) 'no Defender detection-history row on a clean standard-user run (a refusal is a deferral)' ('rows: ' + ($mpdetRows -join ' | '))
     Assert ($text1 -match '\[DEFERRED - ADMIN REQUIRED\] Defender''s detection history was not read' -and $text1 -notmatch '\[OK\] Defender has no detection on record') 'the Defender detection history is a deferral on a standard-user token, never an [OK] (an empty answer there is not evidence)' `
         ('printed: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'detection history' }) -join ' | '))
+    # ASR rules: a standard-user token is shown masked Defender settings, so
+    # the tool reads the stores and says which answered. A deferral is never
+    # a row; a row needs every store to have answered.
+    $asrInfo = @($text1 -split "`r?`n" | Where-Object { $_ -match 'Standard-user token: Defender does not show this token its full settings' })
+    Write-Host ('  MEASURED: ASR rule stores on a standard-user token: ' + ($asrInfo -join ' | '))
+    Assert ($asrInfo.Count -eq 1) 'the ASR check says which stores a standard-user token could read' 'the ASR check did not print its standard-user sources line'
+    $asrRows1 = @($ledger1 | Where-Object { $_ -match '\|9\|T1562\.001\|Defender ASR rules absent or not in Block mode' })
+    $asrDef1 = [bool]($text1 -match '\[DEFERRED - ADMIN REQUIRED\] \d+ key ASR rule\(s\) not graded')
+    $asrAll1 = [bool]($text1 -match '\[DEFERRED - ADMIN REQUIRED\] 5 key ASR rule\(s\) not graded')
+    Assert (-not ($asrAll1 -and $asrRows1.Count)) 'a fully deferred ASR check raised no row' 'the ASR check deferred all five key rules and still raised a row'
+    Assert ($asrDef1 -or $asrRows1.Count -or ($text1 -match 'All five key ASR rules are in Block mode')) 'the ASR check stated a verdict on a standard-user token' 'the ASR check printed neither a finding, a deferral nor an all-clear'
     $lsassGapRows = @($ledger1 | Where-Object { $_ -match '\|12\|T1003\.001\|Defender LSASS-(read records|rule exclusions) NOT' })
     Assert ($lsassGapRows.Count -eq 0) 'no Defender LSASS-read gap row on a clean standard-user run (a refusal this token explains is a deferral)' `
         ('rows: ' + ($lsassGapRows -join ' | '))
@@ -756,6 +770,20 @@ try {
     Write-Host "== Run 2: standard user, WDigest planted as admin (HKLM-read detection) =="
     if (-not (Test-Path -LiteralPath $wdKey)) { New-Item -Path $wdKey -Force | Out-Null }
     Set-ItemProperty -LiteralPath $wdKey -Name UseLogonCredential -Value 1 -Type DWord
+    # An ASR rule set as administrator (Audit mode: it blocks nothing), so run
+    # 2 can show what a standard-user token is shown of Defender's rules. The
+    # staged block this replaced graded an empty answer there as "No ASR
+    # rules configured". Planted only when the runner has no setting for the
+    # rule, so nothing of the image's own is overwritten.
+    try {
+        $mpNow = Get-MpPreference -ErrorAction Stop
+        if (@($mpNow.AttackSurfaceReductionRules_Ids) -notcontains $asrRule) {
+            Add-MpPreference -AttackSurfaceReductionRules_Ids $asrRule -AttackSurfaceReductionRules_Actions AuditMode -ErrorAction Stop
+            $asrPlanted = $true
+        }
+        $mpNow = Get-MpPreference -ErrorAction Stop
+        Write-Host ("  MEASURED: as administrator, Defender lists {0} ASR rule(s) after the plant (planted here: {1})" -f @($mpNow.AttackSurfaceReductionRules_Ids).Count, $asrPlanted)
+    } catch { Write-Host ("  [ SKIP     ] the ASR rule could not be planted on this image ({0}); the tool's self-test pins the judgement" -f $_.Exception.Message) }
     # Run 1's report stays in place (timestamped filenames never collide);
     # newest-file selection plus the inequality check below pick out run 2's.
     # A PowerShell history in the user's own profile, so Section 11's block
@@ -772,6 +800,15 @@ try {
     $ledger2File = Get-NewestFile -Dir $outDir -Filter 'SecurityReport_*.ledger'
     $ledger2 = if ($ledger2File) { @(Get-Content -LiteralPath $ledger2File.FullName -EA SilentlyContinue) } else { @() }
 
+    if ($asrPlanted) {
+        $asr2 = @($text2 -split "`r?`n" | Where-Object { $_ -match 'Standard-user token: Defender does not show|ASR rule|Block credential stealing from LSASS' } | ForEach-Object { $_.Trim() })
+        Write-Host ('  MEASURED: run 2, an ASR rule exists (Audit): ' + ($asr2 -join ' | '))
+        Assert ($text2 -notmatch 'No ASR rules configured') 'with an ASR rule set, a standard-user run never says "No ASR rules configured"' 'a standard-user run said "No ASR rules configured" while a rule exists -- it graded what the token was shown'
+        Assert (($text2 -match '(?m)^\[INFO\] Audit\s+Block credential stealing from LSASS') -or ($text2 -match 'key ASR rule\(s\) not graded on this standard-user token: [^\r\n]*Block credential stealing from LSASS')) `
+            'the planted LSASS rule is either read as Audit or deferred on a standard-user token, never reported missing' `
+            'the planted LSASS rule was neither read nor deferred on a standard-user token'
+        Assert ($text2 -notmatch 'records NOT checked -- the rule is not configured') 'Section 12 does not call the LSASS rule "not configured" while it is set' 'Section 12 said the LSASS rule is not configured while it is set to Audit'
+    }
     Assert ($text2 -match 'WDigest ENABLED') `
         'planted WDigest detected by the NON-ADMIN audit (HKLM is world-readable)' `
         'planted WDigest not detected without admin -- non-admin detection regressed'
@@ -798,11 +835,15 @@ finally {
     } else {
         Set-ItemProperty -LiteralPath $wdKey -Name UseLogonCredential -Value $wdPrior -Type DWord -EA SilentlyContinue
     }
+    if ($asrPlanted) { try { Remove-MpPreference -AttackSurfaceReductionRules_Ids $asrRule -AttackSurfaceReductionRules_Actions AuditMode -ErrorAction Stop } catch { Write-Host ("  cleanup: Remove-MpPreference said: {0}" -f $_.Exception.Message) }
+        $left = @((Get-MpPreference -EA SilentlyContinue).AttackSurfaceReductionRules_Ids) -contains $asrRule
+        if ($left) { Write-Host '::error::cleanup: the planted ASR rule (LSASS, Audit mode) is still set on this machine'; $script:asrLeft = $true } else { Write-Host '  cleanup: the planted ASR rule is gone' } }
     if ($userCreated) { Remove-LocalUser -Name $UserName -EA SilentlyContinue }
     if ($daclCreated) { & sc.exe delete dzsmoke_dacl 2>&1 | Out-Null }
     if ($ifeoCreated) { Remove-Item -Path $ifeoKey -Recurse -Force -EA SilentlyContinue }
 }
 
+if ($script:asrLeft) { Write-Host 'FAIL: the planted ASR rule could not be removed -- this machine is left with the LSASS rule in Audit mode. Remove it: Remove-MpPreference -AttackSurfaceReductionRules_Ids 9e6c4e1f-7d60-472f-ba1a-a39ef669e4b2 -AttackSurfaceReductionRules_Actions AuditMode'; exit 1 }
 Write-Host ""
 if ($fail -gt 0) { Write-Host ("FAIL: {0} non-admin contract assertion(s) regressed." -f $fail); exit 1 }
 Write-Host "OK: non-admin contract holds (deferral, detection without admin, exit codes, ledger consistency)."

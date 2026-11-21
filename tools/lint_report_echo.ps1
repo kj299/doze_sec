@@ -233,22 +233,22 @@ if ($SelfTest) {
         @{ Name = 'odd quotes swallow the redirect'
            From = 'echo --- Defender Core Status: EVALUATED --->> "%REPORT%"'
            To   = 'echo --- Defender "Core Status: EVALUATED --->> "%REPORT%"' },
-        # Anchored on the ASR Command: line since 2026-10-03; the exclusion
-        # Command: lines that carried these two mutations moved into
-        # tools\defender_exclusions_check.ps1, and a mutation whose anchor is
+        # Anchored on the Section 18h registry Command: line since 2026-11-21:
+        # the exclusion lines, then the ASR line, that carried these two
+        # mutations each moved into a tool, and a mutation whose anchor is
         # gone is a vacuous self-test (the check below is what caught that).
         @{ Name = 'caret inside double quotes'
-           From = '"(Get-MpPreference).AttackSurfaceReductionRules_Ids"'
-           To   = '"(Get-MpPreference^).AttackSurfaceReductionRules_Ids"' },
+           From = "-EA Stop).GetValueNames()`""
+           To   = "-EA Stop^).GetValueNames()`"" },
         @{ Name = 'Command: line truncated (unbalanced paren)'
-           From = '"(Get-MpPreference).AttackSurfaceReductionRules_Ids"'
-           To   = '"Get-MpPreference).AttackSurfaceReductionRules_Ids"' },
+           From = "-Command `"(Get-Item -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'"
+           To   = "-Command `"Get-Item -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'" },
         @{ Name = 'printed PowerShell command does not parse'
            From = "(Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' -Name EnableScriptBlockLogging).EnableScriptBlockLogging"
            To   = "(Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging -Name EnableScriptBlockLogging).EnableScriptBlockLogging" },
         @{ Name = 'short severity tag [WARN] on the %PSRUN% path'
-           From = "Write-Output '[WARNING] No ASR rules configured"
-           To   = "Write-Output '[WARN] No ASR rules configured" },
+           From = "'[WARNING] Root certificates installed in last 90 days"
+           To   = "'[WARN] Root certificates installed in last 90 days" },
         @{ Name = 'short severity tag [CRIT] on the %PSRUN% path'
            From = "('[WARNING] '+`$b+' - not found in System32')"
            To   = "('[CRIT] '+`$b+' - not found in System32')" },
