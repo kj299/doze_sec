@@ -102,6 +102,18 @@ jobs:
             if ($LASTEXITCODE -gt 1) { Write-Host "scheduled_tasks_full -Mode $m exit $LASTEXITCODE"; exit 1 }
           }
           Write-Host "scheduled_tasks_full OK (all three modes)"
+          # A task list that was not read is a gap or a deferral, never PASS: the
+          # rule is pinned by -SelfTest; the runner's real list must be GRADED.
+          $st = (.\tools\scheduled_tasks_full.ps1 -SelfTest) -join "`n"
+          if ($LASTEXITCODE -ne 0) { Write-Host $st; exit 1 }
+          $md = Join-Path $env:TEMP ('dz_ci_susptask_' + $PID); New-Item -ItemType Directory -Path $md -Force | Out-Null
+          try {
+            $o = (.\tools\scheduled_tasks_full.ps1 -Mode Suspicious -MarkerDir $md) -join "`n"
+            $sf = Join-Path $md 'dz_susptask_state.txt'
+            $sl = $(if (Test-Path $sf) { (Get-Content $sf -Raw).Trim() } else { '' })
+            Write-Host ("MEASURED: the runner's task list reads [{0}]; markers: {1}" -f $sl, ((Get-ChildItem $md -Filter 'dz_*.txt' | ForEach-Object { $_.Name }) -join ','))
+            if ($sl -notmatch '^tasks=(ok|crit),n=\d+$') { Write-Host $o; throw "the runner's task list was not graded: [$sl]" }
+          } finally { Remove-Item $md -Recurse -Force -EA SilentlyContinue }
           exit 0
 
       # Corpus [appdata-signed-tasks]: per-user updaters (Brave, Chrome, Zoom,

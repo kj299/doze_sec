@@ -6,6 +6,19 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Five places where the audit could read clean without having looked
+Found by the whole-repo documentation audit (2026-11-21) and the review of its PR.
+- **Scheduled tasks (Section 6).** A task list that could not be read printed `[INFO] Get-ScheduledTask unavailable`, wrote no marker and raised nothing, and the dashboard tile then read PASS. `tools/scheduled_tasks_full.ps1 -Mode Suspicious` now treats it like this:
+  - a failed or empty task list is a raised gap, `[WARNING] Scheduled-task check NOT performed`;
+  - a refusal on a standard-user token is a counted deferral;
+  - the tool writes a state the tile states instead of re-measuring (`SUSPTASK_STATE`); a missing verdict reads "NOT graded";
+  - a missing tool is a raised gap; the `schtasks` listing that replaces it is ungraded.
+- **Accessibility binaries.** Section 13 graded the seven accessibility binaries' signatures a second time, so a replaced `sethc.exe` raised two rows. The Section 13 block is gone; Section 17's `accessibility_backdoor_check` is the one measurement. Both had accepted any valid signer whose subject merely contained "Microsoft"; the tool now requires the organisation `O=Microsoft Corporation` exactly, and the self-test pins three look-alikes as CRITICAL and Windows' own subject as clean.
+- **Office identities (Section 17).** A failed `reg query` printed `[OK] ... (Midnight Blizzard check clear)`. It now says the key is absent or could not be read, and that the listing says nothing about token replay.
+- **Downloads HTML listing (Section 14).** The inline walk silenced every error. It is now `file_walk_check -Check DownloadsHtml`. A hit is still an `[INFO]` listing, because a saved web page is ordinary there, but a folder it could not read is a raised gap. It reads Downloads where Windows says it is, so a redirected folder is the one read.
+- **Six uncounted `[SKIPPED]` lines.** Section 4's suspicious-path, LOLBin and masquerading checks, and Section 17's VPN-client listing, printed `[SKIPPED] ... NOT performed` when the process list or the matcher failed, and raised nothing. Each is now `[WARNING] ... NOT performed` with its own gap row.
+- CI drives each change through the real readers: the runner's task list must be graded; the Downloads listing must list a planted 300 KB `.HTA` without raising, and must raise a gap on a folder it is denied.
+
 ### Documentation brought back in line with the code
 A whole-repo audit (2026-11-21) found about 25 places where the documents described an older tool. No audit behaviour changes here.
 - README: `-resetTTP` works in `doze_sec.bat` only; the baseline comparison is automatic (there is no `-diff`); the "Admin Required" column says Partial for the sections a standard user's run now grades in part (3, 4, 5, 8, 9, 12, 17, 18); the section table names the checks added since (Defender detection history, WinRM and OpenSSH, the PowerShell v2 engine, the NTLM level, Sticky Keys, other accounts' Run keys); most checks that could not run print `[WARNING] ... NOT performed` and are counted, and the six inline lines that still print an uncounted `[SKIPPED]` are named (README, THREAT_MODEL and the backlog).

@@ -1,4 +1,4 @@
-# file_walk_check.ps1 -- six checks that walk a folder tree and used to
+# file_walk_check.ps1 -- seven checks that walk a folder tree and used to
 # read a folder they could not open as a folder with nothing in it:
 #   -Check TempAds     Section 14: alternate data streams on files under TEMP
 #                      (T1564.004).
@@ -10,6 +10,12 @@
 #                      the user's folders, Public and TEMP (T1486).
 #   -Check TokenCache  Section 18: the cloud token-cache listing.
 #   -Check CredStores  Section 18: the browser credential-store listing.
+#   -Check DownloadsHtml  Section 14: HTML/HTA files over 200 KB in the
+#                      user's Downloads folder (where Windows says it is, so a
+#                      redirected one is read). A LISTING: a saved web page is
+#                      ordinary there, so a hit is [INFO], never a row. A
+#                      missing Downloads folder is said; an unreadable one is
+#                      a raised gap (T1027.006).
 #
 # Each was an inline line built on
 #   Get-ChildItem -Recurse ... -EA SilentlyContinue
@@ -47,19 +53,19 @@
 #     file), 120 s for RansomExt, 30 s for CredStores, 60 s for the others.
 # Markers: dz_ads_hit / dz_ads_gap, dz_htmltemp_hit / _gap,
 # dz_outlookmsg_hit / _gap, dz_ransom_hit / _gap, dz_tokencache_gap,
-# dz_credstore_gap; and
+# dz_credstore_gap, dz_htmldl_gap; and
 # dz_<name>_done, written last on every run -- the bat raises a
 # "produced no verdict" row when it is absent.
 #
 # Usage:
-#   powershell -File tools\file_walk_check.ps1 -Check <TempAds|TempHtml|OutlookMsg|RansomExt|TokenCache|CredStores> [-MarkerDir <dir>] [-Elevated 0|1] [-BudgetSeconds <n>]
+#   powershell -File tools\file_walk_check.ps1 -Check <TempAds|TempHtml|OutlookMsg|RansomExt|TokenCache|CredStores|DownloadsHtml> [-MarkerDir <dir>] [-Elevated 0|1] [-BudgetSeconds <n>]
 #   powershell -File tools\file_walk_check.ps1 -SelfTest   (walks nothing)
 #
 # Windows PowerShell 5.1 compatible; pure ASCII. Read-only.
 
 [CmdletBinding()]
 param(
-    [ValidateSet('TempAds', 'TempHtml', 'OutlookMsg', 'RansomExt', 'TokenCache', 'CredStores')]
+    [ValidateSet('TempAds', 'TempHtml', 'OutlookMsg', 'RansomExt', 'TokenCache', 'CredStores', 'DownloadsHtml')]
     [string]$Check,
     [string]$MarkerDir = $env:TEMP,
     [int]$Elevated = -1,
@@ -115,6 +121,7 @@ $script:Checks = @{
     # Listings, not findings: a hit is [INFO] for the reader to correlate.
     TokenCache = @{ What = 'Token cache activity check'; Where = 'the AAD token and credential caches'; Tech = 'T1557.001'; Budget = 60; Miss = 'recent token-cache activity is not shown'; Ok = '[OK] No unusual recent token cache modifications.'; Header = '[INFO] Recent AAD/token cache activity (correlate with login events):'; InfoOnly = $true }
     CredStores = @{ What = 'Browser credential store check'; Where = 'the Chrome, Edge and Firefox credential stores'; Tech = 'T1555.003'; Budget = 30; Miss = 'recent access to a browser credential store is not shown'; Ok = '[OK] No unusual recent access to browser credential stores.'; Header = '[INFO] Browser credential stores accessed in last 24h (may be normal browser activity):'; InfoOnly = $true }
+    DownloadsHtml = @{ What = 'Downloads HTML/HTA listing'; Where = 'Downloads'; Tech = 'T1027.006'; Budget = 60; Miss = 'an HTML-smuggling page or HTA saved there would not be listed'; Ok = '[OK] No HTML/HTA files over 200 KB in Downloads.'; Header = '[INFO] HTML/HTA files over 200 KB in Downloads (a saved web page is ordinary; an .hta, or a page you did not save, is the HTML-smuggling shape, T1027.006):'; InfoOnly = $true }
 }
 # The extensions the inline block searched for, unchanged.
 $script:RansomExts = @('.encrypted', '.locked', '.crypt', '.locky', '.cerber', '.zepto', '.thor', '.aesir', '.zzzzz', '.wncry', '.wcry', '.rdmk', '.play', '.black', '.basta', '.royal', '.akira', '.lockbit', '.clop')
@@ -131,6 +138,10 @@ function Get-WalkVerdict {
     if ([string]$Scan.RootState -eq 'missing') {
         if ($Check -eq 'OutlookMsg') {
             [void]$out.Add(('[OK] No Outlook data folder for this user (' + $root + ' does not exist), so there are no .msg/.oft files to check.'))
+            return @{ Lines = @($out.ToArray()); Hit = $false; Gap = $false; Deferred = 0 }
+        }
+        if ($Check -eq 'DownloadsHtml') {
+            [void]$out.Add(('[OK] No Downloads folder for this user (' + $root + ' does not exist), so there is nothing there to list.'))
             return @{ Lines = @($out.ToArray()); Hit = $false; Gap = $false; Deferred = 0 }
         }
         [void]$out.Add(('[WARNING] ' + $c.What + ' NOT performed -- the folder ' + $root + ' was not found, so ' + $c.Miss + ' (' + $c.Tech + ').'))
@@ -507,6 +518,14 @@ if ($SelfTest) {
     T 'Outlook, one hit: the WARNING header the bats always printed' ($v.Hit -and $t -match '(?m)^\[WARNING\] Recent Outlook \.msg/\.oft artefacts \(review for CVE-2023-23397 NTLM relay\):$') $t
     $v = Get-WalkVerdict -Check 'OutlookMsg' -Scan (S @{ RootState = 'unreadable'; RootError = 'IOException: x' })
     T 'Outlook, the folder exists but could not be read: a raised gap, never the old [OK]' ($v.Gap -and ($v.Lines -join "`n") -notmatch '\[OK\]') ($v.Lines -join ' | ')
+    $v = Get-WalkVerdict -Check 'DownloadsHtml' -Scan (S @{ Hits = @('C:\D\invoice.hta  410.0 KB  2026-11-20 09:00') }); $t = $v.Lines -join "`n"
+    T 'Downloads, one hit: a LISTING under an [INFO] header, the file named, never a counted finding' ((-not $v.Hit) -and (-not $v.Gap) -and $t -match '(?m)^\[INFO\] HTML/HTA files over 200 KB in Downloads' -and $t -match '(?m)^    C:\\D\\invoice\.hta' -and $t -notmatch '\[(WARNING|CRITICAL)\]') $t
+    $v = Get-WalkVerdict -Check 'DownloadsHtml' -Scan (S @{ RootState = 'missing'; RootPath = 'C:\Users\alice\Downloads' }); $t = $v.Lines -join "`n"
+    T 'Downloads, no folder: [OK] that SAYS the folder does not exist' ((-not $v.Gap) -and $t -match '(?m)^\[OK\] No Downloads folder for this user \(C:\\Users\\alice\\Downloads does not exist\)') $t
+    $v = Get-WalkVerdict -Check 'DownloadsHtml' -Scan (S @{ Unreadable = @($io) }); $t = $v.Lines -join "`n"
+    T 'Downloads, a folder that could not be read: a raised gap, never "[OK] No HTML/HTA files"' ($v.Gap -and $t -match 'Downloads HTML/HTA listing NOT performed in full' -and $t -notmatch '\[OK\] No HTML') $t
+    $v = Get-WalkVerdict -Check 'DownloadsHtml' -Scan (S @{ RootState = 'unreadable'; RootError = 'UnauthorizedAccessException: denied' })
+    T 'Downloads, the folder itself refused: a raised gap on either token (it is the user''s own folder)' ($v.Gap -and $v.Deferred -eq 0) ($v.Lines -join ' | ')
     if ($fails) { Write-Output "[FAIL] $fails file_walk_check self-test expectation(s) unmet"; exit 1 }
     Write-Output '[OK] file_walk_check self-test: a hit keeps its wording; folders or files that could not be read, or a walk that ran out of time, are a raised gap (on either token: these are the user''s own folders); a missing Outlook folder is said; and a clean walk says how much it examined.'
     exit 0
@@ -523,6 +542,13 @@ if (-not $rootPath) {
     if ($Check -eq 'OutlookMsg') {
         $lad = [Environment]::GetFolderPath('LocalApplicationData')
         if ($lad) { $rootPath = Join-Path $lad 'Microsoft\Outlook' }
+    } elseif ($Check -eq 'DownloadsHtml') {
+        # Where Windows says Downloads is (User Shell Folders), so a folder
+        # moved to another drive is the one read; the profile's own folder
+        # when that value is absent or cannot be read.
+        $dl = ''
+        try { $dl = [string](Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders' -Name '{374DE290-123F-4565-9164-39C4925E467B}' -ErrorAction Stop).'{374DE290-123F-4565-9164-39C4925E467B}' } catch {}
+        if ($dl) { $rootPath = [Environment]::ExpandEnvironmentVariables($dl) } else { $rootPath = Join-Path ([string]$env:USERPROFILE) 'Downloads' }
     } else { $rootPath = $env:TEMP }
 }
 $select = $null
@@ -533,7 +559,7 @@ if ($Check -eq 'TempAds') {
         if ($s.Count -gt 0) { return ($f.FullName + ' :: ' + (@($s | ForEach-Object { [string]$_.Stream }) -join ', ')) }
         return $null
     }
-} elseif ($Check -eq 'TempHtml') {
+} elseif ($Check -eq 'TempHtml' -or $Check -eq 'DownloadsHtml') {
     $select = {
         param($f)
         if (@('.html', '.htm', '.hta') -contains ([string]$f.Extension).ToLowerInvariant() -and $f.Length -gt $script:HtmlBytes) {
@@ -620,7 +646,7 @@ if ($null -eq $v -or @($v.Lines).Count -eq 0) {
 foreach ($l in $v.Lines) { $l }
 # The bat raises a row when this is absent: a helper that never got this far
 # printed no verdict, and no marker must not read as nothing found.
-Write-Marker -Name (@{ TempAds = 'ads'; TempHtml = 'htmltemp'; OutlookMsg = 'outlookmsg'; RansomExt = 'ransom'; TokenCache = 'tokencache'; CredStores = 'credstore' }[$Check] + '_done') -Sev 'done'
+Write-Marker -Name (@{ TempAds = 'ads'; TempHtml = 'htmltemp'; OutlookMsg = 'outlookmsg'; RansomExt = 'ransom'; TokenCache = 'tokencache'; CredStores = 'credstore'; DownloadsHtml = 'htmldl' }[$Check] + '_done') -Sev 'done'
 # Marker names are written out, not built: lint_unraised_findings reads them.
 if ($Check -eq 'TempAds') {
     if ($v.Hit) { Write-Marker -Name 'ads_hit' -Sev 'hit' }
@@ -636,6 +662,8 @@ if ($Check -eq 'TempAds') {
     if ($v.Gap) { Write-Marker -Name 'ransom_gap' -Sev 'WARNING' }
 } elseif ($Check -eq 'TokenCache') {
     if ($v.Gap) { Write-Marker -Name 'tokencache_gap' -Sev 'WARNING' }
+} elseif ($Check -eq 'DownloadsHtml') {
+    if ($v.Gap) { Write-Marker -Name 'htmldl_gap' -Sev 'WARNING' }
 } else {
     if ($v.Gap) { Write-Marker -Name 'credstore_gap' -Sev 'WARNING' }
 }

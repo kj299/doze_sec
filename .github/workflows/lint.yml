@@ -780,13 +780,15 @@ jobs:
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
           out=$(pwsh -NoProfile -File tools/accessibility_backdoor_check.ps1 -SelfTest); echo "$out"
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 23 ] || { echo "only $n accessibility case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 27 ] || { echo "only $n accessibility case(s)"; exit 1; }
           for n in 'a key that could not be read: a raised gap that names it, never "[OK] No IFEO Debugger hijacks"' \
                    'a hijack AND an unreadable key: both raised -- one finding cannot hide what was not read' \
                    'Section 13 could not read the keys: Section 17 says NOT graded, never "[OK] No IFEO accessibility backdoor"' \
                    'Defender is the active antivirus and could not be asked: a raised gap, never "[OK] No ... detections on record"' \
                    'utilman.exe MISSING: a WARNING of its own -- the old block printed nothing' \
-                   'a signature that could not be read is a raised gap, never a pass'; do
+                   'a signature that could not be read is a raised gap, never a pass' \
+                   'a valid signature whose subject only CONTAINS Microsoft is the finding: CN=Not Microsoft Ltd' \
+                   'the subject Windows signs its own binaries with stays clean under the exact rule'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
           out=$(pwsh -NoProfile -File tools/sshd_check.ps1 -SelfTest); echo "$out"
@@ -919,7 +921,7 @@ jobs:
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
           out=$(pwsh -NoProfile -File tools/file_walk_check.ps1 -SelfTest); echo "$out"
-          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 46 ] || { echo "only $n walk case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 50 ] || { echo "only $n walk case(s)"; exit 1; }
           echo "$out" | grep -q '^\[FAIL\]' && { echo 'a walk case failed'; exit 1; }
           for n in 'a profile junction whose LinkType PowerShell could not tell (Start Menu, deny-List ACE) is a link by its tag 0xA0000003' \
                    'a reparse point whose tag could not be read is unknown (a named gap)' \
@@ -929,7 +931,9 @@ jobs:
                    'a path too long to print whole keeps its drive AND its file name' \
                    'ADS, a hit AND an unreadable folder: BOTH the finding and the gap -- one hit cannot hide an incomplete walk' \
                    'a name its parent still lists did not vanish (unknown counts as listed, never as churn)' \
-                   'no path for the Outlook folder at all is a gap, never "No Outlook data folder"'; do
+                   'no path for the Outlook folder at all is a gap, never "No Outlook data folder"' \
+                   'Downloads, one hit: a LISTING under an [INFO] header, the file named, never a counted finding' \
+                   'Downloads, a folder that could not be read: a raised gap, never "[OK] No HTML/HTA files"'; do
             echo "$out" | grep -qF "$n" || { echo "walk case gone: $n"; exit 1; }
           done
           for b in doze_sec.bat doze_sec_noAdmin.bat; do

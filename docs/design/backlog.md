@@ -841,13 +841,15 @@ class: the table was built by a per-line search and was already found
 incomplete once. The per-PSRUN-block search described above has still not
 been run. Two things the last four rows left open, on purpose:
 
-- OPEN (found 2026-11-21 by the review of the documentation PR): six inline
-  lines print `[SKIPPED] ... NOT performed` and raise nothing. Section 4's
-  suspicious-path, LOLBin and masquerading checks print it when the process
-  list or `select_lines` fails, and Section 17's VPN-client check does too.
-  A run that could not read the process list reaches no ledger row for it.
-- The Downloads HTML listing in Section 14 prints files and no verdict, so it
-  cannot print a false `[OK]`; it still walks with errors silenced.
+- DONE 2026-11-21 (found by the review of the documentation PR): six inline
+  lines printed `[SKIPPED] ... NOT performed` and raised nothing -- Section
+  4's suspicious-path, LOLBin and masquerading checks when the process list
+  or `select_lines` failed, and Section 17's VPN-client listing. Each is now
+  `[WARNING] ... NOT performed` with its own gap row.
+- DONE 2026-11-21: the Downloads HTML listing in Section 14 is
+  `file_walk_check -Check DownloadsHtml`. It is still a listing (a hit is
+  `[INFO]`), but a folder it could not read is a raised gap, and it reads
+  Downloads where Windows says it is, so a redirected folder is the one read.
 - The three walks do not follow junctions or symbolic links (a link can loop
   or lead to a whole drive). Each link skipped is counted and named in an
   `[INFO]` line. The old inline walk followed them on Windows PowerShell 5.1.
@@ -896,11 +898,13 @@ is counted nowhere. The owner decided 2026-11-11: both running and installed
 become a counted WARNING. Done in `tools/rmm_check.ps1`, which matches names
 on word boundaries (`Atera` no longer matches inside "Lateral").
 
-**Still a second measurement.** Section 13's "Accessibility Binary File
-Signature Check" block reads the same seven signatures that
-`accessibility_backdoor_check -Part Binaries` reads in Section 17. They grade
-alike (a missing binary is a WARNING in both), but they are two reads; fold
-the Section 13 block into the tool.
+**DONE 2026-11-21: one measurement.** Section 13's "Accessibility Binary File
+Signature Check" block read the same seven signatures that
+`accessibility_backdoor_check -Part Binaries` reads in Section 17, so a
+replaced `sethc.exe` raised two rows. The Section 13 block is gone; the
+section says the signatures are graded in Section 17. Both had accepted any
+valid signer whose subject merely contained "Microsoft"; the tool now
+requires the organisation `O=Microsoft Corporation` exactly.
 
 ## The no-admin bat's standard-user jumps (searched 2026-11-15)
 Its 38 staged blocks matched `doze_sec.bat`'s on that date (31 each on 2026-11-21), so the per-block results above carry over. Its 22 `if "%IS_ADMIN%"=="0" goto` jumps (18 remain on 2026-11-21) were read one by one. Most are true deferrals: the Security log, bcdedit, BitLocker, `C:\Windows\Temp`, Get-MpThreatDetection. The others:

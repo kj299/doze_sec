@@ -690,6 +690,13 @@ try {
     Assert ($mpdetRows.Count -eq 0) 'no Defender detection-history row on a clean standard-user run (a refusal is a deferral)' ('rows: ' + ($mpdetRows -join ' | '))
     Assert ($text1 -match '\[DEFERRED - ADMIN REQUIRED\] Defender''s detection history was not read' -and $text1 -notmatch '\[OK\] Defender has no detection on record') 'the Defender detection history is a deferral on a standard-user token, never an [OK] (an empty answer there is not evidence)' `
         ('printed: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'detection history' }) -join ' | '))
+    # Scheduled tasks: MEASURED what a standard-user token is shown. A task
+    # list that answered is graded; a refusal is a deferral; neither is a row.
+    # An empty answer is a gap -- if this token sees no task at all, that rule
+    # is wrong for this token and this assertion says so.
+    Write-Host ('  MEASURED: Section 6 scheduled-task lines on a standard-user token: ' + (($text1 -split "`r?`n" | Where-Object { $_ -match 'scheduled-task actions in|Scheduled-task check|this token was refused the task list|scheduled task\(s\) with actions' } | ForEach-Object { $_.Trim() }) -join ' | '))
+    $stRows = @($ledger1 | Where-Object { $_ -match '\|6\|T1053\.005\|Scheduled-task check' })
+    Assert ($stRows.Count -eq 0 -and $text1 -match '(\[OK\] No scheduled-task actions in |\[DEFERRED - ADMIN REQUIRED\] Scheduled-task check)') 'the scheduled-task check graded or deferred on a standard-user token, with no gap row' ('rows: ' + ($stRows -join ' | '))
     # ASR rules: a standard-user token is shown masked Defender settings, so
     # the tool reads the stores and says which answered. A deferral is never
     # a row; a row needs every store to have answered.
