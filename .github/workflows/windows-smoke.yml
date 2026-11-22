@@ -223,8 +223,8 @@ jobs:
           Write-Host $st
           if ($LASTEXITCODE -ne 0) { throw 'select_lines -SelfTest failed on Windows PowerShell 5.1' }
           $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($n -lt 12) { throw "select_lines self-test ran only $n case(s)" }
-          foreach ($must in 'a list holding only comments and blanks is exit 2', 'a missing list is exit 2', 'a hit on a line holding # is kept') {
+          if ($n -lt 17) { throw "select_lines self-test ran only $n case(s)" }
+          foreach ($must in 'a list holding only comments and blanks is exit 2', 'a missing list is exit 2', 'a hit on a line holding # is kept', 'an input file locked by another process is exit 2', 'a missing input file is exit 2') {
             if ($st -notmatch [regex]::Escape($must)) { throw ("select_lines case missing: {0}" -f $must) }
           }
           $cg = (.\tools\count_gaps.ps1 -SelfTest) -join "`n"

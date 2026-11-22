@@ -5552,7 +5552,7 @@ goto :sec18a_done
 set "_SEL18A=!errorlevel!"
 if "!_SEL18A!"=="0" goto :sec18a_hit
 if "!_SEL18A!"=="1" goto :sec18a_clean
-echo [WARNING] Process IOC match NOT performed -- ioc_processes.txt could not be read or holds no entries; select_lines exit !_SEL18A!.>> "%REPORT%"
+echo [WARNING] Process IOC match NOT performed -- ioc_processes.txt could not be read or holds no entries, or the snapshot matched against it could not be read; select_lines exit !_SEL18A!.>> "%REPORT%"
 call :dz_finding WARNING 18 T1057 "Process IOC match NOT performed - list unreadable or empty"
 goto :sec18a_done
 :sec18a_hit
@@ -5735,7 +5735,7 @@ goto :sec18f_done
 set "_SEL18F=!errorlevel!"
 if "!_SEL18F!"=="0" goto :sec18f_hit
 if "!_SEL18F!"=="1" goto :sec18f_clean
-echo [WARNING] C2 domain IOC match NOT performed -- ioc_domains.txt could not be read or holds no entries; select_lines exit !_SEL18F!.>> "%REPORT%"
+echo [WARNING] C2 domain IOC match NOT performed -- ioc_domains.txt could not be read or holds no entries, or the snapshot matched against it could not be read; select_lines exit !_SEL18F!.>> "%REPORT%"
 call :dz_finding WARNING 18 T1071.004 "C2 domain IOC match NOT performed - list unreadable or empty"
 goto :sec18f_done
 :sec18f_hit
@@ -5775,7 +5775,7 @@ set "_SELECT_EXIT=!errorlevel!"
 del "%TEMP%\dz_evt.tmp" 2>nul
 if "!_SELECT_EXIT!"=="0" goto :sec18g_hit
 if "!_SELECT_EXIT!"=="1" goto :sec18g_clean
-echo [WARNING] LOLBin pattern match NOT performed -- ioc_lolbins.txt could not be read or holds no entries; select_lines exit !_SELECT_EXIT!.>> "%REPORT%"
+echo [WARNING] LOLBin pattern match NOT performed -- ioc_lolbins.txt could not be read or holds no entries, or the snapshot matched against it could not be read; select_lines exit !_SELECT_EXIT!.>> "%REPORT%"
 call :dz_finding WARNING 18 T1059 "LOLBin pattern match NOT performed - list unreadable or empty"
 goto :sec18g_done
 :sec18g_hit
