@@ -8,7 +8,7 @@ $ErrorActionPreference = 'Stop'
 $st = (.\tools\file_walk_check.ps1 -SelfTest) -join "`n"
 if ($LASTEXITCODE -ne 0) { Write-Host $st; throw 'file_walk_check -SelfTest failed' }
 $n = @($st -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-if ($n -lt 46) { throw "file_walk_check self-test ran only $n case(s)" }
+if ($n -lt 50) { throw "file_walk_check self-test ran only $n case(s)" }
 function RunW([string]$Check, [hashtable]$Extra) {
   $md = Join-Path $env:TEMP ("dz_ci_walk_{0}_{1}" -f $PID, [guid]::NewGuid().ToString('N').Substring(0, 6)); New-Item -ItemType Directory -Path $md -Force | Out-Null
   try {
@@ -37,6 +37,7 @@ try {
   # The folder is not there: TEMP missing is a gap; no Outlook folder is an answer.
   Expect (RunW 'TempAds' $k) 'dz_ads_gap' '(?m)^\[WARNING\] Alternate-data-stream check NOT performed' 'root missing'
   Expect (RunW 'OutlookMsg' $k) '' '(?m)^\[OK\] No Outlook data folder for this user' 'no Outlook folder'
+  Expect (RunW 'DownloadsHtml' $k) '' '(?m)^\[OK\] No Downloads folder for this user' 'no Downloads folder'
   New-Item -ItemType Directory -Path (Join-Path $root 'sub [1]\deep') -Force | Out-Null
   # The benign twins: a downloaded file's Zone.Identifier, a small page, an old message.
   $ben = Join-Path $root 'sub [1]\downloaded.txt'; Set-Content -LiteralPath $ben -Value 'x'
@@ -57,6 +58,9 @@ try {
   if ($r.Out -match '(?m)^\[OK\]' -or $r.Markers -notmatch 'dz_ads_gap') { throw "an out-of-time stream walk was not a raised gap: [$($r.Markers)] $($r.Out)" }
   Expect (RunW 'TempHtml' $k) 'dz_htmltemp_hit' '(?m)^\[WARNING\] Large HTML/HTA files in Temp:' 'a 300 KB .HTA'
   $r = RunW 'TempHtml' $k; if ($r.Out -notmatch 'big\.HTA') { throw "the large file was not listed: $($r.Out)" }
+  # The same file in Downloads is LISTED, never raised: a saved web page there is ordinary.
+  $r = RunW 'DownloadsHtml' $k
+  if ($r.Markers -ne '' -or $r.Out -notmatch '(?m)^\[INFO\] HTML/HTA files over 200 KB in Downloads' -or $r.Out -notmatch 'big\.HTA' -or $r.Out -match '(?m)^\[(WARNING|CRITICAL)\]') { throw "the Downloads listing raised, or did not list, a 300 KB .HTA: [$($r.Markers)] $($r.Out)" }
   Expect (RunW 'OutlookMsg' $k) 'dz_outlookmsg_hit' '(?m)^\[WARNING\] Recent Outlook \.msg/\.oft artefacts' 'a recent .oft'
   # A junction is NOT followed (it can loop, or lead to a whole drive), and that is said.
   $outside = Join-Path $base "dz_ci_walk_out_$PID"; New-Item -ItemType Directory -Path $outside -Force | Out-Null
@@ -92,6 +96,8 @@ try {
     $r = RunW 'TempHtml' $k
     if ($r.Markers -ne 'dz_htmltemp_gap' -or $r.Out -match '(?m)^\[OK\]' -or $r.Out -notmatch 'NOT performed in full') { throw "a folder that cannot be read was not a raised gap: [$($r.Markers)] $($r.Out)" }
     Write-Host 'file walk: a folder this account is denied is a raised gap, never an all-clear'
+    $r = RunW 'DownloadsHtml' $k
+    if ($r.Markers -ne 'dz_htmldl_gap' -or $r.Out -match '(?m)^\[OK\]') { throw "a Downloads folder that cannot be read in full was not a raised gap: [$($r.Markers)] $($r.Out)" }
     # A FILE whose streams cannot be read: Get-Item -Stream reports that as a bare Win32 error.
     & icacls.exe $locked /reset /T /C /Q | Out-Null; Remove-Item -LiteralPath $locked -Recurse -Force
     $nf = Join-Path $root 'noread.txt'; Set-Content -LiteralPath $nf -Value 'x'
@@ -113,14 +119,14 @@ try {
   if ($outside) { Remove-Item -LiteralPath $outside -Recurse -Force -EA SilentlyContinue }
   if (Test-Path -LiteralPath $root) { throw "the CI scratch folder $root could not be removed" }
 }
-Write-Host 'file walk: every state read through the real walker for all three checks'
+Write-Host 'file walk: every state read through the real walker for TempAds, TempHtml, OutlookMsg and DownloadsHtml'
 # MEASURED: what Windows PowerShell 5.1 says about one of the compatibility
 # junctions every profile holds (a deny-List ACE for Everyone, by design).
 $sm = Get-Item -LiteralPath (Join-Path $env:USERPROFILE 'Start Menu') -Force -EA SilentlyContinue
 if ($sm) { $lt = '<threw>'; try { $lt = [string]$sm.LinkType } catch {}; Write-Host ("MEASURED: profile junction 'Start Menu': LinkType [{0}], Attributes [{1}]" -f $lt, $sm.Attributes) } else { Write-Host "MEASURED: this profile has no 'Start Menu' entry" }
 # LIVE, the three later checks on the runner's own folders, MEASURED: each
 # must state a verdict, and the ransomware walk must not raise on a clean image.
-foreach ($c in 'RansomExt', 'TokenCache', 'CredStores') {
+foreach ($c in 'RansomExt', 'TokenCache', 'CredStores', 'DownloadsHtml') {
   $sw = [Diagnostics.Stopwatch]::StartNew(); $r = RunW $c @{}
   Write-Host ("MEASURED: {0} on the runner's own folders: markers [{1}] in {2:N1}s" -f $c, $r.Markers, $sw.Elapsed.TotalSeconds)
   if ($r.Out -notmatch '(?m)^\[(OK|INFO|WARNING|CRITICAL)') { throw "$c printed no verdict on the runner: $($r.Out)" }

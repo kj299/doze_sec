@@ -29,8 +29,8 @@
 #     be the active antivirus, and [INFO] not consulted otherwise. A standard-user token cannot ask at all:
 #     [DEFERRED - ADMIN REQUIRED], counted, never a row;
 #   * a binary whose signature is not valid Microsoft -> CRITICAL (kept).
-#     A binary MISSING -> WARNING (as Section 13's signature check grades
-#     it). A signature that could not be read is a gap, never a pass.
+#     A binary MISSING -> WARNING (Windows ships all seven; since
+#     2026-11-21 this is their only signature check). A signature that could not be read is a gap, never a pass.
 # Markers: dz_accifeo_hit / _gap ; dz_accbin_hit / _missing / _gap /
 # _deferred. State files: dz_accifeo_state.txt  ifeo=<clean|hijack|gap|
 # hijack+gap> ; dz_accbin_state.txt  bins=<ok|bad|missing|gap>,def=<none|
@@ -65,6 +65,17 @@ if (-not $MarkerDir) { $MarkerDir = [IO.Path]::GetTempPath() }
 $script:AccBins = @('sethc.exe', 'utilman.exe', 'osk.exe', 'Magnify.exe', 'Narrator.exe', 'DisplaySwitch.exe', 'AtBroker.exe')
 # The two whose hash and signer are printed, as the old block did.
 $script:MustExist = @('sethc.exe', 'utilman.exe')
+
+# PURE. The signer is Microsoft's only when its subject carries the
+# organisation component O=Microsoft Corporation, exactly. The rule was
+# "-match 'Microsoft'", which a validly signed binary from any signer with the
+# word in its name passed ("CN=Not Microsoft Ltd", "O=Microsoft Corporation
+# Fake"). A code-signing certificate's organisation is validated by the CA
+# that issued it, which is what makes the exact field meaningful.
+function Test-MicrosoftSigner {
+    param([string]$Subject)
+    return ([string]$Subject -cmatch '(^|,\s*)O=Microsoft Corporation\s*(,|$)')
+}
 
 function Write-Marker {
     param([string]$Name, [string]$Sev)
@@ -167,8 +178,8 @@ function Get-BinariesVerdict {
         if ($null -eq $b) { continue }
         $n = [string]$b.Name; $seen[$n] = $true
         if (-not $b.Exists) {
-            # Any of the seven, as Section 13's signature check already grades it:
-            # the two sections must not disagree about the same file.
+            # Any of the seven: Windows ships every one, so a missing one was
+            # removed by something.
             $r.Missing = $true
             [void]$out.Add(('[WARNING] ' + $n + ' is MISSING from the system directory -- Windows ships it, so something removed it (T1546.008).'))
             continue
@@ -178,7 +189,7 @@ function Get-BinariesVerdict {
             [void]$out.Add(($n + ' SHA256: ' + [string]$b.Hash))
             [void]$out.Add(($n + ' Signature: ' + [string]$b.Status + ' / ' + (ConvertTo-PrintableText ([string]$b.Signer))))
         }
-        if ([string]$b.Status -ne 'Valid' -or [string]$b.Signer -notmatch 'Microsoft') {
+        if ([string]$b.Status -ne 'Valid' -or -not (Test-MicrosoftSigner ([string]$b.Signer))) {
             $r.Hit = $true
             [void]$out.Add(('[CRITICAL] ' + $n + ' may have been replaced with a non-Microsoft binary! (signature: ' + [string]$b.Status + ')'))
         }
@@ -265,10 +276,16 @@ if ($SelfTest) {
     T 'sethc.exe replaced by an unsigned binary: the CRITICAL wording kept' ($v.Hit -and $v.State -eq 'bins=bad,def=none' -and $t -match '(?m)^\[CRITICAL\] sethc\.exe may have been replaced with a non-Microsoft binary!') $t
     $v = Get-BinariesVerdict -Ifeo 'ifeo=clean' -Def $none -Bins (BinList @{ 'osk.exe' = @{ Name = 'osk.exe'; Exists = $true; Status = 'Valid'; Signer = 'CN=Evil Corp'; Hash = 'x'; Error = '' } })
     T 'a validly signed binary that is not Microsoft''s is still the finding (cmd.exe copied over it would be Microsoft''s; a third party''s is not)' ($v.Hit) ($v.Lines -join ' | ')
+    foreach ($fake in @('CN=Not Microsoft Ltd, O=Not Microsoft Ltd, C=GB', 'CN=Microsoft Windows, O=Microsoft Corporation Fake, C=US', 'CN=Microsoft Corporation')) {
+        $v = Get-BinariesVerdict -Ifeo 'ifeo=clean' -Def $none -Bins (BinList @{ 'sethc.exe' = @{ Name = 'sethc.exe'; Exists = $true; Status = 'Valid'; Signer = $fake; Hash = 'x'; Error = '' } })
+        T ('a valid signature whose subject only CONTAINS Microsoft is the finding: ' + $fake) ($v.Hit -and $v.State -eq 'bins=bad,def=none') ($v.Lines -join ' | ')
+    }
+    $v = Get-BinariesVerdict -Ifeo 'ifeo=clean' -Def $none -Bins (BinList @{ 'sethc.exe' = @{ Name = 'sethc.exe'; Exists = $true; Status = 'Valid'; Signer = 'CN=Microsoft Windows, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'; Hash = 'x'; Error = '' } })
+    T 'the subject Windows signs its own binaries with stays clean under the exact rule' ((-not $v.Hit) -and $v.State -eq 'bins=ok,def=none') ($v.Lines -join ' | ')
     $v = Get-BinariesVerdict -Ifeo 'ifeo=clean' -Def $none -Bins (BinList @{ 'utilman.exe' = @{ Name = 'utilman.exe'; Exists = $false; Status = ''; Signer = ''; Hash = ''; Error = '' } }); $t = $v.Lines -join "`n"
     T 'utilman.exe MISSING: a WARNING of its own -- the old block printed nothing' ($v.Missing -and (-not $v.Hit) -and $v.State -eq 'bins=missing,def=none' -and $t -match '(?m)^\[WARNING\] utilman\.exe is MISSING from the system directory') $t
     $v = Get-BinariesVerdict -Ifeo 'ifeo=clean' -Def $none -Bins (BinList @{ 'Narrator.exe' = @{ Name = 'Narrator.exe'; Exists = $false; Status = ''; Signer = ''; Hash = ''; Error = '' } })
-    T 'Narrator.exe missing is the same WARNING Section 13 gives it: the two sections cannot disagree about one file' ($v.Missing -and ($v.Lines -join ' ') -match '\[WARNING\] Narrator\.exe is MISSING') ($v.Lines -join ' | ')
+    T 'Narrator.exe missing is a WARNING like any of the seven: Windows ships every one of them' ($v.Missing -and ($v.Lines -join ' ') -match '\[WARNING\] Narrator\.exe is MISSING') ($v.Lines -join ' | ')
     $v = Get-BinariesVerdict -Ifeo 'ifeo=clean' -Def $none -Bins (BinList @{ 'sethc.exe' = @{ Name = 'sethc.exe'; Exists = $true; Status = ''; Signer = ''; Hash = ''; Error = 'IOException: sharing violation' } }); $t = $v.Lines -join "`n"
     T 'a signature that could not be read is a raised gap, never a pass' ($v.Gap -and $v.State -eq 'bins=gap,def=none' -and $t -match 'NOT performed in full -- 1 binary\(ies\) could not be read: sethc\.exe' -and $t -notmatch 'carry a valid Microsoft signature') $t
     $v = Get-BinariesVerdict -Ifeo 'ifeo=clean' -Def $none -Bins @()

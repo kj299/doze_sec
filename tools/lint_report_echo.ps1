@@ -250,8 +250,8 @@ if ($SelfTest) {
            From = "'[WARNING] Root certificates installed in last 90 days"
            To   = "'[WARN] Root certificates installed in last 90 days" },
         @{ Name = 'short severity tag [CRIT] on the %PSRUN% path'
-           From = "('[WARNING] '+`$b+' - not found in System32')"
-           To   = "('[CRIT] '+`$b+' - not found in System32')" },
+           From = "{'[WARNING] Suspicious registry IOCs found:'"
+           To   = "{'[CRIT] Suspicious registry IOCs found:'" },
         @{ Name = 'short severity tag [ERROR] on the %REPORT% path'
            From = 'echo [WARNING] C2 domain IOC matches found in DNS cache above.'
            To   = 'echo [ERROR] C2 domain IOC matches found in DNS cache above.' },
