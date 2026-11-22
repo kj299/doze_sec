@@ -16,13 +16,15 @@ $stOut = (.\tools\stalkerware_check.ps1 -SelfTest) -join "`n"
 Write-Host $stOut
 if ($LASTEXITCODE -ne 0) { throw 'stalkerware_check.ps1 -SelfTest failed' }
 $stOk = @($stOut -split "`n" | Where-Object { $_ -match '^\[OK\]' }).Count
-if ($stOk -lt 24) { throw "only $stOk [OK] line(s) from the stalkerware_check.ps1 self-test; cases have gone missing" }
+if ($stOk -lt 40) { throw "only $stOk [OK] line(s) from the stalkerware_check.ps1 self-test; cases have gone missing" }
 foreach ($needle in @(
     'the CodexSandbox pair is a finding, at WARNING and never CRITICAL',
     'an account named psadmin is NOT swallowed by the note-property skip',
     'an EMPTY string value is not a hide-flag',
     'Shadow=unset requires consent, so it is not a finding',
-    'ordinary software is not a monitoring product')) {
+    'ordinary software is not a monitoring product',
+    'a UserList key that could not be read is a raised gap, never "No accounts are hidden"',
+    'a hit AND a source that did not answer: both said, the hit still WARNING -- one cannot hide the other')) {
   if ($stOut -notmatch ('\[OK\]\s+' + [regex]::Escape($needle))) { throw "the stalkerware_check.ps1 self-test no longer covers: $needle" }
 }
 
@@ -42,6 +44,37 @@ try {
   if ($out -notmatch 'sign-in screen') { throw 'hidden-account check did not run' }
   if ($out -notmatch 'shadowing') { throw 'RDP shadowing check did not run' }
   if ($out -notmatch 'monitoring/spouseware|monitoring another person') { throw 'monitoring-product check did not run' }
+  # A clean runner's result is a claim to pin: an administrator can read every
+  # source, so no gap, and the run reached its end.
+  Write-Host ("MEASURED: the runner's covert-monitoring markers: " + ((Get-ChildItem $md -Filter 'dz_*.txt' | ForEach-Object { $_.Name }) -join ','))
+  if (Test-Path (Join-Path $md 'dz_stalkerware_gap.txt')) { throw ("a clean runner raised a covert-monitoring gap: " + (($out -split "`n" | Where-Object { $_ -match 'NOT performed' }) -join ' | ')) }
+  if (-not (Test-Path (Join-Path $md 'dz_stalkerware_done.txt'))) { throw 'the covert-monitoring check wrote no done marker' }
+  # A KEY THAT CANNOT BE READ, through the real reader, on a throwaway root
+  # (never the runner's own policy keys). Touches: reg:HKCU\Software\dz_ci_sw_<pid>
+  # (its ACL reset and the key removed in finally).
+  $kr = "HKCU:\Software\dz_ci_sw_$PID"
+  $ulk = "$kr\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList"
+  New-Item -Path $ulk -Force | Out-Null
+  Set-ItemProperty -Path $ulk -Name 'dz_ci_hidden' -Value 0 -Type DWord -Force
+  $mdk = Join-Path $md 'keyroot'; New-Item -ItemType Directory -Path $mdk -Force | Out-Null
+  $o = (.\tools\stalkerware_check.ps1 -MarkerDir $mdk -KeyRoot $kr) -join "`n"
+  if ($o -notmatch 'dz_ci_hidden') { throw "the throwaway root's hidden account was not read: $o" }
+  $acl = Get-Acl -Path $ulk
+  $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+  # QueryValues only: the key's values cannot be read, but its ACL can still be
+  # read and reset in finally (a ReadKey deny would also deny READ_CONTROL).
+  $acl.AddAccessRule((New-Object Security.AccessControl.RegistryAccessRule($me, 'QueryValues', 'Deny')))
+  Set-Acl -Path $ulk -AclObject $acl
+  $denied = $false; try { $null = Get-ItemProperty -LiteralPath $ulk -ErrorAction Stop } catch { $denied = $true }
+  if ($denied) {
+    $mdk2 = Join-Path $md 'denied'; New-Item -ItemType Directory -Path $mdk2 -Force | Out-Null
+    $o2 = (.\tools\stalkerware_check.ps1 -MarkerDir $mdk2 -KeyRoot $kr) -join "`n"
+    Write-Host ($o2 -split "`n" | Where-Object { $_ -match 'sign-in screen|NOT performed' })
+    if ($o2 -match 'No accounts are hidden from the sign-in screen') { throw 'a UserList key that could not be read printed the all-clear' }
+    if ($o2 -notmatch '\[WARNING\] Hidden-account check NOT performed') { throw "a UserList key that could not be read was not a raised gap: $o2" }
+    if (-not (Test-Path (Join-Path $mdk2 'dz_stalkerware_gap.txt'))) { throw 'a UserList key that could not be read wrote no gap marker' }
+    Write-Host 'stalkerware: an unreadable UserList key is a raised gap, never "No accounts are hidden"'
+  } else { Write-Host '[ SKIP ] the deny rule did not stop this account reading the key; the self-test pins the judgement' }
   # Plant a hidden account entry: must be reported, and must be worded
   # as something to review rather than as an accusation.
   if (-not (Test-Path $ul)) { New-Item -Path $ul -Force | Out-Null; $madeUl = $true }
@@ -91,6 +124,10 @@ try {
   if ($out3 -match 'No accounts are hidden from the sign-in screen') { throw 'reported a clean hidden-account verdict while an account was hidden' }
   Remove-ItemProperty -Path $ul -Name 'dz_ci_junk_value' -EA SilentlyContinue
 } finally {
+  if ($kr -and (Test-Path $kr)) {
+    try { $a = Get-Acl -Path $ulk; foreach ($rule in @($a.Access | Where-Object { $_.AccessControlType -eq 'Deny' })) { [void]$a.RemoveAccessRule($rule) }; Set-Acl -Path $ulk -AclObject $a } catch { Write-Host ("cleanup: could not reset the throwaway key's ACL: " + $_.Exception.Message) }
+    Remove-Item -Path $kr -Recurse -Force -EA SilentlyContinue
+  }
   Remove-ItemProperty -Path $ul -Name 'dz_ci_junk_value' -EA SilentlyContinue
   Remove-ItemProperty -Path $ul -Name 'dz_ci_probe_user' -EA SilentlyContinue
   if ($madeUl) { Remove-Item $ul -Force -EA SilentlyContinue }

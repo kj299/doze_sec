@@ -917,3 +917,27 @@ Its 38 staged blocks matched `doze_sec.bat`'s on that date (31 each on 2026-11-2
 | Section 17 password spray | the deferral line is printed but not added to `DEFERRED_COUNT` | DONE: `event_scan_check -Check Spray` counts the deferral, and its silenced read (an unreadable log printed INFO) is a gap |
 | Section 7 unquoted service paths (both bats) | a failed `Get-CimInstance Win32_Service` prints `[SKIPPED] ... NOT performed` and raises nothing | DONE: `tools/unquoted_service_check.ps1` reads the registry ImagePaths and grades by exploitability; a finding now reaches the ledger, which it never did |
 
+
+## Silent all-clears: the 2026-11-22 survey (open; one PR per group)
+
+The per-block search this section kept asking for, run read-only across both
+halves of `doze_sec.bat` and every `tools/*.ps1` on 2026-11-22 (three
+searches; the top findings checked against the code by hand). About 40
+instances remain of the shape "a query that failed reads as clean": a silenced
+read whose empty result reaches `[OK]`, `if errorlevel 1 echo [OK]` after a
+command that also exits 1 on failure, `Test-Path` as proof of absence, English
+output parsed for a verdict, and a tile that re-measures. Groups, worst first:
+
+| Group | What | Status |
+|---|---|---|
+| C | `stalkerware_check`: every source (UserList, Shadow, consent stores, processes, services, Uninstall keys, tasks) read silenced; each printed `[OK]` | DONE 2026-11-22: each source asked with `-EA Stop`, a source that did not answer is named in a raised gap, a hit and a gap are both raised, a missing tool and a run that never finished are rows |
+| D | `select_lines` exits 1 ("no match") on a missing input and on any crash, so every caller's `else if errorlevel 1 echo [OK]` passes on a failure (Section 4 suspicious paths and LOLBins, 18a/18f/18g) | open |
+| E | nine helpers whose death reads as a CLEAN section (no done marker, missing tool `[INFO]`): `persistence_eval` default part, `startup_eval`, `persistence_extra`, `logon_persistence`, `module_inspect`, `service_signature_check`, `edr_presence`, `hosts_check`, `bits_history` | open |
+| F | tools that grade a failed read clean: `logon_persistence` (Notify by `Test-Path`, credential providers skipped as stale, screensaver, logon script), `persistence_extra` (an unreadable PS profile, BITS on a standard-user token, print processors), `com_clsid_check`, `edr_presence` Sysmon, `service_signature_check` (WMI failure, `CertProbe` returns valid on an exception), `cross_api_check` (unreadable tasks counted under an `[OK]`) | open |
+| G | Sections 13-18 inline: 18d `Test-Path`, Event 7045 English labels, 18g/18a empty command lines on a standard-user token, 18e scope, ADFS/AADC `sc query`, driver signing by localized `bcdedit` (and its tile re-measures), the SMART tile | open |
+| H | hygiene: Mark-of-the-Web and logging policy reads, six `[INFO] ... not set` lines on any `reg.exe` failure, history and cloud-CLI existence tests, the hash and VirusTotal walks, `driver_audit` without its hash list, `baseline_diff` categories, `vt_ip_check` and `ttp_merge` blocks, `proc_path_grade` scope, the root-certificate `NotBefore` filter, Event 4688 listings on a standard-user token, INIT Safe Mode and the `-resetTTP`/`-updateTTP` `[OK]` lines | open |
+
+Do not call this sweep done from this table either: it was built by three
+searches, and the searches named files they read only in part (most of the
+newest tools route through verdict functions with gap handling and were
+skimmed, not read line by line).

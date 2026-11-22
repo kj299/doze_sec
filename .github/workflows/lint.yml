@@ -292,10 +292,13 @@ jobs:
                    'an account named psadmin is NOT swallowed by the note-property skip' \
                    'an EMPTY string value is not a hide-flag' \
                    'Shadow=unset requires consent, so it is not a finding' \
-                   'ordinary software is not a monitoring product'; do
+                   'ordinary software is not a monitoring product' \
+                   'a UserList key that could not be read is a raised gap, never "No accounts are hidden"' \
+                   'a consent store that could not be read is a raised gap, never "No applications currently hold"' \
+                   'a hit AND a source that did not answer: both said, the hit still WARNING -- one cannot hide the other'; do
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
-          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 24 ] || { echo "only $n case(s)"; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 40 ] || { echo "only $n case(s)"; exit 1; }
       - name: boot_chain_check -- Secure Boot off and VBS off are consumer defaults
         run: |
           out=$(pwsh -NoProfile -File tools/boot_chain_check.ps1 -SelfTest); echo "$out"

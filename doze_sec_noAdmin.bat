@@ -3407,10 +3407,13 @@ echo  accounts, silent RDP shadowing, camera/mic/location grants, and consumer>>
 echo  monitoring products. Often signed, legitimate software used abusively -->> "%REPORT%"
 echo  which is exactly why the rest of the audit walks past it.>> "%REPORT%"
 del "%TEMP%\dz_stalkerware.txt" 2>nul
+del "%TEMP%\dz_stalkerware_gap.txt" 2>nul
+del "%TEMP%\dz_stalkerware_done.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\stalkerware_check.ps1" (
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\stalkerware_check.ps1">> "%REPORT%" 2>&1
 ) else (
-    echo  [INFO] tools\stalkerware_check.ps1 not found -- covert-monitoring check skipped.>> "%REPORT%"
+    echo [WARNING] tools\stalkerware_check.ps1 not found -- covert-monitoring check NOT performed: hidden accounts, silent shadowing and monitoring software were not checked.>> "%REPORT%"
+    call :dz_finding WARNING 10 T1564.002 "Covert-monitoring check NOT performed - tool missing"
 )
 if exist "%TEMP%\dz_stalkerware.txt" (
     set "_SWSEV="
@@ -3418,6 +3421,16 @@ if exist "%TEMP%\dz_stalkerware.txt" (
     call :dz_finding !_SWSEV! 10 T1564.002 "Possible covert monitoring - hidden account, silent shadowing, or monitoring software"
     del "%TEMP%\dz_stalkerware.txt" 2>nul
 )
+if exist "%TEMP%\dz_stalkerware_gap.txt" (
+    rem A gap is its own row, beside a finding or alone: a source did not answer.
+    call :dz_finding WARNING 10 T1564.002 "Covert-monitoring check NOT performed in full - a source it reads could not be read"
+    del "%TEMP%\dz_stalkerware_gap.txt" 2>nul
+)
+if not exist "%TEMP%\dz_stalkerware_done.txt" if exist "%SCRIPT_DIR%tools\stalkerware_check.ps1" (
+    echo [WARNING] Covert-monitoring check produced no verdict -- NOT performed: tools\stalkerware_check.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 10 T1564.002 "Covert-monitoring check produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_stalkerware_done.txt" 2>nul
 
 :: ---- Section 10/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
