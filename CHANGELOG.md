@@ -6,6 +6,18 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### The covert-monitoring check no longer reads clean when it could not look (Section 10)
+`tools/stalkerware_check.ps1` is the check written for someone who may be watched by a person with access to their PC. Every source it reads was silenced:
+- the sign-in screen's hidden-account list, the RDP shadowing policy and the camera, microphone and location permission stores were read with `-EA SilentlyContinue` inside an empty `catch`;
+- so were the process, service, installed-program and scheduled-task searches for monitoring products.
+
+Each that could not be read printed the same `[OK]` as one that held nothing ("No accounts are hidden from the sign-in screen", "No known consumer monitoring/spouseware products detected").
+- Each source is now asked with `-ErrorAction Stop`. A key that does not exist is still the ordinary answer.
+- A source that did not answer is named in `[WARNING] ... NOT performed`, raised as its own row (`dz_stalkerware_gap.txt`), and no `[OK]` is printed over it. A hit and a gap are both raised.
+- A missing tool is a raised row, not `[INFO] ... skipped`, and a run that never reached its end raises "produced no verdict".
+- The self-test covers each source failing alone and together, and a hit beside a gap (40 cases). CI denies read on a throwaway copy of the hidden-account key and requires the gap, and requires a clean runner to raise none.
+- The backlog records the rest of the 2026-11-22 survey: about 40 instances in five more groups.
+
 ### Five places where the audit could read clean without having looked
 Found by the whole-repo documentation audit (2026-11-21) and the review of its PR.
 - **Scheduled tasks (Section 6).** A task list that could not be read printed `[INFO] Get-ScheduledTask unavailable`, wrote no marker and raised nothing, and the dashboard tile then read PASS. `tools/scheduled_tasks_full.ps1 -Mode Suspicious` now treats it like this:

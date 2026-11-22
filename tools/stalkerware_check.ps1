@@ -49,8 +49,24 @@
 # block already warns that removing this software can alert whoever installed it,
 # and that evidence should be preserved first; findings here point back to that.
 #
-# MARKER: severity word to $env:TEMP\dz_stalkerware.txt; caller raises via
-# :dz_finding. No marker when nothing anomalous is found.
+# A SOURCE THAT DID NOT ANSWER IS NOT A CLEAN ONE (2026-11-22). Every read
+# here used -EA SilentlyContinue inside an empty catch, so a UserList key,
+# a Shadow value, a consent store, the service list or the task list that
+# could not be read printed the same [OK] as one that held nothing --
+# "No accounts are hidden", "No known consumer monitoring products". In the
+# check written for someone who may be in danger, that is the worst answer
+# it can give. Now each source is asked with -ErrorAction Stop, and:
+#   * a key or folder that does not exist is the ordinary answer;
+#   * a source that did not answer is NAMED in a raised gap,
+#     "[WARNING] ... NOT performed", and no [OK] is printed over it;
+#   * a hit and a gap are independent facts: both are raised.
+# The decisions are pure (Get-*Verdict, Get-ConsentSummary) and -SelfTest
+# drives every source failing alone and together.
+#
+# MARKERS: severity word to $env:TEMP\dz_stalkerware.txt (no marker when
+# nothing anomalous is found); dz_stalkerware_gap.txt when any source did not
+# answer; dz_stalkerware_done.txt, written last on every run -- the caller
+# raises a "produced no verdict" row when it is absent.
 #
 # Windows PowerShell 5.1 compatible. Read-only. Executed by helpers-ps51 CI.
 
@@ -58,6 +74,10 @@
 param(
     [string]$MarkerDir = $env:TEMP,
     [int]$MaxList = 30,
+    # Only CI changes this: a throwaway registry root standing in for HKLM:,
+    # so a key that cannot be read runs through the real reader without
+    # touching the runner's own policy keys.
+    [string]$KeyRoot = 'HKLM:',
     [switch]$SelfTest
 )
 
@@ -127,8 +147,13 @@ function Get-HiddenAccountVerdict {
     # $Values is the raw name -> value map from the UserList key, PowerShell's
     # note-properties INCLUDED: filtering them is part of the rule, not part of
     # reading the registry, and the self-test has to be able to reach it.
-    param([hashtable]$Values)
-    $r = @{ Lines = @(); Sev = 'OK'; Hidden = @() }
+    param([hashtable]$Values, [string]$ReadError = '')
+    $r = @{ Lines = @(); Sev = 'OK'; Hidden = @(); Gap = $false }
+    if ($ReadError) {
+        $r.Gap = $true
+        $r.Lines += ('[WARNING] Hidden-account check NOT performed -- the sign-in screen''s account list (SpecialAccounts\UserList) could not be read (' + $ReadError + '), so an account hidden from the sign-in screen would go unseen (T1564.002).')
+        return $r
+    }
     $hidden = @()
     foreach ($name in @($Values.Keys)) {
         # EXACT-name skip, never a '^PS' prefix match. A hidden account named
@@ -180,8 +205,13 @@ function Get-HiddenAccountVerdict {
 function Get-ShadowVerdict {
     # $Shadow is the raw Terminal Services 'Shadow' policy value, or $null when
     # the value is not set. 0 and 1 require the user's consent; 2 and 4 do not.
-    param($Shadow)
-    $r = @{ Lines = @(); Sev = 'OK' }
+    param($Shadow, [string]$ReadError = '')
+    $r = @{ Lines = @(); Sev = 'OK'; Gap = $false }
+    if ($ReadError) {
+        $r.Gap = $true
+        $r.Lines += ('[WARNING] Remote-session shadowing check NOT performed -- the Terminal Services policy could not be read (' + $ReadError + '), so a setting that lets someone watch this session without asking would go unseen (T1113).')
+        return $r
+    }
     $v = $null
     if ($null -ne $Shadow) { $v = $Shadow -as [int] }
     if ($null -ne $v -and ($v -eq 2 -or $v -eq 4)) {
@@ -196,6 +226,99 @@ function Get-ShadowVerdict {
         $r.Lines += '[OK] Remote session shadowing is not configured (default: permission required).'
     }
     return $r
+}
+
+# PURE. The consent inventory's closing line. $Unread: the stores or entries
+# that could not be read. An [OK] only when every store answered and none
+# held a grant.
+function Get-ConsentSummary {
+    param([int]$GrantCount, [string[]]$Unread)
+    $u = @($Unread | Where-Object { $_ })
+    $out = @()
+    if ($u.Count -gt 0) {
+        $names = (@($u | Select-Object -First 3) -join '; ') + $(if ($u.Count -gt 3) { '; and ' + ($u.Count - 3) + ' more' } else { '' })
+        $out += ('[WARNING] Camera, microphone and location permission check NOT performed in full -- ' + $u.Count + ' permission store(s) could not be read (' + $names + '), so an unsigned program holding one of them there would go unseen (T1125/T1123).')
+    } elseif ($GrantCount -eq 0) {
+        $out += '[OK] No applications currently hold camera, microphone or location permission.'
+    }
+    return @{ Lines = $out; Gap = ($u.Count -gt 0) }
+}
+
+# PURE. $Hits: what matched. $Failed: @( @{ Source; Error } ) for each source
+# that did not answer. A hit and a gap are both said; [OK] only when every
+# source answered and none matched.
+function Get-ProductVerdict {
+    param([string[]]$Hits, $Failed, [int]$MaxList = 30)
+    $h = @($Hits | Where-Object { $_ } | Sort-Object -Unique)
+    $f = @($Failed | Where-Object { $null -ne $_ })
+    $r = @{ Lines = @(); Sev = 'OK'; Gap = ($f.Count -gt 0) }
+    if ($h.Count -gt 0) {
+        $r.Lines += '[WARNING] Software commonly sold for monitoring another person is present on this PC:'
+        foreach ($x in ($h | Select-Object -First $MaxList)) { $r.Lines += "  $x" }
+        if ($h.Count -gt $MaxList) { $r.Lines += "  ...and $($h.Count - $MaxList) more." }
+        # Both of these are CONTEXT for the finding above. They print in the same
+        # place and carry the same weight to a reader; what the tag changes is the
+        # count, and one finding was printing as three.
+        $r.Lines += '[INFO] These products are also sold legitimately for parental control and workplace monitoring, so this is NOT proof of wrongdoing -- but if you did not install it and were not told it was here, treat it seriously.'
+        $r.Lines += '[INFO] Before removing it, read the READ THIS FIRST section at the top of this report: removing it can alert whoever installed it, and you may want to preserve evidence first.'
+        $r.Sev = 'WARNING'
+    }
+    if ($f.Count -gt 0) {
+        $r.Lines += ('[WARNING] Monitoring-product check NOT performed in full -- ' + (@($f | ForEach-Object { [string]$_.Source + ' (' + [string]$_.Error + ')' }) -join '; ') + ' did not answer, so a monitoring product present only there would go unseen.')
+    } elseif ($h.Count -eq 0) {
+        $r.Lines += '[OK] No known consumer monitoring/spouseware products detected.'
+    }
+    return $r
+}
+
+function ConvertTo-OneLine {
+    param($Err)
+    $m = ''
+    if ($Err -is [System.Management.Automation.ErrorRecord]) { $m = [string]$Err.Exception.Message } elseif ($Err -is [Exception]) { $m = [string]$Err.Message } else { $m = [string]$Err }
+    $m = ($m -replace '[\r\n\t]+', ' ').Trim()
+    if (-not $m) { $m = 'no message' }
+    if ($m.Length -gt 160) { $m = $m.Substring(0, 160) + '...' }
+    return $m
+}
+
+# PURE. A named property of a Get-ItemProperty result, or $null. A key with no
+# values at all gives back NOTHING (not an empty object), and Windows ships
+# such keys -- the legacy stubs under Uninstall (AddressBook, IE40, WIC...) --
+# so indexing the result directly threw "Cannot index into a null array" and
+# the first draft read every PC's installed-program list as unreadable.
+function Get-PropValue {
+    param($Obj, [string]$Name)
+    if ($null -eq $Obj) { return $null }
+    $pp = $Obj.PSObject.Properties[$Name]
+    if ($null -eq $pp) { return $null }
+    return $pp.Value
+}
+
+# The child keys of a key Read-Key already opened: what could be listed, and
+# each child that could not be opened NAMED -- one restricted entry must not
+# end the whole listing (grade what is readable, name what is not).
+function Get-ChildKeys {
+    param([string]$Path)
+    $errs = $null
+    $kids = @(Get-ChildItem -LiteralPath $Path -ErrorAction SilentlyContinue -ErrorVariable errs)
+    $bad = @()
+    foreach ($e in @($errs)) {
+        if ($null -eq $e) { continue }
+        $t = [string]$e.TargetObject
+        if (-not $t) { $t = $Path }
+        $bad += ((Split-Path -Leaf $t) + ': ' + (ConvertTo-OneLine $e))
+    }
+    return @{ Kids = $kids; Bad = $bad }
+}
+
+# PURE. Whether a failed Get-Item said "this key does not exist".
+function Test-KeyMissing {
+    param($Err)
+    if ($null -eq $Err) { return $false }
+    $x = $Err.Exception
+    $d = 0
+    while ($null -ne $x -and $d -lt 6) { if ($x -is [System.Management.Automation.ItemNotFoundException]) { return $true }; $x = $x.InnerException; $d++ }
+    return ([string]$Err.FullyQualifiedErrorId -like 'PathNotFound*')
 }
 
 if ($SelfTest) {
@@ -272,64 +395,127 @@ if ($SelfTest) {
         T "ordinary software is not a monitoring product: '$ordinary'" ($null -eq (Test-MonitorName $ordinary)) 'matched'
     }
 
+    # (7) A SOURCE THAT DID NOT ANSWER. Every one of these used to print [OK].
+    $v = Get-HiddenAccountVerdict -Values @{} -ReadError 'Requested registry access is not allowed.'
+    T 'a UserList key that could not be read is a raised gap, never "No accounts are hidden"' `
+      ($v.Gap -and (& $J $v) -match '^\[WARNING\] Hidden-account check NOT performed' -and (& $J $v) -notmatch '\[OK\]') (& $J $v)
+    $v = Get-ShadowVerdict -Shadow $null -ReadError 'Requested registry access is not allowed.'
+    T 'a Shadow policy that could not be read is a raised gap, never "not configured"' `
+      ($v.Gap -and (& $J $v) -match 'shadowing check NOT performed' -and (& $J $v) -notmatch 'not configured') (& $J $v)
+    $v = Get-ConsentSummary -GrantCount 0 -Unread @('HKLM webcam')
+    T 'a consent store that could not be read is a raised gap, never "No applications currently hold"' `
+      ($v.Gap -and (& $J $v) -match 'permission check NOT performed in full -- 1 permission store' -and (& $J $v) -notmatch '\[OK\]') (& $J $v)
+    $v = Get-ConsentSummary -GrantCount 0 -Unread @()
+    T 'every consent store answered with no grant: the [OK]' ((-not $v.Gap) -and (& $J $v) -match '^\[OK\] No applications currently hold') (& $J $v)
+    $v = Get-ConsentSummary -GrantCount 4 -Unread @()
+    T 'grants listed and every store read: no closing line to add' ((-not $v.Gap) -and @($v.Lines).Count -eq 0) (& $J $v)
+    foreach ($src in @('running processes', 'services', 'installed programs', 'scheduled tasks')) {
+        $v = Get-ProductVerdict -Hits @() -Failed @(@{ Source = $src; Error = 'x' })
+        T ("the monitoring-product search with $src not answering is a raised gap, never the [OK]") `
+          ($v.Gap -and $v.Sev -eq 'OK' -and (& $J $v) -match ('NOT performed in full -- ' + [regex]::Escape($src)) -and (& $J $v) -notmatch '\[OK\]') (& $J $v)
+    }
+    $v = Get-ProductVerdict -Hits @() -Failed @(@{ Source = 'services'; Error = 'a' }, @{ Source = 'scheduled tasks'; Error = 'b' })
+    T 'two sources not answering are both named' ((& $J $v) -match 'services \(a\); scheduled tasks \(b\)') (& $J $v)
+    $v = Get-ProductVerdict -Hits @('running process: mspy') -Failed @(@{ Source = 'services'; Error = 'x' })
+    T 'a hit AND a source that did not answer: both said, the hit still WARNING -- one cannot hide the other' `
+      ($v.Sev -eq 'WARNING' -and $v.Gap -and (& $J $v) -match 'monitoring another person is present' -and (& $J $v) -match 'NOT performed in full') (& $J $v)
+    $v = Get-ProductVerdict -Hits @() -Failed @()
+    T 'every source answered, nothing matched: the [OK]' ((-not $v.Gap) -and (& $J $v) -match '^\[OK\] No known consumer monitoring') (& $J $v)
+    T 'an error message is one line' ((ConvertTo-OneLine ("a`r`nb")) -eq 'a b') (ConvertTo-OneLine ("a`r`nb"))
+    $missErr = $null; if (Test-Path -LiteralPath 'HKCU:\') { try { $null = Get-Item -LiteralPath 'HKCU:\Software\dz_selftest_no_such_key_7f3a' -ErrorAction Stop } catch { $missErr = $_ } }
+    if ($null -eq $missErr) { try { $null = Get-Item -LiteralPath (Join-Path ([IO.Path]::GetTempPath()) 'dz_no_such_item_7f3a') -ErrorAction Stop } catch { $missErr = $_ } }
+    T 'a key that does not exist is MISSING, never unreadable (no false gap on a PC without it)' (Test-KeyMissing $missErr) ([string]$missErr.FullyQualifiedErrorId)
+    T 'a key with no values (Get-ItemProperty returns nothing) reads as no value, never an error' (($null -eq (Get-PropValue $null 'DisplayName')) -and ((Get-PropValue ([pscustomobject]@{ DisplayName = 'x' }) 'DisplayName') -eq 'x') -and ($null -eq (Get-PropValue ([pscustomobject]@{ Other = 1 }) 'DisplayName'))) ''
+    T 'an access denial is not "missing"' (-not (Test-KeyMissing (New-Object System.Management.Automation.ErrorRecord ((New-Object System.Security.SecurityException 'Requested registry access is not allowed.')), 'System.Security.SecurityException,Microsoft.PowerShell.Commands.GetItemCommand', 'PermissionDenied', $null))) ''
+
     if ($script:stFails) { Write-Output "[FAIL] $($script:stFails) stalkerware_check self-test expectation(s) unmet"; exit 1 }
-    Write-Output '[OK] stalkerware_check self-test: the CodexSandbox pair stays a WARNING finding with its framing, psadmin is not swallowed, a junk value cannot fake a clean verdict, an unset Shadow is not a finding, and no block prints two severity lines.'
+    Write-Output '[OK] stalkerware_check self-test: the CodexSandbox pair stays a WARNING finding with its framing, psadmin is not swallowed, a junk value cannot fake a clean verdict, an unset Shadow is not a finding, and no block prints two severity lines, and a source that did not answer is a raised gap, never an [OK].'
     exit 0
 }
 
 '--- [T1564.002/T1125/T1123/T1113] Covert-monitoring check (is someone watching this person?) ---'
 
+$gap = $false
+
+# Ask for a registry key; tell "does not exist" from "could not be read".
+function Read-Key {
+    param([string]$Path)
+    try { $null = Get-Item -LiteralPath $Path -ErrorAction Stop }
+    catch {
+        # Missing by the exception's type OR its error id, not a typed catch
+        # alone: a missing key must never read as unreadable (a false gap on
+        # every PC), whichever wrapper the engine throws it in.
+        if ((Test-KeyMissing $_)) { return @{ State = 'missing'; Error = '' } }
+        return @{ State = 'unreadable'; Error = (ConvertTo-OneLine $_) }
+    }
+    return @{ State = 'ok'; Error = '' }
+}
+
 # ---- 1. Accounts hidden from the sign-in screen (T1564.002) ---------------
 $ulValues = @{}
-$hlKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList'
-try {
-    if (Test-Path $hlKey) {
-        foreach ($p in (Get-ItemProperty -Path $hlKey -EA Stop).PSObject.Properties) { $ulValues[$p.Name] = $p.Value }
-    }
-} catch {}
+$ulErr = ''
+$hlKey = "$KeyRoot\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList"
+$k = Read-Key $hlKey
+if ($k.State -eq 'unreadable') { $ulErr = $k.Error }
+elseif ($k.State -eq 'ok') {
+    try { foreach ($p in (Get-ItemProperty -LiteralPath $hlKey -ErrorAction Stop).PSObject.Properties) { $ulValues[$p.Name] = $p.Value } }
+    catch { $ulErr = ConvertTo-OneLine $_ }
+}
 # Reading is above; the RULE is in Get-HiddenAccountVerdict, which takes the
 # raw map including PowerShell's note-properties so the self-test reaches the
 # exact-name skip and the junk-value path.
-$hv = Get-HiddenAccountVerdict -Values $ulValues
+$hv = Get-HiddenAccountVerdict -Values $ulValues -ReadError $ulErr
 foreach ($l in $hv.Lines) { $l }
 $sev = Get-MaxSev $sev $hv.Sev
+if ($hv.Gap) { $gap = $true }
 
 # ---- 2. Silent RDP shadowing (T1113) --------------------------------------
 $shadow = $null
-try { $shadow = (Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name 'Shadow' -EA SilentlyContinue).Shadow } catch {}
-$sv = Get-ShadowVerdict -Shadow $shadow
+$shErr = ''
+$tsKey = "$KeyRoot\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services"
+$k = Read-Key $tsKey
+if ($k.State -eq 'unreadable') { $shErr = $k.Error }
+elseif ($k.State -eq 'ok') {
+    $tp = $null
+    try { $tp = Get-ItemProperty -LiteralPath $tsKey -ErrorAction Stop } catch { $shErr = ConvertTo-OneLine $_ }
+    if (-not $shErr) { $shadow = Get-PropValue $tp 'Shadow' }
+}
+$sv = Get-ShadowVerdict -Shadow $shadow -ReadError $shErr
 foreach ($l in $sv.Lines) { $l }
 $sev = Get-MaxSev $sev $sv.Sev
+if ($sv.Gap) { $gap = $true }
 
 # ---- 3. Camera / microphone / location access -----------------------------
 # Presented as an inventory, NOT a verdict: an app holding a webcam permission
 # is completely normal. Only an unsigned or staging-path binary is raised.
 $capRoots = @(
     @{ Hive = 'HKCU:'; Label = 'this user' },
-    @{ Hive = 'HKLM:'; Label = 'all users' }
+    @{ Hive = $KeyRoot; Label = 'all users' }
 )
 $caps = @('webcam', 'microphone', 'location')
 $grants = @()
+$unreadStores = @()
 foreach ($r in $capRoots) {
     foreach ($cap in $caps) {
         $base = "$($r.Hive)\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\$cap"
         foreach ($sub in @($base, "$base\NonPackaged")) {
-            if (-not (Test-Path $sub)) { continue }
-            try {
-                foreach ($k in (Get-ChildItem -LiteralPath $sub -EA SilentlyContinue)) {
-                    $val = $null
-                    try { $val = (Get-ItemProperty -LiteralPath $k.PSPath -Name 'Value' -EA SilentlyContinue).Value } catch {}
-                    if ($val -ne 'Allow') { continue }
-                    $last = $null
-                    try {
-                        $lu = (Get-ItemProperty -LiteralPath $k.PSPath -Name 'LastUsedTimeStop' -EA SilentlyContinue).LastUsedTimeStop
-                        if ($lu -and $lu -gt 0) { $last = [datetime]::FromFileTime($lu) }
-                    } catch {}
-                    # NonPackaged keys encode the exe path with # instead of \.
-                    $app = $k.PSChildName -replace '#', '\'
-                    $grants += New-Object PSObject -Property @{ Cap = $cap; App = $app; Scope = $r.Label; Last = $last }
-                }
-            } catch {}
+            $k = Read-Key $sub
+            if ($k.State -eq 'missing') { continue }
+            if ($k.State -eq 'unreadable') { $unreadStores += ("$($r.Label) $cap" + $(if ($sub -like '*NonPackaged') { ' (desktop apps)' } else { '' }) + ': ' + $k.Error); continue }
+            $ckl = Get-ChildKeys $sub
+            foreach ($b in $ckl.Bad) { $unreadStores += ("$($r.Label) $cap entry " + $b) }
+            foreach ($ck in $ckl.Kids) {
+                $props = $null
+                try { $props = Get-ItemProperty -LiteralPath $ck.PSPath -ErrorAction Stop }
+                catch { $unreadStores += ("$($r.Label) $cap entry " + $ck.PSChildName + ': ' + (ConvertTo-OneLine $_)); continue }
+                if ((Get-PropValue $props 'Value') -ne 'Allow') { continue }
+                $last = $null
+                $lu = Get-PropValue $props 'LastUsedTimeStop'
+                if ($lu) { try { if ($lu -gt 0) { $last = [datetime]::FromFileTime($lu) } } catch {} }
+                # NonPackaged keys encode the exe path with # instead of \.
+                $app = $ck.PSChildName -replace '#', '\'
+                $grants += New-Object PSObject -Property @{ Cap = $cap; App = $app; Scope = $r.Label; Last = $last }
+            }
         }
     }
 }
@@ -364,58 +550,57 @@ if ($grants.Count -gt 0) {
             $sev = Get-MaxSev $sev 'WARNING'
         }
     }
-} else {
-    '[OK] No applications currently hold camera, microphone or location permission.'
 }
+$cs = Get-ConsentSummary -GrantCount $grants.Count -Unread $unreadStores
+foreach ($l in $cs.Lines) { $l }
+if ($cs.Gap) { $gap = $true }
 
 # ---- 4. Known consumer monitoring products --------------------------------
 $hits = @()
+$failed = @()
 try {
-    foreach ($p in (Get-Process -EA SilentlyContinue)) {
-        $m = Test-MonitorName $p.ProcessName
-        if ($m) { $hits += "running process: $($p.ProcessName)" }
+    foreach ($p in @(Get-Process -ErrorAction Stop)) {
+        if (Test-MonitorName $p.ProcessName) { $hits += "running process: $($p.ProcessName)" }
     }
-} catch {}
+} catch { $failed += @{ Source = 'running processes'; Error = (ConvertTo-OneLine $_) } }
 try {
-    foreach ($s in (Get-CimInstance Win32_Service -EA SilentlyContinue)) {
-        $m = Test-MonitorName ([string]$s.Name + ' ' + [string]$s.DisplayName)
-        if ($m) { $hits += "service: $($s.Name) ($($s.DisplayName))" }
+    foreach ($s in @(Get-CimInstance Win32_Service -ErrorAction Stop)) {
+        if (Test-MonitorName ([string]$s.Name + ' ' + [string]$s.DisplayName)) { $hits += "service: $($s.Name) ($($s.DisplayName))" }
     }
-} catch {}
+} catch { $failed += @{ Source = 'services'; Error = (ConvertTo-OneLine $_) } }
+$unreadPrograms = @()
 foreach ($uk in @(
-    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
-    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall',
+    "$KeyRoot\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+    "$KeyRoot\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
     'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall')) {
-    if (-not (Test-Path $uk)) { continue }
-    try {
-        foreach ($k in (Get-ChildItem -LiteralPath $uk -EA SilentlyContinue)) {
-            $dn = $null
-            try { $dn = (Get-ItemProperty -LiteralPath $k.PSPath -Name 'DisplayName' -EA SilentlyContinue).DisplayName } catch {}
-            $m = Test-MonitorName $dn
-            if ($m) { $hits += "installed program: $dn" }
-        }
-    } catch {}
+    $k = Read-Key $uk
+    if ($k.State -eq 'missing') { continue }
+    if ($k.State -eq 'unreadable') { $unreadPrograms += ($uk + ': ' + $k.Error); continue }
+    $ckl = Get-ChildKeys $uk
+    $unreadPrograms += $ckl.Bad
+    foreach ($ck in $ckl.Kids) {
+        $ip = $null
+        try { $ip = Get-ItemProperty -LiteralPath $ck.PSPath -ErrorAction Stop }
+        catch { $unreadPrograms += ($ck.PSChildName + ': ' + (ConvertTo-OneLine $_)); continue }
+        $dn = [string](Get-PropValue $ip 'DisplayName')
+        if (Test-MonitorName $dn) { $hits += "installed program: $dn" }
+    }
+}
+if ($unreadPrograms.Count -gt 0) {
+    $failed += @{ Source = 'installed programs'; Error = ([string]$unreadPrograms.Count + ' entr(ies) could not be read, first: ' + $unreadPrograms[0]) }
 }
 try {
-    foreach ($t in (Get-ScheduledTask -EA SilentlyContinue)) {
-        $m = Test-MonitorName ([string]$t.TaskName)
-        if ($m) { $hits += "scheduled task: $($t.TaskPath)$($t.TaskName)" }
+    foreach ($t in @(Get-ScheduledTask -ErrorAction Stop)) {
+        if (Test-MonitorName ([string]$t.TaskName)) { $hits += "scheduled task: $($t.TaskPath)$($t.TaskName)" }
     }
-} catch {}
+} catch { $failed += @{ Source = 'scheduled tasks'; Error = (ConvertTo-OneLine $_) } }
 
-$hits = @($hits | Sort-Object -Unique)
-if ($hits.Count -gt 0) {
-    '[WARNING] Software commonly sold for monitoring another person is present on this PC:'
-    foreach ($h in ($hits | Select-Object -First $MaxList)) { "  $h" }
-    if ($hits.Count -gt $MaxList) { "  ...and $($hits.Count - $MaxList) more." }
-    # Both of these are CONTEXT for the finding above. They print in the same
-    # place and carry the same weight to a reader; what the tag changes is the
-    # count, and one finding was printing as three.
-    '[INFO] These products are also sold legitimately for parental control and workplace monitoring, so this is NOT proof of wrongdoing -- but if you did not install it and were not told it was here, treat it seriously.'
-    '[INFO] Before removing it, read the READ THIS FIRST section at the top of this report: removing it can alert whoever installed it, and you may want to preserve evidence first.'
-    $sev = Get-MaxSev $sev 'WARNING'
-} else {
-    '[OK] No known consumer monitoring/spouseware products detected.'
-}
+$pv = Get-ProductVerdict -Hits $hits -Failed $failed -MaxList $MaxList
+foreach ($l in $pv.Lines) { $l }
+$sev = Get-MaxSev $sev $pv.Sev
+if ($pv.Gap) { $gap = $true }
 
 Write-Marker -Name 'stalkerware' -Sev $sev
+if ($gap) { Write-Marker -Name 'stalkerware_gap' -Sev 'WARNING' }
+# Written last: the bat raises a row when it is absent.
+Write-Marker -Name 'stalkerware_done' -Sev 'done'
