@@ -330,3 +330,5 @@ if (-not $acOk) {
 }
 Write-Marker -Name 'appcert' -Sev $appcertSev
 if ($appcertGap -ne 'OK') { Write-Marker -Name 'appcert_gap' -Sev $appcertGap }
+# Written last: the caller raises "produced no verdict" when it is absent.
+Write-Marker -Name 'startup_done' -Sev 'done'

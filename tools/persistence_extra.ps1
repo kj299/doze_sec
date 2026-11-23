@@ -1396,3 +1396,5 @@ if (-not $tpOk) {
 }
 Write-Marker -Name 'timeprov' -Sev $tpSev
 if ($tpGap -ne 'OK') { Write-Marker -Name 'timeprov_gap' -Sev $tpGap }
+# Written last: the caller raises "produced no verdict" when it is absent.
+Write-Marker -Name 'persist_extra_done' -Sev 'done'

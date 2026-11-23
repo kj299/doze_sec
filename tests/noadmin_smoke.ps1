@@ -168,6 +168,12 @@ function Assert-LedgerConsistency {
     Assert ($ftMax.Success -and $ftMax.Groups[1].Value -eq $lgMax) `
         ("{0}: footer LEDGER MAXSEV ({1}) matches ledger contents" -f $Label, $lgMax) `
         ("{0}: footer LEDGER MAXSEV '{1}' disagrees with ledger '{2}'" -f $Label, $ftMax.Groups[1].Value, $lgMax)
+    # Every helper must reach its end on this runner: a "produced no verdict"
+    # row is a helper that died (or a token path that skips its done marker).
+    $nvLines = @(($Text -split "`r?`n") | Where-Object { $_ -match '^\[WARNING\] .* produced no verdict -- NOT performed' })
+    Assert ($nvLines.Count -eq 0) `
+        ("{0}: every helper reached its end (no 'produced no verdict' line)" -f $Label) `
+        ("{0}: {1} helper(s) produced no verdict: {2}" -f $Label, $nvLines.Count, (($nvLines | ForEach-Object { $_.Trim() }) -join ' | '))
     $alarmLines = @(($Text -split "`r?`n") | Where-Object { $_ -match 'a raise is missing|an in-section raise is missing' })
     Assert ($alarmLines.Count -eq 0) `
         ("{0}: no ledger-divergence alarm fired" -f $Label) `

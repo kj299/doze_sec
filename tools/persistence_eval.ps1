@@ -875,3 +875,5 @@ if (-not $found -and $runUnread.Count -eq 0 -and $ifeoOk) {
 } elseif ($MarkerFile) {
     Write-MarkerFile -Path $MarkerFile -Value 'hit'
 }
+# Written last: the caller raises "produced no verdict" when it is absent.
+if ($DoneFile) { Write-MarkerFile -Path $DoneFile -Value 'done' }

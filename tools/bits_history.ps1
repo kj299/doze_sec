@@ -1003,3 +1003,5 @@ Write-Marker -Name 'bitshist' -Sev $report.Sev
 if ($report.UpSev -ne 'OK') { Write-Marker -Name 'bitshist_up' -Sev $report.UpSev }
 if ($report.GapSev -ne 'OK') { Write-Marker -Name 'bitshist_gap' -Sev $report.GapSev }
 if ($report.Deferred -gt 0) { Write-Marker -Name 'bitshist_deferred' -Sev ([string]$report.Deferred) }
+# Written last: the caller raises "produced no verdict" when it is absent.
+Write-Marker -Name 'bitshist_done' -Sev 'done'
