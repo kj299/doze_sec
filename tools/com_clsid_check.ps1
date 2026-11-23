@@ -54,19 +54,31 @@
 # MARKER: severity word to $MarkerDir\dz_com.txt; caller raises via
 # :dz_finding. Vendor and stale entries write no marker.
 #
+# A KEY THAT COULD NOT BE READ IS NOT A CLEAN ONE (2026-11-23). The walk used
+# Test-Path on the root, Get-ChildItem -EA SilentlyContinue and a silenced
+# InprocServer32 read, so a CLSID tree, or entries in it, that could not be
+# read printed "[OK] No user-level COM CLSID overrides." Now a missing root or
+# a CLSID with no InprocServer32 is the ordinary answer; anything that could
+# not be read is counted and named in "[WARNING] ... NOT performed in full",
+# writes dz_com_gap.txt (its own row), and no [OK] is printed over it.
+# dz_com_done.txt is written last.
+#
 # Windows PowerShell 5.1 compatible. Read-only. Executed by helpers-ps51.
 
 [CmdletBinding()]
 param(
     [string]$MarkerDir = $env:TEMP,
     [int]$MaxReport = 15,
+    # Only CI changes this: a throwaway key standing in for the user's CLSID
+    # tree, so a key that cannot be read runs through the real walker.
+    [string]$Root = 'HKCU:\Software\Classes\CLSID',
     [switch]$SelfTest
 )
 
 $ErrorActionPreference = 'Continue'
 
 function Write-Marker {
-    param([string]$Sev)
+    param([string]$Sev, [string]$Name = 'com')
     if ($Sev -eq 'OK') { return }
     # The marker IS the route to the findings ledger: a failed write here turns
     # a real finding into a CLEAN section. Create the directory rather than
@@ -75,7 +87,42 @@ function Write-Marker {
     if (-not (Test-Path -LiteralPath $MarkerDir)) {
         New-Item -ItemType Directory -Path $MarkerDir -Force -EA SilentlyContinue | Out-Null
     }
-    Set-Content -LiteralPath (Join-Path $MarkerDir 'dz_com.txt') -Value $Sev -Encoding ASCII
+    Set-Content -LiteralPath (Join-Path $MarkerDir ("dz_{0}.txt" -f $Name)) -Value $Sev -Encoding ASCII
+}
+
+# PURE. Whether a failed Get-Item said "this key does not exist".
+function Test-KeyMissing {
+    param($Err)
+    if ($null -eq $Err) { return $false }
+    $x = $Err.Exception
+    $d = 0
+    while ($null -ne $x -and $d -lt 6) { if ($x -is [System.Management.Automation.ItemNotFoundException]) { return $true }; $x = $x.InnerException; $d++ }
+    return ([string]$Err.FullyQualifiedErrorId -like 'PathNotFound*')
+}
+
+# PURE. A named property of a Get-ItemProperty result, or $null (a key with
+# no values gives back nothing at all).
+function Get-PropValue {
+    param($Obj, [string]$Name)
+    if ($null -eq $Obj) { return $null }
+    $pp = $Obj.PSObject.Properties[$Name]
+    if ($null -eq $pp) { return $null }
+    return $pp.Value
+}
+
+# PURE. The closing line(s): [OK] only when nothing was flagged, stale or
+# vendor AND every key was read; otherwise a gap line that names what was not.
+function Get-ClsidSummary {
+    param([int]$Flagged, [int]$Stale, [int]$Vendor, [string[]]$Unread)
+    $u = @($Unread | Where-Object { $_ })
+    $out = @()
+    if ($u.Count -gt 0) {
+        $names = (@($u | Select-Object -First 3) -join '; ') + $(if ($u.Count -gt 3) { '; and ' + ($u.Count - 3) + ' more' } else { '' })
+        $out += ('[WARNING] COM CLSID override check NOT performed in full -- ' + $u.Count + ' key(s) could not be read (' + $names + '), so a COM hijack registered there would go unseen (T1546.015).')
+    } elseif ($Flagged -eq 0 -and $Stale -eq 0 -and $Vendor -eq 0) {
+        $out += '[OK] No user-level COM CLSID overrides.'
+    }
+    return @{ Lines = $out; Gap = ($u.Count -gt 0) }
 }
 
 # Ported verbatim from the bat block.
@@ -158,12 +205,31 @@ function Get-ClsidOverrides {
     # pipeline: `return $out` on an empty array yields $null and the caller's
     # @($null) is a one-element array holding null (see hosts_check.ps1 and
     # module_inspect.ps1 #201 for what that costs).
+    # Every key that could not be read is added to $script:ClsidUnread, named.
     param([string]$Root = 'HKCU:\Software\Classes\CLSID')
-    if (-not (Test-Path $Root)) { return }
-    foreach ($k in (Get-ChildItem $Root -EA SilentlyContinue)) {
-        $sv = Get-ItemProperty ("$($k.PSPath)\InprocServer32") -Name '(default)' -EA SilentlyContinue
-        if (-not $sv) { continue }
-        $dll = [string]$sv.'(default)'
+    $script:ClsidUnread = New-Object System.Collections.ArrayList
+    $oneLine = { param($e) $m = ([string]$e.Exception.Message -replace '[\r\n\t]+', ' ').Trim(); if (-not $m) { $m = 'no message' }; if ($m.Length -gt 120) { $m = $m.Substring(0, 120) + '...' }; $m }
+    try { $null = Get-Item -LiteralPath $Root -ErrorAction Stop }
+    catch {
+        if (-not (Test-KeyMissing $_)) { [void]$script:ClsidUnread.Add(('the CLSID tree: ' + (& $oneLine $_))) }
+        return
+    }
+    $errs = $null
+    $kids = @(Get-ChildItem -LiteralPath $Root -ErrorAction SilentlyContinue -ErrorVariable errs)
+    foreach ($e in @($errs)) { if ($null -ne $e) { [void]$script:ClsidUnread.Add(((Split-Path -Leaf ([string]$e.TargetObject)) + ': ' + (& $oneLine $e))) } }
+    foreach ($k in $kids) {
+        $ipath = "$($k.PSPath)\InprocServer32"
+        # A CLSID with no InprocServer32 is not an in-process override at all;
+        # one whose InprocServer32 could not be read is named, not passed.
+        try { $null = Get-Item -LiteralPath $ipath -ErrorAction Stop }
+        catch {
+            if (-not (Test-KeyMissing $_)) { [void]$script:ClsidUnread.Add(($k.PSChildName + ': ' + (& $oneLine $_))) }
+            continue
+        }
+        $sv = $null
+        try { $sv = Get-ItemProperty -LiteralPath $ipath -ErrorAction Stop }
+        catch { [void]$script:ClsidUnread.Add(($k.PSChildName + ': ' + (& $oneLine $_))); continue }
+        $dll = [string](Get-PropValue $sv '(default)')
         if (-not $dll) { continue }
         if ($dll -match $script:SkipPathRx) { continue }
         New-Object PSObject -Property @{ Guid = $k.PSChildName; Raw = $dll }
@@ -272,6 +338,17 @@ if ($SelfTest) {
     T 'an absent CLSID root yields zero entries under @()' `
       (@(Get-ClsidOverrides -Root 'HKCU:\Software\Classes\NoSuchKeyForSelfTest').Count -eq 0) ''
 
+    # --- a key that could not be read is a raised gap, never the [OK] -------
+    $c = Get-ClsidSummary -Flagged 0 -Stale 0 -Vendor 0 -Unread @('the CLSID tree: Requested registry access is not allowed.')
+    T 'a CLSID tree that could not be read is a raised gap, never "[OK] No user-level COM CLSID overrides"' `
+      ($c.Gap -and ($c.Lines -join ' ') -match '^\[WARNING\] COM CLSID override check NOT performed in full -- 1 key' -and ($c.Lines -join ' ') -notmatch '\[OK\]') ($c.Lines -join ' | ')
+    $c = Get-ClsidSummary -Flagged 1 -Stale 0 -Vendor 0 -Unread @('{x}: denied')
+    T 'a flagged override AND an unreadable entry: the gap is still said beside the finding' ($c.Gap -and ($c.Lines -join ' ') -match 'NOT performed in full') ($c.Lines -join ' | ')
+    $c = Get-ClsidSummary -Flagged 0 -Stale 0 -Vendor 0 -Unread @()
+    T 'every key read and nothing there: the [OK]' ((-not $c.Gap) -and ($c.Lines -join ' ') -eq '[OK] No user-level COM CLSID overrides.') ($c.Lines -join ' | ')
+    $c = Get-ClsidSummary -Flagged 0 -Stale 2 -Vendor 0 -Unread @()
+    T 'stale entries listed and every key read: no closing [OK] (the listing says what was found)' ((-not $c.Gap) -and @($c.Lines).Count -eq 0) ($c.Lines -join ' | ')
+
     if ($fails) { Write-Output "[FAIL] $fails com_clsid_check self-test expectation(s) unmet"; exit 1 }
     Write-Output '[OK] com_clsid_check self-test: a dangling vendor registration is context, a dangling one in a staging path is not, and every present-file verdict is unchanged.'
     exit 0
@@ -282,7 +359,7 @@ $vendor  = @()
 $stale   = @()
 $flagged = @()
 
-foreach ($e in @(Get-ClsidOverrides)) {
+foreach ($e in @(Get-ClsidOverrides -Root $Root)) {
     if ($null -eq $e) { continue }
     $entry = $e.Guid + ' -> ' + $e.Raw
     $v = Get-ClsidVerdict -Guid $e.Guid -RawPath $e.Raw
@@ -311,8 +388,10 @@ if ($vendor.Count -gt 0) {
     $vendor | Select-Object -First $MaxReport | ForEach-Object { '  ' + $_ }
     if ($vendor.Count -gt $MaxReport) { "  ...and $($vendor.Count - $MaxReport) more not listed (report cap $MaxReport)." }
 }
-if ($flagged.Count -eq 0 -and $stale.Count -eq 0 -and $vendor.Count -eq 0) {
-    '[OK] No user-level COM CLSID overrides.'
-}
+$cs = Get-ClsidSummary -Flagged $flagged.Count -Stale $stale.Count -Vendor $vendor.Count -Unread @($script:ClsidUnread)
+foreach ($l in $cs.Lines) { $l }
 
 Write-Marker -Sev $sev
+if ($cs.Gap) { Write-Marker -Name 'com_gap' -Sev 'WARNING' }
+# Written last: the caller raises "produced no verdict" when it is absent.
+Write-Marker -Name 'com_done' -Sev 'done'

@@ -2920,6 +2920,10 @@ jobs:
           Write-Host 'persistence_eval IFEO plant OK'
           exit 0
 
+      - name: logon_persistence / com_clsid_check / persistence_extra -- a key or profile that cannot be read is a raised gap, never [OK]
+        shell: powershell
+        run: |
+          . .\.github\ci\persistence_gap_states.ps1
       - name: logon_persistence.ps1 (logon/unlock vectors; clean runner has no CRITICAL)
         shell: powershell
         run: |

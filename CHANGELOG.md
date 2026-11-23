@@ -6,6 +6,22 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Logon, profile and COM persistence checks no longer read clean when a key could not be read
+- **`tools/logon_persistence.ps1`** covers Winlogon Notify, network providers, credential providers, LSA packages, the screensaver and the logon script. Four of its six checks printed an unraised `[SKIPPED]`; the others read with errors silenced, so a key that could not be read printed the same `[OK]` as an empty one. A credential provider whose COM registration could not be read was skipped as "stale".
+  - Each key is now asked with `-ErrorAction Stop`. A missing key is the ordinary answer.
+  - A key that could not be read is named in `[WARNING] ... NOT performed in full` and raised as its own row (`dz_logon_gap.txt`).
+  - Providers with no COM registration are counted in an `[INFO]` line.
+  - The tool gains its first `-SelfTest`.
+- **`tools/persistence_extra.ps1`:**
+  - A PowerShell profile that could not be read printed `[OK] ... empty/unreadable`. It is now a raised gap (`dz_psprofile_gap.txt`).
+  - Print-processor entries that could not be read printed a `[WARNING]` that raised nothing, under an `[OK] All N ... signed` line. They now raise the existing gap row, and the `[OK]` needs every entry read.
+  - On a standard-user token, "No BITS transfer jobs queued" now says "for this user", followed by the same scope line the tool prints when jobs exist.
+- **`tools/com_clsid_check.ps1`:**
+  - A CLSID tree, or entries in it, that could not be read printed `[OK] No user-level COM CLSID overrides.` They are now counted and named, and raised as their own row (`dz_com_gap.txt`).
+  - The tool now writes a done marker, and `tools/lint_helper_done.ps1` covers it.
+- CI plants each failure through the real reader: a denied throwaway key for the logon and COM checks, and a PowerShell profile held open with no sharing. A clean runner must raise none of these gaps.
+- `Test-KeyMissing` and `Get-PropValue` are now pinned shared helpers.
+
 ### A helper that died partway no longer leaves its section reading CLEAN
 Nine helpers had markers the bats read, but nothing checked that the helper had finished:
 `persistence_eval` (Run keys and IFEO), `startup_eval`, `persistence_extra`, `logon_persistence`, `module_inspect`, `service_signature_check`, `edr_presence`, `hosts_check` and `bits_history`.
