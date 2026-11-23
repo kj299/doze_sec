@@ -6,6 +6,13 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### The matcher's "no match" no longer covers "could not read" (`tools/select_lines.ps1`)
+Every caller branches on the matcher's exit code: 0 matched, 1 nothing matched, 2 nothing to match with. Exit 1 also covered a missing input file and any crash: the reader had no `catch`, and Windows PowerShell 5.1 returns 1 for an unhandled error under `-File`. So an input file held open by antivirus, or a read that threw, reached each caller's `[OK]`:
+- Section 4: "No processes from suspicious locations" (and its PASS tile) and "No LOLBin processes";
+- Sections 18a, 18f and 18g, the IOC matches.
+
+The matcher now exits 2 for a missing input and for any error, which each of those callers already reports as a raised NOT-performed gap. A file locked by another process is pinned on Windows (17 cases). The Event 4688 listings that ignore the exit code are recorded in the backlog.
+
 ### The covert-monitoring check no longer reads clean when it could not look (Section 10)
 `tools/stalkerware_check.ps1` is the check written for someone who may be watched by a person with access to their PC. Every source it reads was silenced:
 - the sign-in screen's hidden-account list, the RDP shadowing policy and the camera, microphone and location permission stores were read with `-EA SilentlyContinue` inside an empty `catch`;

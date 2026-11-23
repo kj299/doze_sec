@@ -26,6 +26,17 @@
 # with -Path. Stdin is intentionally not supported because powershell.exe -File
 # does not reliably forward piped stdin to the script.
 #
+# EXIT CODES (the contract every caller branches on):
+#   0  at least one line emitted
+#   1  every line was read and none matched -- the ONLY "clean" answer
+#   2  nothing to match with, the input missing, or ANY error while reading
+# Exit 1 used to cover a missing input file too, and a crash: the reader had
+# a try/finally and no catch, and Windows PowerShell 5.1 under -File returns
+# 1 for an unhandled terminating error. So an input file locked by antivirus,
+# or a read that threw, reached every caller's `else if errorlevel 1 echo
+# [OK]` -- Section 4's "No processes from suspicious locations" (and its PASS
+# tile) among them. Found by the 2026-11-22 survey.
+#
 # Notes:
 # - Patterns are taken from trailing positional args (ValueFromRemainingArguments).
 #   This avoids the "powershell -File ... -Pattern a,b" array-splatting quirk
@@ -89,7 +100,20 @@ if ($SelfTest) {
         $r = Run @('-Path', $input1, '-PatternFile', (Join-Path $tmp 'no_such_list.txt'))
         T 'a missing list is exit 2 (NOT performed), never 1' ($r.Exit -eq 2) ("exit=" + $r.Exit)
         $r = Run @('-Path', (Join-Path $tmp 'no_such_input.txt'), '-PatternFile', $list)
-        T 'a missing input file is exit 1 -- the bats check their temp file before calling' ($r.Exit -eq 1) ("exit=" + $r.Exit)
+        T 'a missing input file is exit 2 (NOT performed), never 1: the bats create it with > even when the command fails' ($r.Exit -eq 2) ("exit=" + $r.Exit)
+        $r = Run @('-Path', $tmp, '-PatternFile', $list)
+        T 'an input that cannot be read (here a folder) is exit 2, never the "no match" 1 that callers print [OK] for' ($r.Exit -eq 2 -and $r.Lines.Count -eq 0) ("exit=" + $r.Exit + ' ' + ($r.Lines -join ' | '))
+        # A read that THROWS: a file another process holds open with no sharing
+        # (what antivirus scanning it does). Windows enforces the lock; Linux
+        # does not, so there it is a declared skip.
+        if ($env:OS -eq 'Windows_NT') {
+            $lk = W 'locked.txt' "chisel`n"
+            $fs = [IO.File]::Open($lk, 'Open', 'Read', 'None')
+            try { $r = Run @('-Path', $lk, '-PatternFile', $list) } finally { $fs.Dispose() }
+            T 'an input file locked by another process is exit 2 (the read threw), never 1' ($r.Exit -eq 2) ("exit=" + $r.Exit)
+        } else { Write-Output '[ SKIP ] a locked input file: only Windows enforces the lock; the Windows CI job runs this case' }
+        $r = Run @('-Path', (W 'empty.txt' ''), '-PatternFile', $list)
+        T 'an empty input that was read is exit 1: nothing matched, and that is an answer' ($r.Exit -eq 1) ("exit=" + $r.Exit)
         $r = Run @('-Path', $input1, '-PatternFile', (W 'crlf.txt' "# h`r`nchisel`r`n"))
         T 'a CRLF list matches the same as an LF one' ($r.Exit -eq 0 -and ($r.Lines -join ' ') -match 'CHISEL') ("exit=" + $r.Exit)
         $r = Run @('-Path', $input1, '-PatternFile', (W 'bs.txt' "C:\dz_selftest_ioc\`n"))
@@ -109,8 +133,16 @@ if ($SelfTest) {
         if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force -EA SilentlyContinue }
     }
     if ($fails -gt 0) { Write-Output "FAILED: $fails"; exit 1 }
-    Write-Output '[OK] select_lines self-test: comments are never search strings, matching is literal and case-insensitive, and a list with nothing to match exits 2, not 1.'
+    Write-Output '[OK] select_lines self-test: comments are never search strings, matching is literal and case-insensitive, and a list with nothing to match, a missing input or an unreadable one exits 2, never 1.'
     exit 0
+}
+
+# Any terminating error is exit 2, never the 1 that means "read everything,
+# nothing matched". (A trap covers its whole scope, -SelfTest included; there
+# a throw is simply a non-zero exit, which CI reads as a failure.)
+trap {
+    [Console]::Error.WriteLine('select_lines.ps1: ' + [string]$_.Exception.Message)
+    exit 2
 }
 
 # Load patterns from -PatternFile (mirrors `findstr /g:file`). Blank lines and
@@ -161,7 +193,10 @@ if ($Path -eq '') {
     exit 2
 }
 
-if (-not (Test-Path -LiteralPath $Path)) { exit 1 }
+if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+    [Console]::Error.WriteLine("select_lines.ps1: the input file '$Path' does not exist or is not a file -- nothing was matched.")
+    exit 2
+}
 
 # Mirror findstr's exit code: 0 = at least one line emitted, 1 = none emitted.
 # Callers (e.g. doze_sec.bat) gate WARN/CRITICAL blocks on `if errorlevel 0`.
@@ -179,6 +214,15 @@ try {
             $emitted++
         }
     }
+} catch {
+    # A read that failed part-way is never "no match". If a line already
+    # matched, that hit is the stronger fact and the callers' only way to
+    # raise it is exit 0 -- the incompleteness is still said, on stderr, which
+    # every caller sends into the report. With no hit yet it is exit 2.
+    [Console]::Error.WriteLine('select_lines.ps1: reading the input failed part-way, so lines after the failure were not searched -- ' + [string]$_.Exception.Message)
+    if ($reader) { $reader.Dispose(); $reader = $null }
+    if ($emitted -gt 0) { exit 0 }
+    exit 2
 } finally {
     if ($reader) { $reader.Dispose() }
 }
