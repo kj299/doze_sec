@@ -1082,6 +1082,7 @@ $ppSearch = @(
 $envRoot = 'HKLM:\SYSTEM\CurrentControlSet\Control\Print\Environments'
 $ppCount = 0
 $ppUnread = 0   # entries whose value could not be read -- must not be covered by an all-clear
+$ppNoDriver = 0 # entries read with no Driver value: they cannot load, context only
 $ppOk = $true
 try {
     # The Environments key exists on every Windows: listed directly, so one
@@ -1109,8 +1110,13 @@ try {
                 # the `if (-not $raw) { continue }` below dropped it without
                 # counting it, and the section still reported every registered
                 # entry as validly Microsoft-signed.
-                $raw = [string](Get-ItemProperty -LiteralPath $proc.PSPath -Name 'Driver' -EA SilentlyContinue).Driver
-                if (-not $raw) { $ppUnread++; continue }
+                # A key that could not be READ is the gap; a key read with no
+                # Driver value cannot load anything, and is counted as context.
+                $ppProps = $null
+                try { $ppProps = Get-ItemProperty -LiteralPath $proc.PSPath -ErrorAction Stop } catch { $ppUnread++; continue }
+                $raw = ''
+                if ($null -ne $ppProps -and $ppProps.PSObject.Properties['Driver']) { $raw = [string]$ppProps.Driver }
+                if (-not $raw) { $ppNoDriver++; continue }
                 $ppCount++
                 $dll = Resolve-DllPath -Raw $raw -SearchDirs $ppSearch
                 $v = Get-DllVerdict -Path $dll
@@ -1133,6 +1139,7 @@ if (-not $ppOk) {
     # An all-clear may not cover entries the scan could not read, and the line
     # saying so is a raised gap of its own (it used to print and raise nothing).
     if ($ppUnread -gt 0) { $ppGap = Get-MaxSev $ppGap 'WARNING' }
+    if ($ppNoDriver -gt 0) { "[INFO] $ppNoDriver print processor key(s) carry no Driver value, so they load nothing -- listed as context, not graded." }
     if ($ppUnread -gt 0) { "[WARNING] $ppUnread print processor(s) had an unreadable driver value and were NOT checked -- a registry key name crafted to defeat enumeration is itself suspicious. Inspect them by hand." ; $ppGap = Get-MaxSev $ppGap 'WARNING' }
 }
 Write-Marker -Name 'printproc' -Sev $ppSev

@@ -36,6 +36,14 @@ try {
   # logon_persistence: a Winlogon\Notify key that cannot be read.
   $nk = "$root\lk\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\Notify"
   New-Item -Path $nk -Force | Out-Null
+  # The keys every Windows has, planted readable, so the Notify plant is the
+  # ONLY thing in this tree that can raise dz_logon_gap.
+  $ok = "$root\lk\SYSTEM\CurrentControlSet\Control\NetworkProvider\Order"; New-Item -Path $ok -Force | Out-Null
+  Set-ItemProperty -Path $ok -Name 'ProviderOrder' -Value 'RDPNP,LanmanWorkstation,webclient'
+  New-Item -Path "$root\lk\SYSTEM\CurrentControlSet\Control\Lsa" -Force | Out-Null
+  $r0 = Run 'logon_persistence' @{ KeyRoot = "$root\lk"; UserRoot = "$root\lu" }
+  Write-Host ("MEASURED: the throwaway tree before the deny: markers [{0}]" -f $r0.Markers)
+  if ($r0.Markers -match 'logon_gap') { throw ("the readable throwaway tree already raised a gap, so the Notify plant would prove nothing: " + (($r0.Out -split "`n" | Where-Object { $_ -match 'NOT performed' }) -join ' | ')) }
   if (Deny $nk) {
     $r = Run 'logon_persistence' @{ KeyRoot = "$root\lk"; UserRoot = "$root\lu" }
     Write-Host ($r.Out -split "`n" | Where-Object { $_ -match 'Notify|NOT performed' })

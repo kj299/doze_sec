@@ -216,7 +216,14 @@ function Get-ClsidOverrides {
     }
     $errs = $null
     $kids = @(Get-ChildItem -LiteralPath $Root -ErrorAction SilentlyContinue -ErrorVariable errs)
-    foreach ($e in @($errs)) { if ($null -ne $e) { [void]$script:ClsidUnread.Add(((Split-Path -Leaf ([string]$e.TargetObject)) + ': ' + (& $oneLine $e))) } }
+    foreach ($e in @($errs)) {
+        if ($null -eq $e) { continue }
+        # An error record with no target still names SOMETHING unread: never
+        # let a Split-Path on an empty string drop it.
+        $tgt = [string]$e.TargetObject
+        $nm = $(if ($tgt) { Split-Path -Leaf $tgt } else { 'an entry of the CLSID tree' })
+        [void]$script:ClsidUnread.Add(($nm + ': ' + (& $oneLine $e)))
+    }
     foreach ($k in $kids) {
         $ipath = "$($k.PSPath)\InprocServer32"
         # A CLSID with no InprocServer32 is not an in-process override at all;

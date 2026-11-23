@@ -14,7 +14,7 @@ are a separate, machine-specific record of changes each audit made.
   - The tool gains its first `-SelfTest`.
 - **`tools/persistence_extra.ps1`:**
   - A PowerShell profile that could not be read printed `[OK] ... empty/unreadable`. It is now a raised gap (`dz_psprofile_gap.txt`).
-  - Print-processor entries that could not be read printed a `[WARNING]` that raised nothing, under an `[OK] All N ... signed` line. They now raise the existing gap row, and the `[OK]` needs every entry read.
+  - Print-processor entries that could not be read printed a `[WARNING]` that raised nothing, under an `[OK] All N ... signed` line. They now raise the existing gap row, and the `[OK]` needs every entry read. A key that was read but has no `Driver` value cannot load anything, so it is counted in an `[INFO]` line, not raised.
   - On a standard-user token, "No BITS transfer jobs queued" now says "for this user", followed by the same scope line the tool prints when jobs exist.
 - **`tools/com_clsid_check.ps1`:**
   - A CLSID tree, or entries in it, that could not be read printed `[OK] No user-level COM CLSID overrides.` They are now counted and named, and raised as their own row (`dz_com_gap.txt`).

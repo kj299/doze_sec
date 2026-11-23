@@ -519,7 +519,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $md = Join-Path $env:TEMP ("dz_pe_ci_{0}" -f $PID)
           New-Item -ItemType Directory -Path $md -Force | Out-Null
-          $markers = @('dz_netsh.txt','dz_printproc.txt','dz_portmon.txt','dz_bits.txt','dz_bitsupload.txt','dz_bitsupload_gap.txt','dz_psprofile.txt','dz_timeprov.txt')
+          $markers = @('dz_netsh.txt','dz_printproc.txt','dz_printproc_gap.txt','dz_portmon.txt','dz_bits.txt','dz_bitsupload.txt','dz_bitsupload_gap.txt','dz_psprofile.txt','dz_psprofile_gap.txt','dz_timeprov.txt')
           # Clean runner: a stock Windows image registers netsh helpers, print
           # processors, port monitors and time providers, and they are all
           # Microsoft-signed -- so any CRITICAL here is a false positive in the
