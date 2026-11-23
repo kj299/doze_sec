@@ -16,6 +16,20 @@ function Run([string]$Tool, [hashtable]$Extra) {
     return @{ Out = $o; Markers = (@(Get-ChildItem $md -Filter 'dz_*.txt' | ForEach-Object { $_.BaseName } | Sort-Object) -join ',') }
   } finally { Remove-Item $md -Recurse -Force -EA SilentlyContinue }
 }
+# Remove every Deny rule from a throwaway HKCU key this script denied. Get-Acl
+# opens the key with read access, which the QueryValues deny refuses (it
+# returned $null and the rule stayed), so open it through .NET asking only for
+# READ_CONTROL and WRITE_DAC: the owner holds both whatever the DACL says.
+function Clear-DenyRules([string]$KeyPath) {
+  $sub = $KeyPath -replace '^HKCU:\\', ''
+  $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($sub, [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree, [System.Security.AccessControl.RegistryRights]'ReadPermissions, ChangePermissions')
+  if ($null -eq $k) { return }
+  try {
+    $sec = $k.GetAccessControl([System.Security.AccessControl.AccessControlSections]::Access)
+    foreach ($rule in @($sec.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]) | Where-Object { $_.AccessControlType -eq 'Deny' })) { $sec.RemoveAccessRuleSpecific($rule) }
+    $k.SetAccessControl($sec)
+  } finally { $k.Close() }
+}
 function Deny([string]$Path) {
   $acl = Get-Acl -Path $Path
   $acl.AddAccessRule((New-Object Security.AccessControl.RegistryAccessRule([Security.Principal.WindowsIdentity]::GetCurrent().Name, 'QueryValues', 'Deny')))
@@ -85,7 +99,7 @@ try {
   $ErrorActionPreference = 'Continue'
   if ($fs) { $fs.Dispose() }
   foreach ($p in @("$root\lk\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\Notify", "$root\clsid\{dz-ci-0000}\InprocServer32")) {
-    if (Test-Path $p) { try { $a = Get-Acl -Path $p; foreach ($rule in @($a.Access | Where-Object { $_.AccessControlType -eq 'Deny' })) { [void]$a.RemoveAccessRule($rule) }; Set-Acl -Path $p -AclObject $a } catch { Write-Host ("cleanup: " + $_.Exception.Message) } }
+    if (Test-Path $p) { try { Clear-DenyRules $p } catch { Write-Host ("cleanup: could not clear the deny rule on {0}: {1}" -f $p, $_.Exception.Message) } }
   }
   Remove-Item -Path $root -Recurse -Force -EA SilentlyContinue
   if ($profMade -and $prof) { Remove-Item -LiteralPath $prof -Force -EA SilentlyContinue }
