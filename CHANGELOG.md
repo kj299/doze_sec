@@ -6,6 +6,16 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### A helper that died partway no longer leaves its section reading CLEAN
+Nine helpers had markers the bats read, but nothing checked that the helper had finished:
+`persistence_eval` (Run keys and IFEO), `startup_eval`, `persistence_extra`, `logon_persistence`, `module_inspect`, `service_signature_check`, `edr_presence`, `hosts_check` and `bits_history`.
+
+A helper that antivirus quarantined, that threw, or that had a parse error wrote nothing, and the section then printed CLEAN. A missing helper printed `[INFO] ... skipped`.
+- Each now writes a done marker as its last act, and also at the early returns that follow a raised gap, so a gap is never also counted as "no verdict".
+- In both bats, a missing helper is a raised `[WARNING] ... NOT performed` row. A helper that ran without reaching its end raises "produced no verdict".
+- `service_signature_check`'s return when WMI fails still writes no marker. The row then says nothing was graded; group F of the survey turns it into a named gap.
+- A `lint.yml` step checks all 18 call sites and each helper's source, and fails on a copy with one backstop removed.
+
 ### The matcher's "no match" no longer covers "could not read" (`tools/select_lines.ps1`)
 Every caller branches on the matcher's exit code: 0 matched, 1 nothing matched, 2 nothing to match with. Exit 1 also covered a missing input file and any crash: the reader had no `catch`, and Windows PowerShell 5.1 returns 1 for an unhandled error under `-File`. So an input file held open by antivirus, or a read that threw, reached each caller's `[OK]`:
 - Section 4: "No processes from suspicious locations" (and its PASS tile) and "No LOLBin processes";

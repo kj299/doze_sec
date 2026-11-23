@@ -234,3 +234,5 @@ if ($found.Count -gt 0) {
 "[INFO] $inspected security product/agent(s) inspected."
 
 Write-Marker -Name 'edr' -Sev $sev
+# Written last: the caller raises "produced no verdict" when it is absent.
+Write-Marker -Name 'edr_done' -Sev 'done'

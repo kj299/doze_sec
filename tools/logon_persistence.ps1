@@ -327,3 +327,5 @@ if ($lsn) {
 } else {
     '[OK] No UserInitMprLogonScript logon script.'
 }
+# Written last: the caller raises "produced no verdict" when it is absent.
+Write-Marker 'done' 'done'

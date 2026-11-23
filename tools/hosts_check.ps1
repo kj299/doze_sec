@@ -491,12 +491,14 @@ if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
     # Not "clean": the file could not be read, so nothing was checked.
     "[WARNING] HOSTS file not found at $Path -- DNS-hijack check NOT performed."
     Write-Marker -Name 'hosts_gap' -Sev 'WARNING'
+    Write-Marker -Name 'hosts_done' -Sev 'done'
     return
 }
 $lines = $null
 try { $lines = Get-Content -LiteralPath $Path -EA Stop } catch {
     "[WARNING] HOSTS file could not be read ($($_.Exception.Message)) -- DNS-hijack check NOT performed."
     Write-Marker -Name 'hosts_gap' -Sev 'WARNING'
+    Write-Marker -Name 'hosts_done' -Sev 'done'
     return
 }
 
@@ -526,3 +528,5 @@ if ($v.Blackhole.Count -eq 0 -and $v.Redirect.Count -eq 0 -and $v.Context.Count 
 }
 
 Write-Marker -Sev $sev
+# Written last: the caller raises "produced no verdict" when it is absent.
+Write-Marker -Name 'hosts_done' -Sev 'done'

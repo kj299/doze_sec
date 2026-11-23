@@ -2215,11 +2215,18 @@ echo  Command: powershell -File tools\hosts_check.ps1>> "%REPORT%"
 type "%WINDIR%\System32\drivers\etc\hosts">> "%REPORT%" 2>&1
 del "%TEMP%\dz_hosts.txt" 2>nul
 del "%TEMP%\dz_hosts_gap.txt" 2>nul
+del "%TEMP%\dz_hosts_done.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\hosts_check.ps1" (
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\hosts_check.ps1">> "%REPORT%" 2>&1
 ) else (
-    echo  [INFO] tools\hosts_check.ps1 not found -- HOSTS grading skipped.>> "%REPORT%"
+    echo [WARNING] tools\hosts_check.ps1 not found -- HOSTS file check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 3 T1071.004 "HOSTS file check NOT performed - tool missing"
 )
+if not exist "%TEMP%\dz_hosts_done.txt" if exist "%SCRIPT_DIR%tools\hosts_check.ps1" (
+    echo [WARNING] HOSTS file check produced no verdict -- NOT performed: tools\hosts_check.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 3 T1071.004 "HOSTS file check produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_hosts_done.txt" 2>nul
 if exist "%TEMP%\dz_hosts.txt" (
     set "_HOSTSSEV="
     set /p _HOSTSSEV=<"%TEMP%\dz_hosts.txt"
@@ -2549,11 +2556,18 @@ if exist "%SCRIPT_DIR%tools\lsa_protection_check.ps1" "%PWSH%" -NoProfile -NonIn
 del "%TEMP%\dz_module.txt" 2>nul
 del "%TEMP%\dz_module_gap.txt" 2>nul
 del "%TEMP%\dz_module_deferred.txt" 2>nul
+del "%TEMP%\dz_module_done.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\module_inspect.ps1" (
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\module_inspect.ps1">> "%REPORT%" 2>&1
 ) else (
-    echo  [INFO] tools\module_inspect.ps1 not found -- loaded-module inspection skipped.>> "%REPORT%"
+    echo [WARNING] tools\module_inspect.ps1 not found -- Loaded-module injection check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 4 T1055 "Loaded-module injection check NOT performed - tool missing"
 )
+if not exist "%TEMP%\dz_module_done.txt" if exist "%SCRIPT_DIR%tools\module_inspect.ps1" (
+    echo [WARNING] Loaded-module injection check produced no verdict -- NOT performed: tools\module_inspect.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 4 T1055 "Loaded-module injection check produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_module_done.txt" 2>nul
 if exist "%TEMP%\dz_module.txt" (
     set "_MODSEV="
     set /p _MODSEV=<"%TEMP%\dz_module.txt"
@@ -2620,11 +2634,18 @@ echo  Evaluates the raw autorun dumps above: flags encoded/hidden-window/>> "%RE
 echo  LOLBin-download autoruns and any IFEO Debugger hijack.>> "%REPORT%"
 del "%TEMP%\dz_persist_hit.txt" 2>nul
 del "%TEMP%\dz_persist_gap.txt" 2>nul
+del "%TEMP%\dz_persist_done.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\persistence_eval.ps1" (
-    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\persistence_eval.ps1" -MarkerFile "%TEMP%\dz_persist_hit.txt" -GapFile "%TEMP%\dz_persist_gap.txt">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\persistence_eval.ps1" -MarkerFile "%TEMP%\dz_persist_hit.txt" -DoneFile "%TEMP%\dz_persist_done.txt" -GapFile "%TEMP%\dz_persist_gap.txt">> "%REPORT%" 2>&1
 ) else (
-    echo  [INFO] tools\persistence_eval.ps1 not found -- autorun/IFEO evaluation skipped.>> "%REPORT%"
+    echo [WARNING] tools\persistence_eval.ps1 not found -- Run-key and IFEO evaluation NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 5 T1547 "Run-key and IFEO evaluation NOT performed - tool missing"
 )
+if not exist "%TEMP%\dz_persist_done.txt" if exist "%SCRIPT_DIR%tools\persistence_eval.ps1" (
+    echo [WARNING] Run-key and IFEO evaluation produced no verdict -- NOT performed: tools\persistence_eval.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 5 T1547 "Run-key and IFEO evaluation produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_persist_done.txt" 2>nul
 if exist "%TEMP%\dz_persist_hit.txt" (
     call :dz_finding WARNING 5 T1547 "Suspicious Run-key autorun or IFEO Debugger hijack"
     del "%TEMP%\dz_persist_hit.txt" 2>nul
@@ -2642,11 +2663,18 @@ del "%TEMP%\dz_startup_folder.txt" 2>nul
 del "%TEMP%\dz_startup_folder_gap.txt" 2>nul
 del "%TEMP%\dz_appcert.txt" 2>nul
 del "%TEMP%\dz_appcert_gap.txt" 2>nul
+del "%TEMP%\dz_startup_done.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\startup_eval.ps1" (
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\startup_eval.ps1">> "%REPORT%" 2>&1
 ) else (
-    echo  [INFO] tools\startup_eval.ps1 not found -- Startup/AppCert evaluation skipped.>> "%REPORT%"
+    echo [WARNING] tools\startup_eval.ps1 not found -- Startup folder and AppCert DLL evaluation NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 5 T1547.001 "Startup folder and AppCert DLL evaluation NOT performed - tool missing"
 )
+if not exist "%TEMP%\dz_startup_done.txt" if exist "%SCRIPT_DIR%tools\startup_eval.ps1" (
+    echo [WARNING] Startup folder and AppCert DLL evaluation produced no verdict -- NOT performed: tools\startup_eval.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 5 T1547.001 "Startup folder and AppCert DLL evaluation produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_startup_done.txt" 2>nul
 if exist "%TEMP%\dz_startup_folder.txt" (
     set "_SSEV="
     set /p _SSEV=<"%TEMP%\dz_startup_folder.txt"
@@ -2697,11 +2725,18 @@ del "%TEMP%\dz_bits_gap.txt" 2>nul
 del "%TEMP%\dz_psprofile.txt" 2>nul
 del "%TEMP%\dz_timeprov.txt" 2>nul
 del "%TEMP%\dz_timeprov_gap.txt" 2>nul
+del "%TEMP%\dz_persist_extra_done.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\persistence_extra.ps1" (
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\persistence_extra.ps1">> "%REPORT%" 2>&1
 ) else (
-    echo  [INFO] tools\persistence_extra.ps1 not found -- long-tail persistence evaluation skipped.>> "%REPORT%"
+    echo [WARNING] tools\persistence_extra.ps1 not found -- Long-tail persistence evaluation NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 5 T1546.007 "Long-tail persistence evaluation NOT performed - tool missing"
 )
+if not exist "%TEMP%\dz_persist_extra_done.txt" if exist "%SCRIPT_DIR%tools\persistence_extra.ps1" (
+    echo [WARNING] Long-tail persistence evaluation produced no verdict -- NOT performed: tools\persistence_extra.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 5 T1546.007 "Long-tail persistence evaluation produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_persist_extra_done.txt" 2>nul
 if exist "%TEMP%\dz_netsh.txt" (
     set "_NSHSEV="
     set /p _NSHSEV=<"%TEMP%\dz_netsh.txt"
@@ -2800,12 +2835,18 @@ del "%TEMP%\dz_bitshist.txt" 2>nul
 del "%TEMP%\dz_bitshist_up.txt" 2>nul
 del "%TEMP%\dz_bitshist_gap.txt" 2>nul
 del "%TEMP%\dz_bitshist_deferred.txt" 2>nul
+del "%TEMP%\dz_bitshist_done.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\bits_history.ps1" (
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\bits_history.ps1">> "%REPORT%" 2>&1
 ) else (
     echo  [WARNING] tools\bits_history.ps1 not found -- what BITS recorded about finished transfers NOT checked.>> "%REPORT%"
     call :dz_finding WARNING 5 T1197 "BITS transfer history NOT checked - tool missing"
 )
+if not exist "%TEMP%\dz_bitshist_done.txt" if exist "%SCRIPT_DIR%tools\bits_history.ps1" (
+    echo [WARNING] BITS transfer history check produced no verdict -- NOT performed: tools\bits_history.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 5 T1197 "BITS transfer history check produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_bitshist_done.txt" 2>nul
 if exist "%TEMP%\dz_bitshist.txt" (
     set "_BHSEV="
     set /p _BHSEV=<"%TEMP%\dz_bitshist.txt"
@@ -2846,11 +2887,18 @@ del "%TEMP%\dz_logon_credprov.txt" 2>nul
 del "%TEMP%\dz_logon_lsa.txt" 2>nul
 del "%TEMP%\dz_logon_scr.txt" 2>nul
 del "%TEMP%\dz_logon_logonscript.txt" 2>nul
+del "%TEMP%\dz_logon_done.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\logon_persistence.ps1" (
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\logon_persistence.ps1">> "%REPORT%" 2>&1
 ) else (
-    echo  [INFO] tools\logon_persistence.ps1 not found -- logon/unlock checks skipped.>> "%REPORT%"
+    echo [WARNING] tools\logon_persistence.ps1 not found -- Logon and unlock persistence check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 5 T1547.004 "Logon and unlock persistence check NOT performed - tool missing"
 )
+if not exist "%TEMP%\dz_logon_done.txt" if exist "%SCRIPT_DIR%tools\logon_persistence.ps1" (
+    echo [WARNING] Logon and unlock persistence check produced no verdict -- NOT performed: tools\logon_persistence.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 5 T1547.004 "Logon and unlock persistence check produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_logon_done.txt" 2>nul
 if exist "%TEMP%\dz_logon_notify.txt" (
     set "_LSEV="
     set /p _LSEV=<"%TEMP%\dz_logon_notify.txt"
@@ -3120,13 +3168,20 @@ echo  binary path must not be under Temp/AppData/Downloads/Public. Replaces>> "%
 echo  the prior path-substring allowlist that was bypassed by installing>> "%REPORT%"
 echo  to "C:\Program Files\anything\".>> "%REPORT%"
 del "%TEMP%\dz_svcgate_hit.txt" 2>nul
+del "%TEMP%\dz_svcgate_done.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\service_signature_check.ps1" (
-    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\service_signature_check.ps1" -MarkerFile "%TEMP%\dz_svcgate_hit.txt">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\service_signature_check.ps1" -MarkerFile "%TEMP%\dz_svcgate_hit.txt" -DoneFile "%TEMP%\dz_svcgate_done.txt">> "%REPORT%" 2>&1
 ) else (
-    echo  [INFO] tools\service_signature_check.ps1 not found -- service signature gating skipped.>> "%REPORT%"
+    echo [WARNING] tools\service_signature_check.ps1 not found -- Service signature gating NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 7 T1543.003 "Service signature gating NOT performed - tool missing"
     echo Get-CimInstance Win32_Service ^| Where-Object {$_.PathName -and $_.PathName -notmatch 'system32^|SysWOW64^|Program Files^|MpKsl^|Windows Defender^|SecurityHealth^|MsMpEng'} ^| Select-Object Name,State,StartMode,PathName ^| Format-Table -AutoSize -Wrap > "%PSRUN%"
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
 )
+if not exist "%TEMP%\dz_svcgate_done.txt" if exist "%SCRIPT_DIR%tools\service_signature_check.ps1" (
+    echo [WARNING] Service signature gating produced no verdict -- NOT performed: tools\service_signature_check.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 7 T1543.003 "Service signature gating produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_svcgate_done.txt" 2>nul
 if exist "%TEMP%\dz_svcgate_hit.txt" (
     call :dz_finding WARNING 7 T1543.003 "Service failed Authenticode gating"
     del "%TEMP%\dz_svcgate_hit.txt" 2>nul
@@ -3303,11 +3358,18 @@ echo  reported as context, not as a fault: most home machines have none.>> "%REP
 del "%TEMP%\dz_edr.txt" 2>nul
 del "%TEMP%\dz_edr_gap.txt" 2>nul
 del "%TEMP%\dz_edr_deferred.txt" 2>nul
+del "%TEMP%\dz_edr_done.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\edr_presence.ps1" (
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\edr_presence.ps1">> "%REPORT%" 2>&1
 ) else (
-    echo  [INFO] tools\edr_presence.ps1 not found -- endpoint telemetry check skipped.>> "%REPORT%"
+    echo [WARNING] tools\edr_presence.ps1 not found -- Endpoint telemetry check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 9 T1562.001 "Endpoint telemetry check NOT performed - tool missing"
 )
+if not exist "%TEMP%\dz_edr_done.txt" if exist "%SCRIPT_DIR%tools\edr_presence.ps1" (
+    echo [WARNING] Endpoint telemetry check produced no verdict -- NOT performed: tools\edr_presence.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 9 T1562.001 "Endpoint telemetry check produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_edr_done.txt" 2>nul
 if exist "%TEMP%\dz_edr.txt" (
     set "_EDRSEV="
     set /p _EDRSEV=<"%TEMP%\dz_edr.txt"

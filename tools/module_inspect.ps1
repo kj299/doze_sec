@@ -669,6 +669,8 @@ foreach ($p in (Get-Process -EA SilentlyContinue)) {
 if ($modOwners.Count -eq 0) {
     '[WARNING] No process modules could be enumerated -- injection check NOT performed.'
     Write-Marker -Name 'module_gap' -Sev 'WARNING'
+    # The gap is the verdict: never also "produced no verdict".
+    Write-Marker -Name 'module_done' -Sev 'done'
     return
 }
 
@@ -819,3 +821,5 @@ if ($denied -gt 0) {
 
 Write-Marker -Name 'module' -Sev $sev
 if ($gapSev -ne 'OK') { Write-Marker -Name 'module_gap' -Sev $gapSev }
+# Written last: the caller raises "produced no verdict" when it is absent.
+Write-Marker -Name 'module_done' -Sev 'done'

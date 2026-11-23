@@ -21,6 +21,10 @@ $lines = @($text -split "`r?`n")
 $fail = @()
 if ($text -notmatch '(?m)^\s*EXIT CODE:') { $fail += 'no "EXIT CODE:" line -- the audit did not reach its exit handler (early exit or crash)' }
 if ($text -notmatch '\[18/18\]')          { $fail += 'no "[18/18]" banner -- the audit did not reach Section 18, or the report was rewritten without it' }
+# A helper that did not reach its end raises "produced no verdict". On a clean
+# runner every helper finishes, so any such line is a helper that died here.
+$nv = @($lines | Where-Object { $_ -match '^\[WARNING\] .* produced no verdict -- NOT performed' })
+if ($nv.Count) { $fail += ('{0} helper(s) did not reach their end on this runner: {1}' -f $nv.Count, (($nv | ForEach-Object { $_.Trim() }) -join ' | ')) }
 if ($fail.Count -eq 0) {
     $longest = 0; foreach ($l in $lines) { if ($l.Length -gt $longest) { $longest = $l.Length } }
     Write-Output ("OK: report complete -- {0} bytes, {1} lines, longest line {2} chars" -f $bytes.Length, $lines.Count, $longest)

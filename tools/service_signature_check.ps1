@@ -57,7 +57,7 @@
 # wired into Section 7's verdict, so a flagged service used to read CLEAN).
 
 [CmdletBinding()]
-param([string]$MarkerFile, [switch]$SelfTest)
+param([string]$MarkerFile, [string]$DoneFile, [switch]$SelfTest)
 
 $ErrorActionPreference = 'Continue'
 
@@ -469,3 +469,7 @@ if ($inventory.Count -gt 0) {
     "[INFO] $($inventory.Count) service(s) are validly signed by a vendor outside this tool's short allowlist, in a normal install location. That is inventory, not evidence -- no allowlist can enumerate every legitimate software vendor. Listed so you can confirm you recognise each one:"
     $inventory | Format-Table Name,State,StartMode,Why,Binary -AutoSize -Wrap
 }
+# Written last: the caller raises "produced no verdict" when it is absent.
+# (A WMI failure returns early above WITHOUT it: nothing was graded, and the
+# caller's "produced no verdict" row says so.)
+if ($DoneFile) { Set-Content -LiteralPath $DoneFile -Value 'done' -Encoding ASCII }

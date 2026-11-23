@@ -34,6 +34,11 @@ jobs:
       # therefore the section verdict, the findings count and the exit code --
       # never heard about it. Structural, so a check written next year is
       # covered the day it is added.
+      # A helper that died before its end read as a CLEAN section: nine read
+      # their markers but nothing checked the helper finished. Each now writes a
+      # done marker last, and both bats raise "produced no verdict" without it.
+      - name: Nine helpers each prove they finished (a done marker and a no-verdict backstop, both bats)
+        run: pwsh -NoProfile -File tools/lint_helper_done.ps1
       - name: Run lint_unraised_findings.ps1
         run: |
           out=$(pwsh -NoProfile -File tools/lint_unraised_findings.ps1); rc=$?; echo "$out"; [ $rc -eq 0 ] || exit $rc
