@@ -77,7 +77,7 @@ endpoint footprint to audit; they are out of scope by nature.
 | Infostealers / loaders | Good | Process IOCs (Lumma, StealC, Rhadamanthys, DarkGate, PikaBOT, Latrodectus, HijackLoader), browser cred-store access, malicious browser-extension inventory (T1176) |
 | LOLBin abuse | Strong | 52 command-line patterns + Event 4688 download-cradle sweep |
 | BYOVD / EDR killers | Strong | Known vulnerable drivers by name and SHA256 |
-| Supply chain | Partial | Installed-software inventory, driver/service Authenticode gating, rogue root certs, VT hash reputation — cannot vet vendor build pipelines |
+| Supply chain | Partial | Installed-software inventory, driver/service Authenticode gating, rogue root certs (judged by when Windows wrote each root; the AuthRoot store is not read, and an administrator can rewrite a key's write time), VT hash reputation — cannot vet vendor build pipelines |
 | Phishing / social engineering | Partial | Detects artifacts (HTML smuggling, AiTM token-cache touches, staged payloads) and audits the macro/MOTW/SmartScreen/ASR settings that blunt malicious attachments; cannot stop a user clicking |
 | Cloud / identity token theft | Partial | Azure/AWS/GCP/kubectl credential-file presence and recency; tenant-side (Entra/M365) auditing is out of scope |
 | Network MitM / rogue infra | Limited | hosts file (graded by effect: blackholed security/update domains, public and private redirects, local-only dev-tooling names), ARP table, portproxy, DNS cache; no traffic capture, no router/SOHO visibility |

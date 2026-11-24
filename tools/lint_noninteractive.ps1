@@ -48,7 +48,9 @@ $script:Bats = @('doze_sec.bat', 'doze_sec_noAdmin.bat')
 $script:Floor = 100
 # Scripts that WRITE launch lines into a batch file the bats call, and how many
 # such lines each must hold (fewer: the check is reading nothing).
-$script:Generators = @{ 'tools\ttp_merge.ps1' = 3 }
+# ttp_merge writes ONE since 2026-11-24: every generated block now calls
+# tools\ttp_detect.ps1 through the same line, instead of three one-liner shapes.
+$script:Generators = @{ 'tools\ttp_merge.ps1' = 1 }
 # The program token, followed (not consumed) by whitespace and a switch.
 $script:ExeRx = '(?i)("%PWSH%"|%PWSH%|!PWSH!|"?\bpowershell(\.exe)?"?|"?\bpwsh(\.exe)?"?)(?=\s+-)'
 # The switch that ends PowerShell's own options: everything after -File is the
@@ -290,7 +292,7 @@ if ($SelfTest) {
         $gsrc = @(Get-Content -LiteralPath (Join-Path $Root 'tools\ttp_merge.ps1'))
         Set-Content -LiteralPath (Join-Path $work 'tools\ttp_merge.ps1') -Value $gsrc -Encoding ASCII
         $r = Invoke-Lint $work
-        T 'the shipped generator writes every launch with the flag' ($r.Defects.Count -eq 0 -and $r.Counts['tools\ttp_merge.ps1'] -ge 3) ($r.Defects -join ' | ')
+        T 'the shipped generator writes every launch with the flag' ($r.Defects.Count -eq 0 -and $r.Counts['tools\ttp_merge.ps1'] -ge 1) ($r.Defects -join ' | ')
         $script:hit = 0
         $mut = foreach ($l in $gsrc) { if ($script:hit -eq 0 -and $l -match '-NoProfile -NonInteractive') { $script:hit = 1; $l -replace ' -NonInteractive', '' } else { $l } }
         Set-Content -LiteralPath (Join-Path $work 'tools\ttp_merge.ps1') -Value $mut -Encoding ASCII

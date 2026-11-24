@@ -247,8 +247,8 @@ if ($SelfTest) {
            From = "(Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' -Name EnableScriptBlockLogging).EnableScriptBlockLogging"
            To   = "(Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging -Name EnableScriptBlockLogging).EnableScriptBlockLogging" },
         @{ Name = 'short severity tag [WARN] on the %PSRUN% path'
-           From = "'[WARNING] Root certificates installed in last 90 days"
-           To   = "'[WARN] Root certificates installed in last 90 days" },
+           From = "'[WARNING] Scheduled task IOC matches found.'"
+           To   = "'[WARN] Scheduled task IOC matches found.'" },
         @{ Name = 'short severity tag [CRIT] on the %PSRUN% path'
            From = "{'[WARNING] Suspicious registry IOCs found:'"
            To   = "{'[CRIT] Suspicious registry IOCs found:'" },

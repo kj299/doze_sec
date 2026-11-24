@@ -300,7 +300,8 @@ jobs:
           }
           Remove-Item -LiteralPath $gm, $cm -Force -EA SilentlyContinue
           Write-Host "ioc_hash_check OK (shipped list: no gap; missing and comment-only lists: NOT performed + gap marker)"
-          exit 0
+          & .\.github\ci\ioc_hash_states.ps1
+          exit $LASTEXITCODE
 
       # THE [CRITICAL]-LINE CENSUS, AND A PRINTED COMMAND, WITH AN APOSTROPHE.
       # The census was a for /f backtick command beginning with "%PWSH%", the
@@ -2809,6 +2810,18 @@ jobs:
           Remove-Item $noCore -Force -EA SilentlyContinue
           Write-Host "emulation_coverage.ps1 OK (incl. empty-CORE guard)"
           exit 0
+
+      - name: "root_cert_check on 5.1: a root is judged by when Windows wrote it, a store that cannot be read is a raised gap"
+        shell: powershell
+        run: |
+          & .\.github\ci\root_cert_states.ps1
+          exit $LASTEXITCODE
+
+      - name: "CTI-AUTO blocks on 5.1: -updateTTP's generated checks raise their hits and gaps; a failed query is never 'check clear'"
+        shell: powershell
+        run: |
+          & .\.github\ci\ttp_detect_states.ps1
+          exit $LASTEXITCODE
 
       - name: "policy_value_check on 5.1: a registry setting that cannot be read is a raised gap, never 'not set' or [OK]"
         shell: powershell

@@ -44,6 +44,7 @@
 param(
     [string]$MarkerDir = $env:TEMP,
     [string]$HashList  = '',
+    [int]$Elevated = -1,
     [switch]$SelfTest
 )
 
@@ -300,6 +301,48 @@ function Get-DriverEvidenceLines {
     return ,$lines.ToArray()
 }
 
+# PURE. What this run could NOT cover, said and raised (2026-11-24). Three
+# holes read as "[OK] ... none known-bad": a hash list that was missing or
+# empty turned hash matching off in silence; a driver whose hash failed was
+# never matched and nothing said so; and the on-disk walks ran with
+# -EA SilentlyContinue, so a drop folder that refused to list added nothing.
+# $List: @{ State = ok|missing|unreadable|empty; Error; Path }.
+# $Unlisted: top-level folders that could not be listed, @{ Dir; Error; Own }.
+# Returns @{ Lines; Gap; Deferred }.
+function Get-CoverageVerdict {
+    param($List, [string[]]$HashFailed = @(), $Unlisted = @(), [int]$SubErrors = 0, [bool]$IsElevated = $true)
+    $out = New-Object System.Collections.ArrayList
+    $gap = $false; $def = 0
+    $ls = [string]$List.State
+    if ($ls -ne 'ok') {
+        $why = switch ($ls) { 'missing' { 'is missing' } 'empty' { 'holds no valid SHA256 entry' } default { 'could not be read (' + (ConvertTo-EvidenceText ([string]$List.Error) 200) + ')' } }
+        [void]$out.Add(('[WARNING] Driver hash match NOT performed -- the known-bad hash list ' + (ConvertTo-EvidenceText ([string]$List.Path) 300) + ' ' + $why + ', so a renamed vulnerable driver is judged by its filename and signature only (T1068).'))
+        $gap = $true
+    }
+    $hf = @($HashFailed | Where-Object { $_ })
+    if ($hf.Count -and -not $IsElevated) {
+        # A standard user may not read a protected driver file (an EDR's, or
+        # Defender's): the token explains it.
+        [void]$out.Add(('[DEFERRED - ADMIN REQUIRED] ' + $hf.Count + ' driver file(s) cannot be read from a standard-user token, so they were not hashed: ' + ((@($hf | Select-Object -First 5 | ForEach-Object { ConvertTo-EvidenceText $_ 200 })) -join '; ') + ' -- re-run as administrator to hash them.'))
+        $def = 1
+    } elseif ($hf.Count) {
+        [void]$out.Add(('[WARNING] Driver hash match NOT performed in full -- ' + $hf.Count + ' driver file(s) could not be hashed: ' + ((@($hf | Select-Object -First 5 | ForEach-Object { ConvertTo-EvidenceText $_ 200 })) -join '; ') + $(if ($hf.Count -gt 5) { '; and ' + ($hf.Count - 5) + ' more' } else { '' }) + '.'))
+        $gap = $true
+    }
+    $gapDirs = @(); $defDirs = @()
+    foreach ($u in @($Unlisted)) { if ($null -eq $u) { continue }; if ((-not $IsElevated) -and (-not $u.Own)) { $defDirs += $u } else { $gapDirs += $u } }
+    if ($gapDirs.Count) {
+        [void]$out.Add(('[WARNING] On-disk driver walk NOT performed in full -- ' + $gapDirs.Count + ' folder(s) could not be listed, so a driver staged there would go unseen: ' + ((@($gapDirs | ForEach-Object { (ConvertTo-EvidenceText ([string]$_.Dir) 200) + ' (' + (ConvertTo-EvidenceText ([string]$_.Error) 120) + ')' })) -join '; ') + '.'))
+        $gap = $true
+    }
+    if ($defDirs.Count) {
+        [void]$out.Add(('[DEFERRED - ADMIN REQUIRED] ' + $defDirs.Count + ' driver drop folder(s) cannot be listed from a standard-user token: ' + ((@($defDirs | ForEach-Object { ConvertTo-EvidenceText ([string]$_.Dir) 200 })) -join '; ') + ' -- re-run as administrator to walk them.'))
+        $def = 1
+    }
+    if ($SubErrors -gt 0) { [void]$out.Add(('[INFO] ' + $SubErrors + ' subfolder(s) inside the drop folders could not be listed; their own folders were walked.')) }
+    return @{ Lines = @($out.ToArray()); Gap = $gap; Deferred = $def }
+}
+
 if ($SelfTest) {
     $fails = 0
     function T { param([string]$Name, [bool]$Ok, [string]$Got)
@@ -453,6 +496,24 @@ if ($SelfTest) {
     T 'evidence: a crafted path or service name cannot start a new line' `
       ((@($ev | Where-Object { $_ -match "[`r`n]" })).Count -eq 0 -and (@($ev | Where-Object { $_ -match '^\[' })).Count -eq 0) ($ev -join ' | ')
 
+    $cv = Get-CoverageVerdict -List @{ State = 'missing'; Path = 'C:\x\ioc_hashes.txt' }
+    T 'a missing hash list is a raised gap, never "none known-bad" (the defect)' ($cv.Gap -and ($cv.Lines -join ' ') -match '^\[WARNING\] Driver hash match NOT performed -- the known-bad hash list C:\\x\\ioc_hashes\.txt is missing') ($cv.Lines -join ' | ')
+    $cv = Get-CoverageVerdict -List @{ State = 'empty'; Path = 'p' }
+    T 'a hash list with no valid entry is a gap' ($cv.Gap -and ($cv.Lines -join ' ') -match 'holds no valid SHA256 entry') ($cv.Lines -join ' | ')
+    $cv = Get-CoverageVerdict -List @{ State = 'ok' }
+    T 'a loaded list, every hash taken, every folder listed: nothing to say' ((-not $cv.Gap) -and $cv.Lines.Count -eq 0 -and $cv.Deferred -eq 0) ($cv.Lines -join ' | ')
+    $cv = Get-CoverageVerdict -List @{ State = 'ok' } -HashFailed @('C:\Windows\System32\drivers\a.sys')
+    T 'a driver that could not be hashed is named and raised' ($cv.Gap -and ($cv.Lines -join ' ') -match '1 driver file\(s\) could not be hashed: C:\\Windows') ($cv.Lines -join ' | ')
+    $cv = Get-CoverageVerdict -List @{ State = 'ok' } -Unlisted @(@{ Dir = 'C:\Windows\Temp'; Error = 'UnauthorizedAccessException'; Own = $false }) -IsElevated $false
+    T 'a standard user denied C:\Windows\Temp: a counted deferral, never a row' ((-not $cv.Gap) -and $cv.Deferred -eq 1 -and ($cv.Lines -join ' ') -match '^\[DEFERRED - ADMIN REQUIRED\] 1 driver drop folder') ($cv.Lines -join ' | ')
+    $cv = Get-CoverageVerdict -List @{ State = 'ok' } -Unlisted @(@{ Dir = 'C:\Users\me\AppData\Local\Temp'; Error = 'denied'; Own = $true }) -IsElevated $false
+    T 'a standard user denied their OWN temp: a gap -- the token does not explain it' ($cv.Gap -and $cv.Deferred -eq 0) ($cv.Lines -join ' | ')
+    $cv = Get-CoverageVerdict -List @{ State = 'ok' } -Unlisted @(@{ Dir = 'C:\Windows\Temp'; Error = 'denied'; Own = $false }) -IsElevated $true
+    T 'an administrator denied a drop folder: a gap' ($cv.Gap -and ($cv.Lines -join ' ') -match 'On-disk driver walk NOT performed in full') ($cv.Lines -join ' | ')
+    $cv = Get-CoverageVerdict -List @{ State = 'ok' } -HashFailed @('C:\Windows\System32\drivers\edr.sys') -IsElevated $false
+    T 'a driver file a standard user may not read is a deferral, never a row' ((-not $cv.Gap) -and $cv.Deferred -eq 1) ($cv.Lines -join ' | ')
+    $cv = Get-CoverageVerdict -List @{ State = 'ok' } -SubErrors 3
+    T 'subfolders that could not be listed are counted as context, not a gap' ((-not $cv.Gap) -and ($cv.Lines -join ' ') -match '^\[INFO\] 3 subfolder') ($cv.Lines -join ' | ')
     if ($fails -gt 0) { Write-Output "FAILED: $fails"; exit 1 }
     Write-Output 'driver_audit self-test: all cases passed'
     exit 0
@@ -465,8 +526,15 @@ if (-not $HashList) {
 }
 $badHashes = @{}
 $malformedHashes = @()
-if (Test-Path -LiteralPath $HashList) {
-    foreach ($ln in (Get-Content -LiteralPath $HashList -EA SilentlyContinue)) {
+$listState = @{ State = 'ok'; Error = ''; Path = $HashList }
+$listLines = @()
+try { $listLines = @(Get-Content -LiteralPath $HashList -ErrorAction Stop) }
+catch {
+    if ($_.Exception -is [System.Management.Automation.ItemNotFoundException]) { $listState.State = 'missing' }
+    else { $listState.State = 'unreadable'; $listState.Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message) }
+}
+if ($listState.State -eq 'ok') {
+    foreach ($ln in $listLines) {
         $t = $ln.Trim()
         if (-not $t -or $t.StartsWith('#')) { continue }
         $h = ($t -split '\|')[0].Trim().ToLower()
@@ -481,6 +549,7 @@ if (Test-Path -LiteralPath $HashList) {
     }
 }
 $script:BadHashes = $badHashes
+if ($listState.State -eq 'ok' -and $badHashes.Count -eq 0) { $listState.State = 'empty' }
 if ($malformedHashes.Count -gt 0) {
     "[WARNING] $($malformedHashes.Count) entr(y/ies) in the known-bad hash list are not valid SHA256 values and were NOT loaded -- those drivers are not covered by hash matching. Fix the list: $((@($malformedHashes | ForEach-Object { $_.Substring(0, [Math]::Min(12, $_.Length)) + '...' })) -join ', ')"
     $sev = Get-MaxSev $sev 'WARNING'
@@ -516,8 +585,23 @@ try {
 # that would blow the CI time budget.
 $shallowDirs = @( (Join-Path $sys32 'drivers') )
 $dropDirs    = @( $env:TEMP, (Join-Path $env:SystemRoot 'Temp'), 'C:\Users\Public' )
+$unlisted = @(); $subErrors = 0
+$ownRoots = @(@($env:USERPROFILE, $env:TEMP, $env:LOCALAPPDATA) | Where-Object { $_ } | ForEach-Object { $_.TrimEnd('\') + '\' })
+# The top folder itself must answer; a subfolder that refuses is context.
+function Test-WalkDir {
+    param([string]$Dir)
+    try { $null = [IO.Directory]::GetFileSystemEntries($Dir); return $true }
+    catch [System.IO.DirectoryNotFoundException] { return $false }
+    catch {
+        $x = $_.Exception; if ($x.InnerException) { $x = $x.InnerException }
+        $own = @($script:ownRoots | Where-Object { ($Dir.TrimEnd('\') + '\').StartsWith($_, [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
+        $script:unlisted += @{ Dir = $Dir; Error = ($x.GetType().Name); Own = $own }
+        return $false
+    }
+}
+$script:ownRoots = $ownRoots
 foreach ($dir in $shallowDirs) {
-    if (-not (Test-Path -LiteralPath $dir)) { continue }
+    if (-not (Test-WalkDir $dir)) { continue }
     try {
         foreach ($f in (Get-ChildItem -LiteralPath $dir -Filter '*.sys' -File -EA SilentlyContinue)) {
             if ($f.Extension -ieq '.sys') { [void]$paths.Add($f.FullName) }
@@ -525,17 +609,21 @@ foreach ($dir in $shallowDirs) {
     } catch {}
 }
 foreach ($dir in $dropDirs) {
-    if (-not (Test-Path -LiteralPath $dir)) { continue }
+    if (-not $dir -or -not (Test-WalkDir $dir)) { continue }
     try {
         # -Filter, NOT -Include: with -LiteralPath -Recurse, -Include is silently
         # ignored and EVERY file is returned (then Authenticode-checked as a bogus
         # "driver"). -Filter is applied by the provider and actually restricts to
         # .sys. Belt-and-braces: re-check the extension in PS too.
-        foreach ($f in (Get-ChildItem -LiteralPath $dir -Recurse -Filter '*.sys' -File -EA SilentlyContinue)) {
+        $we = $null
+        foreach ($f in (Get-ChildItem -LiteralPath $dir -Recurse -Filter '*.sys' -File -EA SilentlyContinue -ErrorVariable we)) {
             if ($f.Extension -ieq '.sys') { [void]$paths.Add($f.FullName) }
         }
+        # A subfolder removed mid-walk is churn, not a refusal.
+        $subErrors += @($we | Where-Object { $_ -and $_.Exception -isnot [System.Management.Automation.ItemNotFoundException] -and $_.Exception -isnot [System.IO.DirectoryNotFoundException] }).Count
     } catch {}
 }
+$unlisted = @($script:unlisted)
 
 # Event 7045 (service installed), read once and only when something is flagged:
 # the install time is the timeline answer -- a driver extracted by a tool the
@@ -557,6 +645,7 @@ function Get-DriverInstallEvents {
 }
 
 $checked = 0
+$hashFailed = @()
 $missing = 0
 $anyUnsigned = $false
 foreach ($p in $paths) {
@@ -576,6 +665,7 @@ foreach ($p in $paths) {
     $checked++
     $sig  = & $script:SigProbe  $p
     $hash = & $script:HashProbe $p
+    if (-not $hash) { $hashFailed += $p }
     $v = Get-DriverVerdict -Path $p -Hash $hash -Sig $sig
     if ($v.Unsigned) { $anyUnsigned = $true }
 
@@ -612,6 +702,14 @@ if ($anyUnsigned) {
     Get-HvciNote -State (& $script:HvciProbe)
 }
 
+if ($Elevated -lt 0) {
+    $Elevated = 0
+    try { if ((New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.SecurityIdentifier]'S-1-5-32-544')) { $Elevated = 1 } } catch {}
+}
+$cov = Get-CoverageVerdict -List $listState -HashFailed $hashFailed -Unlisted $unlisted -SubErrors $subErrors -IsElevated ($Elevated -eq 1)
+foreach ($l in $cov.Lines) { $l }
+if ($cov.Gap) { $gapSev = Get-MaxSev $gapSev 'WARNING' }
+if ($cov.Deferred -gt 0) { Write-Marker -Name 'driver_deferred' -Sev '1' }
 if ($sev -eq 'OK' -and $gapSev -eq 'OK') {
     "[OK] $checked kernel driver(s) audited -- none known-bad, all validly signed."
 } elseif ($missing -gt 0) {

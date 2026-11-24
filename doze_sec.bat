@@ -5493,9 +5493,33 @@ call :dz_polval KerbEnc 17 T1558.003 "Kerberos encryption-type check"
 
 echo.>> "%REPORT%"
 echo --- [DPRK/RUBY SLEET] Recently Installed Root Certificates --->> "%REPORT%"
-echo  Command: powershell -Command "Get-ChildItem Cert:\LocalMachine\Root">> "%REPORT%"
-echo $r = @(Get-ChildItem Cert:\LocalMachine\Root ^| Where-Object {$_.NotBefore -gt (Get-Date).AddDays(-90)}); if($r.Count -gt 0){ '[WARNING] Root certificates installed in last 90 days (Ruby Sleet drops fake roots):'; $r ^| Select-Object Subject,Thumbprint,NotBefore,NotAfter ^| Format-Table -AutoSize } else { '[OK] No new root certificates installed in last 90 days.' } > "%PSRUN%"
-call :dz_ps_scan 17 T1553.004 "Root certificate installed in the last 90 days"
+:: Judged by when Windows WROTE each root's registry key, not its NotBefore
+:: date: NotBefore is chosen by whoever made the certificate, so a fake root
+:: backdated two years and planted yesterday read "[OK] No new root
+:: certificates installed in last 90 days." (tools\root_cert_check.ps1)
+echo  Command: powershell -File tools\root_cert_check.ps1>> "%REPORT%"
+del "%TEMP%\dz_rootcert_hit.txt" 2>nul
+del "%TEMP%\dz_rootcert_gap.txt" 2>nul
+del "%TEMP%\dz_rootcert_done.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\root_cert_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\root_cert_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\root_cert_check.ps1 not found -- root certificate check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 17 T1553.004 "Root certificate check NOT performed - tool missing"
+)
+if exist "%TEMP%\dz_rootcert_hit.txt" (
+    call :dz_finding WARNING 17 T1553.004 "Root certificate installed in the last 90 days"
+    del "%TEMP%\dz_rootcert_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_rootcert_gap.txt" (
+    call :dz_finding WARNING 17 T1553.004 "Root certificate check NOT performed in full - a certificate store could not be read"
+    del "%TEMP%\dz_rootcert_gap.txt" 2>nul
+)
+if not exist "%TEMP%\dz_rootcert_done.txt" if exist "%SCRIPT_DIR%tools\root_cert_check.ps1" (
+    echo [WARNING] Root certificate check produced no verdict -- NOT performed: tools\root_cert_check.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 17 T1553.004 "Root certificate check produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_rootcert_done.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- [VOLT TYPHOON] VPN Client Processes --->> "%REPORT%"
@@ -6143,6 +6167,7 @@ if exist "%SCRIPT_DIR%tools\ioc_hash_check.ps1" (
     if exist "%IOCDIR%\ioc_hashes.txt" (
         del "%TEMP%\dz_iochit_18k.txt" 2>nul
         del "%TEMP%\dz_iochit_18k_gap.txt" 2>nul
+        del "%TEMP%\dz_iochit_18k_deferred.txt" 2>nul
         "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\ioc_hash_check.ps1" -IocFile "%IOCDIR%\ioc_hashes.txt" >> "%REPORT%" 2>&1
         if exist "%TEMP%\dz_iochit_18k.txt" (
             set /a IOC_HITS+=1
@@ -6153,8 +6178,12 @@ if exist "%SCRIPT_DIR%tools\ioc_hash_check.ps1" (
             del "%TEMP%\dz_iochit_18k.txt" 2>nul
         )
         if exist "%TEMP%\dz_iochit_18k_gap.txt" (
-            call :dz_finding WARNING 18 T1105 "File hash IOC match NOT performed - list holds no valid SHA256 rows"
+            call :dz_finding WARNING 18 T1105 "File hash IOC match NOT performed - the list, a priority folder or a file could not be read"
             del "%TEMP%\dz_iochit_18k_gap.txt" 2>nul
+        )
+        if exist "%TEMP%\dz_iochit_18k_deferred.txt" (
+            set /a DEFERRED_COUNT+=1
+            del "%TEMP%\dz_iochit_18k_deferred.txt" 2>nul
         )
     ) else (
         rem !IOCDIR!, not the percent form: a parenthesis in the path would end this block.
@@ -6398,10 +6427,15 @@ echo  filename, and Authenticode -- so a renamed or relocated vulnerable driver>
 echo  cannot evade by name alone ^(the old 12-name Test-Path scan could^).>> "%REPORT%"
 del "%TEMP%\dz_driver.txt" 2>nul
 del "%TEMP%\dz_driver_gap.txt" 2>nul
+del "%TEMP%\dz_driver_deferred.txt" 2>nul
+:: The hash list is the RUNTIME one in IOCDIR, the same one 18k reads, so an
+:: -updateTTP refresh reaches the driver audit too; it used to read the
+:: shipped copy beside the tool.
 if exist "%SCRIPT_DIR%tools\driver_audit.ps1" (
-    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\driver_audit.ps1">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\driver_audit.ps1" -HashList "%IOCDIR%\ioc_hashes.txt">> "%REPORT%" 2>&1
 ) else (
-    echo  [INFO] tools\driver_audit.ps1 not found -- driver audit skipped.>> "%REPORT%"
+    echo [WARNING] tools\driver_audit.ps1 not found -- kernel driver audit NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 18 T1562.001 "Kernel driver audit NOT performed - tool missing"
 )
 if exist "%TEMP%\dz_driver.txt" (
     set "_DRVSEV="
@@ -6413,8 +6447,12 @@ if exist "%TEMP%\dz_driver_gap.txt" (
     rem A gap is its own row: the tool could not perform (part of) this check.
     set "_GAPSEV="
     set /p _GAPSEV=<"%TEMP%\dz_driver_gap.txt"
-    call :dz_finding !_GAPSEV! 18 T1562.001 "Loaded-driver audit NOT performed - driver enumeration failed"
+    call :dz_finding !_GAPSEV! 18 T1562.001 "Kernel driver audit NOT performed in full - drivers, the hash list or a drop folder could not be read"
     del "%TEMP%\dz_driver_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_driver_deferred.txt" (
+    set /a DEFERRED_COUNT+=1
+    del "%TEMP%\dz_driver_deferred.txt" 2>nul
 )
 
 :: --- [CTI] Suspicious Service Creation - Event 7045 Anomalies ---
@@ -6549,12 +6587,27 @@ echo.>> "%REPORT%"
 
 :: --- [CTI-AUTO] Execute auto-generated TTP blocks from -updateTTP ---
 set "TTP_BLOCKS=%OUTDIR%\ThreatLists\ttp_generated_checks.bat"
+:: Each generated block calls tools\ttp_detect.ps1, which appends one row per
+:: hit, gap or deferral to dz_ttpauto_rows.txt: the generated file cannot
+:: reach :dz_finding itself, so its blocks used to print [SEV] into the report
+:: and raise nothing. The rows are raised here once it returns. A file written
+:: by an older doze_sec still holds the one-liners that printed "[OK] ...
+:: check clear." over a query that failed: it still runs, and that is said.
+:: -updateTTP only APPENDS to it, so the way out is -resetTTP, then -updateTTP.
+del "%TEMP%\dz_ttpauto_rows.txt" 2>nul
+set "_TTPOLD="
+if exist "%TTP_BLOCKS%" findstr /c:"check clear." "%TTP_BLOCKS%" >nul 2>&1 && set "_TTPOLD=1"
 if exist "%TTP_BLOCKS%" (
     echo.>> "%REPORT%"
     echo --- Executing auto-generated CTI detection blocks --->> "%REPORT%"
     echo %C_CYAN%[18/18]%C_RESET% Running auto-generated TTP checks from SENTINEL-X...
     call "%TTP_BLOCKS%"
 )
+if defined _TTPOLD echo [WARNING] Auto-generated CTI checks NOT performed in full -- ThreatLists\ttp_generated_checks.bat was written by an older doze_sec, whose checks print "check clear." when their query fails and raise nothing on a hit. -updateTTP only adds to that file: run doze_sec.bat -resetTTP, then -updateTTP, to replace it.>> "%REPORT%"
+if defined _TTPOLD call :dz_finding WARNING 18 CTIAUTO "Auto-generated CTI checks NOT performed in full - written by an older doze_sec"
+set "_TTPOLD="
+if exist "%TEMP%\dz_ttpauto_rows.txt" for /f "usebackq tokens=1,2,* delims=|" %%a in ("%TEMP%\dz_ttpauto_rows.txt") do call :dz_ttpauto_row %%a %%b "%%c"
+del "%TEMP%\dz_ttpauto_rows.txt" 2>nul
 
 :: ---- Section 18/18 verdict -----------------------------------------------
 echo.>> "%REPORT%"
@@ -7358,6 +7411,14 @@ if /i "%~1"=="CRITICAL" (
 ) else (
     if !EXIT_CODE! LSS 2 set "EXIT_CODE=2"
 )
+goto :eof
+
+:dz_ttpauto_row
+rem One row from tools\ttp_detect.ps1:  %1 severity or DEFERRED   %2 technique   %3 message
+if /i "%~1"=="DEFERRED" set /a DEFERRED_COUNT+=1
+if /i "%~1"=="DEFERRED" goto :eof
+if /i "%~1"=="CRITICAL" call :dz_finding CRITICAL 18 %2 %3
+if /i not "%~1"=="CRITICAL" call :dz_finding WARNING 18 %2 %3
 goto :eof
 
 :dz_polval

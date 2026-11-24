@@ -397,6 +397,27 @@ function Get-BitsSummaryLines {
     return $out
 }
 
+# The notify programs Windows itself registers on BITS jobs. Pinned by name;
+# extend it only with a program seen on a clean Windows, cited where it was
+# seen. directxdatabaseupdater.exe: windows-latest runner, 2026-11-24, job
+# 'DirectX_Database_Download_AsUser_1.9.3', owner NT AUTHORITY\SYSTEM.
+$script:WindowsBitsNotifyPrograms = @('directxdatabaseupdater.exe')
+
+# Live half of the Windows-notify rule: the program the command line runs is a
+# pinned name, directly in System32, and validly Microsoft-signed.
+function Test-WindowsBitsNotify {
+    param([string]$CmdLine)
+    $c = ([string]$CmdLine).Trim()
+    if (-not $c) { return $false }
+    $prog = if ($c.StartsWith('"')) { ($c.Substring(1) -split '"', 2)[0] } else { ($c -split '\s+', 2)[0] }
+    $leaf = [IO.Path]::GetFileName($prog)
+    if ($script:WindowsBitsNotifyPrograms -notcontains $leaf.ToLower()) { return $false }
+    $dir = [IO.Path]::GetDirectoryName($prog)
+    if (-not $dir -or ($dir.TrimEnd('\') -ine ([Environment]::SystemDirectory).TrimEnd('\'))) { return $false }
+    try { $sig = Get-AuthenticodeSignature -LiteralPath $prog -ErrorAction Stop } catch { return $false }
+    return ($sig.Status -eq 'Valid' -and [string]$sig.SignerCertificate.Subject -match 'O=Microsoft Corporation')
+}
+
 function Get-BitsVerdict {
     param(
         [string]$Name,
@@ -404,6 +425,7 @@ function Get-BitsVerdict {
         [object]$Created,                 # [datetime], or $null when unreadable
         [string]$NotifyCmdLine = '',
         [bool]$NotifyKnown = $true,
+        [bool]$NotifyIsWindows = $false,  # Test-WindowsBitsNotify on the live job
         [string[]]$Remotes = @(),
         [string[]]$Locals  = @(),
         [bool]$DestKnown = $true,
@@ -444,7 +466,18 @@ function Get-BitsVerdict {
         $r.TypeUnread = 1
     }
 
-    if (-not [string]::IsNullOrWhiteSpace($NotifyCmdLine)) {
+    # WINDOWS' OWN NOTIFY JOB (2026-11-24). The windows-latest image began
+    # carrying 'DirectX_Database_Download_AsUser_*', owned by SYSTEM, whose
+    # notify command is C:\Windows\system32\directxdatabaseupdater.exe -- and
+    # this rule raised it on a clean runner. It is [INFO] only when every part
+    # holds (Test-WindowsBitsNotify, the live half): the program is NAMED in
+    # $script:WindowsBitsNotifyPrograms, sits directly in System32, carries a
+    # valid Microsoft signature, the owner is SYSTEM, and nothing in the line is
+    # strong content or a staging path. A notify program that is merely
+    # Microsoft-signed is NOT enough: cmd.exe and powershell.exe are too.
+    if ($NotifyIsWindows -and $Owner -match '^NT AUTHORITY\\SYSTEM$' -and $NotifyCmdLine -notmatch $strongContent -and $NotifyCmdLine -notmatch $badPathRx) {
+        $r.Lines += "[INFO] BITS job '$Name' (owner $Owner) has a notify command line run by Windows itself (a Microsoft-signed System32 program Windows registers for this job): $NotifyCmdLine"
+    } elseif (-not [string]::IsNullOrWhiteSpace($NotifyCmdLine)) {
         $sev = 'WARNING'
         if ($NotifyCmdLine -match $strongContent -or $NotifyCmdLine -match $badPathRx) { $sev = 'CRITICAL' }
         $r.Lines += "[$sev] BITS job '$Name' (owner $Owner) has a notify command line: $NotifyCmdLine"
@@ -731,6 +764,18 @@ if ($SelfTest) {
     $v = Get-BitsVerdict -Name 'dz_t' -Owner 'u' -Created $null -NotifyCmdLine 'C:\tools\post.exe /q' -Now $now
     T 'a notify command line raises at WARNING' `
       ($v.Sev -eq 'WARNING' -and $v.Flagged -eq 1 -and (& $j $v) -match 'notify command line') (& $j $v)
+    # The runner's real job, verbatim (windows-latest, 2026-11-24).
+    $dx = 'C:\Windows\system32\directxdatabaseupdater.exe C:\Windows\system32\directxdatabaseupdater.exe -DatabaseComplete {54E5732C-C78E-4CAE-A675-8DCB224D05A9}'
+    $v = Get-BitsVerdict -Name 'DirectX_Database_Download_AsUser_1.9.3' -Owner 'NT AUTHORITY\SYSTEM' -Created $null -NotifyCmdLine $dx -NotifyIsWindows $true -Now $now
+    T 'Windows'' own DirectX database job (pinned verbatim) is [INFO], never raised' ($v.Sev -eq 'OK' -and $v.Flagged -eq 0 -and (& $j $v) -match '^\[INFO\] BITS job ''DirectX_Database') (& $j $v)
+    $v = Get-BitsVerdict -Name 'DirectX_Database_Download_AsUser_1.9.3' -Owner 'DESKTOP\alice' -Created $null -NotifyCmdLine $dx -NotifyIsWindows $true -Now $now
+    T 'the same job owned by a user account is still the finding' ($v.Sev -eq 'WARNING' -and $v.Flagged -eq 1) (& $j $v)
+    $v = Get-BitsVerdict -Name 'DirectX_Database_Download_AsUser_1.9.3' -Owner 'NT AUTHORITY\SYSTEM' -Created $null -NotifyCmdLine $dx -NotifyIsWindows $false -Now $now
+    T 'the same name and command, when the program is not the signed System32 one, is still the finding' ($v.Sev -eq 'WARNING') (& $j $v)
+    $v = Get-BitsVerdict -Name 'x' -Owner 'NT AUTHORITY\SYSTEM' -Created $null -NotifyCmdLine ($dx + ' -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQA') -NotifyIsWindows $true -Now $now
+    T 'strong content in a Windows notify line is still CRITICAL' ($v.Sev -eq 'CRITICAL') (& $j $v)
+    T 'cmd.exe and powershell.exe are never Windows notify programs, signed or not' ((-not (Test-WindowsBitsNotify 'C:\Windows\System32\cmd.exe /c x')) -and (-not (Test-WindowsBitsNotify 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -c x'))) ''
+    T 'the pinned name outside System32 is not Windows'' own' (-not (Test-WindowsBitsNotify 'C:\Users\Public\directxdatabaseupdater.exe -DatabaseComplete')) ''
     $v = Get-BitsVerdict -Name 'dz_t' -Owner 'u' -Created $null `
                          -NotifyCmdLine 'powershell.exe -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQA' -Now $now
     T 'an encoded-command notify payload escalates to CRITICAL' ($v.Sev -eq 'CRITICAL') (& $j $v)
@@ -1304,7 +1349,7 @@ if (-not $bitsOk) {
         # values only -- that split is the seam -SelfTest needs, and the reason
         # the rule below is now provable without a Windows runner.
         $bv = Get-BitsVerdict -Name $name -Owner $owner -Created $created `
-                              -NotifyCmdLine $ncl -NotifyKnown $nclKnown `
+                              -NotifyCmdLine $ncl -NotifyKnown $nclKnown -NotifyIsWindows (Test-WindowsBitsNotify $ncl) `
                               -Remotes $remotes -Locals $locals -DestKnown $destKnown `
                               -FileListEmpty $fileListEmpty `
                               -TransferType $ttype -TypeKnown $ttKnown -JobState $jstate `
