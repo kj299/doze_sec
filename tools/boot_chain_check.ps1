@@ -39,16 +39,31 @@
 #     VBS / HVCI running state via Win32_DeviceGuard.
 #
 # MARKER: max severity word to $env:TEMP\dz_bootchain.txt; caller raises via
-# :dz_finding. No marker when the boot chain is configured soundly (or when
+# :dz_finding. A boot configuration that could not be read at all is its own
+# row, dz_bootchain_gap.txt -- never part of the weakness row's severity. No marker when the boot chain is configured soundly (or when
 # every deep check was skipped for lack of real UEFI).
 #
 # Windows PowerShell 5.1 compatible. Read-only. Executed by helpers-ps51 CI
 # (where the Secure Boot depth checks will [SKIPPED] on the VM runner, which is
 # the correct, honest degradation -- the bcdedit checks still run).
 
+# LANGUAGE (2026-11-24). The flags were read from bcdedit's TEXT, and bcdedit
+# prints its values in the system language ("nointegritychecks Ja"), so on a
+# non-English Windows every flag read as not set and printed [OK]. They are now
+# read from the boot configuration store by element ID (Microsoft documents
+# the IDs in "BCD settings and BitLocker": 0x16000048 nointegritychecks,
+# 0x16000049 testsigning, 0x16000010 bootdebug, 0x260000a0 debug), the same in
+# every language; bcdedit's text is the fallback only when it is the English
+# form. Neither readable is a raised gap (dz_bootchain_gap.txt), never [OK].
+# And when Section 13 has already asked the RUNNING KERNEL whether integrity
+# checks are enforced (-CodeIntegrityState, from tools\code_integrity_check.ps1),
+# the nointegritychecks SETTING is context here, not a second grade of the same
+# fact.
+
 [CmdletBinding()]
 param(
     [string]$MarkerDir = $env:TEMP,
+    [string]$CodeIntegrityState = '',
     [switch]$SelfTest
 )
 
@@ -86,16 +101,22 @@ function Get-MaxSev {
 # ---------------------------------------------------------------------------
 
 function Get-BcdVerdict {
-    # $BcdText is bcdedit's output, or '' when it produced none.
-    param([string]$BcdText)
-    $r = @{ Lines = @(); Sev = 'OK' }
+    # $BcdText is the boot configuration in bcdedit's English form (read from
+    # the store by element ID and written that way, or bcdedit's own English
+    # output), or '' when neither could be read. $EffectGraded: Section 13
+    # graded the running kernel's enforcement, so the setting is context.
+    param([string]$BcdText, [bool]$EffectGraded = $false)
+    $r = @{ Lines = @(); Sev = 'OK'; Gap = $false }
     if (-not $BcdText) {
         # "Unavailable" is not an answer: declared as a gap, never absorbed.
-        $r.Lines += '[SKIPPED] bcdedit produced no output -- boot-loader integrity flags NOT checked (needs admin).'
-        $r.Sev = 'WARNING'
+        $r.Lines += '[WARNING] Boot-loader integrity flags NOT performed -- the boot configuration could not be read by element ID, and bcdedit gave no English output to fall back on (needs administrator), so nointegritychecks or a boot debugger would go unseen (T1542.003).'
+        $r.Gap = $true
         return $r
     }
-    if ($BcdText -match '(?im)^\s*nointegritychecks\s+Yes\b') {
+    if ($EffectGraded) {
+        $set = if ($BcdText -match '(?im)^\s*nointegritychecks\s+Yes\b') { 'Yes' } else { 'not set' }
+        $r.Lines += ('[INFO] Boot config: nointegritychecks = ' + $set + ' (the setting, applied at the next restart). Whether integrity checks are enforced on this boot is graded above, from the running kernel (Driver Signature Enforcement).')
+    } elseif ($BcdText -match '(?im)^\s*nointegritychecks\s+Yes\b') {
         $r.Lines += '[CRITICAL] Boot config: nointegritychecks = Yes (T1542.003) -- kernel driver-signature enforcement is OFF; unsigned or tampered kernel code can load. Fix: bcdedit /set nointegritychecks off'
         $r.Sev = Get-MaxSev $r.Sev 'CRITICAL'
     } else {
@@ -113,6 +134,46 @@ function Get-BcdVerdict {
         $r.Lines += '[OK] Boot config: no boot or kernel debugger enabled.'
     }
     return $r
+}
+
+# PURE. Flags read from the boot configuration store, written in bcdedit's
+# English form so one verdict reads both sources.
+function ConvertTo-BcdText {
+    param($Flags)
+    $l = @('identifier              {store}')
+    if ($Flags.NoIntegrity) { $l += 'nointegritychecks       Yes' }
+    if ($Flags.TestSign) { $l += 'testsigning             Yes' }
+    if ($Flags.BootDebug) { $l += 'bootdebug               Yes' }
+    if ($Flags.Debug) { $l += 'debug                   Yes' }
+    return ($l -join "`n")
+}
+# PURE. bcdedit's output is trusted only in its English form: its element
+# names and Yes/No are localized.
+function Test-EnglishBcd {
+    param([string]$Text)
+    return ([bool]($Text -match '(?im)^\s*identifier\s+\{'))
+}
+# Live. Every object in the boot configuration store, by element ID. A boolean
+# element is a REG_BINARY whose first byte is 1 when set. Returns @{ Error;
+# Flags }.
+function Read-BcdStoreFlags {
+    $f = @{ NoIntegrity = $false; TestSign = $false; BootDebug = $false; Debug = $false }
+    $ids = @{ '16000048' = 'NoIntegrity'; '16000049' = 'TestSign'; '16000010' = 'BootDebug'; '260000a0' = 'Debug' }
+    try {
+        $objs = @(Get-ChildItem -LiteralPath 'HKLM:\BCD00000000\Objects' -ErrorAction Stop)
+        if ($objs.Count -eq 0) { return @{ Error = 'the store lists no object'; Flags = $f } }
+        foreach ($o in $objs) {
+            foreach ($id in $ids.Keys) {
+                $k = $null
+                try { $k = Get-Item -LiteralPath (Join-Path $o.PSPath ('Elements\' + $id)) -ErrorAction Stop } catch { if ($_.Exception -is [System.Management.Automation.ItemNotFoundException]) { continue }; throw }
+                $b = [byte[]]$k.GetValue('Element')
+                if ($b -and $b.Length -gt 0 -and $b[0] -ne 0) { $f[$ids[$id]] = $true }
+            }
+        }
+        return @{ Error = ''; Flags = $f }
+    } catch {
+        return @{ Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message); Flags = $f }
+    }
 }
 
 function Get-SecureBootVerdict {
@@ -232,8 +293,19 @@ bootmenupolicy          Standard
     foreach ($off in @('nointegritychecks No', 'bootdebug No', 'debug No')) {
         T "'$off' is the normal state and raises nothing" ((Get-BcdVerdict -BcdText $off).Sev -eq 'OK') 'raised'
     }
-    T 'no bcdedit output is declared as a GAP, not as clean' `
-      ((Get-BcdVerdict -BcdText '').Sev -eq 'WARNING' -and (Get-BcdVerdict -BcdText '').Lines[0] -match '^\[SKIPPED\]') 'absorbed as calm'
+    T 'no readable boot configuration is a raised GAP, not clean and not a finding' `
+      ((Get-BcdVerdict -BcdText '').Gap -and (Get-BcdVerdict -BcdText '').Sev -eq 'OK' -and (Get-BcdVerdict -BcdText '').Lines[0] -match '^\[WARNING\] Boot-loader integrity flags NOT performed -- ') 'absorbed as calm'
+    $v = Get-BcdVerdict -BcdText "identifier {current}`nnointegritychecks Yes" -EffectGraded $true
+    T 'with the kernel''s enforcement graded in Section 13, the nointegritychecks SETTING is [INFO], never a second CRITICAL' ($v.Sev -eq 'OK' -and (& $J $v) -match '^\[INFO\] Boot config: nointegritychecks = Yes') (& $J $v)
+    $v = Get-BcdVerdict -BcdText "identifier {current}`ndebug Yes" -EffectGraded $true
+    T 'the debugger settings are still graded here when the kernel''s enforcement is graded above' ($v.Sev -eq 'WARNING') (& $J $v)
+    # Store reads, by element ID: the canonical text is what the verdict reads.
+    $t = ConvertTo-BcdText @{ NoIntegrity = $true; TestSign = $false; BootDebug = $false; Debug = $false }
+    T 'the store''s nointegritychecks element is graded exactly as bcdedit''s English line was' ((Get-BcdVerdict -BcdText $t).Sev -eq 'CRITICAL') $t
+    $t = ConvertTo-BcdText @{ NoIntegrity = $false; TestSign = $false; BootDebug = $false; Debug = $false }
+    T 'a store with none of the four elements set reads clean' ((Get-BcdVerdict -BcdText $t).Sev -eq 'OK' -and $t) $t
+    T 'a German bcdedit ("nointegritychecks Ja") is not trusted as English' (-not (Test-EnglishBcd "Windows-Start-Manager`nBezeichner              {bootmgr}`nnointegritychecks       Ja")) ''
+    T 'an English bcdedit is' (Test-EnglishBcd $cleanBcd) ''
 
     # Secure Boot. The unreadable case is legacy BIOS and every VM -- by far
     # the most common state, and it must never raise.
@@ -278,14 +350,26 @@ $sev = 'OK'
 
 # ---- 1. Boot-loader integrity flags (bcdedit) -----------------------------
 $bcd = ''
-try { $bcd = (& bcdedit /enum ALL 2>$null | Out-String) } catch {}
-if (-not $bcd) {
-    try { $bcd = (& bcdedit /enum '{current}' 2>$null | Out-String) } catch {}
+$store = Read-BcdStoreFlags
+if (-not $store.Error) {
+    $bcd = ConvertTo-BcdText $store.Flags
+    '[INFO] Boot config read from the boot configuration store by element ID (the same in every language).'
+} else {
+    $txt = ''
+    try { $txt = (& bcdedit /enum ALL 2>$null | Out-String) } catch {}
+    if (Test-EnglishBcd $txt) {
+        $bcd = $txt
+        ('[INFO] Boot config read from bcdedit''s English output; the store could not be read by element ID (' + (($store.Error -replace '[\r\n]+', ' ')) + ').')
+    } else {
+        ('[INFO] The boot configuration store could not be read by element ID (' + (($store.Error -replace '[\r\n]+', ' ')) + ')' + $(if ($txt.Trim()) { ', and bcdedit printed it in another language, whose values this check cannot read' } else { '' }) + '.')
+    }
 }
 # Reading is above; Get-BcdVerdict decides, from the text alone.
-$bv = Get-BcdVerdict -BcdText $bcd
+$effect = ($CodeIntegrityState -and $CodeIntegrityState -notin @('gap', 'ungraded'))
+$bv = Get-BcdVerdict -BcdText $bcd -EffectGraded $effect
 foreach ($l in $bv.Lines) { $l }
 $sev = Get-MaxSev $sev $bv.Sev
+if ($bv.Gap) { Write-Marker -Name 'bootchain_gap' -Sev 'WARNING' }
 
 # ---- 2. Secure Boot depth (real UEFI only) --------------------------------
 # SetupMode: keys replaceable without validation.

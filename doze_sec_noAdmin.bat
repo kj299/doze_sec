@@ -175,6 +175,7 @@ set "SAFE_MODE=0"
 set "RUNONCE_CREATED=0"
 set "SKIP_DEFRAG=no"
 set "SMART_WARN=0"
+set "SMART_GAP=0"
 set "FREE_BEFORE=0"
 set "FREE_AFTER=0"
 set "OS_BUILD=0"
@@ -203,6 +204,7 @@ set "DEFEXCL_GRADED=0"
 set "DEFEXCL_PATHS=0"
 set "DEFEXCL_PROCS=0"
 set "DEFEXCL_EXTS=0"
+set "CODEINT_STATE=ungraded"
 set "PPL_STATE=ungraded"
 set "LOGCLEAR_STATE=sec=ungraded,sys=ungraded"
 set "ACCTEV_STATE=ungraded"
@@ -1544,9 +1546,16 @@ echo For full SMART attribute data install smartmontools.>> "%REPORT%"
 echo.>> "%REPORT%"
 "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\smart_health.ps1" -Mode Report>> "%REPORT%" 2>&1
 
-:: Capture WMI health status for SMART_WARN flag
-for /f "usebackq" %%a in (`%PWSH% -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\smart_health.ps1" -Mode Flag 2^>nul`) do set "WMI_HEALTH=%%a"
+:: The health state is read through a file and set /p, never a for /f
+:: backtick: a query that did not answer used to leave SMART_WARN at 0 and
+:: read "All drives healthy". gap (or no state at all) is SMART_GAP.
+set "WMI_HEALTH="
+del "%TEMP%\dz_smart_state.txt" 2>nul
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\smart_health.ps1" -Mode State -StateFile "%TEMP%\dz_smart_state.txt" 2>nul
+if exist "%TEMP%\dz_smart_state.txt" set /p WMI_HEALTH=<"%TEMP%\dz_smart_state.txt"
+del "%TEMP%\dz_smart_state.txt" 2>nul
 if /i "%WMI_HEALTH%"=="warn" set "SMART_WARN=1"
+if /i not "%WMI_HEALTH%"=="warn" if /i not "%WMI_HEALTH%"=="ok" set "SMART_GAP=1"
 goto :eof
 
 :smart_done
@@ -1556,6 +1565,11 @@ if "%SMART_WARN%"=="1" (
     echo [WARNING] Do not run this script again until drives are replaced or verified.>> "%REPORT%"
     call :dz_finding WARNING INIT SMART "Drive reports SMART/health failure - back up data immediately"
     echo %C_GREEN%[INIT 14/14]%C_RESET% SMART: WARNING - drive health issue detected
+) else if "%SMART_GAP%"=="1" (
+    echo.>> "%REPORT%"
+    echo [WARNING] Drive health check NOT performed -- Windows did not report the drives' health, so a failing drive would go unseen.>> "%REPORT%"
+    call :dz_finding WARNING INIT SMART "Drive health check NOT performed - Windows did not report the drives' health"
+    echo %C_GREEN%[INIT 14/14]%C_RESET% SMART: NOT checked - Windows did not report drive health
 ) else (
     echo.>> "%REPORT%"
     echo [OK] All drives healthy.>> "%REPORT%"
@@ -4072,21 +4086,48 @@ del "%TEMP%\dz_bitlocker_state.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- Driver Signature Enforcement --->> "%REPORT%"
-echo  Command: bcdedit /enum ^| findstr /i /c:"testsigning" /c:"nointegritychecks">> "%REPORT%"
-if "%IS_ADMIN%"=="0" goto :sec13_drvsig_noadmin
-bcdedit /enum | findstr /i /c:"testsigning" /c:"nointegritychecks">> "%REPORT%" 2>&1
-bcdedit /enum 2>nul | findstr /i /c:"testsigning Yes" >nul 2>&1
-if !errorlevel! equ 0 (
-    echo [WARNING] testsigning enabled. Unsigned kernel drivers can load.>> "%REPORT%"
-    call :dz_finding WARNING 13 T1553.006 "testsigning enabled - unsigned kernel drivers can load"
+:: Asked of the RUNNING KERNEL (tools\code_integrity_check.ps1), not of
+:: bcdedit's text: bcdedit prints its values in the system language and needs
+:: administrator, so "findstr testsigning Yes" printed [OK] on every
+:: non-English Windows and on any bcdedit that failed. The kernel's
+:: code-integrity options are a number, and a standard user may read them.
+echo  Command: powershell -File tools\code_integrity_check.ps1>> "%REPORT%"
+set "CODEINT_STATE=ungraded"
+del "%TEMP%\dz_codeint_crit.txt" 2>nul
+del "%TEMP%\dz_codeint_testsign.txt" 2>nul
+del "%TEMP%\dz_codeint_debug.txt" 2>nul
+del "%TEMP%\dz_codeint_gap.txt" 2>nul
+del "%TEMP%\dz_codeint_state.txt" 2>nul
+del "%TEMP%\dz_codeint_done.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\code_integrity_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\code_integrity_check.ps1" -StateFile "%TEMP%\dz_codeint_state.txt">> "%REPORT%" 2>&1
 ) else (
-    echo [OK] Driver signature enforcement active.>> "%REPORT%"
+    echo [WARNING] tools\code_integrity_check.ps1 not found -- driver signature enforcement check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 13 T1553.006 "Driver signature enforcement check NOT performed - tool missing"
 )
-goto :sec13_drvsig_done
-:sec13_drvsig_noadmin
-echo  [DEFERRED - ADMIN REQUIRED] bcdedit requires admin.>> "%REPORT%"
-set /a DEFERRED_COUNT+=1
-:sec13_drvsig_done
+if exist "%TEMP%\dz_codeint_crit.txt" (
+    call :dz_finding CRITICAL 13 T1553.006 "Kernel code integrity NOT enforced - unsigned kernel drivers can load"
+    del "%TEMP%\dz_codeint_crit.txt" 2>nul
+)
+if exist "%TEMP%\dz_codeint_testsign.txt" (
+    call :dz_finding WARNING 13 T1553.006 "testsigning enabled - unsigned kernel drivers can load"
+    del "%TEMP%\dz_codeint_testsign.txt" 2>nul
+)
+if exist "%TEMP%\dz_codeint_debug.txt" (
+    call :dz_finding WARNING 13 T1553.006 "Kernel debugger attached - code integrity may let unsigned kernel code load"
+    del "%TEMP%\dz_codeint_debug.txt" 2>nul
+)
+if exist "%TEMP%\dz_codeint_gap.txt" (
+    call :dz_finding WARNING 13 T1553.006 "Driver signature enforcement check NOT performed - the kernel did not report its code-integrity options"
+    del "%TEMP%\dz_codeint_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_codeint_state.txt" set /p CODEINT_STATE=<"%TEMP%\dz_codeint_state.txt"
+del "%TEMP%\dz_codeint_state.txt" 2>nul
+if not exist "%TEMP%\dz_codeint_done.txt" if exist "%SCRIPT_DIR%tools\code_integrity_check.ps1" (
+    echo [WARNING] Driver signature enforcement check produced no verdict -- NOT performed: tools\code_integrity_check.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 13 T1553.006 "Driver signature enforcement check produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_codeint_done.txt" 2>nul
 echo.>> "%REPORT%"
 echo --- Boot-Chain Configuration ^(config + known-bad indicators; NOT a firmware scan^) --->> "%REPORT%"
 echo  Command: powershell -File tools\boot_chain_check.ps1>> "%REPORT%"
@@ -4094,8 +4135,9 @@ echo  Audits boot-loader integrity flags, Secure Boot setup mode / revocation li
 echo  and memory-integrity state ^(T1542^) -- boot-chain CONFIG, not a firmware scan.>> "%REPORT%"
 if "%IS_ADMIN%"=="0" goto :sec13_bootchain_noadmin
 del "%TEMP%\dz_bootchain.txt" 2>nul
+del "%TEMP%\dz_bootchain_gap.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\boot_chain_check.ps1" (
-    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\boot_chain_check.ps1">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\boot_chain_check.ps1" -CodeIntegrityState "%CODEINT_STATE%">> "%REPORT%" 2>&1
 ) else (
     echo  [INFO] tools\boot_chain_check.ps1 not found -- boot-chain audit skipped.>> "%REPORT%"
 )
@@ -4104,6 +4146,10 @@ if exist "%TEMP%\dz_bootchain.txt" (
     set /p _BCSEV=<"%TEMP%\dz_bootchain.txt"
     call :dz_finding !_BCSEV! 13 T1542.003 "Boot-chain configuration weakness - bootkit/rootkit enabler"
     del "%TEMP%\dz_bootchain.txt" 2>nul
+)
+if exist "%TEMP%\dz_bootchain_gap.txt" (
+    call :dz_finding WARNING 13 T1542.003 "Boot-loader integrity flags NOT performed - the boot configuration could not be read"
+    del "%TEMP%\dz_bootchain_gap.txt" 2>nul
 )
 goto :sec13_bootchain_done
 :sec13_bootchain_noadmin
@@ -6477,6 +6523,7 @@ call :dz_seed_rem "%REMEDIATION_UNDO%" "UNDO -- reverse what the other two appli
 
 :: ---- Write PS summary script ----------------------------------------
 echo $sw='%SMART_WARN%' > "%PSRUN%"
+echo $sg='%SMART_GAP%' >> "%PSRUN%"
 echo $isAdmin='%IS_ADMIN%' >> "%PSRUN%"
 :: Every path below is read from the environment (cmd's variables are the
 :: child's environment), never pasted between single quotes: a profile
@@ -6555,7 +6602,7 @@ echo. >> "%PSRUN%"
 echo sec 'SYSTEM HARDENING  (Sections 11, 13)' >> "%PSRUN%"
 echo $us='%UAC_STATE%';$uc='';if($us -match 'cpb=([0-5])'){$uc=$matches[1]};if($us -like 'uac=on,*'){ck 'PASS' ('UAC on with prompt (EnableLUA=1, ConsentPrompt='+$uc+')')}elseif($us -like 'uac=off,*'){ck 'CRIT' 'UAC DISABLED -- all processes auto-elevate silently' 'Set EnableLUA=1 in HKLM\...\Policies\System and reboot'}elseif($us -like 'uac=noprompt,*'){ck 'WARN' 'UAC auto-elevates without prompting (ConsentPromptBehaviorAdmin=0)' 'Set ConsentPromptBehaviorAdmin=2 for secure desktop confirmation'}elseif($us -like 'uac=missing,*'){ck 'WARN' 'A UAC policy value is MISSING (Section 13)' 'EnableLUA and ConsentPromptBehaviorAdmin exist on every Windows. See Section 13.'}else{ck 'INFO' 'UAC: NOT graded -- Section 13 could not read it'} >> "%PSRUN%"
 echo if($isAdmin -eq '1'){ >> "%PSRUN%"
-echo $ts=bcdedit /enum 2^>$null^|Select-String 'testsigning\s+yes';if($ts){ck 'WARN' 'Driver signature enforcement DISABLED (testsigning=Yes)' 'Unsigned kernel drivers can load. Fix: bcdedit /set testsigning off'}else{ck 'PASS' 'Driver signature enforcement active'} >> "%PSRUN%"
+echo $cis='%CODEINT_STATE%';if($cis -like '*nointegrity*'){ck 'CRIT' 'Kernel code integrity NOT enforced - unsigned kernel drivers can load (Section 13)' 'The running kernel reports driver signature enforcement OFF. Fix: bcdedit /set nointegritychecks off, then restart.'}elseif($cis -like '*testsign*'){ck 'WARN' 'Driver signature enforcement DISABLED (testsigning=Yes)' 'Unsigned kernel drivers can load. Fix: bcdedit /set testsigning off'}elseif($cis -like '*debug*'){ck 'WARN' 'Kernel debugger attached - code integrity may let unsigned kernel code load (Section 13)' 'Fix: bcdedit /debug off, then restart.'}elseif($cis -eq 'ok'){ck 'PASS' 'Driver signature enforcement active (the running kernel, Section 13)'}else{ck 'INFO' 'Driver signature enforcement: NOT graded -- Section 13 could not ask the running kernel'} >> "%PSRUN%"
 echo $blst='%BITLOCKER_STATE%';if($blst -eq 'on'){ck 'PASS' ('BitLocker ON for '+$env:SystemDrive+' (Section 13)')}elseif($blst -eq 'off'){ck 'WARN' ('BitLocker OFF for '+$env:SystemDrive+' (Section 13)') 'Drive unencrypted -- data readable if the drive is removed. BEFORE enabling: save the recovery key OFF this machine (manage-bde -protectors -get C:) or back it up to your Microsoft account. Without it, a later firmware, TPM or boot-config change makes every file on C: permanently unrecoverable. Then: manage-bde -on C:'}elseif($blst -eq 'unavailable'){ck 'INFO' 'BitLocker status unavailable -- see Section 13'}elseif($blst -eq 'deferred'){ck 'INFO' 'BitLocker status check deferred (requires admin)'}else{ck 'INFO' 'BitLocker: NOT graded -- Section 13 recorded no BitLocker state'} >> "%PSRUN%"
 echo }else{ >> "%PSRUN%"
 echo ck 'INFO' 'Driver signature check deferred (requires admin)' >> "%PSRUN%"
@@ -6581,7 +6628,7 @@ echo. >> "%PSRUN%"
 
 :: ===== DISK HEALTH ===================================================
 echo sec 'DISK HEALTH  (Pre-flight INIT 14)' >> "%PSRUN%"
-echo if($sw -eq '1'){ck 'CRIT' 'SMART failure on one or more drives' 'Back up all data NOW. See SmartData\ folder. Replace failing drive before continuing.'}else{ck 'PASS' 'All drives report healthy SMART status'} >> "%PSRUN%"
+echo if($sw -eq '1'){ck 'WARN' 'SMART failure on one or more drives' 'Back up all data NOW. See SmartData\ folder. Replace failing drive before continuing.'}elseif($sg -eq '1'){ck 'INFO' 'Drive health: NOT graded -- Windows did not report the drives'' health (Pre-flight INIT 14)'}else{ck 'PASS' 'All drives report healthy SMART status'} >> "%PSRUN%"
 echo. >> "%PSRUN%"
 
 :: ===== CTI IOC SWEEP ================================================
@@ -6697,7 +6744,7 @@ echo if(led 'WARNING' '10' 'T1021.001' 'RDP enabled without NLA'){ addfix 'Requi
 echo if(led 'WARNING' '10' 'T1021.006' 'WinRM running'){ addfix 'Stop and disable WinRM' "Stop-Service WinRM -Force; Set-Service WinRM -StartupType Disabled" 'Set-Service WinRM -StartupType Automatic; Start-Service WinRM' } >> "%PSRUN%"
 echo if(led 'CRITICAL' '13' 'T1548.002' 'UAC disabled'){ addfix 'Re-enable UAC (reboot required)' "Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name EnableLUA -Value 1 -Type DWord -Force" '' } >> "%PSRUN%"
 echo if(led 'WARNING' '13' 'T1548.002' 'UAC elevates without prompting'){ addfix 'Restore UAC prompt on secure desktop' "Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name ConsentPromptBehaviorAdmin -Value 2 -Type DWord -Force" '' } >> "%PSRUN%"
-echo if($joined -match 'testsigning=Yes^|testsigning\s*=\s*Yes'){ addfix 'Disable test-signing (re-enforce driver signatures)' "bcdedit /set testsigning off" 'bcdedit /set testsigning on' } >> "%PSRUN%"
+echo if(led 'WARNING' '13' 'T1553.006' 'testsigning enabled'){ addfix 'Disable test-signing (re-enforce driver signatures)' "bcdedit /set testsigning off" 'bcdedit /set testsigning on' } >> "%PSRUN%"
 echo if(led 'WARNING' '11' 'T1562.002' 'Script Block Logging not enabled'){ addfix 'Enable PowerShell Script Block Logging' "New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' -Force | Out-Null; Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' -Name EnableScriptBlockLogging -Value 1 -Type DWord -Force" 'Remove-ItemProperty -Path ''HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging'' -Name EnableScriptBlockLogging -EA SilentlyContinue' } >> "%PSRUN%"
 echo if(led 'CRITICAL' '5' 'T1546.010' 'AppInit_DLLs set'){ addfix 'Clear AppInit_DLLs (remove DLL injection vector)' "Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows' -Name AppInit_DLLs -Value '' -Force; Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows' -Name LoadAppInit_DLLs -Value 0 -Type DWord -Force" '' } >> "%PSRUN%"
 rem TEMPORARY WIDENING, and it must come out. CLAUDE.md says a fix triggers

@@ -2810,6 +2810,12 @@ jobs:
           Write-Host "emulation_coverage.ps1 OK (incl. empty-CORE guard)"
           exit 0
 
+      - name: "code_integrity_check on 5.1: the running kernel answers, and its test-signing bit agrees with the boot configuration"
+        shell: powershell
+        run: |
+          & .\.github\ci\code_integrity_check.ps1
+          exit $LASTEXITCODE
+
       - name: boot_chain_check.ps1 (boot-chain config audit; must not false-CRITICAL a clean VM)
         shell: powershell
         run: |
@@ -2843,6 +2849,8 @@ jobs:
             $out = (.\tools\boot_chain_check.ps1 -MarkerDir $md) -join "`n"
             Write-Host $out
             if ($out -notmatch 'Boot-chain configuration audit') { throw 'boot-chain header missing' }
+            Write-Host ("  MEASURED: boot configuration source: " + $(if ($out -match 'read from the boot configuration store by element ID') { 'the store, by element ID' } elseif ($out -match 'read from bcdedit''s English output') { 'bcdedit English fallback' } else { 'neither' }))
+            if (Test-Path (Join-Path $md 'dz_bootchain_gap.txt')) { throw "boot_chain_check raised its boot-configuration gap on an elevated runner: $out" }
             if ($out -match '\[CRITICAL\]') { throw "boot_chain_check reported CRITICAL on a clean VM runner (bcdedit parse or gate bug)" }
             if (Test-Path (Join-Path $md 'dz_bootchain.txt')) {
               $mv = (Get-Content (Join-Path $md 'dz_bootchain.txt')).Trim()
@@ -2852,7 +2860,7 @@ jobs:
             # The nointegritychecks OK line must appear when bcdedit produced output,
             # proving the integrity-flag parse actually ran on this machine.
             if ($out -match 'nointegritychecks not set') { Write-Host "  integrity-flag parse ran and reported enforced" }
-            elseif ($out -match 'bcdedit produced no output') { Write-Host "  bcdedit unavailable on this runner -- integrity parse skipped (honest)" }
+            elseif ($out -match 'Boot-loader integrity flags NOT performed') { throw "the boot configuration could not be read by element ID or from bcdedit on an elevated runner: $out" }
             else { throw 'neither the integrity-OK line nor the bcdedit-skip line appeared -- parse path unclear' }
             # The memory-integrity arm asserted NOTHING until now. A runner's
             # real DeviceGuard state is unknown, so the assertable invariant is
@@ -3049,6 +3057,13 @@ jobs:
           $free = (.\tools\disk_info.ps1 -Mode FreeSpace -SystemDrive $env:SystemDrive | Out-String).Trim()
           if ($free -notmatch '^\d+$') { Write-Host "FreeSpace not numeric: '$free'"; exit 1 }
           # smart_health: report runs; flag must be warn/ok.
+          $sst = (.\tools\smart_health.ps1 -SelfTest) -join "`n"; Write-Host $sst
+          if ($LASTEXITCODE -ne 0) { Write-Host 'smart_health -SelfTest failed'; exit 1 }
+          $sf = Join-Path $env:TEMP 'dz_ci_smart_state.txt'; Remove-Item $sf -EA SilentlyContinue
+          .\tools\smart_health.ps1 -Mode State -StateFile $sf
+          $ss = (Get-Content -LiteralPath $sf -Raw).Trim(); Remove-Item $sf -EA SilentlyContinue
+          Write-Host "MEASURED: smart_health State on the runner: $ss"
+          if ($ss -ne 'ok' -and $ss -ne 'warn') { Write-Host "smart_health State on a runner was '$ss' -- Windows reports a runner's disks"; exit 1 }
           .\tools\smart_health.ps1 -Mode Report | Out-Null
           $h = (.\tools\smart_health.ps1 -Mode Flag).Trim()
           if ($h -ne 'warn' -and $h -ne 'ok') { Write-Host "smart_health Flag unexpected: '$h'"; exit 1 }
