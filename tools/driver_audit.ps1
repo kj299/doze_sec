@@ -320,7 +320,12 @@ function Get-CoverageVerdict {
         $gap = $true
     }
     $hf = @($HashFailed | Where-Object { $_ })
-    if ($hf.Count) {
+    if ($hf.Count -and -not $IsElevated) {
+        # A standard user may not read a protected driver file (an EDR's, or
+        # Defender's): the token explains it.
+        [void]$out.Add(('[DEFERRED - ADMIN REQUIRED] ' + $hf.Count + ' driver file(s) cannot be read from a standard-user token, so they were not hashed: ' + ((@($hf | Select-Object -First 5 | ForEach-Object { ConvertTo-EvidenceText $_ 200 })) -join '; ') + ' -- re-run as administrator to hash them.'))
+        $def = 1
+    } elseif ($hf.Count) {
         [void]$out.Add(('[WARNING] Driver hash match NOT performed in full -- ' + $hf.Count + ' driver file(s) could not be hashed: ' + ((@($hf | Select-Object -First 5 | ForEach-Object { ConvertTo-EvidenceText $_ 200 })) -join '; ') + $(if ($hf.Count -gt 5) { '; and ' + ($hf.Count - 5) + ' more' } else { '' }) + '.'))
         $gap = $true
     }
@@ -505,6 +510,8 @@ if ($SelfTest) {
     T 'a standard user denied their OWN temp: a gap -- the token does not explain it' ($cv.Gap -and $cv.Deferred -eq 0) ($cv.Lines -join ' | ')
     $cv = Get-CoverageVerdict -List @{ State = 'ok' } -Unlisted @(@{ Dir = 'C:\Windows\Temp'; Error = 'denied'; Own = $false }) -IsElevated $true
     T 'an administrator denied a drop folder: a gap' ($cv.Gap -and ($cv.Lines -join ' ') -match 'On-disk driver walk NOT performed in full') ($cv.Lines -join ' | ')
+    $cv = Get-CoverageVerdict -List @{ State = 'ok' } -HashFailed @('C:\Windows\System32\drivers\edr.sys') -IsElevated $false
+    T 'a driver file a standard user may not read is a deferral, never a row' ((-not $cv.Gap) -and $cv.Deferred -eq 1) ($cv.Lines -join ' | ')
     $cv = Get-CoverageVerdict -List @{ State = 'ok' } -SubErrors 3
     T 'subfolders that could not be listed are counted as context, not a gap' ((-not $cv.Gap) -and ($cv.Lines -join ' ') -match '^\[INFO\] 3 subfolder') ($cv.Lines -join ' | ')
     if ($fails -gt 0) { Write-Output "FAILED: $fails"; exit 1 }

@@ -140,6 +140,11 @@ function Get-DetectionBlock {
     $nm = ConvertTo-BlockField $Name
     $ac = ConvertTo-BlockField $Actor
     $sev = if ($Severity -match '^(?i)\s*critical\s*$') { 'CRITICAL' } else { 'WARNING' }
+    # A value ending in '\' would end the line as \" -- which PowerShell reads
+    # as a literal quote, swallowing every argument after it (Severity, Name,
+    # RowsFile) so a hit or gap would reach no ledger row. A trailing
+    # backslash means nothing for a key or a path, so it is dropped.
+    $Value = ([string]$Value).TrimEnd('\')
     return @(
         "echo --- [CTI-AUTO][$id] $nm - $ac --->> `"%REPORT%`"",
         "`"%PWSH%`" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"%SCRIPT_DIR%tools\ttp_detect.ps1`" -Method `"$m`" -Value `"$Value`" -Severity $sev -Id `"$id`" -Name `"$nm`" -RowsFile `"%TEMP%\dz_ttpauto_rows.txt`">> `"%REPORT%`" 2>&1"
@@ -161,6 +166,8 @@ if ($SelfTest) {
     $t = $b -join "`n"
     $clean = (($t -replace '-Value "C:\\x"', '') -replace ' 2>&1', '') -replace '%(REPORT|PWSH|SCRIPT_DIR|TEMP)%', ''
     T 'the name, ID and actor cannot break or inject into the bat line' (($clean -notmatch '[!&|()%]') -and (([regex]::Matches($b[1], '"').Count % 2) -eq 0)) $t
+    $b = Get-DetectionBlock -Id 'T1' -Name 'n' -Method 'file path' -Value 'C:\ProgramData\Evil\' -Severity 'CRITICAL' -Actor 'a'
+    T 'a value ending in a backslash cannot swallow the arguments after it' ($b[1] -match '-Value "C:\\ProgramData\\Evil" -Severity CRITICAL ') $b[1]
     T 'an unknown method writes no block' ((Get-DetectionBlock -Id 'T1' -Name 'n' -Method 'telepathy' -Value 'x' -Severity 'WARNING' -Actor 'a').Count -eq 0) ''
     T 'a severity other than CRITICAL is WARNING' ((Get-DetectionBlock -Id 'T1' -Name 'n' -Method 'file path' -Value 'x' -Severity 'high' -Actor 'a')[1] -match ' -Severity WARNING ') ''
     if ($fails) { Write-Output "[FAIL] $fails ttp_merge self-test expectation(s) unmet"; exit 1 }

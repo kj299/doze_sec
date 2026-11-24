@@ -42,6 +42,13 @@ proof     = ci:Network provider: Microsoft-signed System32 provider is context
 signature = Non-default network provider .* Microsoft-signed system DLL
 note      = WSL ships p9np.dll and registers P9NP as a network provider on every WSL machine. A Microsoft-signed provider under System32 is context, not credential capture. Field false positive 2026-08-30, fixed in #184. Verify: (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\NetworkProvider\Order').ProviderOrder and Get-AuthenticodeSignature on the ProviderPath.
 
+[bits-directx-database]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:persistence_extra.ps1 (netsh / print / BITS / profile / time-provider)
+signature = BITS job 'DirectX_Database_Download_AsUser_[^']*' \(owner NT AUTHORITY\\SYSTEM\) has a notify command line
+note      = Windows registers this BITS job itself (owner SYSTEM, notify program C:\Windows\System32\directxdatabaseupdater.exe, Microsoft-signed). It first appeared on the windows-latest runner 2026-11-24 and was graded WARNING there. It is [INFO] only while the program is that pinned name, in System32, validly Microsoft-signed, and the job is SYSTEM's. Verify: Get-BitsTransfer -AllUsers | Where-Object DisplayName -like 'DirectX_Database*' | Select-Object DisplayName, OwnerAccount, NotifyCmdLine, and Get-AuthenticodeSignature on the program.
+
 [sense-never-onboarded]
 class     = QUIET
 maxsev    = INFO

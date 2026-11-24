@@ -167,7 +167,17 @@ $userDirs = if ($ScanDir.Count) { $ScanDir } else { @(
     (Join-Path $env:SystemRoot 'Temp')
 ) }
 $exts = @('.exe', '.dll', '.sys', '.ps1', '.vbs')
-foreach ($d in ($userDirs | Where-Object { $_ } | Select-Object -Unique)) {
+# TEMP is often the 8.3 form of LOCALAPPDATA\Temp: compare folders by their
+# long path, or every file in it is hashed (and counted) twice.
+$seenDirs = @{}
+$uniqDirs = @()
+foreach ($d in ($userDirs | Where-Object { $_ })) {
+    $full = $d
+    try { $full = (Get-Item -LiteralPath $d -Force -ErrorAction Stop).FullName } catch {}
+    $k = $full.TrimEnd('\').ToLower()
+    if (-not $seenDirs.ContainsKey($k)) { $seenDirs[$k] = $true; $uniqDirs += $full }
+}
+foreach ($d in $uniqDirs) {
     if (-not (Test-ListDir $d)) { continue }
     $we = $null
     Get-ChildItem -LiteralPath $d -Recurse -File -EA SilentlyContinue -ErrorVariable we |

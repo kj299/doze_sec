@@ -140,7 +140,7 @@ function Get-RootCertVerdict {
     } elseif (-not $hit) {
         [void]$out.Add(('[OK] No root certificate installed in the last ' + $Days + ' days among the ' + ($all.Count - $noTime.Count) + ' that could be read.'))
     }
-    [void]$out.Add('[INFO] An attacker with administrator rights can rewrite a key''s last-write time; this finds a root that is planted, not one planted and then aged by hand.')
+    [void]$out.Add('[INFO] Limits: an attacker with administrator rights can rewrite a key''s last-write time, or plant ' + $BatchSize + ' or more roots within ' + $BatchMinutes + ' minutes so they read as an update batch; and the AuthRoot store (roots Windows fetches on demand, one at a time) is not read, because its keys are written whenever Windows meets a new root. Review the batches listed above.')
     return @{ Lines = @($out.ToArray()); Hit = $hit; Gap = ($un.Count -gt 0) }
 }
 
@@ -188,7 +188,7 @@ if ($SelfTest) {
     $v = Get-RootCertVerdict -Entries @((E 'A' $null)) -Now $now
     T 'a certificate whose last-write time Windows would not give is a gap, never "not recent"' ($v.Gap -and ($v.Lines -join ' ') -match 'A: Windows gave no last-write time') ($v.Lines -join ' | ')
     $v = Get-RootCertVerdict -Entries @() -Now $now
-    T 'the limit is always said' (($v.Lines -join ' ') -match 'can rewrite a key''s last-write time') ($v.Lines -join ' | ')
+    T 'the limits are always said: rewritten times, the batch rule, and AuthRoot not read' (($v.Lines -join ' ') -match 'can rewrite a key''s last-write time' -and ($v.Lines -join ' ') -match 'read as an update batch' -and ($v.Lines -join ' ') -match 'AuthRoot store') ($v.Lines -join ' | ')
     if ($fails) { Write-Output "[FAIL] $fails root_cert_check self-test expectation(s) unmet"; exit 1 }
     Write-Output '[OK] root_cert_check self-test: a root is judged by when Windows wrote it, not its NotBefore; one planted recently is the finding, a batch rewritten together is [INFO], and a store that could not be read is a raised gap.'
     exit 0

@@ -6593,6 +6593,7 @@ set "TTP_BLOCKS=%OUTDIR%\ThreatLists\ttp_generated_checks.bat"
 :: and raise nothing. The rows are raised here once it returns. A file written
 :: by an older doze_sec still holds the one-liners that printed "[OK] ...
 :: check clear." over a query that failed: it still runs, and that is said.
+:: -updateTTP only APPENDS to it, so the way out is -resetTTP, then -updateTTP.
 del "%TEMP%\dz_ttpauto_rows.txt" 2>nul
 set "_TTPOLD="
 if exist "%TTP_BLOCKS%" findstr /c:"check clear." "%TTP_BLOCKS%" >nul 2>&1 && set "_TTPOLD=1"
@@ -6602,7 +6603,7 @@ if exist "%TTP_BLOCKS%" (
     echo %C_CYAN%[18/18]%C_RESET% Running auto-generated TTP checks from SENTINEL-X...
     call "%TTP_BLOCKS%"
 )
-if defined _TTPOLD echo [WARNING] Auto-generated CTI checks NOT performed in full -- ThreatLists\ttp_generated_checks.bat was written by an older doze_sec, whose checks print "check clear." when their query fails and raise nothing on a hit. Run doze_sec.bat -updateTTP to regenerate them.>> "%REPORT%"
+if defined _TTPOLD echo [WARNING] Auto-generated CTI checks NOT performed in full -- ThreatLists\ttp_generated_checks.bat was written by an older doze_sec, whose checks print "check clear." when their query fails and raise nothing on a hit. -updateTTP only adds to that file: run doze_sec.bat -resetTTP, then -updateTTP, to replace it.>> "%REPORT%"
 if defined _TTPOLD call :dz_finding WARNING 18 CTIAUTO "Auto-generated CTI checks NOT performed in full - written by an older doze_sec"
 set "_TTPOLD="
 if exist "%TEMP%\dz_ttpauto_rows.txt" for /f "usebackq tokens=1,2,* delims=|" %%a in ("%TEMP%\dz_ttpauto_rows.txt") do call :dz_ttpauto_row %%a %%b "%%c"

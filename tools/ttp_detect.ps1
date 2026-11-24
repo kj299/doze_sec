@@ -80,6 +80,9 @@ function Get-TtpVerdict {
         'clear' {
             return @{ Lines = @(('[OK] ' + $nm + ' check clear.')); Row = '' }
         }
+        'context' {
+            return @{ Lines = @(('[INFO] ' + $nm + ': ' + (ConvertTo-SafeText ([string]$Probe.Detail) 300))); Row = '' }
+        }
         'listed' {
             $ls = @($Probe.Listing | ForEach-Object { '  ' + (ConvertTo-SafeText ([string]$_) 200) })
             $head = if ($ls.Count) { '[INFO] ' + $nm + ': the newest ' + $ls.Count + ' matching event(s), listed for review:' } else { '[INFO] ' + $nm + ': no matching events in the log.' }
@@ -111,6 +114,25 @@ function Get-ErrText {
     return ($x.GetType().Name + ': ' + $x.Message)
 }
 
+# Keys that exist, with entries, on every Windows. A feed row naming one of
+# them bare is a pattern to review, never an indicator by itself: it would
+# raise on every PC. Listed by their tail, matched case-insensitively.
+$script:StockKeyTails = @(
+    '\Microsoft\Windows\CurrentVersion\Run', '\Microsoft\Windows\CurrentVersion\RunOnce',
+    '\Microsoft\Windows\CurrentVersion\Policies\Explorer', '\Microsoft\Windows\CurrentVersion\Policies\System',
+    '\Microsoft\Windows NT\CurrentVersion\Winlogon', '\Microsoft\Windows NT\CurrentVersion\Image File Execution Options',
+    '\Microsoft\Windows NT\CurrentVersion\Windows', '\CurrentControlSet\Services', '\CurrentControlSet\Control\Lsa',
+    '\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders', '\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders',
+    '\Microsoft\Windows\CurrentVersion\Uninstall', '\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tree')
+
+# PURE. Whether a key path is one of the stock keys above.
+function Test-StockKey {
+    param([string]$Path)
+    $p = ([string]$Path).TrimEnd('\')
+    foreach ($t in $script:StockKeyTails) { if ($p.EndsWith($t, [StringComparison]::OrdinalIgnoreCase)) { return $true } }
+    return $false
+}
+
 # Live. One probe per method. Never throws.
 function Invoke-TtpProbe {
     param([string]$Method, [string]$Value)
@@ -127,14 +149,32 @@ function Invoke-TtpProbe {
             # An empty key is what Windows leaves behind once its values are
             # gone (the PortProxy lesson): it is not the indicator.
             $n = [int]$k.ValueCount + [int]$k.SubKeyCount
-            if ($n -gt 0) { return @{ State = 'hit'; Detail = ($v + ' exists, ' + $n + ' entr(ies)') } }
-            return @{ State = 'clear' }
+            if ($n -le 0) { return @{ State = 'clear' } }
+            if (Test-StockKey $p) { return @{ State = 'context'; Detail = ($v + ' is a key every Windows has (' + $n + ' entr(ies)); naming it bare says nothing about this PC -- its entries are graded elsewhere in the audit') } }
+            return @{ State = 'hit'; Detail = ($v + ' exists, ' + $n + ' entr(ies)') }
         }
         '^process name$' {
             try { $ps = @(Get-CimInstance Win32_Process -Filter ("Name='" + $v + "'") -ErrorAction Stop) }
             catch { return @{ State = 'unread'; Error = (Get-ErrText $_) } }
-            if ($ps.Count) { return @{ State = 'hit'; Detail = ((@($ps | Select-Object -First 5 | ForEach-Object { [string]$_.Name + ' PID ' + [string]$_.ProcessId + $(if ($_.ExecutablePath) { ' ' + [string]$_.ExecutablePath } else { '' }) })) -join '; ') } }
-            return @{ State = 'clear' }
+            # The audit's own processes are not an indicator: a feed row naming
+            # powershell.exe or cmd.exe would otherwise match the audit itself.
+            $own = @($PID)
+            try { $pp = (Get-CimInstance Win32_Process -Filter ('ProcessId=' + $PID) -ErrorAction Stop).ParentProcessId; for ($i = 0; $i -lt 6 -and $pp; $i++) { $own += $pp; $pp = (Get-CimInstance Win32_Process -Filter ('ProcessId=' + $pp) -ErrorAction Stop).ParentProcessId } } catch {}
+            $ps = @($ps | Where-Object { $own -notcontains [int]$_.ProcessId })
+            if (-not $ps.Count) { return @{ State = 'clear' } }
+            # A Windows program running from the Windows folder under its own
+            # name says nothing by its name alone; it is listed as context.
+            $win = @(); $other = @()
+            foreach ($q in $ps) {
+                $ep = [string]$q.ExecutablePath; $isWin = $false
+                if ($ep -and $env:SystemRoot -and $ep.StartsWith(($env:SystemRoot.TrimEnd('\') + '\'), [StringComparison]::OrdinalIgnoreCase)) {
+                    try { $sg = Get-AuthenticodeSignature -LiteralPath $ep -ErrorAction Stop; $isWin = ($sg.Status -eq 'Valid' -and [string]$sg.SignerCertificate.Subject -match 'O=Microsoft Corporation') } catch {}
+                }
+                if ($isWin) { $win += $q } else { $other += $q }
+            }
+            $fmt = { param($q) [string]$q.Name + ' PID ' + [string]$q.ProcessId + $(if ($q.ExecutablePath) { ' ' + [string]$q.ExecutablePath } else { ' (path not visible to this token)' }) }
+            if ($other.Count) { return @{ State = 'hit'; Detail = ((@($other | Select-Object -First 5 | ForEach-Object { & $fmt $_ })) -join '; ') } }
+            return @{ State = 'context'; Detail = ([string]$win.Count + ' Microsoft-signed Windows process(es) by that name, running from the Windows folder -- a name alone is not an indicator: ' + ((@($win | Select-Object -First 3 | ForEach-Object { & $fmt $_ })) -join '; ')) }
         }
         '^file path$' {
             $why = ''
@@ -148,8 +188,11 @@ function Invoke-TtpProbe {
             return @{ State = 'clear' }
         }
         '^named pipe$' {
-            try { $pipes = @([IO.Directory]::GetFiles('\\.\pipe\') | ForEach-Object { [IO.Path]::GetFileName($_) }) }
-            catch { return @{ State = 'unread'; Error = ('the named-pipe list could not be read: ' + (Get-ErrText $_)) } }
+            # Get-ChildItem degrades per entry; [IO.Directory]::GetFiles fails
+            # the whole list on one pipe name .NET does not accept.
+            $pe = $null
+            $pipes = @(Get-ChildItem -LiteralPath '\\.\pipe\' -EA SilentlyContinue -ErrorVariable pe | ForEach-Object { [string]$_.Name })
+            if (-not $pipes.Count -and $pe) { return @{ State = 'unread'; Error = ('the named-pipe list could not be read: ' + (Get-ErrText $pe[0])) } }
             if ($pipes.Count -eq 0) { return @{ State = 'unread'; Error = 'the named-pipe list came back empty, and Windows always has some' } }
             $m = @()
             try { $m = @($pipes | Where-Object { $_ -match $v }) } catch { $m = @($pipes | Where-Object { $_.IndexOf($v, [StringComparison]::OrdinalIgnoreCase) -ge 0 }) }
@@ -165,6 +208,12 @@ function Invoke-TtpProbe {
         '^event id$' {
             $eid = 0
             if (-not [int]::TryParse($v, [ref]$eid)) { return @{ State = 'unread'; Error = ('not an event ID: ' + $v) } }
+            # Opened by name first: a log this token may not read answers the
+            # filtered query with "no matching events" (account_events_check).
+            try { $null = Get-WinEvent -LogName 'Security' -MaxEvents 1 -ErrorAction Stop }
+            catch {
+                if ($_.FullyQualifiedErrorId -notmatch 'NoMatchingEventsFound') { return @{ State = $(if (Test-Denied $_) { 'denied' } else { 'unread' }); Error = ('the Security log could not be read: ' + (Get-ErrText $_)) } }
+            }
             try { $evts = @(Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = $eid } -MaxEvents 10 -ErrorAction Stop) }
             catch {
                 if ($_.FullyQualifiedErrorId -match 'NoMatchingEventsFound') { return @{ State = 'listed'; Listing = @() } }
@@ -204,6 +253,11 @@ if ($SelfTest) {
     T 'event ID records are listed for review, never raised' ((-not $v.Row) -and ($v.Lines -join ' ') -match '^\[INFO\] Log cleared: the newest 1 matching event') ($v.Lines -join ' | ')
     $v = Get-TtpVerdict -Method 'event id' -Name 'Log cleared' -Severity 'CRITICAL' -Id 'T1070.001' -Probe @{ State = 'unread'; Error = 'EventLogException' }
     T 'an event log that could not be read is a gap' ($v.Row -like 'WARNING|T1070.001|*') ($v.Lines -join ' | ')
+    $v = Get-TtpVerdict -Method 'process name' -Name 'Shell' -Severity 'CRITICAL' -Id 'T1059' -Probe @{ State = 'context'; Detail = '3 Microsoft-signed Windows process(es) by that name' }
+    T 'a Windows program running under its own name is context, never a CRITICAL on every PC' ((-not $v.Row) -and ($v.Lines -join ' ') -match '^\[INFO\] Shell: ') ($v.Lines -join ' | ')
+    T 'a feed row naming a stock key (Run) is context, not an indicator' ((Test-StockKey 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run') -and (Test-StockKey 'HKLM:\SYSTEM\CurrentControlSet\Services\')) ''
+    T 'a key that is not a stock key is graded' (-not (Test-StockKey 'HKCU:\Software\EvilCorp\Loader')) ''
+    T 'a key BELOW a stock key is graded (a Run subkey an attacker made is not the stock key)' (-not (Test-StockKey 'HKLM:\SYSTEM\CurrentControlSet\Services\EvilSvc')) ''
     $p = Invoke-TtpProbe -Method 'carrier pigeon' -Value 'x'
     T 'an unknown method is a gap, never a silent pass' ($p.State -eq 'unread') ([string]$p.Error)
     $p = Invoke-TtpProbe -Method 'registry key' -Value 'HKU\.DEFAULT\x'
