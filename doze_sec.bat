@@ -5687,7 +5687,7 @@ if exist "%TEMP%\dz_baseline_gap.txt" (
     rem A gap is its own row: the tool could not perform (part of) this check.
     set "_GAPSEV="
     set /p _GAPSEV=<"%TEMP%\dz_baseline_gap.txt"
-    call :dz_finding !_GAPSEV! 17 BASELINE "Baseline comparison NOT performed in full - a snapshot or a category could not be read"
+    call :dz_finding !_GAPSEV! 17 BASELINE "Baseline not captured or not compared in full - a snapshot or a category could not be read"
     del "%TEMP%\dz_baseline_gap.txt" 2>nul
 )
 
@@ -6156,6 +6156,10 @@ if "%VT_CHECK%"=="1" (
             del "%TEMP%\dz_iochit_18j.txt" 2>nul
         )
         rem A lookup that failed, a rate limit or a missing key: not looked up.
+        if exist "%TEMP%\dz_iochit_18j_deferred.txt" (
+            set /a DEFERRED_COUNT+=1
+            del "%TEMP%\dz_iochit_18j_deferred.txt" 2>nul
+        )
         if exist "%TEMP%\dz_iochit_18j_gap.txt" (
             call :dz_finding WARNING 18 T1105 "VirusTotal file check NOT performed in full - candidate files were not looked up"
             del "%TEMP%\dz_iochit_18j_gap.txt" 2>nul

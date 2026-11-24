@@ -495,6 +495,19 @@ function Get-NetLocalGroupMembers {
     return ,@($body[0..($body.Count - 2)] | ForEach-Object { ([string]$_).Trim() })
 }
 
+# PURE. Categories Windows never leaves empty that the baseline holds no
+# record of while this run does: those were not captured, never "all NEW".
+function Get-NeverEmptyMissing {
+    param([string[]]$OldKeys, [string[]]$NowKeys)
+    $out = @()
+    foreach ($cat in 'DRV', 'SVC', 'TASK', 'PORT', 'ADMIN', 'CERT') {
+        $o = @($OldKeys | Where-Object { $_ -like "$cat|*" }).Count
+        $n = @($NowKeys | Where-Object { $_ -like "$cat|*" }).Count
+        if ($o -eq 0 -and $n -gt 0) { $out += $cat }
+    }
+    return $out
+}
+
 # PURE. The categories a diff must not compare: those the baseline did not
 # capture plus those this run could not read. A category in neither is
 # compared in full.
@@ -711,6 +724,8 @@ if ($SelfTest) {
     T 'net localgroup by position: German members are read and the localized closing line is not a member' ((@($mem) -join ',') -ceq 'Administrator,dzuser') (@($mem) -join ',')
     T 'net localgroup output with no dashed rule is $null (nothing was read)' ($null -eq (Get-NetLocalGroupMembers @('System error 1376 has occurred.'))) ''
     T 'a category missing from the baseline or failed now is skipped, in both directions' ((@(Get-SkippedCategories -BaselineMissing @('SVC') -NowFailed @('PORT', 'SVC')) -join ',') -ceq 'PORT,SVC') ''
+    T 'a never-empty category with no record in an old baseline (ADMIN on a German PC, before the SID read) is not captured, never every admin NEW' ((@(Get-NeverEmptyMissing -OldKeys @('SVC|a', 'RUN|x') -NowKeys @('SVC|a', 'ADMIN|PC\Administrator', 'RUN|x')) -join ',') -ceq 'ADMIN') ''
+    T 'an empty RUN category is ordinary, not uncaptured' (@(Get-NeverEmptyMissing -OldKeys @('SVC|a') -NowKeys @('SVC|a', 'RUN|x')).Count -eq 0) ''
     T 'nothing failed on either side: nothing skipped' (@(Get-SkippedCategories -BaselineMissing @() -NowFailed @()).Count -eq 0) ''
     if ($fails) { Write-Output "[FAIL] $fails baseline_diff self-test expectation(s) unmet"; exit 1 }
     Write-Output '[OK] baseline_diff self-test: update churn (signed replacements and version bumps, dynamic RPC ports, loopback listeners, COM-handler tasks, logon counters) is context; replaced unsigned binaries, moved listeners, new admins, new roots and suspicious arguments are findings.'
@@ -972,6 +987,15 @@ foreach ($k in $old.Keys) { if (-not $new.ContainsKey($k)) { $removed += $k } }
 # A category either side did not capture is compared in NEITHER direction:
 # a failed read now is not every item REMOVED, a category the baseline never
 # held is not every item NEW. Raised as the gap it is.
+# A baseline saved before NotCaptured existed says nothing about what it
+# missed. A category Windows always populates (drivers, services, tasks,
+# listeners, administrators, root CAs) with NO record in it was not captured,
+# whatever the header says: the old ADMIN read used the English group name,
+# so on a German or French PC every administrator would otherwise come back
+# NEW, a raised row on a clean machine. RUN can be legitimately empty.
+foreach ($cat in @(Get-NeverEmptyMissing -OldKeys @($old.Keys) -NowKeys @($new.Keys))) {
+    if ($baselineMissing -notcontains $cat) { $baselineMissing += $cat }
+}
 $skipCats = Get-SkippedCategories -BaselineMissing $baselineMissing -NowFailed @($script:SnapFailed.Keys)
 if ($skipCats.Count -gt 0) {
     $added   = @($added   | Where-Object { $skipCats -notcontains $_.Split('|')[0] })

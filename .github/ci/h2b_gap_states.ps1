@@ -81,7 +81,8 @@ try {
   if ($sc -notmatch '^\[INFO\] Path scope: ') { throw 'an elevated snapshot did not write the [INFO] path scope' }
   if (Test-Path $df) { throw 'an elevated snapshot counted a deferral' }
   $null = & .\tools\proc_snapshot.ps1 -ScopeFile $sf -DeferredFile $df -Elevated 0
-  if ((Get-Content -LiteralPath $sf -Raw) -match '^\[DEFERRED - ADMIN REQUIRED\] Path scope:' -and -not (Test-Path $df)) { throw 'a deferred path scope wrote no deferral marker' }
+  $sc = Get-Content -LiteralPath $sf -Raw; Write-Host $sc
+  if ($sc -notmatch '^\[DEFERRED - ADMIN REQUIRED\] Path scope:' -or -not (Test-Path $df)) { throw 'a standard-user path scope (System and Idle expose no path) was not a counted deferral' }
 
   # ---- account_files_check: a denied folder is a gap; the runner's own is not. ----
   foreach ($c in 'PsHistory', 'CloudCreds') {

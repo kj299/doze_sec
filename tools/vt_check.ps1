@@ -84,31 +84,54 @@ if (-not $token) {
     return
 }
 
-# Build candidate file list. Driver enumeration requires admin; PS will
-# silently skip unreadable files via -EA SilentlyContinue.
+# Build candidate file list. A folder (or a subfolder of one) that could not
+# be listed is said: it was -EA SilentlyContinue, so a denied Downloads read
+# as "no candidate files" and printed [OK]. Collected with -ErrorVariable and
+# raised as a gap -- except Windows\Temp on a standard-user token, which that
+# token can never list: a counted deferral (dz_iochit_18j_deferred.txt).
+Remove-Item -LiteralPath (Join-Path $env:TEMP 'dz_iochit_18j_deferred.txt') -Force -EA SilentlyContinue
+$isAdmin = $false
+try { $isAdmin = (New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.SecurityIdentifier]'S-1-5-32-544') } catch {}
+$listGaps = @()
 $candidates = New-Object System.Collections.Generic.List[object]
 $driverDir = Join-Path $env:SystemRoot 'System32\drivers'
-if (Test-Path $driverDir) {
-    Get-ChildItem $driverDir -Filter *.sys -EA SilentlyContinue |
-        Where-Object { $_.LastWriteTime -gt (Get-Date).AddDays(-$RecentDriverDays) } |
-        ForEach-Object { $candidates.Add($_) }
-}
+$le = $null
+Get-ChildItem -LiteralPath $driverDir -Filter *.sys -ErrorAction SilentlyContinue -ErrorVariable le |
+    Where-Object { $_.LastWriteTime -gt (Get-Date).AddDays(-$RecentDriverDays) } |
+    ForEach-Object { $candidates.Add($_) }
+foreach ($e in @($le)) { if ($e) { $listGaps += ($driverDir + ': ' + $e.Exception.Message) } }
 $userDirs = @(
     $env:TEMP,
     (Join-Path $env:USERPROFILE 'Downloads'),
     (Join-Path $env:LOCALAPPDATA 'Temp'),
     (Join-Path $env:SystemRoot 'Temp')
 )
-foreach ($d in $userDirs) {
-    if (-not (Test-Path $d)) { continue }
-    Get-ChildItem $d -Recurse -Include '*.exe','*.dll','*.ps1','*.vbs' -EA SilentlyContinue |
+$sysTemp = Join-Path $env:SystemRoot 'Temp'
+foreach ($d in @($userDirs | Where-Object { $_ } | Sort-Object -Unique)) {
+    $le = $null
+    Get-ChildItem -LiteralPath $d -Recurse -Include '*.exe','*.dll','*.ps1','*.vbs' -ErrorAction SilentlyContinue -ErrorVariable le |
         Where-Object { $_.LastWriteTime -gt (Get-Date).AddDays(-$RecentUserDays) -and $_.Length -lt 650MB } |
         ForEach-Object { $candidates.Add($_) }
+    foreach ($e in @($le)) {
+        if (-not $e) { continue }
+        # A folder that is not there (no Downloads) is the ordinary answer.
+        if ($e.Exception -is [System.Management.Automation.ItemNotFoundException] -and $e.TargetObject -eq $d) { continue }
+        if (-not $isAdmin -and $d -eq $sysTemp -and $e.Exception -is [System.UnauthorizedAccessException]) {
+            '[DEFERRED - ADMIN REQUIRED] ' + $sysTemp + ' cannot be listed from a standard-user token; its files were not looked up -- re-run as administrator.'
+            New-Item "$env:TEMP\dz_iochit_18j_deferred.txt" -Force | Out-Null
+            continue
+        }
+        $listGaps += ([string]$e.TargetObject + ': ' + $e.Exception.Message)
+    }
+}
+if ($listGaps.Count -gt 0) {
+    '[WARNING] VirusTotal check NOT performed in full -- ' + $listGaps.Count + ' folder(s) could not be listed, so their files were never candidates: ' + (($listGaps | Select-Object -First 3) -join '; ') + $(if ($listGaps.Count -gt 3) { '; ...' } else { '' })
+    New-Item "$env:TEMP\dz_iochit_18j_gap.txt" -Force | Out-Null
 }
 
 $candidates = @($candidates | Sort-Object FullName -Unique | Select-Object -First $MaxFiles)
 if ($candidates.Count -eq 0) {
-    '[OK] VT check: no candidate files in priority directories.'
+    if ($listGaps.Count -eq 0) { '[OK] VT check: no candidate files in priority directories.' }
     return
 }
 

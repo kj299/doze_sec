@@ -287,7 +287,6 @@ foreach ($ip in $ips) {
             -TimeoutSec $TimeoutSeconds `
             -EA Stop
         $data = $resp.Content | ConvertFrom-Json
-        $answered++
         $stats = $data.data.attributes.last_analysis_stats
         $results = $data.data.attributes.last_analysis_results
         $mal = [int]$stats.malicious
@@ -300,6 +299,7 @@ foreach ($ip in $ips) {
         if ($mal -eq 0 -and $sus -eq 0) {
             "  [OK] $ip -- VT 0/$tot clean (AS$asn $owner, $country)"
             "         local process(es): $procs"
+            $answered++
             continue
         }
 
@@ -350,6 +350,9 @@ foreach ($ip in $ips) {
 
         # Count toward IOC_HITS only at MED or HIGH credibility
         if ($cred.Counts) { $malCount++ }
+        # Counted only once the answer was fully processed: an error above
+        # lands in the catch as a failure, and must not be both.
+        $answered++
     } catch {
         $statusCode = $null
         try { $statusCode = [int]$_.Exception.Response.StatusCode } catch {}
