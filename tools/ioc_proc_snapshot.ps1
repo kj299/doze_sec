@@ -53,7 +53,7 @@ function Get-ProcScope {
     if ($IsElevated) {
         return @{ Line = ('[INFO] ' + $Blank + ' of ' + $Total + ' process(es) expose no ' + $what + ' even to an administrator (protected and system processes such as System, Registry and csrss); they were matched by name only.'); Deferred = 0 }
     }
-    return @{ Line = ('[DEFERRED - ADMIN REQUIRED] ' + $Blank + ' of ' + $Total + ' process(es) run under another account or elevated, so this token cannot read their ' + $what + '; they were matched by name only -- re-run as administrator to match the rest.'); Deferred = 1 }
+    return @{ Line = ('[DEFERRED - ADMIN REQUIRED] ' + $Blank + ' of ' + $Total + ' process(es) run under another account or elevated, so this token cannot read their ' + $what + '; they were matched by name only -- re-run as administrator to match those another account runs.'); Deferred = 1 }
 }
 
 # PURE. One snapshot line, as the bats always wrote it. A newline in a field

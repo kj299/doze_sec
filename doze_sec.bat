@@ -5661,7 +5661,7 @@ del "%TEMP%\dz_proc18a_scope.txt" 2>nul
 del "%TEMP%\dz_proc18a_deferred.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\ioc_proc_snapshot.ps1" "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\ioc_proc_snapshot.ps1" -Field ExecutablePath -OutFile "%TEMP%\dz_proc18a.tmp" -ScopeFile "%TEMP%\dz_proc18a_scope.txt" -DeferredFile "%TEMP%\dz_proc18a_deferred.txt" 2>nul
 set "_ENUM18A="
-for %%z in ("%TEMP%\dz_proc18a.tmp") do if %%~zz GTR 100 set "_ENUM18A=1"
+if exist "%TEMP%\dz_proc18a.tmp" for %%z in ("%TEMP%\dz_proc18a.tmp") do if %%~zz GTR 100 set "_ENUM18A=1"
 if defined _ENUM18A goto :sec18a_match
 echo [WARNING] Process IOC match NOT performed -- running processes could not be listed.>> "%REPORT%"
 call :dz_finding WARNING 18 T1057 "Process IOC match NOT performed - processes not enumerable"
@@ -5763,7 +5763,7 @@ del "%TEMP%\dz_iochit_18c_done.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- [18d] Suspicious File Path IOC Check --->> "%REPORT%"
-echo  Command: powershell -Command "foreach($p in Get-Content '%IOCDIR:'=''%\ioc_file_paths.txt'){ if($p.Trim() -and -not $p.StartsWith('#')){ $e = [Environment]::ExpandEnvironmentVariables($p.Trim()); try { $null = [IO.File]::GetAttributes($e); $e } catch { $_.Exception.GetType().Name + ': ' + $e } } }">> "%REPORT%"
+echo  Command: powershell -Command "foreach($p in Get-Content '%IOCDIR:'=''%\ioc_file_paths.txt'){ if($p.Trim() -and -not $p.StartsWith('#')){ $e = [Environment]::ExpandEnvironmentVariables($p.Trim()); try { $null = [IO.File]::GetAttributes($e); $e } catch { $_.Exception.InnerException.GetType().Name + ': ' + $e } } }">> "%REPORT%"
 echo  Checking for known malware staging paths from ioc_file_paths.txt>> "%REPORT%"
 :: Each path is asked for BY NAME (GetAttributes needs no right to list the
 :: folder), and absent only when its folder ANSWERS without it or does not
@@ -5792,7 +5792,7 @@ echo } >> "%PSRUN%"
 echo if($paths.Count -eq 0){'[WARNING] Staging file IOC match NOT performed -- ioc_file_paths.txt is missing or holds no entries.'; New-Item "$env:TEMP\dz_iochit_18d_gap.txt" -Force ^| Out-Null}else{ >> "%PSRUN%"
 echo   if($hits.Count -gt 0){'[CRITICAL] Known malware staging files found:'; $hits; '[ACTION] Quarantine these files immediately.'; New-Item "$env:TEMP\dz_iochit_18d.txt" -Force ^| Out-Null} >> "%PSRUN%"
 echo   if($unread.Count -gt 0){'[WARNING] Staging file IOC match NOT performed in full -- '+$unread.Count+' of '+$paths.Count+' path(s) could not be checked, so a staging file there would go unseen: '+((@($unread) ^| Select-Object -First 5) -join '; ')+$(if($unread.Count -gt 5){'; and '+($unread.Count-5)+' more'}else{'.'}); New-Item "$env:TEMP\dz_iochit_18d_unread.txt" -Force ^| Out-Null} >> "%PSRUN%"
-echo   if($deferred.Count -gt 0){'[DEFERRED - ADMIN REQUIRED] '+$deferred.Count+' staging path(s) are in folders a standard-user token cannot list: '+((@($deferred) ^| Select-Object -First 5) -join '; ')+' -- re-run as administrator to check them.'; Set-Content -LiteralPath (Join-Path $env:TEMP 'dz_iochit_18d_deferred.txt') -Value $deferred.Count -Encoding ASCII} >> "%PSRUN%"
+echo   if($deferred.Count -gt 0){'[DEFERRED - ADMIN REQUIRED] '+$deferred.Count+' staging path(s) are in folders a standard-user token cannot list: '+((@($deferred) ^| Select-Object -First 5) -join '; ')+' -- re-run as administrator to check them.'; Set-Content -LiteralPath (Join-Path $env:TEMP 'dz_iochit_18d_deferred.txt') -Value 1 -Encoding ASCII} >> "%PSRUN%"
 echo   if($hits.Count -eq 0 -and $unread.Count -eq 0){ if($deferred.Count -gt 0){'[OK] No known malware staging files among the '+($paths.Count-$deferred.Count)+' of '+$paths.Count+' path(s) this token can check.'}else{'[OK] No known malware staging files found ('+$paths.Count+' path(s) checked).'} } >> "%PSRUN%"
 echo } >> "%PSRUN%"
 echo New-Item "$env:TEMP\dz_iochit_18d_done.txt" -Force ^| Out-Null >> "%PSRUN%"
@@ -5934,7 +5934,7 @@ del "%TEMP%\dz_proc18g_scope.txt" 2>nul
 del "%TEMP%\dz_proc18g_deferred.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\ioc_proc_snapshot.ps1" "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\ioc_proc_snapshot.ps1" -Field CommandLine -OutFile "%TEMP%\dz_evt.tmp" -ScopeFile "%TEMP%\dz_proc18g_scope.txt" -DeferredFile "%TEMP%\dz_proc18g_deferred.txt" 2>nul
 set "_ENUM18G="
-for %%z in ("%TEMP%\dz_evt.tmp") do if %%~zz GTR 100 set "_ENUM18G=1"
+if exist "%TEMP%\dz_evt.tmp" for %%z in ("%TEMP%\dz_evt.tmp") do if %%~zz GTR 100 set "_ENUM18G=1"
 if defined _ENUM18G goto :sec18g_match
 echo [WARNING] LOLBin pattern match NOT performed -- process command lines could not be listed.>> "%REPORT%"
 call :dz_finding WARNING 18 T1059 "LOLBin pattern match NOT performed - command lines not enumerable"
