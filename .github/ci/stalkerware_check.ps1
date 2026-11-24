@@ -28,6 +28,20 @@ foreach ($needle in @(
   if ($stOut -notmatch ('\[OK\]\s+' + [regex]::Escape($needle))) { throw "the stalkerware_check.ps1 self-test no longer covers: $needle" }
 }
 
+# Remove every Deny rule from a throwaway HKCU key this script denied. Get-Acl
+# opens the key with read access, which the QueryValues deny refuses (it
+# returned $null and the rule stayed), so open it through .NET asking only for
+# READ_CONTROL and WRITE_DAC: the owner holds both whatever the DACL says.
+function Clear-DenyRules([string]$KeyPath) {
+  $sub = $KeyPath -replace '^HKCU:\\', ''
+  $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($sub, [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree, [System.Security.AccessControl.RegistryRights]'ReadPermissions, ChangePermissions')
+  if ($null -eq $k) { return }
+  try {
+    $sec = $k.GetAccessControl([System.Security.AccessControl.AccessControlSections]::Access)
+    foreach ($rule in @($sec.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]) | Where-Object { $_.AccessControlType -eq 'Deny' })) { $sec.RemoveAccessRuleSpecific($rule) }
+    $k.SetAccessControl($sec)
+  } finally { $k.Close() }
+}
 $ErrorActionPreference = 'Stop'
 $md = Join-Path $env:TEMP ("dz_sw_ci_{0}" -f $PID)
 New-Item -ItemType Directory -Path $md -Force | Out-Null
@@ -125,13 +139,15 @@ try {
   Remove-ItemProperty -Path $ul -Name 'dz_ci_junk_value' -EA SilentlyContinue
 } finally {
   if ($kr -and (Test-Path $kr)) {
-    try { $a = Get-Acl -Path $ulk; foreach ($rule in @($a.Access | Where-Object { $_.AccessControlType -eq 'Deny' })) { [void]$a.RemoveAccessRule($rule) }; Set-Acl -Path $ulk -AclObject $a } catch { Write-Host ("cleanup: could not reset the throwaway key's ACL: " + $_.Exception.Message) }
+    try { Clear-DenyRules $ulk } catch { Write-Host ("cleanup: could not clear the deny rule on the throwaway key: " + $_.Exception.Message) }
     Remove-Item -Path $kr -Recurse -Force -EA SilentlyContinue
   }
   Remove-ItemProperty -Path $ul -Name 'dz_ci_junk_value' -EA SilentlyContinue
   Remove-ItemProperty -Path $ul -Name 'dz_ci_probe_user' -EA SilentlyContinue
   if ($madeUl) { Remove-Item $ul -Force -EA SilentlyContinue }
   Remove-Item $md -Recurse -Force -EA SilentlyContinue
+  # Last, after every other plant is gone: a throwaway key left behind fails the step.
+  if ($kr -and (Test-Path $kr)) { throw "cleanup failed: the throwaway key $kr remains" }
 }
 Write-Host "stalkerware_check.ps1 OK (incl. junk-value resilience)"
 exit 0

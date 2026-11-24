@@ -1082,13 +1082,27 @@ $ppSearch = @(
 $envRoot = 'HKLM:\SYSTEM\CurrentControlSet\Control\Print\Environments'
 $ppCount = 0
 $ppUnread = 0   # entries whose value could not be read -- must not be covered by an all-clear
+$ppNoDriver = 0 # entries read with no Driver value: they cannot load, context only
 $ppOk = $true
 try {
-    if (Test-Path $envRoot) {
+    # The Environments key exists on every Windows: listed directly, so one
+    # that could not be read is the gap below, never "All 0 ... signed".
+    if ($true) {
         foreach ($envKey in (Get-ChildItem -LiteralPath $envRoot -EA Stop)) {
             $procRoot = Join-Path $envKey.PSPath 'Print Processors'
-            if (-not (Test-Path $procRoot)) { continue }
-            foreach ($proc in (Get-ChildItem -LiteralPath $procRoot -EA SilentlyContinue)) {
+            # An environment with no Print Processors key is ordinary; one whose
+            # key, or a child of it, could not be read is counted, never skipped.
+            $ppErr = $null
+            try { $null = Get-Item -LiteralPath $procRoot -ErrorAction Stop } catch { $ppErr = $_ }
+            if ($ppErr) {
+                $isMissing = ($ppErr.Exception -is [System.Management.Automation.ItemNotFoundException]) -or ([string]$ppErr.FullyQualifiedErrorId -like 'PathNotFound*')
+                if (-not $isMissing) { $ppUnread++ }
+                continue
+            }
+            $ppErrs = $null
+            $procs = @(Get-ChildItem -LiteralPath $procRoot -ErrorAction SilentlyContinue -ErrorVariable ppErrs)
+            $ppUnread += @($ppErrs | Where-Object { $null -ne $_ }).Count
+            foreach ($proc in $procs) {
                 # -LiteralPath, NOT -Path: the subkey name is
                 # attacker-controlled and -Path treats it as a WILDCARD. A
                 # port monitor named "Std [TCP] Mon" with a malicious Driver
@@ -1096,8 +1110,13 @@ try {
                 # the `if (-not $raw) { continue }` below dropped it without
                 # counting it, and the section still reported every registered
                 # entry as validly Microsoft-signed.
-                $raw = [string](Get-ItemProperty -LiteralPath $proc.PSPath -Name 'Driver' -EA SilentlyContinue).Driver
-                if (-not $raw) { $ppUnread++; continue }
+                # A key that could not be READ is the gap; a key read with no
+                # Driver value cannot load anything, and is counted as context.
+                $ppProps = $null
+                try { $ppProps = Get-ItemProperty -LiteralPath $proc.PSPath -ErrorAction Stop } catch { $ppUnread++; continue }
+                $raw = ''
+                if ($null -ne $ppProps -and $ppProps.PSObject.Properties['Driver']) { $raw = [string]$ppProps.Driver }
+                if (-not $raw) { $ppNoDriver++; continue }
                 $ppCount++
                 $dll = Resolve-DllPath -Raw $raw -SearchDirs $ppSearch
                 $v = Get-DllVerdict -Path $dll
@@ -1115,9 +1134,12 @@ try {
 if (-not $ppOk) {
     '[WARNING] Print environments key could not be read -- print-processor check NOT performed.'
     $ppGap = Get-MaxSev $ppGap 'WARNING'
-} elseif ($ppSev -eq 'OK') {
-    "[OK] All $ppCount registered print processor(s) are validly Microsoft-signed."
-    # An all-clear may not cover entries the scan could not read.
+} else {
+    if ($ppSev -eq 'OK' -and $ppUnread -eq 0) { "[OK] All $ppCount registered print processor(s) are validly Microsoft-signed." }
+    # An all-clear may not cover entries the scan could not read, and the line
+    # saying so is a raised gap of its own (it used to print and raise nothing).
+    if ($ppUnread -gt 0) { $ppGap = Get-MaxSev $ppGap 'WARNING' }
+    if ($ppNoDriver -gt 0) { "[INFO] $ppNoDriver print processor key(s) carry no Driver value, so they load nothing -- listed as context, not graded." }
     if ($ppUnread -gt 0) { "[WARNING] $ppUnread print processor(s) had an unreadable driver value and were NOT checked -- a registry key name crafted to defeat enumeration is itself suspicious. Inspect them by hand." ; $ppGap = Get-MaxSev $ppGap 'WARNING' }
 }
 Write-Marker -Name 'printproc' -Sev $ppSev
@@ -1196,7 +1218,13 @@ if (-not $bitsOk) {
     '[WARNING] BITS module or service unavailable -- BITS job check NOT performed.'
     $bitsGap = Get-MaxSev $bitsGap 'WARNING'
 } elseif (-not $jobs -or $jobs.Count -eq 0) {
-    '[OK] No BITS transfer jobs queued.'
+    # On a standard-user token -AllUsers was refused, so "none" covers this
+    # user only -- the all-clear must not claim the whole machine.
+    if ($bitsAllUsers) { '[OK] No BITS transfer jobs queued.' }
+    else {
+        '[OK] No BITS transfer jobs queued for this user.'
+        @(Get-BitsSummaryLines -JobCount 0 -AllUsers $false) | Where-Object { $_ -like '`[INFO`] BITS jobs were enumerated for THIS USER only*' }
+    }
 } else {
     $flagged = 0
     $aged = 0
@@ -1311,6 +1339,7 @@ if ($bitsGap -ne 'OK') { Write-Marker -Name 'bits_gap' -Sev $bitsGap }
 ''
 '--- [T1546.013] PowerShell profile scripts (run on every interactive start) ---'
 $profSev = 'OK'
+$profGap = 'OK'
 $docs = ''
 try { $docs = [Environment]::GetFolderPath('MyDocuments') } catch {}
 $profilePaths = @()
@@ -1329,9 +1358,17 @@ foreach ($pp in $profilePaths) {
     if (-not (Test-Path -LiteralPath $pp -PathType Leaf)) { continue }
     $found++
     $body = ''
-    try { $body = (Get-Content -LiteralPath $pp -Raw -EA Stop) } catch {}
+    $readErr = ''
+    try { $body = (Get-Content -LiteralPath $pp -Raw -EA Stop) } catch { $readErr = ([string]$_.Exception.Message -replace '[\r\n]+', ' ').Trim(); if (-not $readErr) { $readErr = 'no message' } }
+    # A profile that could not be read is not an empty one: it runs at every
+    # PowerShell start, so what it holds is unknown, not cleared.
+    if ($readErr) {
+        "[WARNING] PowerShell profile check NOT performed in full -- $pp could not be read ($readErr), so a download cradle in it would go unseen (T1546.013)."
+        $profGap = 'WARNING'
+        continue
+    }
     if (-not $body) {
-        "[OK] PowerShell profile present but empty/unreadable: $pp"
+        "[OK] PowerShell profile present but empty: $pp"
         continue
     }
     $sev = 'OK'
@@ -1351,6 +1388,7 @@ foreach ($pp in $profilePaths) {
 }
 if ($found -eq 0) { '[OK] No PowerShell profile scripts present.' }
 Write-Marker -Name 'psprofile' -Sev $profSev
+if ($profGap -ne 'OK') { Write-Marker -Name 'psprofile_gap' -Sev $profGap }
 
 # ---- 6. Time providers (T1547.003) ---------------------------------------
 ''

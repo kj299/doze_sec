@@ -2723,6 +2723,7 @@ del "%TEMP%\dz_bitsupload.txt" 2>nul
 del "%TEMP%\dz_bitsupload_gap.txt" 2>nul
 del "%TEMP%\dz_bits_gap.txt" 2>nul
 del "%TEMP%\dz_psprofile.txt" 2>nul
+del "%TEMP%\dz_psprofile_gap.txt" 2>nul
 del "%TEMP%\dz_timeprov.txt" 2>nul
 del "%TEMP%\dz_timeprov_gap.txt" 2>nul
 del "%TEMP%\dz_persist_extra_done.txt" 2>nul
@@ -2809,6 +2810,11 @@ if exist "%TEMP%\dz_psprofile.txt" (
     call :dz_finding !_PRFSEV! 5 T1546.013 "PowerShell profile script contains suspicious content"
     del "%TEMP%\dz_psprofile.txt" 2>nul
 )
+if exist "%TEMP%\dz_psprofile_gap.txt" (
+    rem A profile that could not be read is its own row: what it runs is unknown.
+    call :dz_finding WARNING 5 T1546.013 "PowerShell profile check NOT performed in full - a profile could not be read"
+    del "%TEMP%\dz_psprofile_gap.txt" 2>nul
+)
 if exist "%TEMP%\dz_timeprov.txt" (
     set "_TMPSEV="
     set /p _TMPSEV=<"%TEMP%\dz_timeprov.txt"
@@ -2887,6 +2893,7 @@ del "%TEMP%\dz_logon_credprov.txt" 2>nul
 del "%TEMP%\dz_logon_lsa.txt" 2>nul
 del "%TEMP%\dz_logon_scr.txt" 2>nul
 del "%TEMP%\dz_logon_logonscript.txt" 2>nul
+del "%TEMP%\dz_logon_gap.txt" 2>nul
 del "%TEMP%\dz_logon_done.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\logon_persistence.ps1" (
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\logon_persistence.ps1">> "%REPORT%" 2>&1
@@ -2934,6 +2941,11 @@ if exist "%TEMP%\dz_logon_logonscript.txt" (
     set /p _LSEV=<"%TEMP%\dz_logon_logonscript.txt"
     call :dz_finding !_LSEV! 5 T1037.001 "UserInitMprLogonScript logon script set"
     del "%TEMP%\dz_logon_logonscript.txt" 2>nul
+)
+if exist "%TEMP%\dz_logon_gap.txt" (
+    rem A gap is its own row, beside a finding or alone: a logon key could not be read.
+    call :dz_finding WARNING 5 T1547.004 "Logon and unlock persistence check NOT performed in full - a logon key could not be read"
+    del "%TEMP%\dz_logon_gap.txt" 2>nul
 )
 
 echo.>> "%REPORT%"
@@ -6281,10 +6293,23 @@ echo.>> "%REPORT%"
 echo --- [CTI][T1546.015] COM Object Hijacking - User CLSID Overrides --->> "%REPORT%"
 echo  Command: powershell -File tools\com_clsid_check.ps1>> "%REPORT%"
 del "%TEMP%\dz_com.txt" 2>nul
+del "%TEMP%\dz_com_gap.txt" 2>nul
+del "%TEMP%\dz_com_done.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\com_clsid_check.ps1" (
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\com_clsid_check.ps1">> "%REPORT%" 2>&1
 ) else (
-    echo  [INFO] tools\com_clsid_check.ps1 not found -- COM CLSID check skipped.>> "%REPORT%"
+    echo [WARNING] tools\com_clsid_check.ps1 not found -- COM CLSID override check NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 18 T1546.015 "COM CLSID override check NOT performed - tool missing"
+)
+if not exist "%TEMP%\dz_com_done.txt" if exist "%SCRIPT_DIR%tools\com_clsid_check.ps1" (
+    echo [WARNING] COM CLSID override check produced no verdict -- NOT performed: tools\com_clsid_check.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 18 T1546.015 "COM CLSID override check produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_com_done.txt" 2>nul
+if exist "%TEMP%\dz_com_gap.txt" (
+    rem A gap is its own row, beside a finding or alone: a CLSID key could not be read.
+    call :dz_finding WARNING 18 T1546.015 "COM CLSID override check NOT performed in full - a CLSID key could not be read"
+    del "%TEMP%\dz_com_gap.txt" 2>nul
 )
 if exist "%TEMP%\dz_com.txt" (
     set "_COMSEV="

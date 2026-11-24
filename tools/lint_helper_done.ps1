@@ -1,7 +1,7 @@
 # lint_helper_done.ps1 -- run by lint.yml (Linux pwsh). Read-only.
 # Usage: pwsh -NoProfile -File tools/lint_helper_done.ps1 [-Root <checkout>]
 #
-# Nine helpers' death used to read as a CLEAN section: their markers were read, but nothing checked the helper finished,
+# Helpers whose death used to read as a CLEAN section (nine at first, then com_clsid_check): their markers were read, but nothing checked the helper finished,
 # and a missing helper printed "[INFO] ... skipped". For each, in BOTH bats:
 # the done marker is deleted before the call, a missing helper raises a row,
 # and a "produced no verdict" backstop raises one when the marker is absent;
@@ -21,7 +21,8 @@ $specs = @(
   @{ Tool = 'service_signature_check'; Done = 'dz_svcgate_done.txt';       Src = "if (`$DoneFile) { Set-Content -LiteralPath `$DoneFile -Value 'done' -Encoding ASCII }"; Arg = $true },
   @{ Tool = 'edr_presence';            Done = 'dz_edr_done.txt';           Src = "'edr_done'" },
   @{ Tool = 'hosts_check';             Done = 'dz_hosts_done.txt';         Src = "'hosts_done'" },
-  @{ Tool = 'bits_history';            Done = 'dz_bitshist_done.txt';      Src = "'bitshist_done'" })
+  @{ Tool = 'bits_history';            Done = 'dz_bitshist_done.txt';      Src = "'bitshist_done'" },
+  @{ Tool = 'com_clsid_check';         Done = 'dz_com_done.txt';           Src = "Write-Marker -Name 'com_done' -Sev 'done'" })
 function Get-Defects([hashtable]$Texts, [hashtable]$Sources) {
   $bad = @()
   foreach ($bat in $Texts.Keys) {
@@ -57,7 +58,7 @@ $texts = @{}; foreach ($b in 'doze_sec.bat', 'doze_sec_noAdmin.bat') { $texts[$b
 $srcs = @{}; foreach ($sp in $specs) { $srcs[$sp.Tool] = ([IO.File]::ReadAllText((Join-Path $Root ("tools/" + $sp.Tool + ".ps1")))) -replace "`r`n", "`n" }
 $bad = @(Get-Defects $texts $srcs)
 if ($bad.Count) { $bad | ForEach-Object { "[FAIL] $_" }; exit 1 }
-"[OK] all nine helpers: done marker cleared, a missing helper raised, a 'produced no verdict' backstop, in both bats ($($specs.Count * 2) call sites)"
+"[OK] all $($specs.Count) helpers: done marker cleared, a missing helper raised, a 'produced no verdict' backstop, in both bats ($($specs.Count * 2) call sites)"
 # The check must be able to fail: drop one backstop, and one tool's marker.
 $m = $texts.Clone(); $m['doze_sec_noAdmin.bat'] = $m['doze_sec_noAdmin.bat'] -replace '(?m)^if not exist "%TEMP%\\dz_hosts_done\.txt" if exist', 'if exist'
 $ms = $srcs.Clone(); $ms['bits_history'] = $ms['bits_history'].Replace("'bitshist_done'", "'bitshist_x'")

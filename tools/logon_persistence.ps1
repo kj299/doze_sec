@@ -36,7 +36,17 @@
 #
 # On a finding, writes the marker file "$env:TEMP\dz_logon_<type>.txt" whose
 # single line is the severity word, so the caller raises via :dz_finding.
-# Enumeration failures emit [SKIPPED] (fail-closed, not silent-clean).
+#
+# A KEY THAT COULD NOT BE READ IS NOT A CLEAN ONE (2026-11-23). Four checks
+# printed an unraised "[SKIPPED] ... NOT performed"; the others read with
+# -EA SilentlyContinue, so a Notify, network-provider, credential-provider,
+# screensaver or logon-script key that could not be read printed the same
+# [OK] as one that held nothing -- and a credential provider whose COM
+# registration could not be read was skipped as "stale". Now every key is
+# asked with -ErrorAction Stop: a key that does not exist is the ordinary
+# answer, one that could not be read is named in "[WARNING] ... NOT
+# performed", and any such line writes dz_logon_gap.txt, which the caller
+# raises as its own row. dz_logon_done.txt is written last.
 #
 # Windows PowerShell 5.1 compatible. Read-only except the marker files.
 # Executed by the helpers-ps51 CI job.
@@ -46,7 +56,13 @@ param(
     # Where the severity markers go. The bat calls this with no arguments, so
     # the default is the previous hardcoded behavior; the parameter exists so
     # the marker contract can be tested without writing into the real TEMP.
-    [string]$MarkerDir = $env:TEMP
+    [string]$MarkerDir = $env:TEMP,
+    # Only CI changes these: throwaway registry roots standing in for HKLM:
+    # and HKCU:, so a key that cannot be read runs through the real readers
+    # without touching the runner's own logon keys.
+    [string]$KeyRoot = 'HKLM:',
+    [string]$UserRoot = 'HKCU:',
+    [switch]$SelfTest
 )
 
 $ErrorActionPreference = 'Continue'
@@ -163,8 +179,96 @@ function Get-DllVerdict {
 # Escalate a running severity ('OK' < 'WARNING' < 'CRITICAL').
 function Get-MaxSev { param($a, $b); if ($a -eq 'CRITICAL' -or $b -eq 'CRITICAL') { 'CRITICAL' } elseif ($a -eq 'WARNING' -or $b -eq 'WARNING') { 'WARNING' } else { 'OK' } }
 
+# PURE. Whether a failed Get-Item said "this key does not exist".
+function Test-KeyMissing {
+    param($Err)
+    if ($null -eq $Err) { return $false }
+    $x = $Err.Exception
+    $d = 0
+    while ($null -ne $x -and $d -lt 6) { if ($x -is [System.Management.Automation.ItemNotFoundException]) { return $true }; $x = $x.InnerException; $d++ }
+    return ([string]$Err.FullyQualifiedErrorId -like 'PathNotFound*')
+}
+
+# PURE. A named property of a Get-ItemProperty result, or $null (a key with
+# no values gives back nothing at all).
+function Get-PropValue {
+    param($Obj, [string]$Name)
+    if ($null -eq $Obj) { return $null }
+    $pp = $Obj.PSObject.Properties[$Name]
+    if ($null -eq $pp) { return $null }
+    return $pp.Value
+}
+
+function ConvertTo-OneLine {
+    param($Err)
+    $m = ''
+    if ($Err -is [System.Management.Automation.ErrorRecord]) { $m = [string]$Err.Exception.Message } elseif ($Err -is [Exception]) { $m = [string]$Err.Message } else { $m = [string]$Err }
+    $m = ($m -replace '[\r\n\t]+', ' ').Trim()
+    if (-not $m) { $m = 'no message' }
+    if ($m.Length -gt 160) { $m = $m.Substring(0, 160) + '...' }
+    return $m
+}
+
+# Read a key's values. State: ok (Values set) | missing | unreadable (Error).
+function Read-KeyValues {
+    param([string]$Path)
+    try { $null = Get-Item -LiteralPath $Path -ErrorAction Stop }
+    catch {
+        if (Test-KeyMissing $_) { return @{ State = 'missing'; Values = $null; Error = '' } }
+        return @{ State = 'unreadable'; Values = $null; Error = (ConvertTo-OneLine $_) }
+    }
+    try { return @{ State = 'ok'; Values = (Get-ItemProperty -LiteralPath $Path -ErrorAction Stop); Error = '' } }
+    catch { return @{ State = 'unreadable'; Values = $null; Error = (ConvertTo-OneLine $_) } }
+}
+
+# Child keys of a key that opened: what was listed, and each child that could
+# not be opened NAMED.
+function Get-ChildKeys {
+    param([string]$Path)
+    $errs = $null
+    $kids = @(Get-ChildItem -LiteralPath $Path -ErrorAction SilentlyContinue -ErrorVariable errs)
+    $bad = @()
+    foreach ($e in @($errs)) {
+        if ($null -eq $e) { continue }
+        $t = [string]$e.TargetObject
+        if (-not $t) { $t = $Path }
+        $bad += ((Split-Path -Leaf $t) + ': ' + (ConvertTo-OneLine $e))
+    }
+    return @{ Kids = $kids; Bad = $bad }
+}
+
+# PURE. The line for a check whose keys could not all be read.
+function Get-GapLine {
+    param([string]$What, [string[]]$Unread, [string]$Miss)
+    $u = @($Unread | Where-Object { $_ })
+    if ($u.Count -eq 0) { return '' }
+    $names = (@($u | Select-Object -First 3) -join '; ') + $(if ($u.Count -gt 3) { '; and ' + ($u.Count - 3) + ' more' } else { '' })
+    return ('[WARNING] ' + $What + ' NOT performed in full -- ' + $u.Count + ' key(s) could not be read (' + $names + '), so ' + $Miss + '.')
+}
+
+if ($SelfTest) {
+    $fails = 0
+    function T { param([string]$Name, [bool]$Ok, [string]$Got) if ($Ok) { "[OK]   $Name" } else { "[FAIL] $Name -- got: $Got"; $script:fails++ } }
+    $l = Get-GapLine -What 'Winlogon Notify check' -Unread @('Notify: Requested registry access is not allowed.') -Miss 'a Notify package there would go unseen'
+    T 'a key that could not be read is a [WARNING] ... NOT performed line that names it' ($l -match '^\[WARNING\] Winlogon Notify check NOT performed in full -- 1 key\(s\) could not be read \(Notify: Requested registry access') $l
+    T 'every key read: no gap line' ((Get-GapLine -What 'x' -Unread @() -Miss 'y') -eq '') ''
+    $l = Get-GapLine -What 'x' -Unread @('a', 'b', 'c', 'd', 'e') -Miss 'y'
+    T 'more than three unread keys: three named and the rest counted' ($l -match '\(a; b; c; and 2 more\)') $l
+    T 'a key with no values reads as no value, never an error' (($null -eq (Get-PropValue $null 'DllName')) -and ((Get-PropValue ([pscustomobject]@{ DllName = 'x.dll' }) 'DllName') -eq 'x.dll') -and ($null -eq (Get-PropValue ([pscustomobject]@{ Other = 1 }) 'DllName'))) ''
+    $missErr = $null; try { $null = Get-Item -LiteralPath (Join-Path ([IO.Path]::GetTempPath()) 'dz_no_such_item_lp_7f3a') -ErrorAction Stop } catch { $missErr = $_ }
+    T 'an item that does not exist is MISSING, never unreadable' (Test-KeyMissing $missErr) ([string]$missErr.FullyQualifiedErrorId)
+    T 'an access denial is not "missing"' (-not (Test-KeyMissing (New-Object System.Management.Automation.ErrorRecord ((New-Object System.Security.SecurityException 'Requested registry access is not allowed.')), 'System.Security.SecurityException,Microsoft.PowerShell.Commands.GetItemCommand', 'PermissionDenied', $null))) ''
+    if ($fails) { "[FAIL] logon_persistence self-test: $fails case(s) failed"; exit 1 }
+    '[OK] logon_persistence self-test: a key that could not be read is a named NOT-performed line, a missing key is the ordinary answer, and a key with no values is not an error.'
+    exit 0
+}
+
+$gaps = 0
+
 function Write-Marker {
-    param([string]$Type, [string]$Sev)
+    # -Name writes dz_<Name>.txt exactly (the gap marker); -Type keeps the
+    # dz_logon_<Type>.txt names every finding marker has always used.
+    param([string]$Type, [string]$Sev, [string]$Name = '')
     # The marker IS the route to the findings ledger: a failed write here turns
     # a real finding into a CLEAN section. Create the directory rather than
     # assume it, and let a genuine write failure print instead of vanishing --
@@ -172,92 +276,111 @@ function Write-Marker {
     if (-not (Test-Path -LiteralPath $MarkerDir)) {
         New-Item -ItemType Directory -Path $MarkerDir -Force -EA SilentlyContinue | Out-Null
     }
-    Set-Content -LiteralPath (Join-Path $MarkerDir ("dz_logon_{0}.txt" -f $Type)) -Value $Sev -Encoding ASCII
+    $file = $(if ($Name) { "dz_{0}.txt" -f $Name } else { "dz_logon_{0}.txt" -f $Type })
+    Set-Content -LiteralPath (Join-Path $MarkerDir $file) -Value $Sev -Encoding ASCII
 }
 
 # ---- 1. Winlogon Notify --------------------------------------------------
 '--- [T1547.004] Winlogon Notify packages (fire on logon/lock/UNLOCK) ---'
-$notifyBase = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\Notify'
-$ok = $true; $subs = $null
-try { if (Test-Path $notifyBase) { $subs = Get-ChildItem -Path $notifyBase -EA Stop } } catch { $ok = $false }
-if (-not $ok) {
-    '[SKIPPED] Winlogon\Notify enumeration failed -- check NOT performed.'
-} elseif (-not $subs) {
-    '[OK] No Winlogon Notify packages (expected on modern Windows).'
-} else {
-    $sev = 'WARNING'
-    foreach ($s in $subs) {
-        $dll = (Get-ItemProperty -Path $s.PSPath -Name DllName -EA SilentlyContinue).DllName
-        $v = Get-DllVerdict -Path $dll
-        $sev = Get-MaxSev $sev $v.Sev
-        ("[{0}] Winlogon Notify subkey '{1}' -> {2} ({3})" -f (@{CRITICAL='CRITICAL';WARNING='WARNING';OK='WARNING'}[$v.Sev]), $s.PSChildName, $dll, $v.Why)
-        Write-WhenCaveat
-        $w = Get-WhenLine -KeyPath $s.PSPath -FilePath $v.Path
-        if ($w) { $w }
-    }
-    Write-Marker 'notify' $sev
+$notifyBase = "$KeyRoot\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\Notify"
+$unread = @()
+$k = Read-KeyValues $notifyBase
+$subs = @()
+if ($k.State -eq 'unreadable') { $unread += ('Winlogon\Notify: ' + $k.Error) }
+elseif ($k.State -eq 'ok') { $ck = Get-ChildKeys $notifyBase; $subs = $ck.Kids; $unread += $ck.Bad }
+$sev = 'OK'
+foreach ($sub in $subs) {
+    $sk = Read-KeyValues $sub.PSPath
+    if ($sk.State -eq 'unreadable') { $unread += ($sub.PSChildName + ': ' + $sk.Error); continue }
+    if ($sev -eq 'OK') { $sev = 'WARNING' }
+    $dll = [string](Get-PropValue $sk.Values 'DllName')
+    $v = Get-DllVerdict -Path $dll
+    $sev = Get-MaxSev $sev $v.Sev
+    ("[{0}] Winlogon Notify subkey '{1}' -> {2} ({3})" -f (@{CRITICAL='CRITICAL';WARNING='WARNING';OK='WARNING'}[$v.Sev]), $sub.PSChildName, $dll, $v.Why)
+    Write-WhenCaveat
+    $w = Get-WhenLine -KeyPath $sub.PSPath -FilePath $v.Path
+    if ($w) { $w }
 }
+if ($sev -ne 'OK') { Write-Marker 'notify' $sev }
+$gl = Get-GapLine -What 'Winlogon Notify check' -Unread $unread -Miss 'a Notify package there, which runs at every logon, lock and unlock, would go unseen (T1547.004)'
+if ($gl) { $gl; $gaps++ } elseif ($sev -eq 'OK') { '[OK] No Winlogon Notify packages (expected on modern Windows).' }
 
 # ---- 2. Network Provider DLL (NPPSPY) ------------------------------------
 ''
 '--- [T1556.008] Network Provider DLLs (cleartext credential capture at logon) ---'
 $allowedNp = @('RDPNP', 'LanmanWorkstation', 'webclient')
-$ok = $true; $order = $null
-try { $order = (Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\NetworkProvider\Order' -Name ProviderOrder -EA Stop).ProviderOrder } catch { $ok = $false }
-if (-not $ok) {
-    '[SKIPPED] NetworkProvider order unavailable -- check NOT performed.'
-} else {
-    $sev = 'OK'; $any = $false
-    foreach ($np in @($order -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
-        if ($allowedNp -contains $np) { continue }
-        $any = $true
-        $pp = (Get-ItemProperty -Path ("HKLM:\SYSTEM\CurrentControlSet\Services\{0}\NetworkProvider" -f $np) -Name ProviderPath -EA SilentlyContinue).ProviderPath
-        $v = Get-DllVerdict -Path $pp
-        if ($v.Sev -eq 'OK') {
-            # Microsoft-signed under System32 is clean, exactly as the tiering
-            # header promises. This branch used to upgrade OK verdicts to
-            # WARNING to keep its pre-WSL three-name allowlist authoritative --
-            # and a field test then flagged WSL's own P9NP (p9np.dll, shipped
-            # by Windows on every WSL machine) as credential capture. Surface
-            # the provider as context, not as a finding.
-            ("[INFO] Non-default network provider '{0}' -> {1} ({2}) -- Microsoft-signed system DLL; WSL's P9NP is the common case." -f $np, $pp, $v.Why)
-        } else {
-            $sev = Get-MaxSev $sev $v.Sev
-            ("[{0}] Non-default network provider '{1}' -> {2} ({3})" -f $v.Sev, $np, $pp, $v.Why)
-        }
+$unread = @()
+$order = $null
+$k = Read-KeyValues "$KeyRoot\SYSTEM\CurrentControlSet\Control\NetworkProvider\Order"
+if ($k.State -eq 'ok') { $order = [string](Get-PropValue $k.Values 'ProviderOrder') }
+# The Order key and its ProviderOrder value exist on every Windows: not
+# finding them is a read that did not answer, never "no providers".
+if ($k.State -ne 'ok') { $unread += ('NetworkProvider\Order: ' + $(if ($k.State -eq 'missing') { 'the key was not found' } else { $k.Error })) }
+elseif (-not $order) { $unread += 'NetworkProvider\Order: ProviderOrder is empty or absent' }
+$sev = 'OK'; $any = $false
+foreach ($np in @(([string]$order) -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
+    if ($allowedNp -contains $np) { continue }
+    $pk = Read-KeyValues ("$KeyRoot\SYSTEM\CurrentControlSet\Services\{0}\NetworkProvider" -f $np)
+    # A provider whose key could not be read is not graded at all -- never the
+    # CRITICAL "no DLL path" an empty path would earn below.
+    if ($pk.State -eq 'unreadable') { $unread += ($np + ': ' + $pk.Error); continue }
+    $any = $true
+    $pp = [string](Get-PropValue $pk.Values 'ProviderPath')
+    $v = Get-DllVerdict -Path $pp
+    if ($v.Sev -eq 'OK') {
+        # Microsoft-signed under System32 is clean, exactly as the tiering
+        # header promises. This branch used to upgrade OK verdicts to
+        # WARNING to keep its pre-WSL three-name allowlist authoritative --
+        # and a field test then flagged WSL's own P9NP (p9np.dll, shipped
+        # by Windows on every WSL machine) as credential capture. Surface
+        # the provider as context, not as a finding.
+        ("[INFO] Non-default network provider '{0}' -> {1} ({2}) -- Microsoft-signed system DLL; WSL's P9NP is the common case." -f $np, $pp, $v.Why)
+    } else {
+        $sev = Get-MaxSev $sev $v.Sev
+        ("[{0}] Non-default network provider '{1}' -> {2} ({3})" -f $v.Sev, $np, $pp, $v.Why)
     }
-    if ($sev -ne 'OK') { Write-Marker 'netprov' $sev }
-    elseif (-not $any) { '[OK] Only default network providers present (RDPNP, LanmanWorkstation, webclient).' }
 }
+if ($sev -ne 'OK') { Write-Marker 'netprov' $sev }
+$gl = Get-GapLine -What 'Network provider check' -Unread $unread -Miss 'a rogue network provider there, which captures the password at every logon, would go unseen (T1556.008)'
+if ($gl) { $gl; $gaps++ } elseif ($sev -eq 'OK' -and -not $any) { '[OK] Only default network providers present (RDPNP, LanmanWorkstation, webclient).' }
 
 # ---- 3. Credential Providers / Filters -----------------------------------
 ''
 '--- [T1547] Credential Providers/Filters (LogonUI, logon + UNLOCK) ---'
 $cpBases = @(
-    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers',
-    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Provider Filters'
+    "$KeyRoot\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers",
+    "$KeyRoot\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Provider Filters"
 )
-$ok = $true; $flagged = $false; $sev = 'OK'
-try {
-    foreach ($base in $cpBases) {
-        if (-not (Test-Path $base)) { continue }
-        foreach ($g in (Get-ChildItem -Path $base -EA Stop)) {
-            $guid = $g.PSChildName
-            $dll = (Get-ItemProperty -Path ("HKLM:\SOFTWARE\Classes\CLSID\{0}\InprocServer32" -f $guid) -Name '(default)' -EA SilentlyContinue).'(default)'
-            if (-not $dll) { continue }   # GUID with no COM registration -> skip (stale)
-            $v = Get-DllVerdict -Path $dll
-            if ($v.Sev -eq 'OK') { continue }
-            $flagged = $true; $sev = Get-MaxSev $sev $v.Sev
-            ("[{0}] Credential provider {1} -> {2} ({3})" -f $v.Sev, $guid, $dll, $v.Why)
-            Write-WhenCaveat
-            $w = Get-WhenLine -KeyPath ("HKLM:\SOFTWARE\Classes\CLSID\{0}\InprocServer32" -f $guid) -FilePath $v.Path
-            if ($w) { $w }
-        }
+$unread = @(); $flagged = $false; $sev = 'OK'; $stale = 0
+foreach ($base in $cpBases) {
+    $k = Read-KeyValues $base
+    if ($k.State -eq 'missing') { continue }
+    if ($k.State -eq 'unreadable') { $unread += ((Split-Path -Leaf $base) + ': ' + $k.Error); continue }
+    $ck = Get-ChildKeys $base
+    $unread += $ck.Bad
+    foreach ($g in $ck.Kids) {
+        $guid = $g.PSChildName
+        $ip = "$KeyRoot\SOFTWARE\Classes\CLSID\$guid\InprocServer32"
+        $ik = Read-KeyValues $ip
+        # No COM registration at all is a stale entry (it cannot load); a
+        # registration that could not be READ is not graded and is named.
+        if ($ik.State -eq 'missing') { $stale++; continue }
+        if ($ik.State -eq 'unreadable') { $unread += ($guid + ': ' + $ik.Error); continue }
+        $dll = [string](Get-PropValue $ik.Values '(default)')
+        if (-not $dll) { $stale++; continue }
+        $v = Get-DllVerdict -Path $dll
+        if ($v.Sev -eq 'OK') { continue }
+        $flagged = $true; $sev = Get-MaxSev $sev $v.Sev
+        ("[{0}] Credential provider {1} -> {2} ({3})" -f $v.Sev, $guid, $dll, $v.Why)
+        Write-WhenCaveat
+        $w = Get-WhenLine -KeyPath $ip -FilePath $v.Path
+        if ($w) { $w }
     }
-} catch { $ok = $false }
-if (-not $ok) { '[SKIPPED] Credential Provider enumeration failed -- check NOT performed.' }
-elseif (-not $flagged) { '[OK] All registered credential providers are Microsoft-signed system DLLs.' }
-else { Write-Marker 'credprov' $sev }
+}
+if ($stale -gt 0) { ('[INFO] ' + $stale + ' registered credential provider(s) have no COM registration, so they cannot load -- a leftover of uninstalled software, not graded.') }
+if ($flagged) { Write-Marker 'credprov' $sev }
+$gl = Get-GapLine -What 'Credential provider check' -Unread $unread -Miss 'a rogue credential provider there, which LogonUI loads at every logon and unlock, would go unseen (T1547)'
+if ($gl) { $gl; $gaps++ } elseif (-not $flagged) { '[OK] All registered credential providers are Microsoft-signed system DLLs.' }
 
 # ---- 4. LSA Notification / Authentication packages (Tier 2) --------------
 # Loaded by lsass at boot/logon; a rogue package (e.g. a password-filter DLL)
@@ -267,34 +390,39 @@ else { Write-Marker 'credprov' $sev }
 ''
 '--- [T1556.002/T1547.002] LSA Notification & Authentication packages (lsass, SYSTEM) ---'
 $sys = [Environment]::GetFolderPath('System')
-$lsaOk = $true; $lsaFlagged = $false; $lsaSev = 'OK'
-try {
-    $lp = Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -EA Stop
+$lsaFlagged = $false; $lsaSev = 'OK'
+$k = Read-KeyValues "$KeyRoot\SYSTEM\CurrentControlSet\Control\Lsa"
+if ($k.State -eq 'ok') {
     foreach ($setName in 'Notification Packages', 'Authentication Packages') {
-        foreach ($pkg in @($lp.$setName | Where-Object { $_ })) {
+        foreach ($pkg in @((Get-PropValue $k.Values $setName) | Where-Object { $_ })) {
             $dllp = Join-Path $sys ($pkg + '.dll')
             $v = Get-DllVerdict -Path $dllp
             if ($v.Sev -eq 'OK') { continue }
             $lsaFlagged = $true; $lsaSev = Get-MaxSev $lsaSev $v.Sev
             ("[{0}] LSA {1} package '{2}' -> {3} ({4})" -f $v.Sev, $setName, $pkg, $dllp, $v.Why)
             Write-WhenCaveat
-            $w = Get-WhenLine -KeyPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -FilePath $v.Path
+            $w = Get-WhenLine -KeyPath "$KeyRoot\SYSTEM\CurrentControlSet\Control\Lsa" -FilePath $v.Path
             if ($w) { $w }
         }
     }
-} catch { $lsaOk = $false }
-if (-not $lsaOk) { '[SKIPPED] LSA package enumeration failed -- check NOT performed.' }
-elseif (-not $lsaFlagged) { '[OK] LSA Notification/Authentication packages are Microsoft-signed system DLLs.' }
-else { Write-Marker 'lsa' $lsaSev }
+}
+if ($lsaFlagged) { Write-Marker 'lsa' $lsaSev }
+# The Lsa key exists on every Windows: missing is a read that did not answer.
+$gl = Get-GapLine -What 'LSA package check' -Unread $(if ($k.State -ne 'ok') { @('Control\Lsa: ' + $(if ($k.State -eq 'missing') { 'the key was not found' } else { $k.Error })) } else { @() }) -Miss 'a rogue LSA package, which lsass loads to see every password, would go unseen (T1556.002)'
+if ($gl) { $gl; $gaps++ } elseif (-not $lsaFlagged) { '[OK] LSA Notification/Authentication packages are Microsoft-signed system DLLs.' }
 
 # ---- 5. Screensaver hijack (Tier 2) -- runs on idle -> lock --------------
 ''
 '--- [T1546.002] Screensaver (executes on user inactivity / lock) ---'
-$desk = 'HKCU:\Control Panel\Desktop'
-$scr = (Get-ItemProperty -Path $desk -Name 'SCRNSAVE.EXE' -EA SilentlyContinue).'SCRNSAVE.EXE'
-$scrSecure = (Get-ItemProperty -Path $desk -Name 'ScreenSaverIsSecure' -EA SilentlyContinue).ScreenSaverIsSecure
+$desk = "$UserRoot\Control Panel\Desktop"
+$k = Read-KeyValues $desk
+$scr = $null; $scrSecure = $null
+if ($k.State -eq 'ok') { $scr = [string](Get-PropValue $k.Values 'SCRNSAVE.EXE'); $scrSecure = Get-PropValue $k.Values 'ScreenSaverIsSecure' }
 $scrFlagged = $false; $scrSev = 'OK'
-if ($scr) {
+if ($k.State -eq 'unreadable') {
+    $gl = Get-GapLine -What 'Screensaver check' -Unread @('Control Panel\Desktop: ' + $k.Error) -Miss 'a screensaver swapped for a program, which runs whenever this PC sits idle, would go unseen (T1546.002)'
+    $gl; $gaps++
+} elseif ($scr) {
     $v = Get-DllVerdict -Path $scr
     if ($v.Sev -ne 'OK') {
         $scrFlagged = $true; $scrSev = Get-MaxSev $scrSev $v.Sev
@@ -320,12 +448,18 @@ if ($scrFlagged) { Write-Marker 'scr' $scrSev }
 # ---- 6. UserInitMprLogonScript (Tier 2) ----------------------------------
 ''
 '--- [T1037.001] Logon script (UserInitMprLogonScript) ---'
-$lsn = (Get-ItemProperty -Path 'HKCU:\Environment' -Name UserInitMprLogonScript -EA SilentlyContinue).UserInitMprLogonScript
-if ($lsn) {
+$k = Read-KeyValues "$UserRoot\Environment"
+$lsn = $null
+if ($k.State -eq 'ok') { $lsn = [string](Get-PropValue $k.Values 'UserInitMprLogonScript') }
+if ($k.State -eq 'unreadable') {
+    $gl = Get-GapLine -What 'Logon script check' -Unread @('Environment: ' + $k.Error) -Miss 'a script set to run at every logon would go unseen (T1037.001)'
+    $gl; $gaps++
+} elseif ($lsn) {
     ("[WARNING] UserInitMprLogonScript is set -- runs a script at every logon: {0}" -f $lsn)
     Write-Marker 'logonscript' 'WARNING'
 } else {
     '[OK] No UserInitMprLogonScript logon script.'
 }
+if ($gaps -gt 0) { Write-Marker -Name 'logon_gap' -Sev 'WARNING' }
 # Written last: the caller raises "produced no verdict" when it is absent.
 Write-Marker 'done' 'done'
