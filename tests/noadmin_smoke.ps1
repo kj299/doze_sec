@@ -664,6 +664,12 @@ try {
         'Section 18d checked the staging paths a standard user can check, and said how many' `
         'Section 18d printed neither its scoped [OK] nor a match on a standard-user token'
     Write-Host ("MEASURED: Section 18d on a standard-user token: " + $(if ($text1 -match '\[DEFERRED - ADMIN REQUIRED\] (\d+) staging path\(s\) are in folders a standard-user token cannot list') { $Matches[1] + ' path(s) deferred' } else { 'no path deferred' }))
+    # Section 13 used to DEFER driver signing on this token (bcdedit needs
+    # administrator). The running kernel's code-integrity options are readable
+    # by a standard user, so it is graded here now -- never deferred, never a gap.
+    Assert ($text1 -match '\[INFO\] Code-integrity options reported by the running kernel: 0x[0-9A-F]{8}' -and $text1 -notmatch 'Driver signature enforcement check NOT performed') `
+        'Section 13 graded driver signing from the running kernel on a standard-user token' `
+        'Section 13 did not read the kernel''s code-integrity options on a standard-user token, or raised a gap'
     # 18a/18g: a standard user is not shown the path or command line of a
     # SYSTEM process, and every runner runs some. Matching those by name
     # alone must be said and counted, never covered by the [OK] above it.
