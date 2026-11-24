@@ -639,7 +639,15 @@ if exist "%OUTDIR%\ThreatLists" (
     del /q "%OUTDIR%\ThreatLists\ttp_manifest.txt" 2>nul
     del /q "%OUTDIR%\ThreatLists\ttp_generated_checks.bat" 2>nul
     del /q "%OUTDIR%\ThreatLists\ttp_update_*.txt" 2>nul
-    echo  [OK] Runtime IOC lists cleared -- the shipped baseline will be re-seeded.
+    rem del leaves errorlevel 0 even when a file is locked or denied, so the
+    rem result is checked by looking, never assumed.
+    set "_RTTP_LEFT="
+    if exist "%OUTDIR%\ThreatLists\ioc_*.txt" set "_RTTP_LEFT=1"
+    if exist "%OUTDIR%\ThreatLists\ttp_manifest.txt" set "_RTTP_LEFT=1"
+    if exist "%OUTDIR%\ThreatLists\ttp_generated_checks.bat" set "_RTTP_LEFT=1"
+    if defined _RTTP_LEFT echo  [WARN] Some runtime IOC lists could not be deleted -- they are still in the runtime ThreatLists folder; close any program holding them and run -resetTTP again.
+    if not defined _RTTP_LEFT echo  [OK] Runtime IOC lists cleared -- the shipped baseline will be re-seeded.
+    set "_RTTP_LEFT="
 ) else (
     echo  [OK] No runtime ThreatLists directory yet -- nothing to reset.
 )
@@ -989,14 +997,21 @@ echo :: --- Update: %date% %time% --->> "%TTP_BLOCKS%"
 :: the checkout, which dirtied `git pull` and let non-discriminating CTI-AUTO
 :: indicators leak into the committed baseline. Curation now lives upstream
 :: (the threat-intel skill), not in -updateTTP's runtime output.
+set "_TTPOK="
 if exist "%SCRIPT_DIR%tools\ttp_merge.ps1" (
     powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\ttp_merge.ps1" -TtpOutput "%TTP_OUTPUT%" -BlocksFile "%TTP_BLOCKS%" -ThreatListsDir "%OUTDIR%\ThreatLists"
+    if not errorlevel 1 set "_TTPOK=1"
 ) else (
     echo  [WARN] tools\ttp_merge.ps1 not found -- TTP detection blocks, IOC merge, and ttp_manifest.txt update all skipped.
 )
-
-echo  [OK] Generated: %TTP_BLOCKS%
-echo  [*] Auto-generated checks will execute during Section 18.
+:: "[OK] Generated" printed whatever happened above: after the missing-tool
+:: line, and after a merge that failed. It is said only when the merge
+:: exited 0 and the blocks file is there.
+if defined _TTPOK if not exist "%TTP_BLOCKS%" set "_TTPOK="
+if defined _TTPOK echo  [OK] TTP merge finished: %TTP_BLOCKS%
+if defined _TTPOK echo  [*] Auto-generated checks will execute during Section 18.
+if not defined _TTPOK echo  [WARN] TTP detection blocks were NOT generated -- the merge did not finish; the audit runs with the lists it already had.
+set "_TTPOK="
 echo.
 
 :: Remove the sanitized CTI response; keeping it serves no purpose
@@ -1458,6 +1473,12 @@ set "BOOTSTATE="
 echo (Get-CimInstance Win32_ComputerSystem -EA SilentlyContinue).BootupState > "%PSRUN%"
 for /f "usebackq delims=" %%a in (`%PWSH% -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%" 2^>nul`) do set "BOOTSTATE=%%a"
 if not defined BOOTSTATE for /f "tokens=2 delims==" %%a in ('wmic computersystem get BootupState /value 2^>nul') do set "BOOTSTATE=%%a"
+:: CIM and wmic both silent used to read as "[OK] Normal mode boot." Windows
+:: sets SAFEBOOT_OPTION in every Safe Mode boot, so that is the second source;
+:: with neither, the report says the boot mode was not read.
+set "_BOOTUNREAD="
+if not defined BOOTSTATE if defined SAFEBOOT_OPTION set "BOOTSTATE=Safe mode, SAFEBOOT_OPTION=%SAFEBOOT_OPTION%"
+if not defined BOOTSTATE set "_BOOTUNREAD=1"
 echo %BOOTSTATE%| findstr /i "safe" >nul 2>&1
 if %errorlevel% equ 0 (
     set "SAFE_MODE=1"
@@ -1466,7 +1487,8 @@ if %errorlevel% equ 0 (
     echo  This is a known Windows 10 bug with no workaround. Use normal mode for SRP.>> "%REPORT%"
     echo %C_GREEN%[INIT 5/14]%C_RESET% Safe Mode: YES - SRP skipped due to Win10 bug
 ) else (
-    echo  [OK] Normal mode boot.>> "%REPORT%"
+    if defined _BOOTUNREAD echo  [INFO] Boot mode NOT read: Windows gave no BootupState through CIM or wmic. SAFEBOOT_OPTION, which Windows sets in Safe Mode, is not set, so this is taken as a normal boot.>> "%REPORT%"
+    if not defined _BOOTUNREAD echo  [OK] Normal mode boot.>> "%REPORT%"
     echo %C_GREEN%[INIT 5/14]%C_RESET% Safe Mode: No - normal boot
 )
 echo.>> "%REPORT%"
@@ -3904,12 +3926,7 @@ if exist "%SCRIPT_DIR%tools\reg_policy_check.ps1" (
     echo [WARNING] tools\reg_policy_check.ps1 not found -- Script Block Logging check NOT performed.>> "%REPORT%"
     call :dz_finding WARNING 11 T1562.002 "Script Block Logging check NOT performed - tool missing"
 )
-echo $base='HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell' > "%PSRUN%"
-echo $ml=(Get-ItemProperty "$base\ModuleLogging" -Name EnableModuleLogging -EA SilentlyContinue).EnableModuleLogging >> "%PSRUN%"
-echo $tr=(Get-ItemProperty "$base\Transcription" -Name EnableTranscripting -EA SilentlyContinue).EnableTranscripting >> "%PSRUN%"
-echo if($ml  -eq 1){'ModuleLogging       : [OK] ENABLED (GPO)'}else{'ModuleLogging       : [OK] Not configured (optional)'} >> "%PSRUN%"
-echo if($tr  -eq 1){'Transcription       : [OK] ENABLED (GPO)'}else{'Transcription       : [OK] Not configured (optional)'} >> "%PSRUN%"
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+call :dz_polval PsLogging 11 T1562.002 "PowerShell logging policy check"
 if exist "%TEMP%\dz_sbl_hit.txt" (
     call :dz_finding WARNING 11 T1562.002 "PowerShell Script Block Logging not enabled"
     del "%TEMP%\dz_sbl_hit.txt" 2>nul
@@ -3998,8 +4015,7 @@ reg query "HKLM\SYSTEM\CurrentControlSet\Control\Lsa" /v "Notification Packages"
 echo.>> "%REPORT%"
 echo --- LsaCfgFlags: 0=disabled, 1=UEFI lock, 2=no lock --->> "%REPORT%"
 echo  Command: reg query "HKLM\SYSTEM\CurrentControlSet\Control\Lsa" /v LsaCfgFlags>> "%REPORT%"
-reg query "HKLM\SYSTEM\CurrentControlSet\Control\Lsa" /v LsaCfgFlags>> "%REPORT%" 2>nul
-if errorlevel 1 (echo [INFO] LsaCfgFlags not set -- Credential Guard not explicitly configured ^(may still be on if VBS-managed^).)>> "%REPORT%"
+call :dz_polval LsaCfg 12 T1003.001 "Credential Guard setting check"
 
 echo.>> "%REPORT%"
 echo --- Full LSA Key --->> "%REPORT%"
@@ -4472,18 +4488,13 @@ if exist "%TEMP%\dz_cbs_gap.txt" (
 
 echo.>> "%REPORT%"
 echo --- AutoRun/AutoPlay: SAFE=NoDriveTypeAutoRun=0xFF --->> "%REPORT%"
-echo  Command: reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v NoDriveTypeAutoRun ^&^& set "_AR_HIT=1">> "%REPORT%"
-set "_AR_HIT="
-reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v NoDriveTypeAutoRun>> "%REPORT%" 2>nul && set "_AR_HIT=1"
-reg query "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v NoDriveTypeAutoRun>> "%REPORT%" 2>nul && set "_AR_HIT=1"
-if not defined _AR_HIT (echo [INFO] NoDriveTypeAutoRun not pinned via policy -- default OS behavior applies.)>> "%REPORT%"
-set "_AR_HIT="
+echo  Command: reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v NoDriveTypeAutoRun   [also the HKCU twin]>> "%REPORT%"
+call :dz_polval AutoRun 13 T1204.002 "AutoRun policy check"
 
 echo.>> "%REPORT%"
 echo --- Windows Script Host: SAFE=Enabled=0 --->> "%REPORT%"
 echo  Command: reg query "HKLM\SOFTWARE\Microsoft\Windows Script Host\Settings" /v Enabled>> "%REPORT%"
-reg query "HKLM\SOFTWARE\Microsoft\Windows Script Host\Settings" /v Enabled>> "%REPORT%" 2>nul
-if errorlevel 1 (echo [INFO] WSH Enabled value not set -- default is enabled. Disable via policy if .vbs/.js execution is not required.)>> "%REPORT%"
+call :dz_polval Wsh 13 T1059 "Windows Script Host setting check"
 
 echo.>> "%REPORT%"
 echo --- Remote Registry: SAFE=STOPPED and Disabled --->> "%REPORT%"
@@ -4648,34 +4659,16 @@ del "%TEMP%\dz_trustloc_done.txt" 2>nul
 echo.>> "%REPORT%"
 echo --- Mark-of-the-Web Preservation: SAFE=SaveZoneInformation absent or 0x1 --->> "%REPORT%"
 echo  Command: reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Attachments" /v SaveZoneInformation   [also the HKLM\SOFTWARE twin]>> "%REPORT%"
-reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Attachments" /v SaveZoneInformation>> "%REPORT%" 2>nul
-reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Attachments" /v SaveZoneInformation>> "%REPORT%" 2>nul
-set "_MOTW_OFF="
-reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Attachments" /v SaveZoneInformation 2>nul | findstr /i /c:"0x2" >nul && set "_MOTW_OFF=1"
-reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Attachments" /v SaveZoneInformation 2>nul | findstr /i /c:"0x2" >nul && set "_MOTW_OFF=1"
-if defined _MOTW_OFF (
-    rem SaveZoneInformation=2 writes downloads without zone data, blinding
-    rem SmartScreen and the Office internet-macro block above.
-    echo [WARNING] SaveZoneInformation=2 -- Mark-of-the-Web is NOT recorded on downloads. SmartScreen and Office macro MOTW protections are blinded.>> "%REPORT%"
-) else (
-    echo [OK] Mark-of-the-Web zone data preserved on downloaded files -- default.>> "%REPORT%"
-)
-if defined _MOTW_OFF call :dz_finding WARNING 13 T1553.005 "Mark-of-the-Web not recorded on downloads - SmartScreen and Office macro blocking are blinded"
-set "_MOTW_OFF="
+call :dz_polval MotW 13 T1553.005 "Mark-of-the-Web check"
+if exist "%TEMP%\dz_polval_hit.txt" call :dz_finding WARNING 13 T1553.005 "Mark-of-the-Web not recorded on downloads - SmartScreen and Office macro blocking are blinded"
+del "%TEMP%\dz_polval_hit.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- SmartScreen for Files: SAFE=Warn or RequireAdmin --->> "%REPORT%"
 echo  Command: reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" /v SmartScreenEnabled   [also HKLM\SOFTWARE\Policies\Microsoft\Windows\System /v EnableSmartScreen]>> "%REPORT%"
-reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" /v SmartScreenEnabled>> "%REPORT%" 2>nul
-if errorlevel 1 (echo [INFO] SmartScreenEnabled not set -- Windows Security app default applies.)>> "%REPORT%"
-reg query "HKLM\SOFTWARE\Policies\Microsoft\Windows\System" /v EnableSmartScreen>> "%REPORT%" 2>nul
-if errorlevel 1 (echo [INFO] EnableSmartScreen policy not set -- not pinned via GPO.)>> "%REPORT%"
-set "_SS_OFF="
-reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" /v SmartScreenEnabled 2>nul | findstr /i /c:" Off" >nul && set "_SS_OFF=1"
-reg query "HKLM\SOFTWARE\Policies\Microsoft\Windows\System" /v EnableSmartScreen 2>nul | findstr /i /c:"0x0" >nul && set "_SS_OFF=1"
-if defined _SS_OFF (echo [WARNING] SmartScreen is OFF -- downloaded-file reputation checks are disabled.)>> "%REPORT%"
-if defined _SS_OFF call :dz_finding WARNING 13 T1562.001 "SmartScreen is off - downloaded-file reputation checks disabled"
-set "_SS_OFF="
+call :dz_polval SmartScreen 13 T1562.001 "SmartScreen check"
+if exist "%TEMP%\dz_polval_hit.txt" call :dz_finding WARNING 13 T1562.001 "SmartScreen is off - downloaded-file reputation checks disabled"
+del "%TEMP%\dz_polval_hit.txt" 2>nul
 echo.>> "%REPORT%"
 
 :: ====================================================================
@@ -5155,8 +5148,11 @@ echo.>> "%REPORT%"
 echo --- Process Creation - Event 4688 (last 24h) --->> "%REPORT%"
 echo  Command: wevtutil qe Security /q:"*[System[(EventID=4688)]]" /c:200 /rd:true /f:text ^| select_lines.ps1 "TimeCreated" "Process Name" "Creator Process" "Command Line">> "%REPORT%"
 wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:200 /rd:true /f:text > "%TEMP%\dz_evt.tmp" 2>nul
+set "_WEV=!errorlevel!"
 "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" "TimeCreated" "Process Name" "Creator Process" "Command Line">> "%REPORT%" 2>&1
+set "_SEL=!errorlevel!"
 del "%TEMP%\dz_evt.tmp" 2>nul
+call :dz_evt_verdict 16 T1059 labels "Process-creation listing (Event 4688)"
 
 echo.>> "%REPORT%"
 echo --- Defender Alerts: 1116=Detected, 1117=Action --->> "%REPORT%"
@@ -5239,15 +5235,21 @@ echo.>> "%REPORT%"
 echo --- [VOLT TYPHOON] LOLBin Abuse in Event 4688 (last 24h) --->> "%REPORT%"
 echo  Command: wevtutil qe Security /q:"*[System[(EventID=4688)]]" /c:500 /rd:true /f:text ^| select_lines.ps1 "certutil" "mshta" "regsvr32" "cmstp" "installutil" "odbcconf">> "%REPORT%"
 wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:500 /rd:true /f:text > "%TEMP%\dz_evt.tmp" 2>nul
+set "_WEV=!errorlevel!"
 "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" "certutil" "mshta" "regsvr32" "cmstp" "installutil" "odbcconf">> "%REPORT%" 2>&1
+set "_SEL=!errorlevel!"
 del "%TEMP%\dz_evt.tmp" 2>nul
+call :dz_evt_verdict 17 T1059 list "LOLBin listing (Event 4688)"
 
 echo.>> "%REPORT%"
 echo --- [VOLT TYPHOON] Discovery Commands in Event 4688 (last 24h) --->> "%REPORT%"
 echo  Command: wevtutil qe Security /q:"*[System[(EventID=4688)]]" /c:500 /rd:true /f:text ^| select_lines.ps1 "nltest" "net group" "dsquery" "ldifde" "ntdsutil" "csvde">> "%REPORT%"
 wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:500 /rd:true /f:text > "%TEMP%\dz_evt.tmp" 2>nul
+set "_WEV=!errorlevel!"
 "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" "nltest" "net group" "dsquery" "ldifde" "ntdsutil" "csvde">> "%REPORT%" 2>&1
+set "_SEL=!errorlevel!"
 del "%TEMP%\dz_evt.tmp" 2>nul
+call :dz_evt_verdict 17 T1087 list "Discovery-command listing (Event 4688)"
 
 echo.>> "%REPORT%"
 echo --- [MIDNIGHT BLIZZARD] OAuth Identity Registrations --->> "%REPORT%"
@@ -5487,8 +5489,7 @@ if not "!WMISUB_STATE:~0,7!"=="filter=" if exist "%SCRIPT_DIR%tools\wmi_subscrip
 echo.>> "%REPORT%"
 echo --- [CHINA/VOLT TYPHOON] Kerberos RC4 Encryption Types --->> "%REPORT%"
 echo  Command: reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Kerberos\Parameters" /v SupportedEncryptionTypes>> "%REPORT%"
-reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Kerberos\Parameters" /v SupportedEncryptionTypes>> "%REPORT%" 2>nul
-if errorlevel 1 (echo [INFO] SupportedEncryptionTypes not pinned -- Kerberos uses defaults ^(may include RC4-HMAC^). To restrict to AES, set value 0x18.)>> "%REPORT%"
+call :dz_polval KerbEnc 17 T1558.003 "Kerberos encryption-type check"
 
 echo.>> "%REPORT%"
 echo --- [DPRK/RUBY SLEET] Recently Installed Root Certificates --->> "%REPORT%"
@@ -6264,8 +6265,11 @@ echo.>> "%REPORT%"
 echo --- [CTI][T1105+T1059] LOLBin Download Cradles in Event 4688 (last 24h) --->> "%REPORT%"
 echo  Command: wevtutil qe Security /q:"*[System[(EventID=4688)]]" /c:1000 /rd:true /f:text ^| select_lines.ps1 "bitsadmin" "certutil -urlcache" "curl " "wget" "Invoke-WebRequest" "Start-BitsTransfer" "desktopimgdownldr" "esentutl">> "%REPORT%"
 wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:1000 /rd:true /f:text > "%TEMP%\dz_evt.tmp" 2>nul
+set "_WEV=!errorlevel!"
 "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" -ExcludeAuditEsentutl "bitsadmin" "certutil -urlcache" "curl " "wget" "Invoke-WebRequest" "Start-BitsTransfer" "desktopimgdownldr" "esentutl">> "%REPORT%" 2>&1
+set "_SEL=!errorlevel!"
 del "%TEMP%\dz_evt.tmp" 2>nul
+call :dz_evt_verdict 18 T1105 list "Download-cradle listing (Event 4688)"
 
 :: --- [CTI] AMSI Bypass Artifacts in PowerShell Logs (T1562.001) ---
 echo.>> "%REPORT%"
@@ -6352,8 +6356,11 @@ echo.>> "%REPORT%"
 echo --- [CTI][T1490] Ransomware Precursors - VSS/BCDEdit/Recovery Tampering (last 24h) --->> "%REPORT%"
 echo  Command: wevtutil qe Security /q:"*[System[(EventID=4688)]]" /c:1000 /rd:true /f:text ^| select_lines.ps1 "vssadmin delete" "wmic shadowcopy" "bcdedit /set {default} recoveryenabled no" "wbadmin delete" "disableshadowcopy">> "%REPORT%"
 wevtutil qe Security /q:"*[System[(EventID=4688) and TimeCreated[@SystemTime>='%WEVT_24H_AGO%']]]" /c:1000 /rd:true /f:text > "%TEMP%\dz_evt.tmp" 2>nul
+set "_WEV=!errorlevel!"
 "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\select_lines.ps1" -Path "%TEMP%\dz_evt.tmp" "vssadmin delete" "wmic shadowcopy" "bcdedit /set {default} recoveryenabled no" "wbadmin delete" "disableshadowcopy">> "%REPORT%" 2>&1
+set "_SEL=!errorlevel!"
 del "%TEMP%\dz_evt.tmp" 2>nul
+call :dz_evt_verdict 18 T1490 list "Ransomware-precursor listing (Event 4688)"
 
 echo.>> "%REPORT%"
 echo --- [CTI][T1486] Ransomware File Extension Survey --->> "%REPORT%"
@@ -7371,6 +7378,52 @@ goto :eof
 :: can never inflate it). A block that reports nothing raises nothing.
 :: Args: %1=section  %2=code  %3="message"
 :: ====================================================================
+:dz_polval
+rem One registry setting check, through tools\policy_value_check.ps1.
+rem   %1 the -Check name   %2 section   %3 technique   %4 what (quoted)
+rem reg.exe exits 1 for "not set" AND for "access denied", so these checks
+rem used to print "[INFO] ... not set" over a value they could not read. The
+rem tool tells the two apart; its gap is a row here. A finding (dz_polval_hit)
+rem is left for the caller, which knows its wording.
+del "%TEMP%\dz_polval_hit.txt" 2>nul
+del "%TEMP%\dz_polval_gap.txt" 2>nul
+del "%TEMP%\dz_polval_done.txt" 2>nul
+if not exist "%SCRIPT_DIR%tools\policy_value_check.ps1" goto :dz_polval_notool
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\policy_value_check.ps1" -Check %1>> "%REPORT%" 2>&1
+if exist "%TEMP%\dz_polval_gap.txt" (
+    call :dz_finding WARNING %2 %3 "%~4 NOT performed - the setting could not be read"
+    del "%TEMP%\dz_polval_gap.txt" 2>nul
+)
+if not exist "%TEMP%\dz_polval_done.txt" (
+    echo [WARNING] %~4 produced no verdict -- NOT performed: tools\policy_value_check.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING %2 %3 "%~4 produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_polval_done.txt" 2>nul
+goto :eof
+:dz_polval_notool
+echo [WARNING] tools\policy_value_check.ps1 not found -- %~4 NOT performed.>> "%REPORT%"
+call :dz_finding WARNING %2 %3 "%~4 NOT performed - tool missing"
+goto :eof
+:dz_evt_verdict
+rem The verdict for an Event 4688 listing.
+rem   %1 section   %2 technique   %3 list or labels   %4 what (quoted)
+rem _WEV is wevtutil's exit and _SEL select_lines' exit, set by the caller.
+rem A Security log that could not be read used to leave an empty file, the
+rem listing printed nothing under its heading, and nothing said why.
+if not "%_WEV%"=="0" goto :dz_evt_verdict_noread
+if "%_SEL%"=="0" goto :eof
+if "%_SEL%"=="1" goto :dz_evt_verdict_none
+echo [WARNING] %~4 NOT performed -- the events were read, but the matcher could not run on them; select_lines exit %_SEL%.>> "%REPORT%"
+call :dz_finding WARNING %1 %2 "%~4 NOT performed - the matcher could not run"
+goto :eof
+:dz_evt_verdict_none
+if /i "%~3"=="labels" echo [INFO] No process-creation lines matched. This filter reads English field labels, so on a non-English Windows it is empty even when events exist.>> "%REPORT%"
+if /i not "%~3"=="labels" echo [INFO] No matching events in the last 24 hours of process-creation records -- none at all are kept if process-creation auditing is off.>> "%REPORT%"
+goto :eof
+:dz_evt_verdict_noread
+echo [WARNING] %~4 NOT performed -- the Security log could not be read, wevtutil exit %_WEV%.>> "%REPORT%"
+call :dz_finding WARNING %1 %2 "%~4 NOT performed - the Security log could not be read"
+goto :eof
 :dz_ps_scan
 set "DZ_BLK=%TEMP%\dz_blk_%DOZE_LOG_TS%.txt"
 "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%" > "%DZ_BLK%" 2>&1
