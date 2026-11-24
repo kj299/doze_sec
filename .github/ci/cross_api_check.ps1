@@ -37,6 +37,11 @@ try {
   }
   if ($out -notmatch 'Process lists agree') { throw 'process cross-check did not run' }
   if ($out -notmatch 'Service views agree') { throw 'service cross-check did not run' }
+  # An administrator reads every service key on a clean image. A key that
+  # could not be read here would raise a false gap on every PC.
+  $tu = @($out -split "`n" | Where-Object { $_ -match 'service key\(s\) could not be read|Hidden-task \(Tarrask\) check NOT performed in full' })
+  Write-Host ("MEASURED: unreadable service keys / task nodes on the clean runner: " + $(if ($tu.Count) { $tu -join ' | ' } else { 'none' }))
+  if ($tu.Count) { throw ("a clean runner could not read service keys or task nodes, so every PC would raise a false gap: " + ($tu -join ' | ')) }
   # The by-name probe against a REAL SCM answer, on 5.1, under the
   # token this job has (elevated). A service whose DACL denies
   # Administrators SERVICE_QUERY_STATUS is omitted from enumeration
@@ -110,7 +115,9 @@ try {
   # descriptor" -- contradicting itself in adjacent lines.
   $src = Get-Content .\tools\cross_api_check.ps1 -Raw
   if ($src -notmatch '\$sdSuppressed') { throw 'the proportion-guard suppression flag is gone -- the self-contradicting [OK] can return' }
-  if ($src -notmatch '\$noSd\.Count -eq 0 -and \$liveOk -and -not \$sdSuppressed') { throw 'the hidden-task [OK] is no longer guarded on both degradation paths' }
+  # The [OK] is decided by Get-TaskSummary (pure, self-tested), and it must be
+  # handed both degradation signals and the unread count.
+  if ($src -notmatch 'Get-TaskSummary -Total [^\r\n]*-Unread [^\r\n]*-LiveOk \$liveOk -Suppressed \$sdSuppressed') { throw 'the hidden-task [OK] is no longer guarded on both degradation paths and the unread count' }
   # A raised gap prints [WARNING] (vocabulary decision 2026-10-03): the
   # degraded path says the check could NOT run and raises it.
   if ($t3 -notmatch '\[WARNING\][^\r\n]*hidden-task[^\r\n]*could NOT run') { throw 'degraded hidden-task path did not report itself as a raised gap ([WARNING] ... could NOT run)' }
@@ -119,9 +126,38 @@ try {
   # performed", not "rootkit indicator".
   if (-not (Test-Path (Join-Path $md4 'dz_crossapi_gap.txt'))) { throw 'degraded hidden-task path raised no gap at all -- it would vanish from the ledger' }
   if (Test-Path (Join-Path $md4 'dz_crossapi.txt')) { throw 'degraded hidden-task path wrote the FINDING marker -- its ledger row would claim a rootkit indicator for a scheduler it could not open' }
+  # (d) A TREE NODE THAT CANNOT BE READ: the full "[OK] ... all carry a
+  # security descriptor" must not be printed over it; elevated it is a
+  # raised gap. The plant is the readable task from (b) plus a denied node.
+  $dn = "$tc\Tree\dz_ci_denied"
+  New-Item -Path $dn -Force | Out-Null
+  Set-ItemProperty -Path $dn -Name 'Id' -Value '{dead0000-0000-0000-0000-00000000beef}' -Force
+  $acl = Get-Acl -Path $dn
+  $acl.AddAccessRule((New-Object Security.AccessControl.RegistryAccessRule([Security.Principal.WindowsIdentity]::GetCurrent().Name, 'QueryValues', 'Deny')))
+  Set-Acl -Path $dn -AclObject $acl
+  $denied = $false; try { $null = Get-ItemProperty -LiteralPath $dn -ErrorAction Stop } catch { $denied = $true }
+  if ($denied) {
+    $md6 = Join-Path $md 'treedenied'; New-Item -ItemType Directory -Path $md6 -Force | Out-Null
+    $t6 = (.\tools\cross_api_check.ps1 -MarkerDir $md6 -TreeRoot "$tc\Tree" -TasksRoot "$tc\Tasks") -join "`n"
+    Write-Host ($t6 -split "`n" | Where-Object { $_ -match 'hidden scheduled tasks|Tarrask' })
+    if ($t6 -match 'all carry a security descriptor') { throw 'the full hidden-task [OK] was printed over a task node that could not be read' }
+    if ($t6 -notmatch '\[WARNING\] Hidden-task \(Tarrask\) check NOT performed in full -- 1 registered task') { throw "an unreadable task node was not a raised gap: $t6" }
+    if (-not (Test-Path (Join-Path $md6 'dz_crossapi_gap.txt'))) { throw 'an unreadable task node wrote no gap marker' }
+    Write-Host 'cross_api_check: a task node that cannot be read is a raised gap, never "all carry a security descriptor"'
+  } else { Write-Host '[ SKIP ] the deny rule did not stop this account reading the task node; the self-test pins the judgement' }
 } finally {
+  # A QueryValues deny refuses Get-Acl too: clear it through .NET, asking only
+  # for what an owner always holds, before removing the synthetic tree.
+  $dsub = ("Software\dz_ci_taskcache_{0}\Tree\dz_ci_denied" -f $PID)
+  try {
+    $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($dsub, [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree, [System.Security.AccessControl.RegistryRights]'ReadPermissions, ChangePermissions')
+    if ($null -ne $k) {
+      try { $sec = $k.GetAccessControl([System.Security.AccessControl.AccessControlSections]::Access); foreach ($rule in @($sec.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]) | Where-Object { $_.AccessControlType -eq 'Deny' })) { $sec.RemoveAccessRuleSpecific($rule) }; $k.SetAccessControl($sec) } finally { $k.Close() }
+    }
+  } catch { Write-Host ("cleanup: could not clear the deny rule on the synthetic task node: " + $_.Exception.Message) }
   Remove-Item $tc -Recurse -Force -EA SilentlyContinue
   Remove-Item $md -Recurse -Force -EA SilentlyContinue
 }
+if (Test-Path $tc) { throw "cleanup failed: the synthetic task tree $tc remains" }
 Write-Host "cross_api_check.ps1 OK (incl. honest degradation when the scheduler is unavailable)"
 exit 0

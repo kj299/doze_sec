@@ -6,6 +6,19 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Sysmon, service-signature and hidden-service checks no longer read clean when they could not look
+- **`tools/edr_presence.ps1` (Section 9).** Sysmon's three service names were looked up in empty catches, so a Sysmon whose service this token could not open read "Sysmon is not installed". They now go through the tool's own service-manager probe: only the SCM's 1060 means not installed. Anything else is the tool's existing gap when elevated, or deferral on a standard-user token. The tool gains its first `-SelfTest`.
+- **`tools/service_signature_check.ps1` (Section 7):**
+  - A service list that could not be read printed `[INFO] Service enumeration unavailable.` It is now a raised gap with its own row (`dz_svcgate_gap.txt`).
+  - A certificate check that threw counted as a valid certificate. It is now "could not verify", which joins the binaries listed as not verified and is never clean; in a staging folder it is still a finding.
+  - The `[OK] All N services ... pass` line no longer claims binaries it could not verify: it says how many it could.
+- **`tools/cross_api_check.ps1` (T1014):**
+  - A service key that could not be read was silently left out of the SCM-versus-registry comparison, which is where a service hidden behind a restrictive ACL would sit. It is now named: a raised gap elevated, a counted deferral on a standard-user token. Each key is read whole, so a key with no `Type` value is not an error.
+  - A scheduled-task node that could not be read was dropped, and the closing `[OK] No hidden scheduled tasks (... all carry a security descriptor)` printed beside an `[INFO]` count of tasks never inspected. The closing line is now decided by a pure `Get-TaskSummary`. Tasks it could not inspect are a gap elevated, a deferral on a standard-user token, and the `[OK]` says how many tasks it covers.
+- **CI:**
+  - A denied node in the synthetic task tree must raise the gap.
+  - A clean runner must raise no Sysmon, service-list, service-key or task-node gap.
+
 ### Logon, profile and COM persistence checks no longer read clean when a key could not be read
 - **`tools/logon_persistence.ps1`** covers Winlogon Notify, network providers, credential providers, LSA packages, the screensaver and the logon script. Four of its six checks printed an unraised `[SKIPPED]`; the others read with errors silenced, so a key that could not be read printed the same `[OK]` as an empty one. A credential provider whose COM registration could not be read was skipped as "stale".
   - Each key is now asked with `-ErrorAction Stop`. A missing key is the ordinary answer.

@@ -48,7 +48,8 @@
 param(
     [string]$MarkerDir = $env:TEMP,
     # 1/0 from the caller, or -1: ask the token.
-    [int]$Elevated = -1
+    [int]$Elevated = -1,
+    [switch]$SelfTest
 )
 
 $ErrorActionPreference = 'Continue'
@@ -72,6 +73,32 @@ function Test-MdeOnboarded {
         return ((Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows Advanced Threat Protection\Status' -Name 'OnboardingState' -EA Stop).OnboardingState -eq 1)
     } catch { return $false }
 }
+# PURE. What the service manager's own answer to `sc.exe query <name>` means:
+# 1060 (ERROR_SERVICE_DOES_NOT_EXIST) is the only "not installed"; any other
+# code (5 = a DACL that hides it from this token, or no code at all) is a
+# service this token could not check -- never "not installed".
+function Get-ScmAbsence {
+    param($Code)
+    if ($null -ne $Code -and [int]$Code -eq 1060) { return 'absent' }
+    return 'unprobed'
+}
+function Get-ScmCode {
+    param([string]$Name)
+    try { $null = & sc.exe query $Name 2>&1; return $LASTEXITCODE } catch { return -1 }
+}
+
+if ($SelfTest) {
+    $fails = 0
+    function T { param([string]$N, [bool]$Ok) if ($Ok) { "[OK]   $N" } else { "[FAIL] $N"; $script:fails++ } }
+    T 'the service manager''s 1060 is "not installed"' ((Get-ScmAbsence 1060) -eq 'absent')
+    T 'access denied (5) is a service this token could not check, never "not installed"' ((Get-ScmAbsence 5) -eq 'unprobed')
+    T 'no exit code at all is unprobed, never "not installed"' ((Get-ScmAbsence $null) -eq 'unprobed')
+    T 'a failed sc.exe launch (-1) is unprobed' ((Get-ScmAbsence -1) -eq 'unprobed')
+    if ($fails) { "[FAIL] edr_presence self-test: $fails case(s) failed"; exit 1 }
+    '[OK] edr_presence self-test: only the service manager''s own 1060 reads as not installed.'
+    exit 0
+}
+
 function Get-MaxSev {
     param([string]$A, [string]$B)
     if ($A -eq 'CRITICAL' -or $B -eq 'CRITICAL') { return 'CRITICAL' }
@@ -122,9 +149,8 @@ foreach ($svcName in $edrServices.Keys) {
     $svc = $null
     try { $svc = Get-Service -Name $svcName -EA Stop } catch {
         # Ask the SCM: only its own 1060 means the service is not there.
-        $code = -1
-        try { $null = & sc.exe query $svcName 2>&1; $code = $LASTEXITCODE } catch { $code = -1 }
-        if ($code -ne 1060) { [void]$unprobed.Add(('{0} ({1}, sc.exe exit {2})' -f $edrServices[$svcName], $svcName, $code)) }
+        $code = Get-ScmCode $svcName
+        if ((Get-ScmAbsence $code) -ne 'absent') { [void]$unprobed.Add(('{0} ({1}, sc.exe exit {2})' -f $edrServices[$svcName], $svcName, $code)) }
         continue
     }
     if (-not $svc) { continue }
@@ -177,14 +203,25 @@ if (-not $scOk) {
 }
 
 # ---- Sysmon ---------------------------------------------------------------
+# The same rule as the agents above: a name Get-Service cannot find is asked
+# of the service manager, and only its 1060 means "not installed". A Sysmon
+# whose service DACL hides it from this token used to read "not installed".
 $sysmonSvc = $null
-foreach ($n in @('Sysmon', 'Sysmon64')) {
-    try { $s = Get-Service -Name $n -EA Stop; if ($s) { $sysmonSvc = $s; break } } catch {}
-}
 $sysmonDrv = $null
-try { $sysmonDrv = Get-Service -Name 'SysmonDrv' -EA Stop } catch {}
+$sysmonUnprobed = 0
+foreach ($n in @('Sysmon', 'Sysmon64', 'SysmonDrv')) {
+    $s = $null
+    try { $s = Get-Service -Name $n -EA Stop } catch {
+        $code = Get-ScmCode $n
+        if ((Get-ScmAbsence $code) -ne 'absent') { [void]$unprobed.Add(('Sysmon ({0}, sc.exe exit {1})' -f $n, $code)); $sysmonUnprobed++ }
+        continue
+    }
+    if ($n -eq 'SysmonDrv') { $sysmonDrv = $s } elseif (-not $sysmonSvc) { $sysmonSvc = $s }
+}
 
-if (-not $sysmonSvc -and -not $sysmonDrv) {
+if (-not $sysmonSvc -and -not $sysmonDrv -and $sysmonUnprobed -gt 0) {
+    '[INFO] Whether Sysmon is installed could not be determined: its service could not be checked from here (see the line below).'
+} elseif (-not $sysmonSvc -and -not $sysmonDrv) {
     '[INFO] Sysmon is not installed. It is free from Microsoft and records process creation with command lines and hashes, network connections, and image loads -- the evidence that makes an intrusion reconstructable after the fact. Windows does not record most of that by default. Not a fault; worth knowing when weighing a clean result.'
 } else {
     $inspected++

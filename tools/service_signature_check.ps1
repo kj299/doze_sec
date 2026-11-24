@@ -57,7 +57,7 @@
 # wired into Section 7's verdict, so a flagged service used to read CLEAN).
 
 [CmdletBinding()]
-param([string]$MarkerFile, [string]$DoneFile, [switch]$SelfTest)
+param([string]$MarkerFile, [string]$DoneFile, [string]$GapFile, [switch]$SelfTest)
 
 $ErrorActionPreference = 'Continue'
 
@@ -101,7 +101,10 @@ $script:SigProbe    = { param($p) $sig = $null; try { $sig = Get-AuthenticodeSig
 # to the warning stream for a cert past NotAfter that is countersigned -- a
 # service that PASSES. A field report carried 17 such lines inside Section 7;
 # 'WARNING:' in a report is exactly the text a reader is told to count.
-$script:CertProbe   = { param($c) try { return [bool](Test-Certificate -Cert $c -EA Stop -WarningAction SilentlyContinue) } catch { return $true } }
+# A Test-Certificate that THROWS has verified nothing: $null ("could not
+# verify"), never $true. It returned $true -- a certificate the check could not
+# test read as a valid one (2026-11-24).
+$script:CertProbe   = { param($c) try { return [bool](Test-Certificate -Cert $c -EA Stop -WarningAction SilentlyContinue) } catch { return $null } }
 # A service's MSIX package is provisioned for SYSTEM, not for the auditing
 # user, so -AllUsers (which needs admin) is tried first; the per-user query is
 # the fallback so a non-elevated run still answers what it can.
@@ -177,7 +180,14 @@ function Get-ServiceVerdict {
 
     $certIssue = ''
     if ($sig.SignerCertificate) {
-        if (-not (& $script:CertProbe $sig.SignerCertificate)) { $certIssue = 'cert-invalid' }
+        $certOk = & $script:CertProbe $sig.SignerCertificate
+        if ($null -eq $certOk) {
+            # Not verified either way: context with the unreadable signatures,
+            # never clean, and a finding in a staging path as before.
+            if ($bad) { return @{ Bucket = 'flagged'; Why = 'cert-unverifiable bad-path' } }
+            return @{ Bucket = 'unreadable'; Why = 'cert-unverifiable' }
+        }
+        if (-not $certOk) { $certIssue = 'cert-invalid' }
         if ($certIssue -eq '' -and $sig.SignerCertificate.NotAfter -lt (Get-Date) -and -not $sig.TimeStamperCertificate) {
             $certIssue = 'cert-expired'
         }
@@ -391,14 +401,32 @@ if ($SelfTest) {
     T 'an ordinary Microsoft-signed service is clean and reported nowhere' `
       ($v.Bucket -eq 'clean') "$($v.Bucket)/$($v.Why)"
 
+    # --- a certificate check that THROWS verified nothing ----------------
+    $script:CertProbe = { param($c) $null }
+    $v = Get-ServiceVerdict -Binary 'C:\Windows\System32\svchost.exe'
+    T 'a certificate that could not be verified is never clean (it was read as valid)' `
+      ($v.Bucket -eq 'unreadable' -and $v.Why -eq 'cert-unverifiable') "$($v.Bucket)/$($v.Why)"
+    $v = Get-ServiceVerdict -Binary 'C:\Users\Public\svc.exe'
+    T 'an unverifiable certificate in a staging path is still a finding' `
+      ($v.Bucket -eq 'flagged' -and $v.Why -eq 'cert-unverifiable bad-path') "$($v.Bucket)/$($v.Why)"
+    $script:CertProbe = { param($c) $true }
+
     if ($fails) { Write-Output "[FAIL] $fails service_signature_check self-test expectation(s) unmet"; exit 1 }
     Write-Output '[OK] service_signature_check self-test: absent / unreadable / unlisted-but-signed are context; staging paths, unsigned and bad certs stay findings.'
     exit 0
 }
 
-$services = Get-CimInstance Win32_Service -EA SilentlyContinue
-if (-not $services) {
-    '[INFO] Service enumeration unavailable.'
+# A service list that could not be read is a raised gap, never "[INFO]
+# unavailable". Every Windows has services: an empty answer did not answer.
+$services = @()
+$svcErr = ''
+try { $services = @(Get-CimInstance Win32_Service -ErrorAction Stop) } catch { $svcErr = ([string]$_.Exception.Message -replace '[\r\n]+', ' ').Trim(); if (-not $svcErr) { $svcErr = 'no message' } }
+if (-not $svcErr -and $services.Count -eq 0) { $svcErr = 'the service list came back empty' }
+if ($svcErr) {
+    "[WARNING] Service signature check NOT performed -- the service list could not be read ($svcErr), so a service binary that is unsigned or runs from a staging folder would go unseen (T1543.003)."
+    if ($GapFile) { Set-Content -LiteralPath $GapFile -Value 'WARNING' -Encoding ASCII }
+    # The gap IS the verdict: the caller's "produced no verdict" row stays quiet.
+    if ($DoneFile) { Set-Content -LiteralPath $DoneFile -Value 'done' -Encoding ASCII }
     return
 }
 
@@ -450,6 +478,9 @@ if ($flagged.Count -gt 0) {
     "[INFO] 'cert-invalid' = chain build / revocation check failed for the signing cert."
     "[INFO] 'cert-expired' = cert past NotAfter and no countersigning timestamp."
     Write-MarkerFile -Path $MarkerFile
+} elseif ($unreadable.Count -gt 0) {
+    # Not a clean claim over binaries that were never verified.
+    "[OK] All $($totalChecked - $unreadable.Count) service(s) whose signature could be read pass Authenticode gating + path check; $($unreadable.Count) could not be verified (listed below)."
 } else {
     "[OK] All $totalChecked services with binary paths pass Authenticode gating + path check."
 }

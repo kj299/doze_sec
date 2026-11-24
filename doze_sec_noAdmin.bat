@@ -2805,9 +2805,10 @@ echo  binary path must not be under Temp/AppData/Downloads/Public. Replaces>> "%
 echo  the prior path-substring allowlist that was bypassed by installing>> "%REPORT%"
 echo  to "C:\Program Files\anything\".>> "%REPORT%"
 del "%TEMP%\dz_svcgate_hit.txt" 2>nul
+del "%TEMP%\dz_svcgate_gap.txt" 2>nul
 del "%TEMP%\dz_svcgate_done.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\service_signature_check.ps1" (
-    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\service_signature_check.ps1" -MarkerFile "%TEMP%\dz_svcgate_hit.txt" -DoneFile "%TEMP%\dz_svcgate_done.txt">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\service_signature_check.ps1" -MarkerFile "%TEMP%\dz_svcgate_hit.txt" -DoneFile "%TEMP%\dz_svcgate_done.txt" -GapFile "%TEMP%\dz_svcgate_gap.txt">> "%REPORT%" 2>&1
 ) else (
     echo [WARNING] tools\service_signature_check.ps1 not found -- Service signature gating NOT performed.>> "%REPORT%"
     call :dz_finding WARNING 7 T1543.003 "Service signature gating NOT performed - tool missing"
@@ -2822,6 +2823,11 @@ del "%TEMP%\dz_svcgate_done.txt" 2>nul
 if exist "%TEMP%\dz_svcgate_hit.txt" (
     call :dz_finding WARNING 7 T1543.003 "Service failed Authenticode gating"
     del "%TEMP%\dz_svcgate_hit.txt" 2>nul
+)
+if exist "%TEMP%\dz_svcgate_gap.txt" (
+    rem The service list could not be read: its own row, gap-worded.
+    call :dz_finding WARNING 7 T1543.003 "Service signature check NOT performed - the service list could not be read"
+    del "%TEMP%\dz_svcgate_gap.txt" 2>nul
 )
 
 echo.>> "%REPORT%"
