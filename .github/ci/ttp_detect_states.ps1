@@ -61,10 +61,10 @@ try {
   $rw = @(Get-Content -LiteralPath $rows -EA SilentlyContinue)
   Write-Host $rep; Write-Host ('ROWS:' + "`n" + ($rw -join "`n"))
   if ($rep -notmatch '(?m)^\[CRITICAL\] DzHit IOC found: ' -or -not @($rw | Where-Object { $_ -like 'CRITICAL|T1055|DzHit*' }).Count) { throw 'the planted file was not a raised CRITICAL' }
-  if ($rep -notmatch '(?m)^\[OK\] DzMissing check clear\.$' -or @($rw | Where-Object { $_ -match 'DzMissing' }).Count) { throw 'a missing file was not a clean [OK] with no row' }
+  if ($rep -notmatch '(?m)^\[OK\] DzMissing check clear\.\r?$' -or @($rw | Where-Object { $_ -match 'DzMissing' }).Count) { throw 'a missing file was not a clean [OK] with no row' }
   if ($rep -notmatch '(?m)^\[WARNING\] DzKey IOC found: ' -or -not @($rw | Where-Object { $_ -like 'WARNING|T1112|DzKey*' }).Count) { throw 'the planted key was not a raised WARNING' }
   if ($rep -notmatch '(?m)^\[WARNING\] DzWmi check NOT performed -- ' -or $rep -match 'DzWmi check clear' -or -not @($rw | Where-Object { $_ -like 'WARNING|T1047|DzWmi check NOT performed*' }).Count) { throw 'an invalid WMI query was not a raised gap (the old block read "check clear")' }
-  if ($rep -notmatch '(?m)^\[OK\] DzPipe check clear\.$') { throw 'a pipe that does not exist was not [OK]' }
+  if ($rep -notmatch '(?m)^\[OK\] DzPipe check clear\.\r?$') { throw 'a pipe that does not exist was not [OK]' }
   if ($denied) {
     if ($rep -notmatch '(?m)^\[WARNING\] DzDenied check NOT performed -- .* could not be listed' -or $rep -match 'DzDenied check clear' -or -not @($rw | Where-Object { $_ -like 'WARNING|T1074|DzDenied check NOT performed*' }).Count) { throw 'a folder that refused to list was not a raised gap' }
   } else { Write-Host '[ SKIP ] denied-folder case: this account can still list the folder through the deny rule' }
