@@ -2810,6 +2810,12 @@ jobs:
           Write-Host "emulation_coverage.ps1 OK (incl. empty-CORE guard)"
           exit 0
 
+      - name: "policy_value_check on 5.1: a registry setting that cannot be read is a raised gap, never 'not set' or [OK]"
+        shell: powershell
+        run: |
+          & .\.github\ci\policy_value_states.ps1
+          exit $LASTEXITCODE
+
       - name: "code_integrity_check on 5.1: the running kernel answers, and its test-signing bit agrees with the boot configuration"
         shell: powershell
         run: |

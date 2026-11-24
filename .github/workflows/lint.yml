@@ -304,6 +304,19 @@ jobs:
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
           n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 40 ] || { echo "only $n case(s)"; exit 1; }
+      - name: policy_value_check -- a registry setting that could not be read is a gap; the Event 4688 listings say why they are empty
+        run: |
+          out=$(pwsh -NoProfile -File tools/policy_value_check.ps1 -SelfTest); echo "$out"
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 18 ] || { echo "only $n case(s)"; exit 1; }
+          for b in doze_sec.bat doze_sec_noAdmin.bat; do
+            for c in PsLogging LsaCfg AutoRun Wsh MotW SmartScreen KerbEnc; do
+              grep -qE "^call :dz_polval $c [0-9]+ T[0-9.]+ \"" "$b" || { echo "$b: the $c check no longer goes through :dz_polval"; exit 1; }
+            done
+            grep -qE '_MOTW_OFF|_SS_OFF|_AR_HIT|EnableModuleLogging -EA SilentlyContinue' "$b" && { echo "$b: a cmd reg query verdict that reads 'access denied' as 'not set' is back"; exit 1; }
+            grep -qF 'if errorlevel 1 (echo [INFO] LsaCfgFlags not set' "$b" && { echo "$b: LsaCfgFlags reads a failed reg query as not set again"; exit 1; }
+            n=$(grep -c '^call :dz_evt_verdict ' "$b"); [ "$n" -eq 5 ] || { echo "$b: $n Event 4688 listings report their verdict, expected 5"; exit 1; }
+            n=$(grep -c '^set "_WEV=!errorlevel!"' "$b"); [ "$n" -eq 5 ] || { echo "$b: $n Event 4688 listings capture wevtutil's exit, expected 5"; exit 1; }
+          done
       - name: code_integrity_check and smart_health -- the running kernel's bits decide, and a health query that did not answer is a gap
         run: |
           out=$(pwsh -NoProfile -File tools/code_integrity_check.ps1 -SelfTest); echo "$out"
