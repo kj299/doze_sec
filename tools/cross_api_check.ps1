@@ -181,6 +181,34 @@ function Get-TaskViewVerdict {
     return @{ Deferred = $false; Sev = 'WARNING'; Line = $null }
 }
 
+# PURE. The hidden-task check's closing line(s). An [OK] that says "all carry
+# a security descriptor" only when every registered task was inspected; tasks
+# that could not be inspected are a raised gap when elevated and a counted
+# deferral on a standard-user token (the token explains it), and the [OK]
+# then says how many it covers. (It used to print the full [OK] beside an
+# [INFO] count of the tasks it had not looked at.)
+function Get-TaskSummary {
+    param([int]$Total, [int]$Inspected, [int]$Unread, [bool]$LiveOk, [bool]$Suppressed, [int]$HitCount, [bool]$IsElevated)
+    $r = @{ Lines = @(); Gap = $false; Deferred = 0 }
+    if (-not $LiveOk -or $Suppressed -or $HitCount -gt 0) {
+        if ($Unread -gt 0) { $r.Lines += "[INFO] $Unread task(s) could not be inspected at all; the remaining $Inspected were checked." }
+        return $r
+    }
+    if ($Unread -le 0) {
+        $r.Lines += "[OK] No hidden scheduled tasks ($Total registered tasks; all carry a security descriptor)."
+        return $r
+    }
+    $r.Lines += "[OK] No hidden scheduled tasks among the $Inspected task(s) that could be inspected."
+    if ($IsElevated) {
+        $r.Lines += "[WARNING] Hidden-task (Tarrask) check NOT performed in full -- $Unread registered task(s) could not be inspected, so a task hidden among them would go unseen (T1053.005)."
+        $r.Gap = $true
+    } else {
+        $r.Lines += "[DEFERRED - ADMIN REQUIRED] $Unread registered task(s) are not readable from a standard-user token -- re-run as administrator to inspect them for a hidden (Tarrask) task."
+        $r.Deferred = 1
+    }
+    return $r
+}
+
 # PURE: the whole set of registry-only names with their per-name codes.
 function Get-ServiceCrossCheckReport {
     param([array]$Probes, [bool]$IsElevated, [int]$RegistryCount)
@@ -316,6 +344,16 @@ if ($SelfTest) {
     $r = Get-ProcessRaceReport -Hits @('PID 4242 (dz_hidden) -- .NET:True WMI:False tasklist:True') -Raced 0 -Total 285
     T 'one live hit: CRITICAL (T1014) naming the PID, no OK line, no race line' ($r.Sev -eq 'CRITICAL' -and (($r.Lines -join "`n") -match '\[CRITICAL\] Process visible to some enumeration APIs but not others.*\(T1014\):\n  PID 4242 \(dz_hidden\)') -and (($r.Lines -join "`n") -notmatch '\[OK\]') -and (($r.Lines -join "`n") -notmatch 'had exited')) ($r.Lines -join ' | ')
 
+    # --- the hidden-task closing line: no full [OK] over tasks not inspected ---
+    $ts = Get-TaskSummary -Total 150 -Inspected 150 -Unread 0 -LiveOk $true -Suppressed $false -HitCount 0 -IsElevated $true
+    T 'every task inspected and none hidden: the full [OK]' ((-not $ts.Gap) -and ($ts.Lines -join ' ') -match 'all carry a security descriptor') ($ts.Lines -join ' | ')
+    $ts = Get-TaskSummary -Total 150 -Inspected 140 -Unread 10 -LiveOk $true -Suppressed $false -HitCount 0 -IsElevated $true
+    T 'tasks not inspected, elevated: a raised gap, and the [OK] says how many it covers -- never "all carry a security descriptor"' ($ts.Gap -and ($ts.Lines -join ' ') -match 'among the 140 task' -and ($ts.Lines -join ' ') -match 'NOT performed in full -- 10 registered task' -and ($ts.Lines -join ' ') -notmatch 'all carry') ($ts.Lines -join ' | ')
+    $ts = Get-TaskSummary -Total 150 -Inspected 140 -Unread 10 -LiveOk $true -Suppressed $false -HitCount 0 -IsElevated $false
+    T 'tasks not inspected, standard-user token: a counted deferral, never a row' ((-not $ts.Gap) -and $ts.Deferred -eq 1 -and ($ts.Lines -join ' ') -match '\[DEFERRED - ADMIN REQUIRED\] 10 registered task') ($ts.Lines -join ' | ')
+    $ts = Get-TaskSummary -Total 150 -Inspected 140 -Unread 10 -LiveOk $false -Suppressed $false -HitCount 0 -IsElevated $true
+    T 'with the scheduler unavailable there is no [OK] at all (that gap is raised elsewhere)' (($ts.Lines -join ' ') -notmatch '\[OK\]') ($ts.Lines -join ' | ')
+
     if ($fails) { Write-Output "[FAIL] $fails cross_api_check self-test expectation(s) unmet"; exit 1 }
     Write-Output '[OK] cross_api_check self-test: a service the SCM refuses to a standard user is stated as not enumerable, one the SCM has never heard of is the hidden service, and only the latter is CRITICAL.'
     exit 0
@@ -404,14 +442,28 @@ if (-not $pOk -or $setNet.Count -eq 0 -or $setWmi.Count -eq 0 -or $setTl.Count -
 ''
 '--- [T1014] Service enumeration cross-check (SCM vs WMI vs registry) ---'
 $svcScm = @{}; $svcWmi = @{}; $svcReg = @{}
+$deferredSvc = 0
 $sOk = $true
 try { foreach ($s in (Get-Service -EA Stop)) { $svcScm[$s.Name.ToLower()] = $true } } catch { $sOk = $false }
 try { foreach ($s in (Get-CimInstance Win32_Service -EA Stop)) { $svcWmi[([string]$s.Name).ToLower()] = $true } } catch { $sOk = $false }
 $svcRoot = 'HKLM:\SYSTEM\CurrentControlSet\Services'
+$typeUnread = New-Object System.Collections.ArrayList
 try {
     foreach ($k in (Get-ChildItem -LiteralPath $svcRoot -EA Stop)) {
         $type = $null
-        try { $type = (Get-ItemProperty -LiteralPath $k.PSPath -Name 'Type' -EA SilentlyContinue).Type } catch {}
+        # The whole key, not -Name 'Type': a key with no Type value is not an
+        # error, and asking for it by name would make one. A key that could
+        # not be READ was silently left out of the comparison -- exactly where
+        # a service hidden behind a restrictive ACL would sit -- so it is named.
+        $kp = $null
+        try { $kp = Get-ItemProperty -LiteralPath $k.PSPath -ErrorAction Stop }
+        catch {
+            # A key removed between the listing and this read (a service
+            # uninstalled mid-run) is churn, not a key that refused us.
+            if (-not (($_.Exception -is [System.Management.Automation.ItemNotFoundException]) -or ([string]$_.FullyQualifiedErrorId -like 'PathNotFound*'))) { [void]$typeUnread.Add($k.PSChildName) }
+            continue
+        }
+        if ($null -ne $kp -and $kp.PSObject.Properties['Type']) { $type = $kp.Type }
         # Only Win32 service types (0x10 own process, 0x20 share process, and the
         # interactive variants). Drivers (1/2/4/8) are not SCM services and would
         # be a guaranteed false positive against Get-Service.
@@ -419,6 +471,16 @@ try {
     }
 } catch { $sOk = $false }
 
+if ($sOk -and $typeUnread.Count -gt 0) {
+    $tn = (@($typeUnread | Select-Object -First 5) -join ', ') + $(if ($typeUnread.Count -gt 5) { (' and ' + ($typeUnread.Count - 5) + ' more') } else { '' })
+    if ($Elevated -eq 1) {
+        "[WARNING] Service cross-check NOT performed in full -- $($typeUnread.Count) service key(s) could not be read ($tn), so a service hidden behind one of them would go unseen (T1014)."
+        $gapSev = Get-MaxSev $gapSev 'WARNING'
+    } else {
+        "[DEFERRED - ADMIN REQUIRED] $($typeUnread.Count) service key(s) are not readable from a standard-user token ($tn) -- re-run as administrator to compare them."
+        $deferredSvc = 1
+    }
+}
 if (-not $sOk -or $svcReg.Count -eq 0) {
     '[WARNING] Service enumeration or registry read failed -- cross-check NOT performed.'
     $gapSev = Get-MaxSev $gapSev 'WARNING'
@@ -471,6 +533,7 @@ $treeRoot  = $TreeRoot
 $tasksRoot = $TasksRoot
 $tOk = $true
 $deferred = 0
+if ($deferredSvc) { $deferred += $deferredSvc }
 # Live task list, used ONLY to corroborate a missing-SD hit (see below). Failure
 # to enumerate is not fatal -- it just means corroboration is unavailable.
 $live = @{}
@@ -486,6 +549,7 @@ if (-not $SkipLiveTaskCompare) {
 }
 
 $treeTasks = @()
+$treeUnread = 0
 try {
     if (Test-Path $treeRoot) {
         $stack = New-Object System.Collections.Stack
@@ -493,7 +557,19 @@ try {
         while ($stack.Count -gt 0) {
             $node = $stack.Pop()
             $id = $null
-            try { $id = (Get-ItemProperty -LiteralPath $node.PSPath -Name 'Id' -EA SilentlyContinue).Id } catch {}
+            # A folder node has no Id value (ordinary); a node that could not be
+            # READ is counted, never passed.
+            $np = $null
+            $nodeErr = $null
+            try { $np = Get-ItemProperty -LiteralPath $node.PSPath -ErrorAction Stop } catch { $nodeErr = $_ }
+            if ($nodeErr) {
+                # A node deleted mid-walk (a task re-registered by an updater)
+                # is churn; one that refused us is counted ONCE, and its
+                # children are not listed (that would count it again).
+                if (-not (($nodeErr.Exception -is [System.Management.Automation.ItemNotFoundException]) -or ([string]$nodeErr.FullyQualifiedErrorId -like 'PathNotFound*'))) { $treeUnread++ }
+                continue
+            }
+            if ($null -ne $np -and $np.PSObject.Properties['Id']) { $id = $np.Id }
             if ($id) {
                 # REG_SZ values here carry a trailing NUL; leaving it in makes the
                 # Tasks\{GUID} lookup malformed, the SD read fail, and EVERY task
@@ -510,7 +586,9 @@ try {
                 $full = $node.PSPath -replace ('^.*?' + [regex]::Escape((Split-Path -Leaf $treeRoot))), ''
                 $treeTasks += New-Object PSObject -Property @{ Path = $full; Id = $idClean }
             }
-            try { foreach ($c in (Get-ChildItem -LiteralPath $node.PSPath -EA SilentlyContinue)) { $stack.Push($c) } } catch {}
+            $cErr = $null
+            foreach ($c in @(Get-ChildItem -LiteralPath $node.PSPath -ErrorAction SilentlyContinue -ErrorVariable cErr)) { $stack.Push($c) }
+            $treeUnread += @($cErr | Where-Object { $null -ne $_ -and -not (($_.Exception -is [System.Management.Automation.ItemNotFoundException]) -or ([string]$_.FullyQualifiedErrorId -like 'PathNotFound*')) }).Count
         }
     } else { $tOk = $false }
 } catch { $tOk = $false }
@@ -600,9 +678,6 @@ if (-not $tOk -or $treeTasks.Count -eq 0) {
     if ($sdOnly -gt 0) {
         "[INFO] $sdOnly task(s) lack a readable security descriptor but ARE enumerable by Task Scheduler -- expected at admin privilege (descriptor reads want SYSTEM), not treated as hidden."
     }
-    if ($unreadable -gt 0) {
-        "[INFO] $unreadable task(s) could not be inspected at all; the remaining $inspected were checked."
-    }
     if ($noSd.Count -gt 0) {
         '[CRITICAL] Scheduled task registered in TaskCache with NO security descriptor (SD) -- Tarrask-style hidden task (T1053.005):'
         foreach ($h in $noSd) { "  $h" }
@@ -616,9 +691,10 @@ if (-not $tOk -or $treeTasks.Count -eq 0) {
     # performed". Without $sdSuppressed the second path printed that SKIPPED
     # line and then, one branch later, "all carry a security descriptor" --
     # contradicting itself in adjacent lines.
-    if ($noSd.Count -eq 0 -and $liveOk -and -not $sdSuppressed) {
-        "[OK] No hidden scheduled tasks ($($treeTasks.Count) registered tasks; all carry a security descriptor)."
-    }
+    $ts = Get-TaskSummary -Total $treeTasks.Count -Inspected $inspected -Unread ($unreadable + $treeUnread) -LiveOk $liveOk -Suppressed $sdSuppressed -HitCount $noSd.Count -IsElevated ($Elevated -eq 1)
+    foreach ($l in $ts.Lines) { $l }
+    if ($ts.Gap) { $gapSev = Get-MaxSev $gapSev 'WARNING' }
+    $deferred += $ts.Deferred
 }
 
 Write-Marker -Name 'crossapi' -Sev $sev

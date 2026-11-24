@@ -1204,6 +1204,11 @@ jobs:
               throw ("edr_presence raised on a clean runner (false positive): " + (Get-Content (Join-Path $md 'dz_edr.txt')))
             }
             if ($out -notmatch 'Sysmon is not installed') { throw 'no Sysmon verdict emitted' }
+            # An administrator can ask the service manager about every agent and
+            # Sysmon by name: a gap here is a probe that read "could not check".
+            if (Test-Path (Join-Path $md 'dz_edr_gap.txt')) { throw ("edr_presence raised a gap on a clean runner: " + (($out -split "`n" | Where-Object { $_ -match 'NOT performed' }) -join ' | ')) }
+            $et = (.\tools\edr_presence.ps1 -SelfTest) -join "`n"
+            if ($LASTEXITCODE -ne 0) { Write-Host $et; throw 'edr_presence -SelfTest failed' }
             if ($out -notmatch 'inspected') { throw 'no inspection tally emitted' }
             # Guard the guard: a run that enumerated nothing must not look clean.
             $m = [regex]::Match($out, '(\d+) security product/agent\(s\) inspected')
@@ -2063,12 +2068,17 @@ jobs:
           Write-Host $out
           if ($LASTEXITCODE -ne 0) { throw 'service_signature_check self-test failed' }
           $n = @($out -split "`n" | Where-Object { $_ -match '^\[OK\]   ' }).Count
-          if ($n -lt 24) { throw "service_signature_check self-test ran only $n case(s) -- it is not asserting what it claims" }
+          if ($n -lt 26) { throw "service_signature_check self-test ran only $n case(s) -- it is not asserting what it claims" }
           # Real services on the runner: it has Google/Docker-style vendors and
           # WindowsApps packages, so a WARNING here is the false positive.
           $mf = Join-Path $env:TEMP ("dz_svc_ci_{0}\dz_svc.txt" -f $PID)
-          $real = (.\tools\service_signature_check.ps1 -MarkerFile $mf) -join "`n"
+          $gf = Join-Path (Split-Path -Parent $mf) 'dz_svcgate_gap.txt'
+          $real = (.\tools\service_signature_check.ps1 -MarkerFile $mf -GapFile $gf) -join "`n"
           Write-Host $real
+          # The service list is readable on every runner: a gap is the defect.
+          if (Test-Path $gf) { throw 'service_signature_check raised a gap on a clean runner (the service list could not be read)' }
+          # An [OK] must not claim binaries it could not verify.
+          if ($real -match 'could not be verified \(listed below\)' -and $real -match '\[OK\] All \d+ services with binary paths pass') { throw 'the full [OK] was printed over binaries that could not be verified' }
           if ($real -match 'null-valued expression|InvalidOperation') {
             throw 'service_signature_check wrote PowerShell errors into its own output'
           }
