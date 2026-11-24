@@ -4878,15 +4878,35 @@ set /a DEFERRED_COUNT+=1
 :: These event logs can be read without admin
 echo.>> "%REPORT%"
 echo --- New Service Installed - Event 7045 --->> "%REPORT%"
-echo  Command: wevtutil qe System /q:"*[System[(EventID=7045)]]" /c:20 /rd:true /f:text>> "%REPORT%"
-wevtutil qe System /q:"*[System[(EventID=7045)]]" /c:20 /rd:true /f:text > "%TEMP%\dz_pipe.tmp" 2>nul
-if errorlevel 1 (
-    echo [INFO] wevtutil unavailable or System log inaccessible -- 7045 check skipped.>> "%REPORT%"
+:: Read by field POSITION from the record, never by findstr on the English
+:: wevtutil /f:text labels: on a non-English Windows those labels do not
+:: exist, nothing matched, and this printed "[OK] No recent service install
+:: events" -- and a log it could not read was "[INFO] ... skipped".
+del "%TEMP%\dz_svclist_gap.txt" 2>nul
+del "%TEMP%\dz_svclist_deferred.txt" 2>nul
+del "%TEMP%\dz_svclist_done.txt" 2>nul
+echo  Command: powershell -Command "Get-WinEvent -FilterHashtable @{LogName='System'; Id=7045} -MaxEvents 20 | ForEach-Object { $_.TimeCreated.ToString('s') + '  ' + $_.Properties[0].Value + '  ' + $_.Properties[1].Value + '  ' + $_.Properties[4].Value }">> "%REPORT%"
+if exist "%SCRIPT_DIR%tools\event_scan_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\event_scan_check.ps1" -Check ServiceInstallList>> "%REPORT%" 2>&1
 ) else (
-    findstr /c:"Date:" /c:"Service Name:" /c:"Service File Name:" /c:"Service Account:" "%TEMP%\dz_pipe.tmp">> "%REPORT%"
-    if errorlevel 1 echo [OK] No recent service install events ^(7045^) found.>> "%REPORT%"
+    echo [WARNING] tools\event_scan_check.ps1 not found -- Service-install event listing NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 16 T1543.003 "Service-install event listing NOT performed - tool missing"
 )
-del "%TEMP%\dz_pipe.tmp" 2>nul
+if exist "%TEMP%\dz_svclist_gap.txt" (
+    call :dz_finding WARNING 16 T1543.003 "Service-install event listing NOT performed - the System log could not be read"
+    del "%TEMP%\dz_svclist_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_svclist_deferred.txt" (
+    set "_SVLDEF=0"
+    set /p _SVLDEF=<"%TEMP%\dz_svclist_deferred.txt"
+    set /a DEFERRED_COUNT+=!_SVLDEF!
+    del "%TEMP%\dz_svclist_deferred.txt" 2>nul
+)
+if not exist "%TEMP%\dz_svclist_done.txt" if exist "%SCRIPT_DIR%tools\event_scan_check.ps1" (
+    echo [WARNING] Service-install event listing produced no verdict -- NOT performed: tools\event_scan_check.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 16 T1543.003 "Service-install event listing produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_svclist_done.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- PS Script Block Executions - Event 4104 --->> "%REPORT%"
@@ -5083,9 +5103,18 @@ del "%TEMP%\dz_outlookmsg_done.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- [PEACH SANDSTORM] ADFS Service (GoldenSAML attack surface) --->> "%REPORT%"
-echo  Command: sc query adfssrv ^&^& set "_ADFS_HIT=1">> "%REPORT%"
+echo  Command: sc query adfssrv>> "%REPORT%"
+:: Only the service manager's own 1060 means the service does not exist.
+:: This was "sc query adfssrv && set HIT", so ANY failure -- a service
+:: whose DACL refuses us, a service manager that did not answer -- read
+:: "[OK] ... not installed". Anything but 0 or 1060 is a raised gap; on a
+:: standard-user token, access denied (5) is a counted deferral.
 set "_ADFS_HIT="
-sc query adfssrv >nul 2>nul && set "_ADFS_HIT=1"
+sc query adfssrv >nul 2>nul
+set "_ADFS_SC=%errorlevel%"
+if "%_ADFS_SC%"=="0" set "_ADFS_HIT=1"
+set "_ADFS_DEF="
+if "%_ADFS_SC%"=="5" if "%IS_ADMIN%"=="0" set "_ADFS_DEF=1"
 reg query "HKLM\SOFTWARE\Microsoft\ADFS" >nul 2>nul && set "_ADFS_HIT=1"
 if defined _ADFS_HIT (
     sc query adfssrv>> "%REPORT%" 2>nul
@@ -5094,26 +5123,46 @@ if defined _ADFS_HIT (
     rem is reported as context. Raising it would cry wolf on every machine that
     rem legitimately runs ADFS and teach the reader to ignore the tool.
     echo [INFO] ADFS detected -- GoldenSAML attack surface present. Not a compromise indicator by itself; keep it patched and monitored.>> "%REPORT%"
-) else (
+) else if "%_ADFS_SC%"=="1060" (
     echo [OK] ADFS not installed -- no GoldenSAML attack surface.>> "%REPORT%"
+) else if defined _ADFS_DEF (
+    echo [DEFERRED - ADMIN REQUIRED] ADFS check: the service manager refused this token the adfssrv service -- re-run as administrator to check it.>> "%REPORT%"
+    set /a DEFERRED_COUNT+=1
+) else (
+    echo [WARNING] ADFS check NOT performed -- the service manager did not say whether adfssrv exists, sc.exe exit code %_ADFS_SC%, so a GoldenSAML attack surface would go unseen.>> "%REPORT%"
+    call :dz_finding WARNING 17 T1078 "ADFS check NOT performed - the service manager did not answer for adfssrv"
 )
 set "_ADFS_HIT="
+set "_ADFS_SC="
+set "_ADFS_DEF="
 
 echo.>> "%REPORT%"
 echo --- [MANGO SANDSTORM] Azure AD Connect (on-prem to cloud pivot) --->> "%REPORT%"
-echo  Command: sc query ADSync ^&^& set "_AAD_HIT=1">> "%REPORT%"
+echo  Command: sc query ADSync>> "%REPORT%"
 set "_AAD_HIT="
-sc query ADSync >nul 2>nul && set "_AAD_HIT=1"
+sc query ADSync >nul 2>nul
+set "_AAD_SC=%errorlevel%"
+if "%_AAD_SC%"=="0" set "_AAD_HIT=1"
+set "_AAD_DEF="
+if "%_AAD_SC%"=="5" if "%IS_ADMIN%"=="0" set "_AAD_DEF=1"
 reg query "HKLM\SOFTWARE\Microsoft\Azure AD Connect" >nul 2>nul && set "_AAD_HIT=1"
 if defined _AAD_HIT (
     sc query "ADSync">> "%REPORT%" 2>nul
     reg query "HKLM\SOFTWARE\Microsoft\Azure AD Connect">> "%REPORT%" 2>nul
     rem Attack surface, not compromise -- see the ADFS note above.
     echo [INFO] Azure AD Connect detected -- on-prem to cloud pivot surface present. Not a compromise indicator by itself; keep it patched and monitored.>> "%REPORT%"
-) else (
+) else if "%_AAD_SC%"=="1060" (
     echo [OK] Azure AD Connect not installed -- no on-prem to cloud pivot.>> "%REPORT%"
+) else if defined _AAD_DEF (
+    echo [DEFERRED - ADMIN REQUIRED] Azure AD Connect check: the service manager refused this token the ADSync service -- re-run as administrator to check it.>> "%REPORT%"
+    set /a DEFERRED_COUNT+=1
+) else (
+    echo [WARNING] Azure AD Connect check NOT performed -- the service manager did not say whether ADSync exists, sc.exe exit code %_AAD_SC%, so an on-prem to cloud pivot surface would go unseen.>> "%REPORT%"
+    call :dz_finding WARNING 17 T1078 "Azure AD Connect check NOT performed - the service manager did not answer for ADSync"
 )
 set "_AAD_HIT="
+set "_AAD_SC="
+set "_AAD_DEF="
 
 echo.>> "%REPORT%"
 echo --- [ALL ACTORS] Password Spray Analysis (Event 4625 unique accounts) --->> "%REPORT%"
@@ -5457,7 +5506,14 @@ echo  Matching running processes against ioc_processes.txt>> "%REPORT%"
 :: printed [OK] with zero processes examined when wmic was absent. Enumerate
 :: via CIM into a temp file so a failed/empty enumeration is detectable and
 :: raised as a NOT-performed gap instead of masquerading as a clean result.
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object { $_.Name+'  '+$_.ProcessId+'  '+$_.ExecutablePath }" > "%TEMP%\dz_proc18a.tmp" 2>nul
+:: tools\ioc_proc_snapshot.ps1 writes the same "Name  PID  Path" lines and a
+:: scope line: a standard-user token is not shown the path of a process
+:: another account or an elevated token runs, and the [OK] below used to
+:: cover every process while those were matched by name alone.
+del "%TEMP%\dz_proc18a.tmp" 2>nul
+del "%TEMP%\dz_proc18a_scope.txt" 2>nul
+del "%TEMP%\dz_proc18a_deferred.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\ioc_proc_snapshot.ps1" "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\ioc_proc_snapshot.ps1" -Field ExecutablePath -OutFile "%TEMP%\dz_proc18a.tmp" -ScopeFile "%TEMP%\dz_proc18a_scope.txt" -DeferredFile "%TEMP%\dz_proc18a_deferred.txt" 2>nul
 set "_ENUM18A="
 for %%z in ("%TEMP%\dz_proc18a.tmp") do if %%~zz GTR 100 set "_ENUM18A=1"
 if defined _ENUM18A goto :sec18a_match
@@ -5485,6 +5541,10 @@ goto :sec18a_done
 :sec18a_clean
 echo [OK] No process IOC matches.>> "%REPORT%"
 :sec18a_done
+if exist "%TEMP%\dz_proc18a_scope.txt" type "%TEMP%\dz_proc18a_scope.txt">> "%REPORT%"
+if exist "%TEMP%\dz_proc18a_deferred.txt" set /a DEFERRED_COUNT+=1
+del "%TEMP%\dz_proc18a_scope.txt" 2>nul
+del "%TEMP%\dz_proc18a_deferred.txt" 2>nul
 set "_SEL18A="
 set "_ENUM18A="
 del "%TEMP%\dz_proc18a.tmp" 2>nul
@@ -5557,18 +5617,42 @@ del "%TEMP%\dz_iochit_18c_done.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- [18d] Suspicious File Path IOC Check --->> "%REPORT%"
-echo  Command: powershell -Command "foreach($p in Get-Content '%IOCDIR:'=''%\ioc_file_paths.txt'){ if(Test-Path ([Environment]::ExpandEnvironmentVariables($p))){ $p } }">> "%REPORT%"
+echo  Command: powershell -Command "foreach($p in Get-Content '%IOCDIR:'=''%\ioc_file_paths.txt'){ if($p.Trim() -and -not $p.StartsWith('#')){ $e = [Environment]::ExpandEnvironmentVariables($p.Trim()); try { $null = [IO.File]::GetAttributes($e); $e } catch { $_.Exception.GetType().Name + ': ' + $e } } }">> "%REPORT%"
 echo  Checking for known malware staging paths from ioc_file_paths.txt>> "%REPORT%"
+:: Each path is asked for BY NAME (GetAttributes needs no right to list the
+:: folder), and absent only when its folder ANSWERS without it or does not
+:: exist. This was Test-Path, which reads "access denied" as "not there", so
+:: a staging folder that refused us printed [OK]. A path that could not be
+:: checked is named and raised; on a standard-user token, a folder outside
+:: the user's own profile that refuses to list is a counted deferral.
 echo $iocFile = Join-Path $env:IOCDIR 'ioc_file_paths.txt' > "%PSRUN%"
-echo $paths=if(Test-Path $iocFile){Get-Content $iocFile ^| Where-Object {$_ -and $_ -notmatch '^^\s*#'}} >> "%PSRUN%"
-echo $hits=@() >> "%PSRUN%"
+echo $paths=@(if(Test-Path $iocFile){Get-Content $iocFile ^| Where-Object {$_.Trim() -and $_ -notmatch '^^\s*#'}}) >> "%PSRUN%"
+echo $adm=$false; try{ $adm=(New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.SecurityIdentifier]'S-1-5-32-544') }catch{} >> "%PSRUN%"
+echo $own=@(@($env:USERPROFILE,$env:TEMP,$env:LOCALAPPDATA,$env:APPDATA) ^| Where-Object {$_} ^| ForEach-Object {$_.TrimEnd('\')+'\'}) >> "%PSRUN%"
+echo $hits=@(); $unread=@(); $deferred=@() >> "%PSRUN%"
 echo foreach($p in $paths){ >> "%PSRUN%"
-echo   $expanded=[System.Environment]::ExpandEnvironmentVariables($p.Trim()) >> "%PSRUN%"
-echo   if(Test-Path $expanded){$hits+=$expanded} >> "%PSRUN%"
+echo   $e=[System.Environment]::ExpandEnvironmentVariables($p.Trim()); $why='' >> "%PSRUN%"
+echo   try{ $null=[IO.File]::GetAttributes($e); $hits+=$e; continue }catch{ $why=$_.Exception.GetType().Name } >> "%PSRUN%"
+echo   $dir=[IO.Path]::GetDirectoryName($e); $leaf=[IO.Path]::GetFileName($e) >> "%PSRUN%"
+echo   if(-not $dir -or -not $leaf){ $unread+=($e+' - not a full path'); continue } >> "%PSRUN%"
+echo   $names=$null >> "%PSRUN%"
+echo   try{ $names=@([IO.Directory]::GetFileSystemEntries($dir) ^| ForEach-Object {[IO.Path]::GetFileName($_)}) }catch [System.IO.DirectoryNotFoundException]{ continue }catch{ >> "%PSRUN%"
+echo     $lw=$_.Exception.GetType().Name; $mine=@($own ^| Where-Object {$e.StartsWith($_,[StringComparison]::OrdinalIgnoreCase)}).Count >> "%PSRUN%"
+echo     if(-not $adm -and $mine -eq 0){ $deferred+=$e }else{ $unread+=($e+' - '+$lw) } >> "%PSRUN%"
+echo     continue >> "%PSRUN%"
+echo   } >> "%PSRUN%"
+echo   if($names -contains $leaf){ $hits+=($e+' - its folder lists it, but it could not be opened by name: '+$why) } >> "%PSRUN%"
 echo } >> "%PSRUN%"
-echo if(-not $paths){'[WARNING] Staging file IOC match NOT performed -- ioc_file_paths.txt is missing or holds no entries.'; New-Item "$env:TEMP\dz_iochit_18d_gap.txt" -Force ^| Out-Null}elseif($hits.Count -gt 0){'[CRITICAL] Known malware staging files found:'; $hits; '[ACTION] Quarantine these files immediately.'; New-Item "$env:TEMP\dz_iochit_18d.txt" -Force ^| Out-Null}else{'[OK] No known malware staging files found.'} >> "%PSRUN%"
+echo if($paths.Count -eq 0){'[WARNING] Staging file IOC match NOT performed -- ioc_file_paths.txt is missing or holds no entries.'; New-Item "$env:TEMP\dz_iochit_18d_gap.txt" -Force ^| Out-Null}else{ >> "%PSRUN%"
+echo   if($hits.Count -gt 0){'[CRITICAL] Known malware staging files found:'; $hits; '[ACTION] Quarantine these files immediately.'; New-Item "$env:TEMP\dz_iochit_18d.txt" -Force ^| Out-Null} >> "%PSRUN%"
+echo   if($unread.Count -gt 0){'[WARNING] Staging file IOC match NOT performed in full -- '+$unread.Count+' of '+$paths.Count+' path(s) could not be checked, so a staging file there would go unseen: '+((@($unread) ^| Select-Object -First 5) -join '; ')+$(if($unread.Count -gt 5){'; and '+($unread.Count-5)+' more'}else{'.'}); New-Item "$env:TEMP\dz_iochit_18d_unread.txt" -Force ^| Out-Null} >> "%PSRUN%"
+echo   if($deferred.Count -gt 0){'[DEFERRED - ADMIN REQUIRED] '+$deferred.Count+' staging path(s) are in folders a standard-user token cannot list: '+((@($deferred) ^| Select-Object -First 5) -join '; ')+' -- re-run as administrator to check them.'; Set-Content -LiteralPath (Join-Path $env:TEMP 'dz_iochit_18d_deferred.txt') -Value $deferred.Count -Encoding ASCII} >> "%PSRUN%"
+echo   if($hits.Count -eq 0 -and $unread.Count -eq 0){ if($deferred.Count -gt 0){'[OK] No known malware staging files among the '+($paths.Count-$deferred.Count)+' of '+$paths.Count+' path(s) this token can check.'}else{'[OK] No known malware staging files found ('+$paths.Count+' path(s) checked).'} } >> "%PSRUN%"
+echo } >> "%PSRUN%"
 echo New-Item "$env:TEMP\dz_iochit_18d_done.txt" -Force ^| Out-Null >> "%PSRUN%"
 del "%TEMP%\dz_iochit_18d.txt" 2>nul
+del "%TEMP%\dz_iochit_18d_unread.txt" 2>nul
+del "%TEMP%\dz_iochit_18d_deferred.txt" 2>nul
 del "%TEMP%\dz_iochit_18d_gap.txt" 2>nul
 del "%TEMP%\dz_iochit_18d_done.txt" 2>nul
 "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
@@ -5586,6 +5670,16 @@ if not exist "%TEMP%\dz_iochit_18d_done.txt" (
     call :dz_finding WARNING 18 T1074 "Staging file IOC match NOT performed - the check stopped before a verdict"
 )
 del "%TEMP%\dz_iochit_18d_done.txt" 2>nul
+if exist "%TEMP%\dz_iochit_18d_unread.txt" (
+    call :dz_finding WARNING 18 T1074 "Staging file IOC match NOT performed in full - a listed path could not be checked"
+    del "%TEMP%\dz_iochit_18d_unread.txt" 2>nul
+)
+if exist "%TEMP%\dz_iochit_18d_deferred.txt" (
+    set "_18DDEF=0"
+    set /p _18DDEF=<"%TEMP%\dz_iochit_18d_deferred.txt"
+    set /a DEFERRED_COUNT+=!_18DDEF!
+    del "%TEMP%\dz_iochit_18d_deferred.txt" 2>nul
+)
 
 echo.>> "%REPORT%"
 echo --- [18e] Scheduled Task IOC Match --->> "%REPORT%"
@@ -5599,10 +5693,13 @@ echo  Matching scheduled task NAMES and ACTIONS against ioc_scheduled_tasks.txt>
 :: action's Execute and Arguments are properties, the same in every language.
 echo $iocFile = Join-Path $env:IOCDIR 'ioc_scheduled_tasks.txt' > "%PSRUN%"
 echo $patterns = if (Test-Path $iocFile) { Get-Content $iocFile ^| Where-Object {$_.Trim() -and $_ -notmatch '^^\s*#'} } >> "%PSRUN%"
-echo $tasks = @(Get-ScheduledTask -EA SilentlyContinue ^| ForEach-Object { [pscustomobject]@{ Task = ([string]$_.TaskPath).TrimEnd('\') + '\' + [string]$_.TaskName; Action = (@($_.Actions ^| ForEach-Object { ([string]$_.Execute + ' ' + [string]$_.Arguments).Trim() }) -join '; ') } }) >> "%PSRUN%"
-echo if (-not $patterns) { '[WARNING] Scheduled task IOC match NOT performed -- ioc_scheduled_tasks.txt is missing or holds no entries.'; New-Item "$env:TEMP\dz_iochit_18e_gap.txt" -Force ^| Out-Null } elseif ($tasks.Count -eq 0) { '[WARNING] Scheduled task IOC match NOT performed -- Get-ScheduledTask listed no tasks.'; New-Item "$env:TEMP\dz_iochit_18e_gap.txt" -Force ^| Out-Null } else { $hits = @(); foreach ($p in $patterns) { $rx = [regex]::Escape($p.Trim()); $hits += $tasks ^| Where-Object { ($_.Task -match $rx) -or ($_.Action -match $rx) } }; $hits = @($hits ^| Sort-Object Task,Action -Unique); if ($hits.Count -gt 0) { $hits ^| Format-List Task,Action; '[WARNING] Scheduled task IOC matches found.'; New-Item "$env:TEMP\dz_iochit_18e.txt" -Force ^| Out-Null } else { '[OK] No scheduled task IOC matches.' } } >> "%PSRUN%"
+echo $adm=$false; try{ $adm=(New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.SecurityIdentifier]'S-1-5-32-544') }catch{} >> "%PSRUN%"
+echo $tasks=@(); $terr=''; $refused=$false >> "%PSRUN%"
+echo try { $tasks = @(Get-ScheduledTask -ErrorAction Stop ^| ForEach-Object { [pscustomobject]@{ Task = ([string]$_.TaskPath).TrimEnd('\') + '\' + [string]$_.TaskName; Action = (@($_.Actions ^| ForEach-Object { ([string]$_.Execute + ' ' + [string]$_.Arguments).Trim() }) -join '; ') } }) } catch { $terr = (($_.Exception.GetType().Name + ': ' + $_.Exception.Message) -replace '[\r\n]+', ' '); $x = $_.Exception; while ($x) { if ($x -is [System.UnauthorizedAccessException] -or [int]$x.HResult -eq -2147024891) { $refused = $true }; if ($x.GetType().FullName -eq 'Microsoft.Management.Infrastructure.CimException') { try { if ([string]$x.NativeErrorCode -eq 'AccessDenied') { $refused = $true } } catch {} }; $x = $x.InnerException } } >> "%PSRUN%"
+echo if (-not $patterns) { '[WARNING] Scheduled task IOC match NOT performed -- ioc_scheduled_tasks.txt is missing or holds no entries.'; New-Item "$env:TEMP\dz_iochit_18e_gap.txt" -Force ^| Out-Null } elseif ($terr -and $refused -and -not $adm) { '[DEFERRED - ADMIN REQUIRED] Scheduled task IOC match: this token was refused the task list (' + $terr + ') -- re-run as administrator to check it.'; Set-Content -LiteralPath (Join-Path $env:TEMP 'dz_iochit_18e_deferred.txt') -Value 1 -Encoding ASCII } elseif ($terr) { '[WARNING] Scheduled task IOC match NOT performed -- the task list could not be read (' + $terr + ').'; New-Item "$env:TEMP\dz_iochit_18e_gap.txt" -Force ^| Out-Null } elseif ($tasks.Count -eq 0) { '[WARNING] Scheduled task IOC match NOT performed -- Get-ScheduledTask listed no tasks.'; New-Item "$env:TEMP\dz_iochit_18e_gap.txt" -Force ^| Out-Null } else { $hits = @(); foreach ($p in $patterns) { $rx = [regex]::Escape($p.Trim()); $hits += $tasks ^| Where-Object { ($_.Task -match $rx) -or ($_.Action -match $rx) } }; $hits = @($hits ^| Sort-Object Task,Action -Unique); if ($hits.Count -gt 0) { $hits ^| Format-List Task,Action; '[WARNING] Scheduled task IOC matches found.'; New-Item "$env:TEMP\dz_iochit_18e.txt" -Force ^| Out-Null } else { '[OK] No scheduled task IOC matches among the ' + $tasks.Count + ' task(s) read' + $(if ($adm) { '.' } else { '; a standard-user token is shown only the tasks it may read, so this covers those.' }) } } >> "%PSRUN%"
 echo New-Item "$env:TEMP\dz_iochit_18e_done.txt" -Force ^| Out-Null >> "%PSRUN%"
 del "%TEMP%\dz_iochit_18e.txt" 2>nul
+del "%TEMP%\dz_iochit_18e_deferred.txt" 2>nul
 del "%TEMP%\dz_iochit_18e_gap.txt" 2>nul
 del "%TEMP%\dz_iochit_18e_done.txt" 2>nul
 "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
@@ -5620,6 +5717,10 @@ if not exist "%TEMP%\dz_iochit_18e_done.txt" (
     call :dz_finding WARNING 18 T1053 "Scheduled task IOC match NOT performed - the check stopped before a verdict"
 )
 del "%TEMP%\dz_iochit_18e_done.txt" 2>nul
+if exist "%TEMP%\dz_iochit_18e_deferred.txt" (
+    set /a DEFERRED_COUNT+=1
+    del "%TEMP%\dz_iochit_18e_deferred.txt" 2>nul
+)
 
 echo.>> "%REPORT%"
 echo --- [18f] DNS Cache C2 Domain Match --->> "%REPORT%"
@@ -5680,7 +5781,12 @@ echo  Matching process command lines against ioc_lolbins.txt>> "%REPORT%"
 :: produced an empty temp file there and select_lines reported no matches,
 :: so LOLBin abuse went undetected while the report said [OK]. Enumerate via
 :: CIM and raise a NOT-performed gap when the enumeration itself fails.
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object { $_.Name+'  '+$_.ProcessId+'  '+$_.CommandLine }" > "%TEMP%\dz_evt.tmp" 2>nul
+:: The same snapshot tool as 18a, for command lines: a standard-user token is
+:: not shown the command line of another account's or an elevated process.
+del "%TEMP%\dz_evt.tmp" 2>nul
+del "%TEMP%\dz_proc18g_scope.txt" 2>nul
+del "%TEMP%\dz_proc18g_deferred.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\ioc_proc_snapshot.ps1" "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\ioc_proc_snapshot.ps1" -Field CommandLine -OutFile "%TEMP%\dz_evt.tmp" -ScopeFile "%TEMP%\dz_proc18g_scope.txt" -DeferredFile "%TEMP%\dz_proc18g_deferred.txt" 2>nul
 set "_ENUM18G="
 for %%z in ("%TEMP%\dz_evt.tmp") do if %%~zz GTR 100 set "_ENUM18G=1"
 if defined _ENUM18G goto :sec18g_match
@@ -5708,6 +5814,10 @@ goto :sec18g_done
 :sec18g_clean
 echo [OK] No LOLBin abuse patterns in running processes.>> "%REPORT%"
 :sec18g_done
+if exist "%TEMP%\dz_proc18g_scope.txt" type "%TEMP%\dz_proc18g_scope.txt">> "%REPORT%"
+if exist "%TEMP%\dz_proc18g_deferred.txt" set /a DEFERRED_COUNT+=1
+del "%TEMP%\dz_proc18g_scope.txt" 2>nul
+del "%TEMP%\dz_proc18g_deferred.txt" 2>nul
 set "_ENUM18G="
 
 echo.>> "%REPORT%"

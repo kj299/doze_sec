@@ -6,6 +6,17 @@
 #                           staging path or through a script host, T1543.003.
 #   -Check ScriptBlockList  Section 16: the listing of recent Script Block
 #                           events that are not the audit's own.
+#   -Check ServiceInstallList  Section 16: the listing of the newest service
+#                           installs (System 7045). It was wevtutil /f:text
+#                           piped through findstr on the ENGLISH field labels
+#                           ("Service Name:"), so on every non-English
+#                           Windows it matched nothing and printed "[OK] No
+#                           recent service install events (7045) found." --
+#                           and a log it could not read was "[INFO] ...
+#                           skipped". The fields are now read from the record
+#                           by position (ServiceName, ImagePath, ServiceType,
+#                           StartType, AccountName), the same in every
+#                           language.
 #   -Check Spray            Section 17: failed sign-ins (Security 4625) spread
 #                           over many accounts, T1110.003. It printed "[INFO] No
 #                           4625 events or insufficient privileges." for a log
@@ -35,19 +46,20 @@
 #   * an event whose text Windows could not render is counted and said --
 #     it was not examined.
 # Markers: dz_amsiev_hit / _gap / _deferred, dz_svc7045_hit / _gap /
-# _deferred, dz_sblist_gap / _deferred, dz_spray_hit / _gap / _deferred;
+# _deferred, dz_sblist_gap / _deferred, dz_svclist_gap / _deferred,
+# dz_spray_hit / _gap / _deferred;
 # and dz_<name>_done, written last on
 # every run -- the bat raises a "produced no verdict" row when it is absent.
 #
 # Usage:
-#   powershell -File tools\event_scan_check.ps1 -Check <AmsiBypass|ServiceInstalls|ScriptBlockList|Spray> [-MarkerDir <dir>] [-Elevated 0|1] [-SblState <sbl=on|sbl=off|...>]
+#   powershell -File tools\event_scan_check.ps1 -Check <AmsiBypass|ServiceInstalls|ScriptBlockList|ServiceInstallList|Spray> [-MarkerDir <dir>] [-Elevated 0|1] [-SblState <sbl=on|sbl=off|...>]
 #   powershell -File tools\event_scan_check.ps1 -SelfTest   (reads no log)
 #
 # Windows PowerShell 5.1 compatible; pure ASCII. Read-only.
 
 [CmdletBinding()]
 param(
-    [ValidateSet('AmsiBypass', 'ServiceInstalls', 'ScriptBlockList', 'Spray')]
+    [ValidateSet('AmsiBypass', 'ServiceInstalls', 'ScriptBlockList', 'ServiceInstallList', 'Spray')]
     [string]$Check,
     [string]$MarkerDir = $env:TEMP,
     [int]$Elevated = -1,
@@ -84,6 +96,7 @@ function ConvertTo-PrintableText {
 $script:Checks = @{
     AmsiBypass      = @{ Log = 'Microsoft-Windows-PowerShell/Operational'; Id = 4104; Max = 500; What = 'AMSI-bypass check (Script Block events)'; Tech = 'T1562.001'; Miss = 'an AMSI bypass recorded there would go unseen' }
     ServiceInstalls = @{ Log = 'System'; Id = 7045; Max = 50; What = 'Service-install check (Event 7045)'; Tech = 'T1543.003'; Miss = 'a service installed from a staging path would go unseen' }
+    ServiceInstallList = @{ Log = 'System'; Id = 7045; Max = 20; What = 'Service-install event listing (Event 7045)'; Tech = 'T1543.003'; Miss = 'recent service installs are not shown' }
     ScriptBlockList = @{ Log = 'Microsoft-Windows-PowerShell/Operational'; Id = 4104; Max = 200; What = 'Script Block event listing'; Tech = 'T1059.001'; Miss = 'recent PowerShell activity is not shown' }
     Spray           = @{ Log = 'Security'; Id = 4625; Max = 200; What = 'Password-spray check (Event 4625)'; Tech = 'T1110.003'; Miss = 'failed sign-ins spread over many accounts would go unseen' }
 }
@@ -137,6 +150,12 @@ function Get-EventScan {
             if ([string]$msg -match $script:SuspInstall) { [void]$scan.Hits.Add(('[' + [string]$r.Time + '] ' + (ConvertTo-PrintableText (([string]$msg) -replace '[\r\n]+', ' ')))) }
             continue
         }
+        if ($Check -eq 'ServiceInstallList') {
+            # Listed from the record's own fields, by position. No fields at
+            # all is a record this listing cannot show, and it says so.
+            if (@($r.Props | Where-Object { [string]$_ }).Count -eq 0) { $scan.NoText++; continue }
+            [void]$scan.Shown.Add($r); continue
+        }
         if ([string]$r.Path -match $script:SelfPath -or ($script:OwnScript -and [string]$r.Path -ieq $script:OwnScript)) { $scan.Own++; continue }
         if ($Check -eq 'ScriptBlockList') { [void]$scan.Shown.Add($r); continue }
         if ($null -eq $msg -or -not [string]$msg) { $scan.NoText++; continue }
@@ -163,7 +182,7 @@ function Get-EventScanVerdict {
         return @{ Lines = @($out.ToArray()); Hit = $false; Gap = $true; Deferred = 0 }
     }
     $scope = ([string]$Scan.Total + ' event(s) read from the ' + $c.Log + ' log (newest ' + [string]$c.Max + ' at most)')
-    $noText = if ([int]$Scan.NoText -gt 0) { $(if ($Check -eq 'Spray') { ('[INFO] ' + [string]$Scan.NoText + ' failed sign-in record(s) had no readable account name, so they were NOT examined.') } else { ('[INFO] ' + [string]$Scan.NoText + ' event(s) had no text Windows could render, so they were NOT examined.') }) } else { '' }
+    $noText = if ([int]$Scan.NoText -gt 0) { $(if ($Check -eq 'ServiceInstallList') { ('[INFO] ' + [string]$Scan.NoText + ' service-install record(s) had no fields Windows could read, so they are NOT listed.') } elseif ($Check -eq 'Spray') { ('[INFO] ' + [string]$Scan.NoText + ' failed sign-in record(s) had no readable account name, so they were NOT examined.') } else { ('[INFO] ' + [string]$Scan.NoText + ' event(s) had no text Windows could render, so they were NOT examined.') }) } else { '' }
     if ($Check -eq 'ScriptBlockList') {
         $shown = @($Scan.Shown)
         if ([int]$Scan.Total -eq 0) { [void]$out.Add('[OK] No PS Script Block events found.') }
@@ -176,6 +195,22 @@ function Get-EventScanVerdict {
             }
         }
         [void]$out.Add(('[INFO] ' + $scope + '; ' + [string]$Scan.Own + ' were the audit''s own and are not listed.'))
+        return @{ Lines = @($out.ToArray()); Hit = $false; Gap = $false; Deferred = 0 }
+    }
+    if ($Check -eq 'ServiceInstallList') {
+        $shown = @($Scan.Shown)
+        if ([int]$Scan.Total -eq 0) { [void]$out.Add('[OK] No recent service install events (7045) found.') }
+        foreach ($r in $shown) {
+            $p = @($r.Props)
+            $f = { param([int]$i) if ($p.Count -gt $i -and [string]$p[$i]) { ConvertTo-PrintableText ([string]$p[$i]) } else { '(not recorded)' } }
+            [void]$out.Add(('Date: ' + [string]$r.Time))
+            [void]$out.Add(('  Service Name: ' + (& $f 0)))
+            [void]$out.Add(('  Service File Name: ' + (& $f 1)))
+            [void]$out.Add(('  Service Account: ' + (& $f 4)))
+            [void]$out.Add('')
+        }
+        [void]$out.Add(('[INFO] ' + $scope + '. Listed for review; Section 18 grades them (staging folders, script hosts).'))
+        if ($noText) { [void]$out.Add($noText) }
         return @{ Lines = @($out.ToArray()); Hit = $false; Gap = $false; Deferred = 0 }
     }
     if ($Check -eq 'Spray') {
@@ -244,13 +279,16 @@ function Read-Events {
         $msg = $null; if ($Id -ne 4625) { try { $msg = $e.Message } catch { $msg = $null } }
         $path = ''; try { if ($e.Properties.Count -ge 5) { $path = [string]$e.Properties[4].Value } } catch { $path = '' }
         $time = ''; try { $time = $e.TimeCreated.ToString('s') } catch { $time = '' }
+        # Every field by position, as text: the listing reads them, never the
+        # rendered message, whose labels are localized.
+        $props = @(); try { $props = @($e.Properties | ForEach-Object { [string]$_.Value }) } catch { $props = @() }
         $target = $null
         if ($Id -eq 4625) {
             # TargetUserName by its field NAME in the record's XML: the
             # rendered message is localized, the field names are not.
             try { $x = [xml]$e.ToXml(); $target = [string](@($x.Event.EventData.Data | Where-Object { $_.Name -eq 'TargetUserName' })[0].'#text') } catch { $target = $null }
         }
-        [void]$recs.Add(@{ Time = $time; Message = $msg; Path = $path; Target = $target })
+        [void]$recs.Add(@{ Time = $time; Message = $msg; Path = $path; Target = $target; Props = $props })
     }
     return @{ Error = ''; Denied = $false; Records = @($recs.ToArray()) }
 }
@@ -317,6 +355,23 @@ if ($SelfTest) {
     $v = V 'ServiceInstalls' @(@{ Time = 't'; Message = ''; Path = '' })
     T '7045, a record with no text is said as not examined' (($v.Lines -join ' ') -match 'NOT examined') ($v.Lines -join ' | ')
 
+    # The listing reads fields by POSITION. The Message below is German on
+    # purpose: the labels the old findstr line looked for are not in it, and
+    # the listing must print the record all the same.
+    $l1 = @{ Time = '2026-11-12T09:04:00'; Message = "Ein Dienst wurde im System installiert.`r`nDienstname:  Updater"; Path = ''; Props = @('Updater', 'C:\Users\Public\upd.exe', 'Benutzermodusdienst', 'Bei Bedarf starten', 'LocalSystem') }
+    $v = V 'ServiceInstallList' @($l1); $t = $v.Lines -join "`n"
+    T '7045 listing, a record whose rendered labels are not English: printed from its fields, never "[OK] No recent service install events"' ((-not ($v.Gap -or $v.Hit)) -and $t -match '(?m)^  Service Name: Updater$' -and $t -match '(?m)^  Service File Name: C:\\Users\\Public\\upd\.exe$' -and $t -match '(?m)^  Service Account: LocalSystem$' -and $t -notmatch '\[OK\]') $t
+    $v = V 'ServiceInstallList' @(); $t = $v.Lines -join "`n"
+    T '7045 listing, a readable log with no 7045 events: the [OK] line the bats printed, and how much was read' ($t -match '(?m)^\[OK\] No recent service install events \(7045\) found\.$' -and $t -match '\[INFO\] 0 event\(s\) read from the System log' -and -not $v.Gap) $t
+    $v = V 'ServiceInstallList' @() @{ Error = 'EventLogException: The handle is invalid'; Denied = $false }; $t = $v.Lines -join "`n"
+    T '7045 listing, the System log could not be read: a raised gap, never "[INFO] ... skipped" or [OK]' ($v.Gap -and $t -match '(?m)^\[WARNING\] Service-install event listing \(Event 7045\) NOT performed -- ' -and $t -notmatch '\[OK\]') $t
+    $v = V 'ServiceInstallList' @() @{ Error = 'UnauthorizedAccessException: denied'; Denied = $true } $false
+    T '7045 listing, a standard-user token denied the log: a counted deferral' ((-not $v.Gap) -and $v.Deferred -eq 1) ($v.Lines -join ' | ')
+    $v = V 'ServiceInstallList' @(@{ Time = 't'; Message = 'x'; Path = ''; Props = @() }); $t = $v.Lines -join "`n"
+    T '7045 listing, a record with no fields is said as not listed' ($t -match '1 service-install record\(s\) had no fields Windows could read, so they are NOT listed') $t
+    $v = V 'ServiceInstallList' @(@{ Time = 't'; Message = 'x'; Path = ''; Props = @('Svc', ('C:\x.exe' + [char]0 + [char]10 + '[OK] fine')) }); $t = $v.Lines -join "`n"
+    T '7045 listing, a field cannot forge a line (a NUL and a newline in an image path)' ($t -notmatch '(?m)^\[OK\] fine' -and $t -notmatch [char]0) $t
+
     $v = V 'ScriptBlockList' @(); $t = $v.Lines -join "`n"
     T 'listing, a readable log with no 4104 events: the [OK] line the bats printed' ($t -match '(?m)^\[OK\] No PS Script Block events found\.$' -and -not $v.Gap) $t
     $v = V 'ScriptBlockList' @($own); $t = $v.Lines -join "`n"
@@ -348,7 +403,7 @@ if ($SelfTest) {
 }
 
 # --- live ---------------------------------------------------------------------
-if (-not $Check) { 'event_scan_check: -Check is required (AmsiBypass, ServiceInstalls, ScriptBlockList or Spray).'; exit 1 }
+if (-not $Check) { 'event_scan_check: -Check is required (AmsiBypass, ServiceInstalls, ScriptBlockList, ServiceInstallList or Spray).'; exit 1 }
 if ($Elevated -lt 0) {
     $Elevated = 0
     try { if ((New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { $Elevated = 1 } } catch {}
@@ -383,6 +438,10 @@ if ($Check -eq 'AmsiBypass') {
     if ($v.Gap) { Write-Marker -Name 'spray_gap' -Sev 'WARNING' }
     if ($v.Deferred -gt 0) { Write-Marker -Name 'spray_deferred' -Sev ([string]$v.Deferred) }
     Write-Marker -Name 'spray_done' -Sev 'done'
+} elseif ($Check -eq 'ServiceInstallList') {
+    if ($v.Gap) { Write-Marker -Name 'svclist_gap' -Sev 'WARNING' }
+    if ($v.Deferred -gt 0) { Write-Marker -Name 'svclist_deferred' -Sev ([string]$v.Deferred) }
+    Write-Marker -Name 'svclist_done' -Sev 'done'
 } else {
     if ($v.Gap) { Write-Marker -Name 'sblist_gap' -Sev 'WARNING' }
     if ($v.Deferred -gt 0) { Write-Marker -Name 'sblist_deferred' -Sev ([string]$v.Deferred) }

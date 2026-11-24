@@ -18,7 +18,7 @@ function RunE([string]$Check, [hashtable]$Extra) {
 }
 # LIVE: the runner's real logs. Each check must ANSWER (an administrator can
 # read both logs): a verdict line, and never a gap.
-foreach ($c in 'AmsiBypass', 'ServiceInstalls', 'ScriptBlockList', 'Spray') {
+foreach ($c in 'AmsiBypass', 'ServiceInstalls', 'ScriptBlockList', 'ServiceInstallList', 'Spray') {
   $r = RunE $c @{}
   Write-Host ("MEASURED: {0} on the runner's own log: markers [{1}]" -f $c, $r.Markers)
   if ($r.Markers -match '_gap|_deferred' -or $r.Out -match 'NOT performed') { throw "$c could not read a log an administrator can read: $($r.Out)" }
@@ -37,11 +37,11 @@ Write-Host "MEASURED: Script Block events naming this tool's own file: $mine ; s
 if ($ownSaid -lt 0) { throw "the AMSI check did not say how many events were its own: $($r.Out)" }
 if ($mine -gt 0 -and $ownSaid -lt 1) { throw "PowerShell logged this tool's own script block and the tool did not set it aside: it would report itself as an AMSI bypass" }
 # THE READ THAT FAILS, through the real reader: a log that does not exist.
-foreach ($c in @(@('AmsiBypass', 'dz_amsiev_gap'), @('ServiceInstalls', 'dz_svc7045_gap'), @('ScriptBlockList', 'dz_sblist_gap'), @('Spray', 'dz_spray_gap'))) {
+foreach ($c in @(@('AmsiBypass', 'dz_amsiev_gap'), @('ServiceInstalls', 'dz_svc7045_gap'), @('ScriptBlockList', 'dz_sblist_gap'), @('ServiceInstallList', 'dz_svclist_gap'), @('Spray', 'dz_spray_gap'))) {
   $r = RunE $c[0] @{ LogName = 'dz-ci-no-such-log/Operational' }
   if ($r.Markers -ne $c[1] -or $r.Out -match '(?m)^\[OK\]' -or $r.Out -notmatch '(?m)^\[WARNING\] .* NOT performed -- ') { throw "$($c[0]): a log that cannot be read was not a raised gap: [$($r.Markers)] $($r.Out)" }
 }
-Write-Host 'event scan: a log that cannot be read is a raised gap for all four checks, never an all-clear'
+Write-Host 'event scan: a log that cannot be read is a raised gap for all five checks, never an all-clear'
 # A REAL SPRAY, read from real 4625 records: eleven failed sign-ins to this
 # runner's own IPC$ share under names that do not exist (no account is locked
 # out, nothing is created). It proves TargetUserName is read from the record

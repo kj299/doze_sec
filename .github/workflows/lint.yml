@@ -503,6 +503,19 @@ jobs:
           out=$(pwsh -NoProfile -File tools/proc_snapshot.ps1 -SelfTest); echo "$out"
           echo "$out" | grep -qF 'the stdout line is exactly the former one-liner' || { echo 'case gone: stdout format'; exit 1; }
           n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 6 ] || { echo "only $n case(s)"; exit 1; }
+      - name: ioc_proc_snapshot -- what a token could not see in the 18a/18g snapshot is counted, never an all-clear
+        run: |
+          out=$(pwsh -NoProfile -File tools/ioc_proc_snapshot.ps1 -SelfTest); echo "$out"
+          echo "$out" | grep -qF 'a standard-user token shown no command line for 80 processes' || { echo 'case gone: deferral'; exit 1; }
+          n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 7 ] || { echo "only $n case(s)"; exit 1; }
+          for b in doze_sec.bat doze_sec_noAdmin.bat; do
+            grep -qF "+\$_.CommandLine }\" > \"%TEMP%\\dz_evt.tmp\"" "$b" && { echo "$b: the silenced 18g one-liner is back"; exit 1; }
+            grep -qF "+\$_.ExecutablePath }\" > \"%TEMP%\\dz_proc18a.tmp\"" "$b" && { echo "$b: the silenced 18a one-liner is back"; exit 1; }
+            for s in 18a 18g; do
+              grep -qF "if exist \"%TEMP%\\dz_proc${s}_scope.txt\" type" "$b" || { echo "$b: $s no longer prints its scope line"; exit 1; }
+              grep -qF "if exist \"%TEMP%\\dz_proc${s}_deferred.txt\" set /a DEFERRED_COUNT+=1" "$b" || { echo "$b: $s deferral is not counted"; exit 1; }
+            done
+          done
       # The first standard-user field run (2026-09-24): a DACL-restricted
       # Microsoft service reported as a rootkit, a stale per-user IOC copy
       # reporting UAC ON as an IOC, and a coverage block certifying an audit
@@ -895,14 +908,16 @@ jobs:
             grep -qF "Id=4104} -MaxEvents 500 -EA SilentlyContinue > " "$b" && { echo "$b: the silenced AMSI event read is back"; exit 1; }
             grep -qF "Id=4104} -MaxEvents 200 -EA SilentlyContinue > " "$b" && { echo "$b: the silenced Script Block listing is back"; exit 1; }
             grep -qF "Id=7045} -MaxEvents 50 -EA SilentlyContinue > " "$b" && { echo "$b: the silenced Event 7045 read is back"; exit 1; }
+            grep -qF '/c:20 /rd:true /f:text > "%TEMP%\dz_pipe.tmp"' "$b" && { echo "$b: the Section 16 7045 listing is back on the English wevtutil labels"; exit 1; }
+            grep -qE '^sc query (adfssrv|ADSync) >nul 2>nul && set' "$b" && { echo "$b: ADFS/AADC read any sc.exe failure as not installed again"; exit 1; }
             grep -qF -- "-Name Debugger -EA SilentlyContinue" "$b" && { echo "$b: a silenced IFEO Debugger read is back (in a section or a re-measuring tile)"; exit 1; }
             grep -qF "Get-MpThreatDetection -EA SilentlyContinue" "$b" && { echo "$b: the silenced Defender detection query is back"; exit 1; }
             grep -qF "Get-Service sshd -EA SilentlyContinue >" "$b" && { echo "$b: the silenced sshd query is back"; exit 1; }
             grep -qF 'echo [OK] OpenSSH Server ^(sshd^) not installed.' "$b" && { echo "$b: cmd prints [OK] on any sc.exe failure again"; exit 1; }
-            for m in accifeo_hit accifeo_gap accbin_hit accbin_missing accbin_gap accbin_deferred sblist_gap sblist_deferred amsiev_hit amsiev_gap amsiev_deferred svc7045_hit svc7045_gap svc7045_deferred sshd_hit sshd_gap sshd_deferred; do
+            for m in accifeo_hit accifeo_gap accbin_hit accbin_missing accbin_gap accbin_deferred sblist_gap sblist_deferred svclist_gap svclist_deferred amsiev_hit amsiev_gap amsiev_deferred svc7045_hit svc7045_gap svc7045_deferred sshd_hit sshd_gap sshd_deferred; do
               grep -qF "if exist \"%TEMP%\\dz_$m.txt\" (" "$b" || { echo "$b: the dz_$m marker is never read -- that verdict would reach no ledger row"; exit 1; }
             done
-            for d in sblist amsiev svc7045; do
+            for d in sblist svclist amsiev svc7045; do
               grep -qF "if not exist \"%TEMP%\\dz_${d}_done.txt\" if exist" "$b" || { echo "$b: the $d check lost its no-verdict backstop"; exit 1; }
             done
             for w in 'Accessibility IFEO check produced no verdict' 'Accessibility binary check produced no verdict' 'OpenSSH Server check produced no verdict'; do
@@ -1465,7 +1480,7 @@ jobs:
         run: pwsh -NoProfile -File tests/section18_gaps.ps1 -SelfTest
       - name: "Section 18: every matcher that cannot run says NOT performed and raises it (both bats)"
         run: pwsh -NoProfile -File tests/section18_gaps.ps1 -Mode Missing
-      - name: "Section 18: the shipped lists on Linux (no Windows listings: 18b/18c/18e gap, 18h unread, 18d OK)"
+      - name: "Section 18: the shipped lists on Linux (no Windows listings: 18b/18c/18e gap, 18d/18h unread)"
         run: pwsh -NoProfile -File tests/section18_gaps.ps1 -Mode Shipped
       # findstr /g: read a broken list as [OK]: the errorlevel checked was the
       # SECOND findstr's in the pipe. Each of 18a, 18f and 18g must call
