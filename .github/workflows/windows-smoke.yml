@@ -3475,7 +3475,7 @@ jobs:
           if not "%RC%"=="%REPRC%" ( echo EXIT CODE LOST ON THE CONSOLE-LOG PATH: process exited %RC%, report says %REPRC% & exit /b 1 )
           rem Section 16 lists the 7045 record the plant step left (it is real);
           rem Section 18 counts it as harness residue and does not list it.
-          findstr /r /c:"^Service Name: *dzsmoke_probe_residue" "%REP%" >nul || ( echo SECTION 16 DID NOT PRINT THE PLANTED 7045 RECORD & exit /b 1 )
+          findstr /r /c:"^ *Service Name: *dzsmoke_probe_residue" "%REP%" >nul || ( echo SECTION 16 DID NOT PRINT THE PLANTED 7045 RECORD & exit /b 1 )
           findstr /r /c:"system\. Service Name: *dzsmoke_probe_residue" "%REP%" >nul && ( echo SECTION 18 LISTED OUR OWN dz_probe RESIDUE AS A SUSPICIOUS SERVICE INSTALL & exit /b 1 )
           findstr /c:"(dz_selftest/dzsmoke/dz_probe) and were excluded" "%REP%" >nul || ( echo SECTION 18 DID NOT DECLARE THE EXCLUDED RESIDUE COUNT & exit /b 1 )
           echo Completed end-to-end through Section 18 and the exit handler.
