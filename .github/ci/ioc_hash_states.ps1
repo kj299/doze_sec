@@ -28,7 +28,7 @@ try {
   Remove-Item $gm, $hm -Force -EA SilentlyContinue
   $o = (.\tools\ioc_hash_check.ps1 -IocFile $list -ScanDir $open) -join "`n"
   Write-Host $o
-  if ($o -notmatch [regex]::Escape($bad) -or -not (Test-Path $hm)) { throw 'a file on the list was not the CRITICAL match' }
+  if ($o -notmatch 'dzci_known_bad\.exe -- IOC HASH MATCH' -or -not (Test-Path $hm)) { throw 'a file on the list was not the CRITICAL match' }
   if (Test-Path $gm) { throw "a clean walk raised a gap: $o" }
   # A file held open with no sharing cannot be hashed.
   $locked = Join-Path $open 'dzci_locked.dll'
@@ -40,8 +40,10 @@ try {
   $o = (.\tools\ioc_hash_check.ps1 -IocFile $list -ScanDir $open, $shut) -join "`n"
   Write-Host $o
   if (-not (Test-Path $gm)) { throw "a file that could not be hashed (or a folder that refused to list) wrote no gap marker: $o" }
-  if ($o -notmatch ('(?m)^\[WARNING\] File hash IOC match NOT performed in full -- .*could not be hashed: .*' + [regex]::Escape($locked))) { throw "the locked file was not named: $o" }
-  if ($denied -and $o -notmatch ('could not be listed: ' + [regex]::Escape($shut))) { throw "the folder that refused to list was not named: $o" }
+  if ($o -notmatch ('(?m)^\[WARNING\] File hash IOC match NOT performed in full -- .*could not be hashed: .*dzci_locked\.dll')) { throw "the locked file was not named: $o" }
+  # Paths compare by their last part: TEMP is the 8.3 form (RUNNER~1) and the
+  # tool prints files by their long name.
+  if ($denied -and $o -notmatch ('could not be listed: [^;]*\\shut \(')) { throw "the folder that refused to list was not named: $o" }
   if (-not (Test-Path $hm)) { throw 'the match beside the gap was lost: a hit and a gap are both raised' }
   Write-Host '18k: a locked file and a folder that refuses to list are named and raised beside the match'
 } finally {
