@@ -219,7 +219,7 @@ if ($SelfTest) {
     foreach ($c in @(
         @{ L = 'the dashboard SUMCODE back between quotes'; F = 'echo $scf=$env:SUMCODE >> "%PSRUN%"'; T = "echo `$scf='%SUMCODE%' >> `"%PSRUN%`""; Need = 'pastes the path %SUMCODE% between single quotes' },
         @{ L = 'the census REPORT back between quotes'; F = '-LiteralPath $env:REPORT -Pattern'; T = "-LiteralPath '%REPORT%' -Pattern"; Need = 'pastes the path %REPORT% between single quotes' },
-        @{ L = 'the Section 11 history APPDATA back between quotes'; F = "Get-Content -LiteralPath (Join-Path `$env:APPDATA 'Microsoft"; T = "Get-Content -LiteralPath ('%APPDATA%\Microsoft"; Need = 'pastes the path %APPDATA% between single quotes' },
+        @{ L = 'the 18d own-folder list APPDATA back between quotes'; F = '$env:LOCALAPPDATA,$env:APPDATA)'; T = "`$env:LOCALAPPDATA,'%APPDATA%')"; Need = 'pastes the path %APPDATA% between single quotes' },
         @{ L = 'a printed 18e Command: line without the apostrophe doubling'; F = "Get-Content '%IOCDIR:'=''%\ioc_scheduled_tasks.txt'"; T = "Get-Content '%IOCDIR%\ioc_scheduled_tasks.txt'"; Need = "write %IOCDIR:'=''%" },
         @{ L = 'a delayed !REPORT! between quotes'; F = '-LiteralPath $env:REPORT -Pattern'; T = "-LiteralPath '!REPORT!' -Pattern"; Need = 'pastes the path !REPORT! between single quotes' },
         @{ L = 'the census REPORT pasted into a double-quoted string'; F = '-LiteralPath $env:REPORT -Pattern'; T = '-LiteralPath \"%REPORT%\" -Pattern'; Need = 'pastes the path %REPORT% in a double-quoted string' })) {

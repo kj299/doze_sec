@@ -27,6 +27,19 @@
 # Writes "$env:TEMP\dz_iochit_18l.txt" if any IP is flagged at MED or
 # HIGH credibility so the .bat can increment IOC_HITS.
 #
+# WHAT WAS NOT LOOKED UP IS SAID (2026-11-24), as in vt_check: a failed
+# lookup, a 401 or a 429 left "[OK] VirusTotal IP: no ... matches in N remote
+# endpoint(s)" or an [INFO]; a missing key after -vt was an [INFO]. Any of
+# them is now "[WARNING] VirusTotal IP check NOT performed" with
+# dz_iochit_18l_gap.txt. And the connection list: Get-NetTCPConnection
+# -State Established THROWS when no connection matches, so a quiet machine
+# fell back to netstat, whose fallback matched the English word ESTABLISHED
+# (German Windows prints HERGESTELLT) and read [OK] having parsed nothing.
+# The CIM query now asks for every connection and filters by the State
+# property; netstat is parsed by COLUMN (Get-NetstatTcpRows), and a fallback
+# that recovers no TCP row at all -- every Windows has listening sockets --
+# is a gap, not an empty list.
+#
 # Usage:
 #   pwsh -NoProfile -ExecutionPolicy Bypass -File vt_ip_check.ps1 [-MaxIps N]
 #   pwsh -NoProfile -ExecutionPolicy Bypass -File vt_ip_check.ps1 -SelfTest   (no token, no network)
@@ -73,6 +86,44 @@ function Get-VtCredibility {
     return @{ Tier = $tier; Prefix = $prefix; Counts = ($tier -eq 'HIGH' -or $tier -eq 'MED') }
 }
 
+# PURE. netstat -ano lines -> TCP rows @{ Remote; Pid; Listening }, by column:
+# Proto, Local, Foreign, State, PID. The state WORD is localized, so it is
+# never matched; a row whose foreign address is the unspecified one
+# (0.0.0.0:0, [::]:0) is a listener, anything else had a remote peer.
+function Get-NetstatTcpRows {
+    param([string[]]$Lines)
+    $rows = @()
+    foreach ($line in $Lines) {
+        $t = @(([string]$line).Trim() -split '\s+')
+        if ($t.Count -lt 5 -or $t[0] -ne 'TCP' -or $t[-1] -notmatch '^\d+$') { continue }
+        $f = $t[2]
+        $remote = $null
+        if ($f -match '^\[([0-9a-fA-F:.%]+)\]:\d+$') { $remote = ($matches[1] -replace '%.*$', '') }
+        elseif ($f -match '^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):\d+$') { $remote = $matches[1] }
+        else { continue }
+        $rows += [pscustomobject]@{ Remote = $remote; Pid = [int]$t[-1]; Listening = ($remote -eq '0.0.0.0' -or $remote -eq '::') }
+    }
+    return ,$rows
+}
+
+# PURE. The closing lines, as vt_check's Get-VtSummary.
+function Get-VtIpSummary {
+    param([int]$Total, [int]$Flagged, [int]$Answered, [int]$Failed, [string]$Why = '')
+    $out = @()
+    if ($Flagged -gt 0) {
+        $out += "[CRITICAL] VirusTotal IP: $Flagged remote endpoint(s) flagged at MED or HIGH credibility. Investigate the listed local processes (Get-Process -Id <PID>) to identify what is connecting."
+        $out += '[INFO] LOW-credibility hits (1 engine, non-top-tier) are reported above as [INFO] only -- often false positives.'
+    }
+    if ($Failed -gt 0) {
+        $out += ('[WARNING] VirusTotal IP check NOT performed in full -- ' + $Failed + ' of ' + $Total + ' remote endpoint(s) were not looked up' + $(if ($Why) { ' (' + $Why + ')' } else { '' }) + ', so a known-bad address among them would go unseen (T1071).')
+    }
+    if ($Flagged -eq 0) {
+        if ($Failed -eq 0) { $out += "[OK] VirusTotal IP: no MED-or-HIGH credibility malicious matches in $Total remote endpoint(s)." }
+        elseif ($Answered -gt 0) { $out += "[OK] VirusTotal IP: no MED-or-HIGH credibility malicious matches among the $Answered endpoint(s) it answered for." }
+    }
+    return @{ Lines = $out; Hit = ($Flagged -gt 0); Gap = ($Failed -gt 0) }
+}
+
 if ($SelfTest) {
     $fails = 0
     function T { param([string]$Name, [bool]$Ok, [string]$Got)
@@ -95,20 +146,46 @@ if ($SelfTest) {
     $c = Get-VtCredibility -Malicious 5 -Suspicious 5 -TopTierHit $true
     T 'HIGH stays HIGH (no tier above it)' ($c.Tier -eq 'HIGH') $c.Tier
     T 'the top-tier list holds the curated engines (lower-cased, as the live loop compares them)' (($topTier -contains 'kaspersky') -and ($topTier -contains 'crowdstrike-falcon') -and (@($topTier | Where-Object { $_ -cne $_.ToLower() }).Count -eq 0)) ''
+    $ns = @(
+        '',
+        'Active Connections',
+        '',
+        '  Proto  Local Address          Foreign Address        State           PID',
+        '  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING       1044',
+        '  TCP    10.0.0.5:50123         52.96.1.10:443         ESTABLISHED     4120',
+        '  TCP    [::]:445               [::]:0                 LISTENING       4',
+        '  TCP    [2001:db8::5]:50200    [2606:4700::1111]:443  ESTABLISHED     5300',
+        '  UDP    0.0.0.0:5353           *:*                                    2200')
+    $r = Get-NetstatTcpRows $ns
+    T 'netstat by column: four TCP rows, UDP and headers ignored' ($r.Count -eq 4) "$($r.Count)"
+    T 'a listener is told by its unspecified foreign address, not the state word' (@($r | Where-Object { $_.Listening }).Count -eq 2) ''
+    T 'IPv4 and IPv6 remotes come out bare, with their PID' (@($r | Where-Object { -not $_.Listening } | ForEach-Object { $_.Remote + '/' + $_.Pid }) -join ',' -ceq '52.96.1.10/4120,2606:4700::1111/5300') (@($r | ForEach-Object { $_.Remote }) -join ',')
+    $de = @('  Proto  Lokale Adresse         Remoteadresse          Status           PID', '  TCP    10.0.0.5:50123         52.96.1.10:443         HERGESTELLT     4120')
+    $r = Get-NetstatTcpRows $de
+    T 'a German netstat row (HERGESTELLT) is read -- the English-word match read none (the defect)' ($r.Count -eq 1 -and $r[0].Remote -eq '52.96.1.10' -and -not $r[0].Listening) "$($r.Count)"
+    T 'output with no TCP row at all yields zero rows (the caller raises it as a gap)' ((Get-NetstatTcpRows @('netstat: error', '')).Count -eq 0) ''
+    $v = Get-VtIpSummary -Total 4 -Flagged 0 -Answered 0 -Failed 4 -Why 'a lookup failed'
+    T 'every lookup failed: a raised gap, never the [OK] (the defect)' ($v.Gap -and ($v.Lines -join ' ') -notmatch '\[OK\]' -and ($v.Lines -join ' ') -match 'NOT performed in full -- 4 of 4') ($v.Lines -join ' | ')
+    $v = Get-VtIpSummary -Total 4 -Flagged 1 -Answered 2 -Failed 2 -Why '429 rate limit'
+    T 'a hit and a gap are both raised' ($v.Hit -and $v.Gap) ''
+    $v = Get-VtIpSummary -Total 4 -Flagged 0 -Answered 4 -Failed 0
+    T 'all answered and clean: the [OK]' ((-not ($v.Hit -or $v.Gap)) -and $v.Lines[0] -match '^\[OK\]') ($v.Lines -join ' | ')
     if ($fails) { Write-Output "[FAIL] $fails vt_ip_check self-test expectation(s) unmet"; exit 1 }
     Write-Output '[OK] vt_ip_check self-test: a single non-top-tier engine is INFO and never counted; malicious weighs twice suspicious; a top-tier engine boosts one tier.'
     exit 0
 }
 
+Remove-Item -LiteralPath (Join-Path $env:TEMP 'dz_iochit_18l_gap.txt') -Force -EA SilentlyContinue
+function Write-IpGap { New-Item "$env:TEMP\dz_iochit_18l_gap.txt" -Force | Out-Null }
+
+# -vt asked for this check: no key is a check not performed, raised.
 $tokenFile = Join-Path $env:USERPROFILE '.vt_token'
-if (-not (Test-Path $tokenFile)) {
-    '[INFO] VT IP check skipped -- $env:USERPROFILE\.vt_token not found.'
-    return
-}
-$token = (Get-Content $tokenFile -Raw -EA SilentlyContinue)
+$token = $null
+try { $token = (Get-Content -LiteralPath $tokenFile -Raw -ErrorAction Stop) } catch {}
 if ($token) { $token = $token.Trim() }
 if (-not $token) {
-    '[INFO] VT IP check skipped -- .vt_token is empty.'
+    '[WARNING] VirusTotal IP check NOT performed -- %USERPROFILE%\.vt_token is missing, empty or unreadable. Create it with your VT API key (one line, no quotes) to enable this check.'
+    Write-IpGap
     return
 }
 
@@ -137,8 +214,11 @@ function Test-PublicIp {
 $ipToProc = @{}
 $usedNetstat = $false
 try {
-    $conns = Get-NetTCPConnection -State Established -EA Stop
+    # No -State filter: with one, a machine with no established connection
+    # THROWS (no matching object) and was sent to the fallback.
+    $conns = @(Get-NetTCPConnection -ErrorAction Stop)
     foreach ($c in $conns) {
+        if ([string]$c.State -ne 'Established') { continue }
         if (-not (Test-PublicIp $c.RemoteAddress)) { continue }
         $procName = 'unknown'
         if ($c.OwningProcess) {
@@ -157,17 +237,20 @@ try {
     # the LAST colon, which mangles IPv6 addresses (everything inside the
     # brackets was kept, including the brackets themselves, and Test-PublicIp
     # then rejected the bracketed form).
-    $netstat = & netstat -ano 2>$null
-    foreach ($line in $netstat) {
-        $remote = $null; $pid_ = $null
-        # IPv6: bracketed address. Match [<addr>]:<port> separately.
-        if ($line -match '^\s*TCP\s+\S+\s+\[([0-9a-fA-F:]+)\]:\d+\s+ESTABLISHED\s+(\d+)') {
-            $remote = $matches[1]; $pid_ = [int]$matches[2]
-        }
-        # IPv4: 1-3 digits per octet. Anchor more tightly so we don't catch IPv6.
-        elseif ($line -match '^\s*TCP\s+\S+\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):\d+\s+ESTABLISHED\s+(\d+)') {
-            $remote = $matches[1]; $pid_ = [int]$matches[2]
-        } else { continue }
+    # Parsed by column (Get-NetstatTcpRows): the state word is localized.
+    # A row with a remote peer counts whatever its state, so a TIME_WAIT or
+    # CLOSE_WAIT peer is looked up too -- a recent connection is as worth
+    # checking as a live one.
+    $netstat = @(& netstat -ano 2>$null)
+    $nsRows = Get-NetstatTcpRows $netstat
+    if ($nsRows.Count -eq 0) {
+        "[WARNING] VirusTotal IP check NOT performed -- Get-NetTCPConnection failed ($($_.Exception.Message)) and netstat -ano returned no TCP row to read."
+        Write-IpGap
+        return
+    }
+    foreach ($row in $nsRows) {
+        if ($row.Listening) { continue }
+        $remote = $row.Remote; $pid_ = $row.Pid
         if (-not (Test-PublicIp $remote)) { continue }
         $procName = 'unknown'
         $p = Get-Process -Id $pid_ -EA SilentlyContinue
@@ -189,6 +272,9 @@ $est = [math]::Round((($total - 1) * $SleepSeconds) / 60.0, 1)
 if ($usedNetstat) { '[INFO] Get-NetTCPConnection unavailable; using netstat -ano fallback (process correlation still works).' }
 
 $malCount = 0
+$answered = 0
+$failedCount = 0
+$failWhy = @()
 $abortReason = $null
 $idx = 0
 foreach ($ip in $ips) {
@@ -213,6 +299,7 @@ foreach ($ip in $ips) {
         if ($mal -eq 0 -and $sus -eq 0) {
             "  [OK] $ip -- VT 0/$tot clean (AS$asn $owner, $country)"
             "         local process(es): $procs"
+            $answered++
             continue
         }
 
@@ -263,34 +350,39 @@ foreach ($ip in $ips) {
 
         # Count toward IOC_HITS only at MED or HIGH credibility
         if ($cred.Counts) { $malCount++ }
+        # Counted only once the answer was fully processed: an error above
+        # lands in the catch as a failure, and must not be both.
+        $answered++
     } catch {
         $statusCode = $null
         try { $statusCode = [int]$_.Exception.Response.StatusCode } catch {}
         if ($statusCode -eq 404) {
             "  [INFO] $ip -- not in VT IP corpus"
             "         local process(es): $procs"
+            $answered++
         } elseif ($statusCode -eq 401) {
-            "  [ERROR] VT API key rejected (HTTP 401) -- check ~/.vt_token contents"
+            "  [INFO] VT API key rejected (HTTP 401) -- check ~/.vt_token contents"
             $abortReason = '401 unauthorized'
             break
         } elseif ($statusCode -eq 429) {
-            "  [WARNING] VT rate limit (HTTP 429) -- aborting after $($idx - 1) IP lookup(s)"
+            "  [INFO] VT rate limit (HTTP 429) -- stopping after $($idx - 1) IP lookup(s)"
             $abortReason = '429 rate limit'
             break
         } else {
-            "  [INFO] $ip -- VT lookup failed (HTTP $statusCode)"
+            "  [INFO] $ip -- VT lookup failed (HTTP $statusCode), not looked up"
             "         local process(es): $procs"
+            $failedCount++; if ($failWhy -notcontains 'a lookup failed') { $failWhy += 'a lookup failed' }
         }
     }
     if ($idx -lt $total) { Start-Sleep -Seconds $SleepSeconds }
 }
 
-if ($malCount -gt 0) {
-    "[CRITICAL] VirusTotal IP: $malCount remote endpoint(s) flagged at MED or HIGH credibility. Investigate the listed local processes (Get-Process -Id <PID>) to identify what is connecting."
-    "[INFO] LOW-credibility hits (1 engine, non-top-tier) are reported above as [INFO] only -- often false positives."
-    New-Item "$env:TEMP\dz_iochit_18l.txt" -Force | Out-Null
-} elseif ($abortReason) {
-    "[INFO] VirusTotal IP check aborted ($abortReason). Partial results above."
-} else {
-    "[OK] VirusTotal IP: no MED-or-HIGH credibility malicious matches in $total remote endpoint(s)."
+# A run that stopped early (401, 429) did not look up the rest.
+if ($abortReason) {
+    $failedCount = $total - $answered
+    $failWhy += $abortReason
 }
+$sum = Get-VtIpSummary -Total $total -Flagged $malCount -Answered $answered -Failed $failedCount -Why ($failWhy -join '; ')
+$sum.Lines
+if ($sum.Hit) { New-Item "$env:TEMP\dz_iochit_18l.txt" -Force | Out-Null }
+if ($sum.Gap) { Write-IpGap }

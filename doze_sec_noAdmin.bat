@@ -1165,7 +1165,10 @@ if "%NETWORK_AVAIL%"=="1" if "%VT_SELF_SKIP%"=="0" if exist "%USERPROFILE%\.vt_t
     echo  Command: powershell -File tools\vt_self_check.ps1>> "%REPORT%"
     if exist "%SCRIPT_DIR%tools\vt_self_check.ps1" (
         "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\vt_self_check.ps1" -Binaries "%PWSH%","%SystemRoot%\System32\wbem\wmic.exe","%SystemRoot%\System32\wevtutil.exe","%SystemRoot%\System32\reg.exe" >> "%REPORT%" 2>&1
-        rem PS script exit codes: 0=clean, 1=MALICIOUS (HARD FAIL), 2=skipped/error.
+        set "_VTSELF_RC=!errorlevel!"
+        rem PS script exit codes: 0=clean, 1=MALICIOUS (HARD FAIL), 2=NOT performed
+        rem in full. 2 was read as a skip, and the tool printed its all-clear
+        rem when every lookup failed; it is a raised gap now, row below.
         rem Use delayed expansion since we are inside a parenthesized block;
         rem percent-errorlevel-percent would expand at block-parse time, not runtime.
         if !errorlevel! equ 1 (
@@ -1209,9 +1212,15 @@ if "%NETWORK_AVAIL%"=="1" if "%VT_SELF_SKIP%"=="0" if exist "%USERPROFILE%\.vt_t
             set "EXIT_CODE=7"
             goto :final_exit
         )
+        if "!_VTSELF_RC!"=="2" call :dz_finding WARNING INIT VTSELF "Pre-flight VirusTotal integrity check NOT performed in full - a script-critical binary could not be verified"
+        if not "!_VTSELF_RC!"=="0" if not "!_VTSELF_RC!"=="1" if not "!_VTSELF_RC!"=="2" (
+            echo  [WARNING] Pre-flight VT integrity check NOT performed -- vt_self_check.ps1 exited !_VTSELF_RC!, which is no verdict.>> "%REPORT%"
+            call :dz_finding WARNING INIT VTSELF "Pre-flight VirusTotal integrity check produced no verdict - NOT performed"
+        )
     ) else (
-        echo  [INFO] vt_self_check.ps1 not found at "%SCRIPT_DIR%tools\vt_self_check.ps1">> "%REPORT%"
-        echo  [INFO] Pre-flight VT integrity check skipped. To enable, ensure the>> "%REPORT%"
+        echo  [WARNING] Pre-flight VT integrity check NOT performed -- vt_self_check.ps1 not found at "%SCRIPT_DIR%tools\vt_self_check.ps1">> "%REPORT%"
+        call :dz_finding WARNING INIT VTSELF "Pre-flight VirusTotal integrity check NOT performed - tools\vt_self_check.ps1 missing"
+        echo  [INFO] To enable it, ensure the>> "%REPORT%"
         echo         tools folder ships alongside doze_sec_noAdmin.bat ^(both must>> "%REPORT%"
         echo         live in the same directory^), then re-run.>> "%REPORT%"
     )
@@ -1999,8 +2008,10 @@ echo --- Running-process enumeration for the checks below --->> "%REPORT%"
 :: parent rule reads (PID, parent PID, creation time) comes from the SAME
 :: objects, so the two can never describe different processes.
 del "%TEMP%\dz_proc4_tree.tmp" 2>nul
+del "%TEMP%\dz_proc4_scope.txt" 2>nul
+del "%TEMP%\dz_proc4_deferred.txt" 2>nul
 if not exist "%SCRIPT_DIR%tools\proc_snapshot.ps1" goto :sec4_snap_inline
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\proc_snapshot.ps1" -TreePath "%TEMP%\dz_proc4_tree.tmp" > "%TEMP%\dz_proc4.tmp" 2>nul
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\proc_snapshot.ps1" -TreePath "%TEMP%\dz_proc4_tree.tmp" -ScopeFile "%TEMP%\dz_proc4_scope.txt" -DeferredFile "%TEMP%\dz_proc4_deferred.txt" > "%TEMP%\dz_proc4.tmp" 2>nul
 goto :sec4_snap_done
 :sec4_snap_inline
 "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object { $_.Name+'  '+$_.ProcessId+'  '+$_.ExecutablePath }" > "%TEMP%\dz_proc4.tmp" 2>nul
@@ -2050,6 +2061,12 @@ goto :sec4_susp_done
 echo [WARNING] Suspicious-path process check NOT performed -- the process list could not be read, so a process running from Temp, Downloads or Public would go unseen.>> "%REPORT%"
 call :dz_finding WARNING 4 T1057 "Suspicious-path process check NOT performed - the process list could not be read"
 :sec4_susp_done
+:: The path checks grade only processes whose path this token can read: say
+:: how many that was. On a standard-user token the rest is a counted deferral.
+if exist "%TEMP%\dz_proc4_scope.txt" type "%TEMP%\dz_proc4_scope.txt">> "%REPORT%"
+if exist "%TEMP%\dz_proc4_deferred.txt" set /a DEFERRED_COUNT+=1
+del "%TEMP%\dz_proc4_scope.txt" 2>nul
+del "%TEMP%\dz_proc4_deferred.txt" 2>nul
 
 :: Carry Section 4's verdict to the summary dashboard, the way DNSPROBE_STATE
 :: already does. Read at TOP LEVEL, not inside the block above: set /p plus a
@@ -3619,15 +3636,21 @@ if not "!SBL_STATE:~0,4!"=="sbl=" if exist "%SCRIPT_DIR%tools\reg_policy_check.p
 
 echo.>> "%REPORT%"
 echo --- Recent PS Command History --->> "%REPORT%"
-echo  Command: powershell -Command "Get-Content '%APPDATA:'=''%\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt' -EA SilentlyContinue | Select-Object -Last 50">> "%REPORT%"
-if not exist "%APPDATA%\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt" goto :pshistnone
-echo [FOUND] PS history file. Last 50 commands:>> "%REPORT%"
-echo Get-Content -LiteralPath (Join-Path $env:APPDATA 'Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt') -EA SilentlyContinue ^| Select-Object -Last 50 > "%PSRUN%"
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
-goto :pshistdone
-:pshistnone
-echo [INFO] No PS history file found.>> "%REPORT%"
-:pshistdone
+echo  Command: powershell -File tools\account_files_check.ps1 -Check PsHistory>> "%REPORT%"
+:: Every *_history.txt in this account's PSReadLine folder, read with -EA Stop.
+:: It was `if not exist ConsoleHost_history.txt`: a denied file reads as not
+:: there to `if exist`, and VS Code's and the ISE's histories were never read.
+del "%TEMP%\dz_pshist_gap.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\account_files_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\account_files_check.ps1" -Check PsHistory>> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] PowerShell history check NOT performed -- tools\account_files_check.ps1 not found.>> "%REPORT%"
+    call :dz_finding WARNING 11 T1059.001 "PowerShell history check NOT performed - tools\account_files_check.ps1 missing"
+)
+if exist "%TEMP%\dz_pshist_gap.txt" (
+    call :dz_finding WARNING 11 T1059.001 "PowerShell history check NOT performed in full - a history file or its folder could not be read"
+    del "%TEMP%\dz_pshist_gap.txt" 2>nul
+)
 echo.>> "%REPORT%"
 
 :: ====================================================================
@@ -5473,7 +5496,8 @@ if "%BASELINE_SKIP%"=="1" (
     echo  [INFO] Baseline analysis skipped ^(-noBaseline^).>> "%REPORT%"
 ) else (
     if not exist "%SCRIPT_DIR%tools\baseline_diff.ps1" (
-        echo  [INFO] tools\baseline_diff.ps1 not found -- baseline analysis skipped.>> "%REPORT%"
+        echo  [WARNING] Baseline analysis NOT performed -- tools\baseline_diff.ps1 not found.>> "%REPORT%"
+        call :dz_finding WARNING 17 BASELINE "Baseline analysis NOT performed - tools\baseline_diff.ps1 missing"
     ) else (
         if "%BASELINE_SAVE%"=="1" (
             "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\baseline_diff.ps1" -Mode Save -Path "!BASELINE_FILE!">> "%REPORT%" 2>&1
@@ -5492,7 +5516,7 @@ if exist "%TEMP%\dz_baseline_gap.txt" (
     rem A gap is its own row: the tool could not perform (part of) this check.
     set "_GAPSEV="
     set /p _GAPSEV=<"%TEMP%\dz_baseline_gap.txt"
-    call :dz_finding !_GAPSEV! 17 BASELINE "Baseline comparison NOT performed - snapshot unreadable"
+    call :dz_finding !_GAPSEV! 17 BASELINE "Baseline not captured or not compared in full - a snapshot or a category could not be read"
     del "%TEMP%\dz_baseline_gap.txt" 2>nul
 )
 
@@ -5956,14 +5980,27 @@ if "%VT_CHECK%"=="1" (
         rem support it. Every other IOC marker already deletes before its
         rem producer runs; these two were the exceptions.
         del "%TEMP%\dz_iochit_18j.txt" 2>nul
+        del "%TEMP%\dz_iochit_18j_gap.txt" 2>nul
         "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\vt_check.ps1">> "%REPORT%" 2>&1
+        rem CRITICAL, as the tool prints it: the row was WARNING, so the ledger
+        rem graded a VirusTotal-flagged file lower than the report did.
         if exist "%TEMP%\dz_iochit_18j.txt" (
             set /a IOC_HITS+=1
-            call :dz_finding WARNING 18 T1105 "VirusTotal-flagged file"
+            call :dz_finding CRITICAL 18 T1105 "VirusTotal-flagged file"
             del "%TEMP%\dz_iochit_18j.txt" 2>nul
         )
+        rem A lookup that failed, a rate limit or a missing key: not looked up.
+        if exist "%TEMP%\dz_iochit_18j_deferred.txt" (
+            set /a DEFERRED_COUNT+=1
+            del "%TEMP%\dz_iochit_18j_deferred.txt" 2>nul
+        )
+        if exist "%TEMP%\dz_iochit_18j_gap.txt" (
+            call :dz_finding WARNING 18 T1105 "VirusTotal file check NOT performed in full - candidate files were not looked up"
+            del "%TEMP%\dz_iochit_18j_gap.txt" 2>nul
+        )
     ) else (
-        echo  [INFO] tools\vt_check.ps1 not found -- VT check skipped.>> "%REPORT%"
+        echo  [WARNING] VirusTotal file check NOT performed -- tools\vt_check.ps1 not found.>> "%REPORT%"
+        call :dz_finding WARNING 18 T1105 "VirusTotal file check NOT performed - tools\vt_check.ps1 missing"
     )
 )
 
@@ -5978,14 +6015,21 @@ if "%VT_CHECK%"=="1" (
         rem Clear a marker left by an interrupted earlier -vt run -- see the
         rem note on the 18j marker above.
         del "%TEMP%\dz_iochit_18l.txt" 2>nul
+        del "%TEMP%\dz_iochit_18l_gap.txt" 2>nul
         "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\vt_ip_check.ps1">> "%REPORT%" 2>&1
+        rem CRITICAL, as the tool prints it; see the 18j row above.
         if exist "%TEMP%\dz_iochit_18l.txt" (
             set /a IOC_HITS+=1
-            call :dz_finding WARNING 18 T1071 "VirusTotal-flagged remote IP"
+            call :dz_finding CRITICAL 18 T1071 "VirusTotal-flagged remote IP"
             del "%TEMP%\dz_iochit_18l.txt" 2>nul
         )
+        if exist "%TEMP%\dz_iochit_18l_gap.txt" (
+            call :dz_finding WARNING 18 T1071 "VirusTotal IP check NOT performed in full - remote endpoints were not looked up"
+            del "%TEMP%\dz_iochit_18l_gap.txt" 2>nul
+        )
     ) else (
-        echo  [INFO] tools\vt_ip_check.ps1 not found -- VT IP check skipped.>> "%REPORT%"
+        echo  [WARNING] VirusTotal IP check NOT performed -- tools\vt_ip_check.ps1 not found.>> "%REPORT%"
+        call :dz_finding WARNING 18 T1071 "VirusTotal IP check NOT performed - tools\vt_ip_check.ps1 missing"
     )
 )
 
@@ -6366,24 +6410,21 @@ if exist "%TEMP%\dz_com.txt" (
 :: --- [CTI] Living-off-the-Cloud: Azure/M365 CLI Token Files ---
 echo.>> "%REPORT%"
 echo --- [CTI] Cloud Token Theft - Azure/AWS/GCP CLI Credential Files --->> "%REPORT%"
-echo  Command: powershell -Command "($env:USERPROFILE+'\.azure\accessTokens.json'),($env:USERPROFILE+'\.azure\msal_token_cache.json'),($env:USERPROFILE+'\.aws\credentials'),($env:APPDATA+'\gcloud\credentials.db'),($env:APPDATA+'\gcloud\application_default_credentials.json'),($env:USERPROFILE+'\.kube\config') | Get-Item -EA SilentlyContinue | Select-Object FullName,LastWriteTime">> "%REPORT%"
-echo $cloudCreds = @( > "%PSRUN%"
-echo   @{Name='Azure CLI';Path="$env:USERPROFILE\.azure\accessTokens.json"}, >> "%PSRUN%"
-echo   @{Name='Azure CLI MSAL';Path="$env:USERPROFILE\.azure\msal_token_cache.json"}, >> "%PSRUN%"
-echo   @{Name='AWS CLI';Path="$env:USERPROFILE\.aws\credentials"}, >> "%PSRUN%"
-echo   @{Name='GCP';Path="$env:APPDATA\gcloud\credentials.db"}, >> "%PSRUN%"
-echo   @{Name='GCP ADC';Path="$env:APPDATA\gcloud\application_default_credentials.json"}, >> "%PSRUN%"
-echo   @{Name='kubectl';Path="$env:USERPROFILE\.kube\config"} >> "%PSRUN%"
-echo ) >> "%PSRUN%"
-echo $found = @() >> "%PSRUN%"
-echo foreach ($c in $cloudCreds) { >> "%PSRUN%"
-echo   if (Test-Path $c.Path) { >> "%PSRUN%"
-echo     $item = Get-Item $c.Path >> "%PSRUN%"
-echo     $found += $c.Name + ': ' + $c.Path + ' (modified: ' + $item.LastWriteTime + ')' >> "%PSRUN%"
-echo   } >> "%PSRUN%"
-echo } >> "%PSRUN%"
-echo if ($found.Count -gt 0) { '[INFO] Cloud CLI credential files present (verify these are expected):'; $found ^| ForEach-Object { '  '+$_ } } else { '[OK] No cloud CLI credential files found (no cloud attack surface from local tokens).' } >> "%PSRUN%"
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%">> "%REPORT%" 2>&1
+echo  Command: powershell -File tools\account_files_check.ps1 -Check CloudCreds>> "%REPORT%"
+:: Each file asked for with -EA Stop; absent only when its folder answers
+:: without it. A Test-Path here read a denied token file as "no cloud attack
+:: surface", an [OK] over a file it could not see.
+del "%TEMP%\dz_cloudcred_gap.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\account_files_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\account_files_check.ps1" -Check CloudCreds>> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] Cloud CLI credential check NOT performed -- tools\account_files_check.ps1 not found.>> "%REPORT%"
+    call :dz_finding WARNING 18 T1528 "Cloud CLI credential check NOT performed - tools\account_files_check.ps1 missing"
+)
+if exist "%TEMP%\dz_cloudcred_gap.txt" (
+    call :dz_finding WARNING 18 T1528 "Cloud CLI credential check NOT performed in full - a credential file or its folder could not be read"
+    del "%TEMP%\dz_cloudcred_gap.txt" 2>nul
+)
 
 :: --- [CTI] Explicit Credential Logon - Event 4648 (T1078) ---
 echo.>> "%REPORT%"

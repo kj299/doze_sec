@@ -15,7 +15,14 @@
 # Exit codes:
 #   0 = all checked binaries clean (or unknown to VT)
 #   1 = at least one binary flagged malicious -- HARD FAIL, audit aborts
-#   2 = no token / no network / cannot proceed (caller treats as skip)
+#   2 = NOT performed in full: a binary could not be hashed or looked up,
+#       the key was missing/rejected, or VT rate-limited us. The caller
+#       RAISES it (2026-11-24): it used to read as a skip, and a run where
+#       every lookup failed printed "[OK] ... all critical script binaries
+#       clean" and exited 0 -- an integrity check that checked nothing,
+#       reading as a pass.
+#   A binary that does not exist on this Windows (wmic on 24H2+) is not a
+#   gap: the audit cannot be running it.
 #
 # Free-tier VT API limits: 4 lookups/min, 500/day. With 4 default
 # binaries this completes in ~50 seconds (3 sleeps x 16 s + 4 calls).
@@ -23,10 +30,37 @@
 param(
     [string[]]$Binaries,
     [int]$SleepSeconds = 16,
-    [int]$TimeoutSeconds = 20
+    [int]$TimeoutSeconds = 20,
+    [switch]$SelfTest
 )
 
 $ErrorActionPreference = 'Continue'
+
+# PURE. The closing verdict and exit code from the counts.
+function Get-VtSelfVerdict {
+    param([int]$Checked, [int]$Malicious, [int]$Unverified, [string]$Why = '')
+    if ($Malicious -gt 0) { return @{ Exit = 1; Line = '' } }
+    if ($Unverified -gt 0) {
+        return @{ Exit = 2; Line = ('[WARNING] VT pre-flight integrity check NOT performed in full -- ' + $Unverified + ' of ' + $Checked + ' script-critical binar(ies) could not be verified' + $(if ($Why) { ' (' + $Why + ')' } else { '' }) + '. The audit continues, but a tampered binary among them would go unseen.') }
+    }
+    return @{ Exit = 0; Line = '[OK] VT self-check: all critical script binaries clean.' }
+}
+
+if ($SelfTest) {
+    $fails = 0
+    function T { param([string]$N, [bool]$Ok, [string]$Got)
+        if ($Ok) { Write-Output "[OK]   $N" } else { Write-Output "[FAIL] $N$(if ($Got) { ": $Got" })"; $script:fails++ }
+    }
+    $v = Get-VtSelfVerdict -Checked 3 -Malicious 0 -Unverified 3 -Why 'a lookup failed'
+    T 'every lookup failed: exit 2 and a NOT-performed line, never the [OK] and exit 0 (the defect)' ($v.Exit -eq 2 -and $v.Line -match '^\[WARNING\] .*NOT performed in full -- 3 of 3 ') "$($v.Exit) $($v.Line)"
+    $v = Get-VtSelfVerdict -Checked 3 -Malicious 0 -Unverified 0
+    T 'every binary answered clean: exit 0 and the [OK]' ($v.Exit -eq 0 -and $v.Line -match '^\[OK\]') "$($v.Exit) $($v.Line)"
+    $v = Get-VtSelfVerdict -Checked 3 -Malicious 1 -Unverified 2
+    T 'a flagged binary is exit 1 whatever else failed' ($v.Exit -eq 1) "$($v.Exit)"
+    if ($fails) { Write-Output "[FAIL] $fails vt_self_check self-test expectation(s) unmet"; exit 1 }
+    Write-Output '[OK] vt_self_check self-test: an unverified binary is exit 2 with a NOT-performed line, never exit 0.'
+    exit 0
+}
 
 # powershell.exe -File binds a cmd-side comma list (-Binaries "a","b","c") as
 # ONE [string[]] element containing literal commas -- no array splitting is
@@ -38,25 +72,28 @@ $Binaries = @($Binaries |
     Where-Object { $_ })
 
 if (-not $Binaries -or $Binaries.Count -eq 0) {
-    '[INFO] VT self-check: no binaries supplied -- nothing to verify.'
+    '[WARNING] VT pre-flight integrity check NOT performed -- no binaries were supplied.'
     exit 2
 }
 
+# The bat runs this only when %USERPROFILE%\.vt_token exists, so a key that
+# cannot be read here is a check the person set up and did not get.
 $tokenFile = Join-Path $env:USERPROFILE '.vt_token'
-if (-not (Test-Path $tokenFile)) {
-    '[INFO] VT self-check skipped -- $env:USERPROFILE\.vt_token not found.'
-    exit 2
-}
-$token = (Get-Content $tokenFile -Raw -EA SilentlyContinue)
+$token = $null
+$tokErr = ''
+try { $token = (Get-Content -LiteralPath $tokenFile -Raw -ErrorAction Stop) } catch { $tokErr = $_.Exception.Message }
 if ($token) { $token = $token.Trim() }
 if (-not $token) {
-    '[INFO] VT self-check skipped -- .vt_token is empty.'
+    '[WARNING] VT pre-flight integrity check NOT performed -- %USERPROFILE%\.vt_token is ' + $(if ($tokErr) { 'unreadable (' + $tokErr + ')' } else { 'empty' }) + '.'
     exit 2
 }
 
 # Resolve binary paths and hash them up front so a single missing
 # file does not waste rate-limited VT calls on the others.
 $entries = @()
+$unverified = 0
+$hashFailed = 0
+$why = @()
 foreach ($b in $Binaries) {
     if (-not $b) { continue }
     $resolved = $null
@@ -75,12 +112,14 @@ foreach ($b in $Binaries) {
         $h = (Get-FileHash -LiteralPath $resolved -Algorithm SHA256 -EA Stop).Hash.ToLower()
         $entries += [pscustomobject]@{ Path = $resolved; Hash = $h }
     } catch {
-        "  [INFO] $resolved -- hash failed: $($_.Exception.Message)"
+        "  [INFO] $resolved -- hash failed, not verified: $($_.Exception.Message)"
+        $unverified++; $hashFailed++; if ($why -notcontains 'a binary could not be hashed') { $why += 'a binary could not be hashed' }
     }
 }
 
 if ($entries.Count -eq 0) {
-    '[INFO] VT self-check: no resolvable binaries to verify.'
+    if ($unverified -gt 0) { (Get-VtSelfVerdict -Checked $unverified -Malicious 0 -Unverified $unverified -Why ($why -join '; ')).Line; exit 2 }
+    '[WARNING] VT pre-flight integrity check NOT performed -- none of the supplied binaries could be found.'
     exit 2
 }
 
@@ -111,13 +150,16 @@ foreach ($e in $entries) {
         if ($statusCode -eq 404) {
             "  [INFO] $($e.Path) -- not in VT corpus (sha256 $($e.Hash))"
         } elseif ($statusCode -eq 401) {
-            "  [ERROR] VT API key rejected (HTTP 401) -- aborting integrity check"
-            exit 2
+            "  [INFO] VT API key rejected (HTTP 401) -- stopping the integrity check"
+            $unverified += ($entries.Count - $idx + 1); $why += '401 unauthorized'
+            break
         } elseif ($statusCode -eq 429) {
-            "  [WARNING] VT rate limit (HTTP 429) -- aborting integrity check after $($idx - 1) lookup(s)"
-            exit 2
+            "  [INFO] VT rate limit (HTTP 429) -- stopping the integrity check after $($idx - 1) lookup(s)"
+            $unverified += ($entries.Count - $idx + 1); $why += '429 rate limit'
+            break
         } else {
-            "  [INFO] $($e.Path) -- VT lookup failed (HTTP $statusCode); cannot verify"
+            "  [INFO] $($e.Path) -- VT lookup failed (HTTP $statusCode); not verified"
+            $unverified++; if ($why -notcontains 'a lookup failed') { $why += 'a lookup failed' }
         }
     }
     if ($idx -lt $entries.Count) { Start-Sleep -Seconds $SleepSeconds }
@@ -134,5 +176,6 @@ if ($malicious.Count -gt 0) {
     exit 1
 }
 
-'[OK] VT self-check: all critical script binaries clean.'
-exit 0
+$v = Get-VtSelfVerdict -Checked ($entries.Count + $hashFailed) -Malicious 0 -Unverified $unverified -Why ($why -join '; ')
+$v.Line
+exit $v.Exit

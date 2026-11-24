@@ -37,7 +37,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$script:Pinned = @('Get-RegKeyLastWrite', 'Get-WhenLine', 'Write-WhenCaveat', 'Remove-HostsMarkerLines', 'Expand-CmdEscapes', 'Get-RemoteHostClass', 'Read-RegValueState', 'Get-DefenderQueryFailure', 'Test-DefenderAccessDenied', 'Get-OtherAntivirus', 'Test-KeyMissing', 'Get-PropValue')
+$script:Pinned = @('Get-RegKeyLastWrite', 'Get-WhenLine', 'Write-WhenCaveat', 'Remove-HostsMarkerLines', 'Expand-CmdEscapes', 'Get-RemoteHostClass', 'Read-RegValueState', 'Get-DefenderQueryFailure', 'Test-DefenderAccessDenied', 'Get-OtherAntivirus', 'Test-KeyMissing', 'Get-PropValue', 'Test-AbsentForSure')
 $script:ScanDirs = @('tools', 'tests')
 
 function Join-Rel {
