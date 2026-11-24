@@ -304,6 +304,31 @@ jobs:
             echo "$out" | grep -qF "$n" || { echo "case gone: $n"; exit 1; }
           done
           n=$(echo "$out" | grep -c '^\[OK\]'); [ "$n" -ge 40 ] || { echo "only $n case(s)"; exit 1; }
+      - name: H2a self-tests -- driver_audit, ioc_hash_check and root_cert_check say what they could not read
+        run: |
+          for t in driver_audit ioc_hash_check root_cert_check; do
+            out=$(pwsh -NoProfile -File tools/$t.ps1 -SelfTest); echo "$out"
+            echo "$out" | grep -qE '^\[FAIL\]|^FAILED' && { echo "$t self-test failed"; exit 1; }
+          done
+          for b in doze_sec.bat doze_sec_noAdmin.bat; do
+            grep -qF "NotBefore -gt (Get-Date).AddDays(-90)" "$b" && { echo "$b: root certificates are judged by NotBefore again"; exit 1; }
+            grep -qF 'tools\driver_audit.ps1" -HashList "%IOCDIR%\ioc_hashes.txt"' "$b" || { echo "$b: the driver audit no longer reads the runtime hash list"; exit 1; }
+            for m in rootcert_hit rootcert_gap driver_deferred iochit_18k_deferred; do
+              grep -qF "if exist \"%TEMP%\\dz_$m.txt\" (" "$b" || { echo "$b: the dz_$m marker is never read"; exit 1; }
+            done
+          done
+      - name: ttp_detect and ttp_merge -- generated CTI checks raise their hits and gaps, and never print an all-clear of their own
+        run: |
+          for t in ttp_detect ttp_merge; do
+            out=$(pwsh -NoProfile -File tools/$t.ps1 -SelfTest); echo "$out"
+            echo "$out" | grep -q '^\[FAIL\]' && exit 1
+          done
+          out=$(pwsh -NoProfile -File tools/ttp_detect.ps1 -SelfTest); n=$(echo "$out" | grep -c '^\[OK\]   '); [ "$n" -ge 13 ] || { echo "ttp_detect: only $n case(s)"; exit 1; }
+          grep -qE "check clear|SilentlyContinue" <(sed -n '/^function Get-DetectionBlock/,/^}/p' tools/ttp_merge.ps1) && { echo "ttp_merge: a generated block carries the old all-clear shape again"; exit 1; }
+          for b in doze_sec.bat doze_sec_noAdmin.bat; do
+            grep -qF 'do call :dz_ttpauto_row %%a %%b "%%c"' "$b" || { echo "$b: the generated checks' rows are not raised"; exit 1; }
+            grep -qF 'del "%TEMP%\dz_ttpauto_rows.txt" 2>nul' "$b" || { echo "$b: the rows file is not cleared before the generated checks run"; exit 1; }
+          done
       - name: policy_value_check -- a registry setting that could not be read is a gap; the Event 4688 listings say why they are empty
         run: |
           out=$(pwsh -NoProfile -File tools/policy_value_check.ps1 -SelfTest); echo "$out"

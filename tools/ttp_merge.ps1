@@ -45,33 +45,35 @@
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory=$true)] [string]$TtpOutput,
-    [Parameter(Mandatory=$true)] [string]$BlocksFile,
+    [string]$TtpOutput = '',
+    [string]$BlocksFile = '',
     # Primary write target. doze_sec passes the audit's RUNTIME ThreatLists
     # (C:\SecurityAudit\ThreatLists) here so merges take effect on the next
     # IOC sweep. It deliberately does NOT pass the repo's shipped ThreatLists/
     # -- that baseline is hand-curated and must not be dirtied by runtime
     # appends (curation lives upstream in the threat-intel skill).
-    [Parameter(Mandatory=$true)] [string]$ThreatListsDir,
+    [string]$ThreatListsDir = '',
     # Optional second mirror target (legacy; unused by doze_sec.bat). When set,
     # IOC merges and manifest appends are written here too. Kept for callers
     # that still want to mirror into a second directory.
-    [Parameter(Mandatory=$false)] [string]$AdditionalThreatListsDir = ''
+    [Parameter(Mandatory=$false)] [string]$AdditionalThreatListsDir = '',
+    [switch]$SelfTest
 )
 
 $ErrorActionPreference = 'Continue'
 
-if (-not (Test-Path -LiteralPath $TtpOutput)) {
-    Write-Error "ttp_merge.ps1: TTP feed not found: $TtpOutput"
-    exit 2
-}
-
-$rows = @(Get-Content -LiteralPath $TtpOutput -EA SilentlyContinue |
-    Where-Object { $_ -and $_.Trim() -ne '' })
-
-if ($rows.Count -eq 0) {
-    Write-Output "  [INFO] No TTP rows to merge."
-    exit 0
+$rows = @()
+if (-not $SelfTest) {
+    if (-not $TtpOutput -or -not (Test-Path -LiteralPath $TtpOutput)) {
+        Write-Error "ttp_merge.ps1: TTP feed not found: $TtpOutput"
+        exit 2
+    }
+    $rows = @(Get-Content -LiteralPath $TtpOutput -EA SilentlyContinue |
+        Where-Object { $_ -and $_.Trim() -ne '' })
+    if ($rows.Count -eq 0) {
+        Write-Output "  [INFO] No TTP rows to merge."
+        exit 0
+    }
 }
 
 $today = Get-Date -Format 'ddd MM/dd/yyyy'
@@ -82,7 +84,7 @@ $today = Get-Date -Format 'ddd MM/dd/yyyy'
 # the audit's runtime ThreatLists/, so new IOCs take effect on the next
 # audit immediately).
 $writeDirs = New-Object System.Collections.Generic.List[string]
-$writeDirs.Add($ThreatListsDir)
+if ($ThreatListsDir) { $writeDirs.Add($ThreatListsDir) }
 if ($AdditionalThreatListsDir -and $AdditionalThreatListsDir -ne $ThreatListsDir) {
     if (Test-Path -LiteralPath $AdditionalThreatListsDir) {
         $writeDirs.Add($AdditionalThreatListsDir)
@@ -107,53 +109,65 @@ if ($AdditionalThreatListsDir -and $AdditionalThreatListsDir -ne $ThreatListsDir
 #     as a command -- so we emit `^|` (CMD escape-pipe = literal `|` in
 #     the echo argument) so the literal pipe ends up inside %PSRUN%.
 
+# THE BLOCKS NOW CALL tools\ttp_detect.ps1 (2026-11-24). Each one used to be a
+# cmd or PowerShell one-liner that printed "[OK] <name> check clear." when its
+# query FAILED (-EA SilentlyContinue, if exist on a folder that refused us),
+# printed no verdict at all for registry keys, event IDs and processes, and
+# raised nothing even on a hit: the generated file cannot reach the parent
+# bat's :dz_finding. ttp_detect asks with -ErrorAction Stop, says hit / clear /
+# not performed / deferred, and appends a ledger row to dz_ttpauto_rows.txt,
+# which the bat raises after `call "%TTP_BLOCKS%"` returns.
+#
+# Only the VALUE is sanitized upstream (the bat's sanitizer); the ID, name,
+# actor and severity are pasted into a bat line here, so they are reduced to
+# a safe alphabet first: a quote, %, ! or & in a CTI name would otherwise
+# break or inject into the generated file.
+
+function ConvertTo-BlockField {
+    param([string]$s, [int]$Max = 120)
+    $t = ([string]$s) -replace '[^A-Za-z0-9 ._:/+\-]', '_'
+    $t = $t.Trim()
+    if ($t.Length -gt $Max) { $t = $t.Substring(0, $Max) }
+    return $t
+}
+
 function Get-DetectionBlock {
     param([string]$Id, [string]$Name, [string]$Method, [string]$Value,
           [string]$Severity, [string]$Actor)
-    $header = "echo --- [CTI-AUTO][$Id] $Name ($Actor) --->> `"%REPORT%`""
-    switch ($Method.ToLower()) {
-        'registry key' {
-            return @(
-                $header,
-                "reg query `"$Value`">> `"%REPORT%`" 2>&1"
-            )
-        }
-        'event id' {
-            return @(
-                $header,
-                "wevtutil qe Security /q:`"*[System[(EventID=$Value)]]`" /c:10 /rd:true /f:text | findstr /c:`"TimeCreated`" /c:`"Account Name`">> `"%REPORT%`" 2>&1"
-            )
-        }
-        'process name' {
-            return @(
-                $header,
-                "echo Get-CimInstance Win32_Process -Filter `"name='$Value'`" -EA SilentlyContinue ^| Select-Object Name,ProcessId,ExecutablePath ^| Format-Table -AutoSize > `"%PSRUN%`"",
-                "`"%PWSH%`" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"%PSRUN%`">> `"%REPORT%`" 2>&1"
-            )
-        }
-        'file path' {
-            return @(
-                $header,
-                "if exist `"$Value`" (echo [$Severity] $Name IOC found: $Value>> `"%REPORT%`") else (echo [OK] $Name check clear.>> `"%REPORT%`")"
-            )
-        }
-        'named pipe' {
-            return @(
-                $header,
-                "echo try{`$p=Get-ChildItem \\.\pipe\ -EA SilentlyContinue ^| Where-Object {`$_.Name -match '$Value'}; if(`$p){'[$Severity] $Name pipe detected: '+(`$p.Name -join ', ')}else{'[OK] $Name pipe check clear.'}}catch{'[INFO] Pipe check unavailable.'} > `"%PSRUN%`"",
-                "`"%PWSH%`" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"%PSRUN%`">> `"%REPORT%`" 2>&1"
-            )
-        }
-        'wmi query' {
-            return @(
-                $header,
-                "echo try{`$r=Get-CimInstance -Query '$Value' -EA SilentlyContinue; if(`$r){'[$Severity] $Name WMI hit: '+(`$r ^| Out-String).Trim()}else{'[OK] $Name WMI check clear.'}}catch{'[INFO] WMI query failed: '+`$_.Exception.Message} > `"%PSRUN%`"",
-                "`"%PWSH%`" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"%PSRUN%`">> `"%REPORT%`" 2>&1"
-            )
-        }
-    }
-    return @()
+    $m = $Method.Trim().ToLower()
+    if (@('registry key', 'event id', 'process name', 'file path', 'named pipe', 'wmi query') -notcontains $m) { return @() }
+    $id = ConvertTo-BlockField $Id 40
+    $nm = ConvertTo-BlockField $Name
+    $ac = ConvertTo-BlockField $Actor
+    $sev = if ($Severity -match '^(?i)\s*critical\s*$') { 'CRITICAL' } else { 'WARNING' }
+    return @(
+        "echo --- [CTI-AUTO][$id] $nm - $ac --->> `"%REPORT%`"",
+        "`"%PWSH%`" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"%SCRIPT_DIR%tools\ttp_detect.ps1`" -Method `"$m`" -Value `"$Value`" -Severity $sev -Id `"$id`" -Name `"$nm`" -RowsFile `"%TEMP%\dz_ttpauto_rows.txt`">> `"%REPORT%`" 2>&1"
+    )
 }
+
+if ($SelfTest) {
+    $fails = 0
+    function T { param([string]$N, [bool]$Ok, [string]$Got)
+        if ($Ok) { Write-Output "[OK]   $N" } else { Write-Output "[FAIL] $N$(if ($Got) { ": $Got" })"; $script:fails++ }
+    }
+    foreach ($meth in 'registry key', 'event id', 'process name', 'file path', 'named pipe', 'wmi query') {
+        $b = Get-DetectionBlock -Id 'T1055' -Name 'Loader' -Method $meth -Value 'x' -Severity 'CRITICAL' -Actor 'APT0'
+        $t = $b -join "`n"
+        T ("'" + $meth + "': one header and one ttp_detect call, which reports into the ledger rows file") ($b.Count -eq 2 -and $t -match 'tools\\ttp_detect\.ps1" -Method "' + [regex]::Escape($meth) + '"' -and $t -match '-RowsFile "%TEMP%\\dz_ttpauto_rows\.txt"' -and $t -match '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File') $t
+        T ("'" + $meth + "': no block prints an all-clear of its own (the defect: [OK] over a query that failed)") ($t -notmatch 'check clear|\[OK\]|SilentlyContinue|if exist') $t
+    }
+    $b = Get-DetectionBlock -Id 'T1"&x' -Name 'a"b%c!d&e|f' -Method 'file path' -Value 'C:\x' -Severity 'CRITICAL' -Actor 'A(b)'
+    $t = $b -join "`n"
+    $clean = (($t -replace '-Value "C:\\x"', '') -replace ' 2>&1', '') -replace '%(REPORT|PWSH|SCRIPT_DIR|TEMP)%', ''
+    T 'the name, ID and actor cannot break or inject into the bat line' (($clean -notmatch '[!&|()%]') -and (([regex]::Matches($b[1], '"').Count % 2) -eq 0)) $t
+    T 'an unknown method writes no block' ((Get-DetectionBlock -Id 'T1' -Name 'n' -Method 'telepathy' -Value 'x' -Severity 'WARNING' -Actor 'a').Count -eq 0) ''
+    T 'a severity other than CRITICAL is WARNING' ((Get-DetectionBlock -Id 'T1' -Name 'n' -Method 'file path' -Value 'x' -Severity 'high' -Actor 'a')[1] -match ' -Severity WARNING ') ''
+    if ($fails) { Write-Output "[FAIL] $fails ttp_merge self-test expectation(s) unmet"; exit 1 }
+    Write-Output '[OK] ttp_merge self-test: every generated block calls tools\ttp_detect.ps1, which raises hits and gaps through the ledger; no block prints an all-clear of its own, and no CTI field can break the bat line.'
+    exit 0
+}
+if (-not $TtpOutput -or -not $BlocksFile -or -not $ThreatListsDir) { 'ttp_merge: -TtpOutput, -BlocksFile and -ThreatListsDir are required.'; exit 2 }
 
 # --- IOC merge ----------------------------------------------------------------
 # Detection_Method -> ioc_*.txt mapping. event ID / wmi query intentionally

@@ -17,6 +17,23 @@ Write-Host ($out -split "`n" | Select-Object -First 40)
 if (Test-Path (Join-Path $md 'dz_driver.txt')) {
   throw ("driver marker written on a clean runner: {0}" -f (Get-Content (Join-Path $md 'dz_driver.txt')))
 }
+if (Test-Path (Join-Path $md 'dz_driver_gap.txt')) { throw ("driver coverage gap on a clean runner: " + (($out -split "`n" | Where-Object { $_ -match 'NOT performed' }) -join ' | ')) }
+if ($out -notmatch '(?m)^\[OK\] \d+ kernel driver\(s\) audited -- none known-bad, all validly signed\.$') { throw "the clean runner's all-clear is missing: $out" }
+# The hash list missing must be a raised gap, never "none known-bad": the
+# hash path is the one that survives a renamed vulnerable driver.
+$mdl = Join-Path $env:TEMP ("dz_drv_ci_list_{0}" -f $PID)
+New-Item -ItemType Directory -Path $mdl -Force | Out-Null
+try {
+  $ol = (.\tools\driver_audit.ps1 -MarkerDir $mdl -HashList (Join-Path $mdl 'no_such_ioc_hashes.txt')) -join "`n"
+  if (-not (Test-Path (Join-Path $mdl 'dz_driver_gap.txt'))) { throw "a missing hash list wrote no gap marker: $ol" }
+  if ($ol -notmatch '(?m)^\[WARNING\] Driver hash match NOT performed -- the known-bad hash list .*no_such_ioc_hashes\.txt is missing') { throw "a missing hash list was not said: $ol" }
+  if ($ol -match 'none known-bad') { throw "the all-clear was printed with hash matching off: $ol" }
+  Set-Content -LiteralPath (Join-Path $mdl 'empty.txt') -Value @('# no entries') -Encoding ASCII
+  Remove-Item (Join-Path $mdl 'dz_driver_gap.txt') -Force
+  $oe = (.\tools\driver_audit.ps1 -MarkerDir $mdl -HashList (Join-Path $mdl 'empty.txt')) -join "`n"
+  if (-not (Test-Path (Join-Path $mdl 'dz_driver_gap.txt')) -or $oe -notmatch 'holds no valid SHA256 entry') { throw "a hash list with no entries was not a raised gap: $oe" }
+  Write-Host 'driver_audit: a missing or empty hash list is a raised gap, never "none known-bad"'
+} finally { Remove-Item $mdl -Recurse -Force -EA SilentlyContinue }
 # Plant an unsigned "driver" in a drop location: the signature catch-all
 # (not a name/hash match) must flag it -- this is what defeats renaming.
 $plant = 'C:\Users\Public\dz_ci_probe_driver.sys'
