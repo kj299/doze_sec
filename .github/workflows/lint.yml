@@ -315,6 +315,8 @@ jobs:
             grep -qF "Select-String 'testsigning" "$b" && { echo "$b: the driver-signing tile re-measures with bcdedit again"; exit 1; }
             grep -qF 'smart_health.ps1" -Mode Flag' "$b" && { echo "$b: the SMART flag is read through a for /f backtick again"; exit 1; }
             grep -qF "echo \$cis='%CODEINT_STATE%'" "$b" || { echo "$b: the driver-signing tile no longer states Section 13's verdict"; exit 1; }
+            grep -qF "Driver signature check deferred" "$b" && { echo "$b: the driver-signing tile still defers on a standard-user token, which Section 13 now grades"; exit 1; }
+            awk "/echo if\(\\\$isAdmin -eq '1'\)\{/{a=1} a&&/echo \\\$cis=/{print; exit} /echo \}else\{/{a=0}" "$b" | grep -q . && { echo "$b: the driver-signing tile sits inside the administrator-only branch"; exit 1; }
             grep -qF -- '-CodeIntegrityState "%CODEINT_STATE%"' "$b" || { echo "$b: boot_chain_check no longer knows Section 13 graded the kernel"; exit 1; }
             grep -qF "if(led 'WARNING' '13' 'T1553.006' 'testsigning enabled')" "$b" || { echo "$b: the test-signing fix no longer triggers off the ledger"; exit 1; }
             for m in codeint_crit codeint_testsign codeint_debug codeint_gap bootchain_gap; do

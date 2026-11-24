@@ -115,7 +115,7 @@ function Get-BcdVerdict {
     }
     if ($EffectGraded) {
         $set = if ($BcdText -match '(?im)^\s*nointegritychecks\s+Yes\b') { 'Yes' } else { 'not set' }
-        $r.Lines += ('[INFO] Boot config: nointegritychecks = ' + $set + ' (the setting, applied at the next restart). Whether integrity checks are enforced on this boot is graded above, from the running kernel (Driver Signature Enforcement).')
+        $r.Lines += ('[INFO] Boot config: nointegritychecks = ' + $set + ' (the setting; Windows ignores it while Secure Boot is on). Whether integrity checks are enforced on this boot is graded above, from the running kernel (Driver Signature Enforcement).')
     } elseif ($BcdText -match '(?im)^\s*nointegritychecks\s+Yes\b') {
         $r.Lines += '[CRITICAL] Boot config: nointegritychecks = Yes (T1542.003) -- kernel driver-signature enforcement is OFF; unsigned or tampered kernel code can load. Fix: bcdedit /set nointegritychecks off'
         $r.Sev = Get-MaxSev $r.Sev 'CRITICAL'
