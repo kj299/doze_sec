@@ -4363,7 +4363,7 @@ if not exist "%TEMP%\dz_trustloc_done.txt" if exist "%SCRIPT_DIR%tools\office_ma
 del "%TEMP%\dz_trustloc_done.txt" 2>nul
 
 echo.>> "%REPORT%"
-echo --- Mark-of-the-Web Preservation: SAFE=SaveZoneInformation absent or 0x1 --->> "%REPORT%"
+echo --- Mark-of-the-Web Preservation: SAFE=SaveZoneInformation absent or 0x2 --->> "%REPORT%"
 echo  Command: reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Attachments" /v SaveZoneInformation   [also the HKLM\SOFTWARE twin]>> "%REPORT%"
 call :dz_polval MotW 13 T1553.005 "Mark-of-the-Web check"
 if exist "%TEMP%\dz_polval_hit.txt" call :dz_finding WARNING 13 T1553.005 "Mark-of-the-Web not recorded on downloads - SmartScreen and Office macro blocking are blinded"
@@ -4810,7 +4810,7 @@ wevtutil qe Security /q:"*[System[(EventID=4698 or EventID=4702)]]" /c:20 /rd:tr
 :: wevtutil 4688 queries as an XPath SystemTime predicate so the
 :: results are scoped to the last 24h regardless of how many events
 :: the Security log has rotated through.
-for /f "usebackq" %%i in (`powershell -NoProfile -NonInteractive -Command "(Get-Date).ToUniversalTime().AddHours(-24).ToString('yyyy-MM-ddTHH:mm:ss.fffZ')"`) do set "WEVT_24H_AGO=%%i"
+for /f "usebackq" %%i in (`powershell -NoProfile -NonInteractive -Command "(Get-Date).ToUniversalTime().AddHours(-24).ToString('yyyy-MM-ddTHH:mm:ss.fffZ', [Globalization.CultureInfo]::InvariantCulture)"`) do set "WEVT_24H_AGO=%%i"
 if not defined WEVT_24H_AGO set "WEVT_24H_AGO=1970-01-01T00:00:00.000Z"
 
 echo.>> "%REPORT%"
@@ -7259,24 +7259,6 @@ if /i "%~1"=="CRITICAL" (
 )
 goto :eof
 
-:: ====================================================================
-:: :dz_ps_scan -- run the staged %PSRUN% block, append its output to the
-:: report, and raise ONE finding at the highest severity the block printed.
-::
-:: WHY: a staged block that prints [CRITICAL]/[WARNING] and is redirected
-:: straight into %REPORT% never reaches the ledger, so the section verdict,
-:: FINDINGS COUNTED and the exit code all understate what the block found.
-:: A retrospective found ~25 checks in that state at once -- Cobalt Strike
-:: named pipes, WMI subscription persistence, IFEO accessibility hijacks,
-:: ransomware-extension files and more could all be printed while the
-:: report's own verdict said the machine was clean. Blocks now run through
-:: here, and tools\lint_unraised_findings.ps1 fails CI on any that do not.
-::
-:: The severity is read back from the block's own output by
-:: tools\block_sev.ps1 (leading-tag parsing, so [OK]/[INFO]/[SKIPPED] lines
-:: can never inflate it). A block that reports nothing raises nothing.
-:: Args: %1=section  %2=code  %3="message"
-:: ====================================================================
 :dz_polval
 rem One registry setting check, through tools\policy_value_check.ps1.
 rem   %1 the -Check name   %2 section   %3 technique   %4 what (quoted)
@@ -7323,6 +7305,24 @@ goto :eof
 echo [WARNING] %~4 NOT performed -- the Security log could not be read, wevtutil exit %_WEV%.>> "%REPORT%"
 call :dz_finding WARNING %1 %2 "%~4 NOT performed - the Security log could not be read"
 goto :eof
+:: ====================================================================
+:: :dz_ps_scan -- run the staged %PSRUN% block, append its output to the
+:: report, and raise ONE finding at the highest severity the block printed.
+::
+:: WHY: a staged block that prints [CRITICAL]/[WARNING] and is redirected
+:: straight into %REPORT% never reaches the ledger, so the section verdict,
+:: FINDINGS COUNTED and the exit code all understate what the block found.
+:: A retrospective found ~25 checks in that state at once -- Cobalt Strike
+:: named pipes, WMI subscription persistence, IFEO accessibility hijacks,
+:: ransomware-extension files and more could all be printed while the
+:: report's own verdict said the machine was clean. Blocks now run through
+:: here, and tools\lint_unraised_findings.ps1 fails CI on any that do not.
+::
+:: The severity is read back from the block's own output by
+:: tools\block_sev.ps1 (leading-tag parsing, so [OK]/[INFO]/[SKIPPED] lines
+:: can never inflate it). A block that reports nothing raises nothing.
+:: Args: %1=section  %2=code  %3="message"
+:: ====================================================================
 :dz_ps_scan
 set "DZ_BLK=%TEMP%\dz_blk_%DOZE_LOG_TS%.txt"
 "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PSRUN%" > "%DZ_BLK%" 2>&1

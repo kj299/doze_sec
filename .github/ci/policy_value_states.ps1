@@ -5,7 +5,7 @@
 #
 # tools\policy_value_check.ps1, through its real reader, with -KeyRoot and
 # -UserRoot pointed at the scratch key:
-#   MotW off      SaveZoneInformation=2 under the user root        -> the hit
+#   MotW off      SaveZoneInformation=1 under the user root        -> the hit
 #   MotW denied   the machine-root Attachments key, QueryValues denied
 #                 -> the gap beside the hit (a finding and a gap are both raised)
 #   SmartScreen   SmartScreenEnabled=Off                           -> the hit
@@ -32,11 +32,11 @@ function RunPV([string]$Check) {
 try {
   $att = 'Software\Microsoft\Windows\CurrentVersion\Policies\Attachments'
   New-Item -Path "$root\U\$att" -Force | Out-Null
-  Set-ItemProperty -Path "$root\U\$att" -Name 'SaveZoneInformation' -Value 2 -Type DWord
+  Set-ItemProperty -Path "$root\U\$att" -Name 'SaveZoneInformation' -Value 1 -Type DWord
   New-Item -Path "$root\M\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" -Force | Out-Null
   Set-ItemProperty -Path "$root\M\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" -Name 'SmartScreenEnabled' -Value 'Off'
   $r = RunPV 'MotW'
-  if (-not $r.Hit -or $r.Gap -or $r.Out -notmatch '(?m)^\[WARNING\] SaveZoneInformation=2 -- ') { throw "SaveZoneInformation=2 was not the finding: $($r.Out)" }
+  if (-not $r.Hit -or $r.Gap -or $r.Out -notmatch '(?m)^\[WARNING\] SaveZoneInformation=1 -- ') { throw "SaveZoneInformation=1 was not the finding: $($r.Out)" }
   $r = RunPV 'SmartScreen'
   if (-not $r.Hit -or $r.Out -notmatch '(?m)^\[WARNING\] SmartScreen is OFF') { throw "SmartScreenEnabled=Off was not the finding: $($r.Out)" }
   $r = RunPV 'LsaCfg'
@@ -46,7 +46,7 @@ try {
   # The denied key, through the real reader.
   $mAtt = "$root\M\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Attachments"
   New-Item -Path $mAtt -Force | Out-Null
-  Set-ItemProperty -Path $mAtt -Name 'SaveZoneInformation' -Value 1 -Type DWord
+  Set-ItemProperty -Path $mAtt -Name 'SaveZoneInformation' -Value 2 -Type DWord
   $denied = $false
   try {
     $acl = Get-Acl -Path $mAtt

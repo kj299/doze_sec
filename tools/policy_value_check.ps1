@@ -39,13 +39,15 @@
 param(
     [ValidateSet('PsLogging', 'LsaCfg', 'AutoRun', 'Wsh', 'MotW', 'SmartScreen', 'KerbEnc')]
     [string]$Check,
-    [string]$MarkerDir = '',
+    [string]$MarkerDir = $env:TEMP,
     [string]$KeyRoot = 'HKLM:',
     [string]$UserRoot = 'HKCU:',
     [switch]$SelfTest
 )
 
 $ErrorActionPreference = 'Continue'
+# The bats read markers from %TEMP%. GetTempPath() reads TMP first, and the
+# two differ on some machines: the default is $env:TEMP, as in every tool.
 if (-not $MarkerDir) { $MarkerDir = [IO.Path]::GetTempPath() }
 
 function Write-Marker {
@@ -97,7 +99,9 @@ function Get-HiveLabel { param([string]$Hive) if ($Hive -eq 'U') { 'HKCU' } else
 function Format-RegValue {
     param($S)
     $n = ConvertTo-RegNumber $S.Value
-    if ($null -ne $n -and [string]$S.Kind -match 'DWord|QWord') { return ('0x{0:x}' -f $n) }
+    # A DWORD with its top bit set comes back as a negative Int32.
+    if ($null -ne $n -and [string]$S.Kind -eq 'DWord') { return ('0x{0:x}' -f ($n -band 0xFFFFFFFFL)) }
+    if ($null -ne $n -and [string]$S.Kind -eq 'QWord') { return ('0x{0:x}' -f $n) }
     return (ConvertTo-PrintableText ([string]$S.Value))
 }
 
@@ -134,9 +138,15 @@ function Get-PolicyValueVerdict {
     if ($Check -eq 'AutoRun' -and -not $anySet -and $unread.Count -eq 0) { [void]$out.Add($c.AllNotSet) }
     if ($Check -eq 'MotW') {
         $off = $false
-        foreach ($id in 'mu', 'mm') { $s = $States[$id]; if ($s -and [string]$s.State -eq 'present' -and (ConvertTo-RegNumber $s.Value) -eq 2) { $off = $true } }
+        # AttachmentManager.admx, "Do not preserve zone information in file
+        # attachments": Enabled writes 1 (downloads are NOT marked), Disabled
+        # writes 2 (they are). Microsoft's Policy CSP page states what Enabled
+        # means. This check used to read 2 as the off value: the protective
+        # setting raised, and the common "SaveZoneInformation=1" tweak that
+        # silences "This file came from another computer" read [OK].
+        foreach ($id in 'mu', 'mm') { $s = $States[$id]; if ($s -and [string]$s.State -eq 'present' -and (ConvertTo-RegNumber $s.Value) -eq 1) { $off = $true } }
         if ($off) {
-            [void]$out.Add('[WARNING] SaveZoneInformation=2 -- Mark-of-the-Web is NOT recorded on downloads. SmartScreen and Office macro MOTW protections are blinded.')
+            [void]$out.Add('[WARNING] SaveZoneInformation=1 -- Mark-of-the-Web is NOT recorded on downloads (the policy "Do not preserve zone information" is enabled). SmartScreen and Office macro MOTW protections are blinded.')
             $r.Hit = $true
         } elseif ($unread.Count -eq 0) {
             [void]$out.Add('[OK] Mark-of-the-Web zone data preserved on downloaded files -- default.')
@@ -199,14 +209,14 @@ if ($SelfTest) {
     T 'AutoRun with HKLM unreadable: a gap "in full", and no "not pinned" line over it' ($x.V.Gap -and $x.T -match 'AutoRun policy check NOT performed in full' -and $x.T -notmatch 'not pinned') $x.T
     $x = V 'MotW' @{ mu = $A; mm = $N }
     T 'MotW default: the [OK] the bats printed' ((-not ($x.V.Hit -or $x.V.Gap)) -and $x.T -match '^\[OK\] Mark-of-the-Web zone data preserved') $x.T
-    $x = V 'MotW' @{ mu = (P 2); mm = $A }
-    T 'MotW off (SaveZoneInformation=2): the WARNING and a hit' ($x.V.Hit -and $x.T -match '(?m)^\[WARNING\] SaveZoneInformation=2 -- ' -and $x.T -notmatch '\[OK\]') $x.T
+    $x = V 'MotW' @{ mu = (P 1); mm = $A }
+    T 'MotW off (SaveZoneInformation=1, "do not preserve" enabled): the WARNING and a hit' ($x.V.Hit -and $x.T -match '(?m)^\[WARNING\] SaveZoneInformation=1 -- ' -and $x.T -notmatch '\[OK\]') $x.T
     $x = V 'MotW' @{ mu = $U; mm = $U }
     T 'MotW with both keys unreadable: a gap, never "[OK] ... -- default."' ($x.V.Gap -and -not $x.V.Hit -and $x.T -notmatch '\[OK\]' -and $x.T -match 'Mark-of-the-Web check NOT performed -- ') $x.T
-    $x = V 'MotW' @{ mu = (P 2); mm = $U }
+    $x = V 'MotW' @{ mu = (P 1); mm = $U }
     T 'MotW off with the other key unreadable: the hit AND the gap' ($x.V.Hit -and $x.V.Gap) $x.T
-    $x = V 'MotW' @{ mu = (P 1); mm = $A }
-    T 'SaveZoneInformation=1 (the safe value) is not a hit' ((-not $x.V.Hit) -and $x.T -match '\[OK\]') $x.T
+    $x = V 'MotW' @{ mu = (P 2); mm = $A }
+    T 'SaveZoneInformation=2 (the policy disabled: zone data preserved) is not a hit' ((-not $x.V.Hit) -and $x.T -match '\[OK\]') $x.T
     $x = V 'SmartScreen' @{ sse = (P 'Off' 'String'); ssp = $N }
     T 'SmartScreenEnabled=Off: the WARNING and a hit' ($x.V.Hit -and $x.T -match '(?m)^\[WARNING\] SmartScreen is OFF') $x.T
     $x = V 'SmartScreen' @{ sse = (P 'Warn' 'String'); ssp = (P 0) }
@@ -221,6 +231,8 @@ if ($SelfTest) {
     T 'PS logging unreadable: a gap, never "[OK] Not configured" for that value' ($x.V.Gap -and $x.T -notmatch 'ModuleLogging       : \[OK\]' -and $x.T -match 'PowerShell logging policy check NOT performed in full') $x.T
     $x = V 'Wsh' @{ wsh = (P '0' 'String') }
     T 'WSH Enabled=0 is printed' ($x.T -match 'Enabled = 0$') $x.T
+    $x = V 'KerbEnc' @{ krb = (P -2147483620) }
+    T 'a DWORD with its top bit set prints as the 32-bit value' ($x.T -match '= 0x8000001c$') $x.T
     $x = V 'KerbEnc' @{ krb = @{ State = 'unreadable'; Value = $null; Kind = ''; Error = ('bad' + [char]10 + '[OK] fine') } }
     T 'an error text cannot forge a line' ($x.T -notmatch '(?m)^\[OK\] fine') $x.T
     if ($fails) { Write-Output "[FAIL] $fails policy_value_check self-test expectation(s) unmet"; exit 1 }
