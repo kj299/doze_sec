@@ -2817,6 +2817,12 @@ jobs:
           & .\.github\ci\root_cert_states.ps1
           exit $LASTEXITCODE
 
+      - name: "H2b on 5.1: VT with no key, a baseline category not captured, a denied credential or history folder are raised gaps, never an all-clear"
+        shell: powershell
+        run: |
+          & .\.github\ci\h2b_gap_states.ps1
+          exit $LASTEXITCODE
+
       - name: "CTI-AUTO blocks on 5.1: -updateTTP's generated checks raise their hits and gaps; a failed query is never 'check clear'"
         shell: powershell
         run: |

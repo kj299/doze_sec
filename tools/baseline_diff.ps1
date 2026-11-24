@@ -455,6 +455,54 @@ function Get-ChangedVerdict {
     return @{ Sev = 'WARNING'; Why = 'never routine' }
 }
 
+# PURE. netstat -ano lines -> listening TCP sockets @{ Port; Bind; Pid }, by
+# COLUMN (Proto, Local, Foreign, State, PID). The state word is localized --
+# German Windows prints ABHOEREN, not LISTENING -- so the old match recorded
+# no listener there and the next diff reported every port REMOVED. A listener
+# is told by its unspecified foreign address (0.0.0.0:0, [::]:0). Returns
+# @{ Rows; TcpRows }: TcpRows counts every TCP row read, so a caller can tell
+# "no listener" from "read nothing".
+function Get-NetstatListeners {
+    param([string[]]$Lines)
+    $rows = @(); $tcp = 0
+    foreach ($line in $Lines) {
+        $f = @(([string]$line).Trim() -split '\s+')
+        if ($f.Count -lt 5 -or $f[0] -ne 'TCP' -or $f[-1] -notmatch '^\d+$') { continue }
+        $tcp++
+        if ($f[2] -ne '0.0.0.0:0' -and $f[2] -ne '[::]:0') { continue }
+        $lp = ($f[1] -split ':')[-1]
+        $bind = ''
+        if ($f[1].Length -gt $lp.Length + 1) { $bind = $f[1].Substring(0, $f[1].Length - $lp.Length - 1).Trim('[', ']') }
+        $rows += [pscustomobject]@{ Port = $lp; Bind = $bind; Pid = $f[-1] }
+    }
+    return @{ Rows = $rows; TcpRows = $tcp }
+}
+
+# PURE. `net localgroup Administrators` lines -> member names, by POSITION:
+# the members sit between the dashed rule and the closing status line, whose
+# wording is localized ("The command completed successfully." in English
+# only). Returns $null when there is no dashed rule to anchor on (nothing was
+# read). The Administrators group always holds the built-in Administrator, so
+# a caller treats zero members as a failed read too.
+function Get-NetLocalGroupMembers {
+    param([string[]]$Lines)
+    $start = -1
+    for ($i = 0; $i -lt $Lines.Count; $i++) { if ([string]$Lines[$i] -match '^-{3,}\s*$') { $start = $i; break } }
+    if ($start -lt 0) { return $null }
+    $body = @($Lines[($start + 1)..($Lines.Count - 1)] | Where-Object { ([string]$_).Trim() })
+    if ($start + 1 -gt $Lines.Count - 1) { $body = @() }
+    if ($body.Count -le 1) { return ,@() }
+    return ,@($body[0..($body.Count - 2)] | ForEach-Object { ([string]$_).Trim() })
+}
+
+# PURE. The categories a diff must not compare: those the baseline did not
+# capture plus those this run could not read. A category in neither is
+# compared in full.
+function Get-SkippedCategories {
+    param([string[]]$BaselineMissing, [string[]]$NowFailed)
+    return @(@($BaselineMissing) + @($NowFailed) | Where-Object { $_ } | Sort-Object -Unique)
+}
+
 if ($SelfTest) {
     $fails = 0
     function T { param([string]$Name, [bool]$Ok, [string]$Got)
@@ -655,6 +703,15 @@ if ($SelfTest) {
     T 'a SVC record is never excluded by the RUN rules' `
       (-not (Test-ExcludedRecord -Cat 'SVC' -Id 'LastLogOffEndTimePerfCounter' -Detail 'x')) ''
 
+    $ns = Get-NetstatListeners @('  Proto  Lokale Adresse  Remoteadresse  Status  PID', '  TCP    0.0.0.0:135     0.0.0.0:0      ABHOEREN   1044', '  TCP    [::]:445        [::]:0         ABHOEREN   4', '  TCP    10.0.0.5:50123  52.96.1.10:443 HERGESTELLT 4120')
+    T 'netstat by column: German listeners (ABHOEREN) are read -- the LISTENING match read none (the defect)' ($ns.Rows.Count -eq 2 -and $ns.TcpRows -eq 3 -and (@($ns.Rows | ForEach-Object { $_.Port + '@' + $_.Bind + '/' + $_.Pid }) -join ',') -ceq '135@0.0.0.0/1044,445@::/4') (@($ns.Rows | ForEach-Object { $_.Port + '@' + $_.Bind }) -join ',')
+    $ns = Get-NetstatListeners @('Der Befehl ist fehlgeschlagen.')
+    T 'netstat with no TCP row: TcpRows 0, which the snapshot raises as a category not captured' ($ns.TcpRows -eq 0) ''
+    $mem = Get-NetLocalGroupMembers @('Aliasname     Administratoren', 'Beschreibung  Administratoren haben uneingeschraenkten Vollzugriff', '', 'Mitglieder', '', '-------------------------------------------------------------------------------', 'Administrator', 'dzuser', 'Der Befehl wurde erfolgreich ausgefuehrt.', '')
+    T 'net localgroup by position: German members are read and the localized closing line is not a member' ((@($mem) -join ',') -ceq 'Administrator,dzuser') (@($mem) -join ',')
+    T 'net localgroup output with no dashed rule is $null (nothing was read)' ($null -eq (Get-NetLocalGroupMembers @('System error 1376 has occurred.'))) ''
+    T 'a category missing from the baseline or failed now is skipped, in both directions' ((@(Get-SkippedCategories -BaselineMissing @('SVC') -NowFailed @('PORT', 'SVC')) -join ',') -ceq 'PORT,SVC') ''
+    T 'nothing failed on either side: nothing skipped' (@(Get-SkippedCategories -BaselineMissing @() -NowFailed @()).Count -eq 0) ''
     if ($fails) { Write-Output "[FAIL] $fails baseline_diff self-test expectation(s) unmet"; exit 1 }
     Write-Output '[OK] baseline_diff self-test: update churn (signed replacements and version bumps, dynamic RPC ports, loopback listeners, COM-handler tasks, logon counters) is context; replaced unsigned binaries, moved listeners, new admins, new roots and suspicious arguments are findings.'
     exit 0
@@ -666,6 +723,17 @@ if (-not $Path) {
 }
 
 # ---- Collect the current state ------------------------------------------
+# A CATEGORY THAT COULD NOT BE READ IS SAID (2026-11-24). Every category read
+# ended in an empty catch, so a Win32_Service query that failed at Diff time
+# turned every saved service into a REMOVED record, and one that failed at
+# Save time made a baseline with no services -- whose next Diff reported every
+# service as NEW -- and both runs printed nothing about it. Get-Snapshot now
+# records each category it could not read in $script:SnapFailed; Save writes
+# them into the baseline header and raises them; Diff compares nothing in a
+# category either side failed to capture, and raises that too (baseline_gap).
+$script:SnapFailed = [ordered]@{}
+function Add-SnapFailure { param([string]$Cat, [string]$Why) if (-not $script:SnapFailed.Contains($Cat)) { $script:SnapFailed[$Cat] = (($Why -replace '\s+', ' ').Trim()) } }
+
 function Get-Snapshot {
     $recs = New-Object System.Collections.Generic.List[string]
     $sysroot = $env:SystemRoot
@@ -682,7 +750,7 @@ function Get-Snapshot {
             try { if (Test-Path -LiteralPath $pn -PathType Leaf) { $h = (Get-FileHash -LiteralPath $pn -Algorithm SHA256 -EA Stop).Hash } } catch {}
             $recs.Add(('DRV|{0}|{1} sha256={2}' -f (CleanField $d.Name), (CleanField $pn), $h))
         }
-    } catch {}
+    } catch { Add-SnapFailure 'DRV' $_.Exception.Message }
 
     # SVC -- services by name; DETAIL carries the image path and start mode, so a
     # service repointed at a new binary shows up as CHANGED.
@@ -690,7 +758,7 @@ function Get-Snapshot {
         foreach ($s in (Get-CimInstance Win32_Service -EA Stop)) {
             $recs.Add(('SVC|{0}|{1} start={2}' -f (CleanField $s.Name), (CleanField $s.PathName), (CleanField $s.StartMode)))
         }
-    } catch {}
+    } catch { Add-SnapFailure 'SVC' $_.Exception.Message }
 
     # TASK -- scheduled tasks by full path; DETAIL carries the action.
     try {
@@ -699,7 +767,7 @@ function Get-Snapshot {
             try { $act = (($t.Actions | ForEach-Object { [string]$_.Execute + ' ' + [string]$_.Arguments }) -join ' ; ') } catch {}
             $recs.Add(('TASK|{0}{1}|{2}' -f (CleanField $t.TaskPath), (CleanField $t.TaskName), (CleanField $act)))
         }
-    } catch {}
+    } catch { Add-SnapFailure 'TASK' $_.Exception.Message }
 
     # RUN -- autorun / persistence registry values. The classic locations plus
     # the subsystem load points audited elsewhere in Section 5.
@@ -715,8 +783,12 @@ function Get-Snapshot {
     )
     foreach ($k in $runKeys) {
         try {
-            if (-not (Test-Path $k)) { continue }
-            $props = Get-ItemProperty -Path $k -EA Stop
+            # Missing is the ordinary answer (RunOnce is usually absent); a key
+            # that is there and cannot be read is a category not captured.
+            $props = $null
+            try { $props = Get-ItemProperty -LiteralPath $k -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { continue }
+            if ($null -eq $props) { continue }
             foreach ($p in $props.PSObject.Properties) {
                 # Exact-name skip, not a '^PS' prefix match (see
                 # persistence_eval.ps1). A "PS"-named autorun was excluded from
@@ -727,7 +799,7 @@ function Get-Snapshot {
                 if (Test-OwnResumeEntry -Key $k -Name $p.Name -Value ([string]$p.Value)) { continue }
                 $recs.Add(('RUN|{0}\{1}|{2}' -f (CleanField $k), (CleanField $p.Name), (CleanField ([string]$p.Value))))
             }
-        } catch {}
+        } catch { Add-SnapFailure 'RUN' ($k + ': ' + $_.Exception.Message) }
     }
 
     # PORT -- listening sockets. A new listener is how an implant takes calls.
@@ -741,35 +813,34 @@ function Get-Snapshot {
     } catch {
         # Get-NetTCPConnection is absent on very old builds -- fall back to netstat
         # rather than silently recording no listeners (a false clean).
+        $why = $_.Exception.Message
         try {
-            foreach ($line in (& netstat -ano 2>$null)) {
-                if ($line -notmatch '^\s*TCP\s') { continue }
-                if ($line -notmatch 'LISTENING') { continue }
-                $f = ($line -split '\s+') | Where-Object { $_ }
-                if ($f.Count -lt 5) { continue }
-                $lp = ($f[1] -split ':')[-1]
-                $bind = ''
-                if ($f[1].Length -gt $lp.Length + 1) { $bind = $f[1].Substring(0, $f[1].Length - $lp.Length - 1).Trim('[', ']') }
-                $recs.Add(('PORT|tcp/{0}|pid={1} bind={2}' -f (CleanField $lp), (CleanField $f[4]), (CleanField $bind -replace '\s', '')))
+            $ns = Get-NetstatListeners @(& netstat -ano 2>$null)
+            if ($ns.TcpRows -eq 0) { Add-SnapFailure 'PORT' ('Get-NetTCPConnection failed (' + $why + ') and netstat -ano returned no TCP row') }
+            foreach ($r in $ns.Rows) {
+                $recs.Add(('PORT|tcp/{0}|pid={1} bind={2}' -f (CleanField $r.Port), (CleanField $r.Pid), (CleanField $r.Bind -replace '\s', '')))
             }
-        } catch {}
+        } catch { Add-SnapFailure 'PORT' ('Get-NetTCPConnection failed (' + $why + '); netstat: ' + $_.Exception.Message) }
     }
 
     # ADMIN -- local Administrators membership. A new admin is a takeover.
+    # By SID (S-1-5-32-544), never by name: the group is "Administratoren" on
+    # German Windows, "Administrateurs" on French, and -Group 'Administrators'
+    # failed there -- and so did the net fallback, so ADMIN was empty on every
+    # non-English machine and a new admin could never be NEW.
     try {
-        foreach ($m in (Get-LocalGroupMember -Group 'Administrators' -EA Stop)) {
+        foreach ($m in (Get-LocalGroupMember -SID 'S-1-5-32-544' -EA Stop)) {
             $recs.Add(('ADMIN|{0}|{1}' -f (CleanField ([string]$m.Name)), (CleanField ([string]$m.PrincipalSource))))
         }
     } catch {
+        $why = $_.Exception.Message
         try {
-            $out = & net localgroup Administrators 2>$null
-            $on = $false
-            foreach ($line in $out) {
-                if ($line -match '^-+$') { $on = $true; continue }
-                if ($line -match '^The command completed') { $on = $false; continue }
-                if ($on -and $line.Trim()) { $recs.Add(('ADMIN|{0}|net' -f (CleanField $line))) }
-            }
-        } catch {}
+            # The group's local name, from its SID (see above).
+            $gname = ((New-Object System.Security.Principal.SecurityIdentifier 'S-1-5-32-544').Translate([System.Security.Principal.NTAccount]).Value -split '\\')[-1]
+            $mem = Get-NetLocalGroupMembers @(& net localgroup $gname 2>$null)
+            if ($null -eq $mem -or $mem.Count -eq 0) { Add-SnapFailure 'ADMIN' ('Get-LocalGroupMember failed (' + $why + ') and net localgroup returned no member list') }
+            else { foreach ($m in $mem) { $recs.Add(('ADMIN|{0}|net' -f (CleanField $m))) } }
+        } catch { Add-SnapFailure 'ADMIN' ('Get-LocalGroupMember failed (' + $why + '); net: ' + $_.Exception.Message) }
     }
 
     # CERT -- machine root CAs. A new root CA is how TLS interception is planted.
@@ -777,12 +848,13 @@ function Get-Snapshot {
         foreach ($c in (Get-ChildItem Cert:\LocalMachine\Root -EA Stop)) {
             $recs.Add(('CERT|{0}|{1}' -f (CleanField $c.Thumbprint), (CleanField $c.Subject)))
         }
-    } catch {}
+    } catch { Add-SnapFailure 'CERT' $_.Exception.Message }
 
     return ($recs | Sort-Object -Unique)
 }
 
 $snapshot = Get-Snapshot
+
 
 if ($Mode -eq 'Save') {
     $header = @(
@@ -792,6 +864,9 @@ if ($Mode -eq 'Save') {
         '# implant as normal. This is a change detector from now forward, not a',
         '# clean-room reference. Capture as early in the device life as possible.'
     )
+    # Read back by Diff: a category this snapshot could not read is never
+    # compared later, so its absence cannot come back as a wave of NEW items.
+    if ($script:SnapFailed.Count -gt 0) { $header += ('# NotCaptured: ' + (@($script:SnapFailed.Keys) -join ',')) }
     try {
         $dir = Split-Path -Parent $Path
         if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
@@ -805,7 +880,14 @@ if ($Mode -eq 'Save') {
         Set-Content -LiteralPath $Path -Value ($header + $snapshot) -Encoding UTF8 -EA Stop
         '--- Baseline Snapshot (saved) ---'
         "[OK] Baseline saved: $Path"
-        "[OK] $($snapshot.Count) state record(s) captured (drivers, services, tasks, autoruns, ports, admins, root CAs)."
+        if ($script:SnapFailed.Count -gt 0) {
+            "[WARNING] Baseline NOT captured in full -- $($script:SnapFailed.Count) categor(ies) could not be read and are left out; a later diff will not compare them:"
+            foreach ($c in $script:SnapFailed.Keys) { "  [INFO] $(Get-CatLabel $c): $($script:SnapFailed[$c])" }
+            Write-Marker -Name 'baseline_gap' -Sev 'WARNING'
+            "[OK] $($snapshot.Count) state record(s) captured in the categories that could be read."
+        } else {
+            "[OK] $($snapshot.Count) state record(s) captured (drivers, services, tasks, autoruns, ports, admins, root CAs)."
+        }
         "[INFO] Excluded by design: Winlogon $($script:ExcludedRunValues -join ' and ') -- Windows rewrites these counters at every logon and logoff; they are not persistence values."
         '[INFO] A baseline captured on an already-compromised machine records the implant as normal.'
         '[INFO] It detects CHANGE from this moment forward -- it is not proof the current state is clean.'
@@ -829,6 +911,7 @@ if (-not (Test-Path -LiteralPath $Path)) {
 }
 
 $old = @{}
+$baselineMissing = @()
 $oldExcluded = 0
 $perUserOld = 0
 $perUserNew = 0
@@ -836,6 +919,7 @@ $userSvcTemplates = Get-UserServiceTemplates
 try {
     foreach ($ln in (Get-Content -LiteralPath $Path -Encoding UTF8 -EA Stop)) {
         $t = $ln.Trim()
+        if ($t -match '^#\s*NotCaptured:\s*(.+)$') { $baselineMissing += @($Matches[1] -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }); continue }
         if (-not $t -or $t.StartsWith('#')) { continue }
         $f = $t.Split('|')
         if ($f.Length -lt 2) { continue }
@@ -884,6 +968,22 @@ foreach ($k in $new.Keys) {
     }
 }
 foreach ($k in $old.Keys) { if (-not $new.ContainsKey($k)) { $removed += $k } }
+
+# A category either side did not capture is compared in NEITHER direction:
+# a failed read now is not every item REMOVED, a category the baseline never
+# held is not every item NEW. Raised as the gap it is.
+$skipCats = Get-SkippedCategories -BaselineMissing $baselineMissing -NowFailed @($script:SnapFailed.Keys)
+if ($skipCats.Count -gt 0) {
+    $added   = @($added   | Where-Object { $skipCats -notcontains $_.Split('|')[0] })
+    $changed = @($changed | Where-Object { $skipCats -notcontains $_.Split('|')[0] })
+    $removed = @($removed | Where-Object { $skipCats -notcontains $_.Split('|')[0] })
+    "[WARNING] Baseline comparison NOT performed for $($skipCats.Count) categor(ies) -- " + (@($skipCats | ForEach-Object { Get-CatLabel $_ }) -join ', ') + '. Changes there would go unseen.'
+    foreach ($c in $skipCats) {
+        if ($script:SnapFailed.Contains($c)) { "  [INFO] $(Get-CatLabel $c): could not be read on this run: $($script:SnapFailed[$c])" }
+        if ($baselineMissing -contains $c) { "  [INFO] $(Get-CatLabel $c): not captured when the baseline was saved -- re-save with -baseline to include it." }
+    }
+    Write-Marker -Name 'baseline_gap' -Sev 'WARNING'
+}
 
 # Evaluate every added item FIRST, then print raised findings before benign
 # ones. Printing in raw sorted order with a single shared cap is a real
@@ -982,7 +1082,8 @@ foreach ($k in ($removed | Sort-Object)) {
 if ($rmShown -gt $MaxReport) { "[INFO] ...and $($rmShown - $MaxReport) more removed item(s) not listed (report cap $MaxReport)." }
 
 if ($added.Count -eq 0 -and $changed.Count -eq 0 -and $removed.Count -eq 0) {
-    "[OK] No change from the saved baseline across $($new.Count) tracked state record(s)."
+    if ($skipCats.Count -gt 0) { "[OK] No change from the saved baseline in the categories compared ($($skipCats.Count) not compared, above)." }
+    else { "[OK] No change from the saved baseline across $($new.Count) tracked state record(s)." }
 } else {
     "[INFO] Baseline diff summary: $($added.Count) new, $($changed.Count) changed, $($removed.Count) removed (of $($new.Count) tracked records)."
 }

@@ -21,11 +21,23 @@
 # The name is last (it may hold spaces); control characters and '|' in a name
 # or path become '?', so no process can split or forge a line.
 #
+# -ScopeFile writes ONE line saying how many processes had no readable path
+# (Get-PathScope, 2026-11-24). Section 4's path checks grade only processes
+# whose path this token can read, and its "[OK] No processes from suspicious
+# locations" said nothing about the rest: on a standard-user token that is
+# every SYSTEM process and every other account's. Elevated, the few
+# protected processes with no path are [INFO]; on a standard-user token the
+# count is a [DEFERRED - ADMIN REQUIRED], counted through -DeferredFile. From
+# the same query as the dump, so the count describes the same processes.
+#
 # Read-only. Windows PowerShell 5.1 and pwsh. Pure ASCII.
 
 [CmdletBinding()]
 param(
     [string]$TreePath = '',
+    [string]$ScopeFile = '',
+    [string]$DeferredFile = '',
+    [int]$Elevated = -1,
     [switch]$SelfTest
 )
 $ErrorActionPreference = 'Continue'
@@ -54,6 +66,18 @@ function Format-DumpLine {
     return ($Process.Name + '  ' + $Process.ProcessId + '  ' + $Process.ExecutablePath)
 }
 
+# PURE. Returns @{ Line; Deferred }.
+function Get-PathScope {
+    param([int]$Total, [int]$Blank, [bool]$IsElevated)
+    if ($Blank -le 0) {
+        return @{ Line = ('[INFO] Path scope: all ' + $Total + ' process(es) exposed their executable path, so every one was checked.'); Deferred = 0 }
+    }
+    if ($IsElevated) {
+        return @{ Line = ('[INFO] Path scope: ' + $Blank + ' of ' + $Total + ' process(es) expose no executable path even to an administrator (protected and system processes such as System, Registry and csrss); their paths were not checked.'); Deferred = 0 }
+    }
+    return @{ Line = ('[DEFERRED - ADMIN REQUIRED] Path scope: ' + $Blank + ' of ' + $Total + ' process(es) run under another account or elevated, so this token cannot read their executable path and the path checks above did not cover them -- re-run as administrator.'); Deferred = 1 }
+}
+
 if ($SelfTest) {
     $fails = 0
     function T { param([string]$Name, [bool]$Ok, [string]$Got)
@@ -74,12 +98,31 @@ if ($SelfTest) {
     T 'the stdout line is exactly the former one-liner: Name, two spaces, PID, two spaces, Path' ($l -ceq 'svchost.exe  1234  C:\Windows\System32\svchost.exe') $l
     $l = Format-DumpLine ([pscustomobject]@{ Name = 'csrss.exe'; ProcessId = 700; ParentProcessId = 600; CreationDate = $d; ExecutablePath = $null })
     T 'a process with no readable path keeps its trailing two spaces, as before' ($l -ceq 'csrss.exe  700  ') ("[" + $l + "]")
+    $v = Get-PathScope -Total 120 -Blank 0 -IsElevated $false
+    T 'every path readable: an [INFO] saying all were checked, no deferral' ($v.Deferred -eq 0 -and $v.Line -match '^\[INFO\] Path scope: all 120 ') $v.Line
+    $v = Get-PathScope -Total 120 -Blank 6 -IsElevated $true
+    T 'an administrator shown no path for protected processes: an [INFO] count, never a deferral' ($v.Deferred -eq 0 -and $v.Line -match '^\[INFO\] Path scope: 6 of 120 ') $v.Line
+    $v = Get-PathScope -Total 120 -Blank 80 -IsElevated $false
+    T 'a standard-user token shown no path for 80 processes: a counted deferral that says the checks did not cover them' ($v.Deferred -eq 1 -and $v.Line -match '^\[DEFERRED - ADMIN REQUIRED\] Path scope: 80 of 120 .*did not cover them') $v.Line
     if ($fails) { Write-Output "[FAIL] $fails proc_snapshot self-test expectation(s) unmet"; exit 1 }
     Write-Output '[OK] proc_snapshot self-test: the tree line carries the creation time or an empty field, and the stdout line is the former one-liner exactly.'
     exit 0
 }
 
 $ps = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+foreach ($f in @($ScopeFile, $DeferredFile)) { if ($f) { Remove-Item -LiteralPath $f -Force -EA SilentlyContinue } }
+if ($ScopeFile -and $ps.Count -gt 0) {
+    if ($Elevated -lt 0) {
+        $Elevated = 0
+        try { if ((New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.SecurityIdentifier]'S-1-5-32-544')) { $Elevated = 1 } } catch {}
+    }
+    $blank = @($ps | Where-Object { -not ([string]$_.ExecutablePath).Trim() }).Count
+    $sc = Get-PathScope -Total $ps.Count -Blank $blank -IsElevated ($Elevated -eq 1)
+    try {
+        Set-Content -LiteralPath $ScopeFile -Value $sc.Line -Encoding ASCII -ErrorAction Stop
+        if ($sc.Deferred -gt 0 -and $DeferredFile) { Set-Content -LiteralPath $DeferredFile -Value '1' -Encoding ASCII -ErrorAction Stop }
+    } catch { }
+}
 if ($TreePath) {
     $tree = @(foreach ($p in $ps) { Format-TreeLine $p })
     try { Set-Content -LiteralPath $TreePath -Value $tree -Encoding ASCII -ErrorAction Stop } catch { }
