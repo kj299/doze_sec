@@ -76,7 +76,7 @@ $ErrorActionPreference = 'Continue'
 $script:Specs = @(
     @{ S = '18b'; List = 'ioc_named_pipes.txt';     Name = 'Named pipe IOC match';     Tech = 'T1071'; Linux = 'gap' },
     @{ S = '18c'; List = 'ioc_services.txt';        Name = 'Service IOC match';        Tech = 'T1543'; Linux = 'gap' },
-    @{ S = '18d'; List = 'ioc_file_paths.txt';      Name = 'Staging file IOC match';   Tech = 'T1074'; Linux = 'ok' },
+    @{ S = '18d'; List = 'ioc_file_paths.txt';      Name = 'Staging file IOC match';   Tech = 'T1074'; Linux = 'unread' },
     @{ S = '18e'; List = 'ioc_scheduled_tasks.txt'; Name = 'Scheduled task IOC match'; Tech = 'T1053'; Linux = 'gap' },
     @{ S = '18h'; List = 'ioc_registry.txt';        Name = 'Registry IOC match';       Tech = 'T1112'; Linux = 'unread' }
 )

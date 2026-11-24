@@ -447,6 +447,18 @@ jobs:
           & .\.github\ci\registry_ioc_states.ps1
           exit $LASTEXITCODE
 
+      - name: "ioc_proc_snapshot on 5.1: the 18a/18g snapshot keeps its lines and states what this token could not see"
+        shell: powershell
+        run: |
+          & .\.github\ci\ioc_proc_snapshot.ps1
+          exit $LASTEXITCODE
+
+      - name: "Section 18d on 5.1: a staging path in a folder that refuses to list is named and raised, never [OK]"
+        shell: powershell
+        run: |
+          & .\.github\ci\staging_path_states.ps1
+          exit $LASTEXITCODE
+
       - name: startup_eval.ps1 (Startup folder + AppCert DLL evaluation)
         shell: powershell
         run: |
@@ -2152,54 +2164,49 @@ jobs:
           Write-Host "hosts_check OK ($n self-test cases)"
           exit 0
 
-      - name: Section 16 Event 7045 pipeline prints the record (wevtutil /f:text vocabulary, the bat's own findstr line)
+      - name: "Section 16 Event 7045 listing prints a planted record from its fields, never from the English wevtutil labels"
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           # A field report said '[OK] No recent service install events (7045)
-          # found.' while Section 18 listed 26 of them from the same log. The
-          # findstr tokens (TimeCreated, ServiceName, ImagePath, AccountName)
-          # were XML element names; wevtutil /f:text prints 'Date:',
-          # 'Service Name:', 'Service File Name:', 'Service Account:'. Nothing
-          # could ever match, so the line was a permanent false all-clear.
-          # This lifts the findstr line FROM doze_sec.bat and runs it against
-          # a record planted now, so the bat's text is what is tested.
+          # found.' while Section 18 listed 26 of them from the same log. Its
+          # findstr tokens were XML element names; the fix that matched the
+          # /f:text labels ('Service Name:') then held only on an English
+          # Windows. The listing now reads the record's fields by position, and
+          # this plants a real record and runs the tool the bats call.
+          # Touches: service:dzsmoke_7045probe (deleted in finally).
+          foreach ($b in '.\doze_sec.bat', '.\doze_sec_noAdmin.bat') {
+            $t = Get-Content -LiteralPath $b -Raw
+            if ($t -match '(?m)^wevtutil qe System .*EventID=7045.*dz_pipe\.tmp') { throw "$b`: the Section 16 wevtutil /f:text 7045 pipeline is back" }
+            if ($t -notmatch 'event_scan_check\.ps1" -Check ServiceInstallList>> "%REPORT%"') { throw "$b`: Section 16 no longer runs the ServiceInstallList listing" }
+          }
           & sc.exe create dzsmoke_7045probe binPath= 'C:\Windows\System32\cmd.exe /c rem dz_selftest_7045' start= demand | Out-Null
+          $md = Join-Path $env:TEMP ("dz_ci_svclist_{0}" -f $PID)
           try {
-            $bat = [string[]](Get-Content .\doze_sec.bat)
-            $w = [array]::FindIndex($bat, [Predicate[string]]{ param($l) $l -match '^wevtutil qe System .*EventID=7045.*dz_pipe\.tmp' })
-            if ($w -lt 0) { throw 'the Section 16 wevtutil 7045 line was not found in doze_sec.bat' }
-            $fs = $null
-            for ($k = $w + 1; $k -lt $w + 8; $k++) { if ($bat[$k] -match '^\s*findstr .*dz_pipe\.tmp') { $fs = $bat[$k]; break } }
-            if (-not $fs) { throw 'no findstr line follows the wevtutil 7045 line' }
-            $tmp = Join-Path $env:TEMP 'dz_ci_7045.txt'
-            # The Service Control Manager writes 7045 asynchronously: the first
-            # run of this step queried the log 300 ms after sc create and the
-            # newest record was 40 s old. Wait for the record before grading,
-            # and fail on its ABSENCE with its own message, so a plumbing
-            # timeout is never read as a verdict about the bat's line.
-            $seen = $false
+            # The Service Control Manager writes 7045 asynchronously; wait for
+            # the record, and fail on its ABSENCE with its own message.
+            $out = ''
             for ($try = 0; $try -lt 30; $try++) {
-              & cmd.exe /c ('wevtutil qe System /q:"*[System[(EventID=7045)]]" /c:20 /rd:true /f:text > "' + $tmp + '"')
-              if ((Get-Content -LiteralPath $tmp -Raw -EA SilentlyContinue) -match 'dzsmoke_7045probe') { $seen = $true; break }
+              New-Item -ItemType Directory -Path $md -Force | Out-Null
+              $out = (& .\tools\event_scan_check.ps1 -Check ServiceInstallList -MarkerDir $md) -join "`n"
+              if ($out -match 'dzsmoke_7045probe') { break }
+              Remove-Item -LiteralPath $md -Recurse -Force -EA SilentlyContinue
               Start-Sleep -Seconds 2
             }
-            if (-not $seen) { throw 'the 7045 record for the planted service never appeared in the System log within 60 s -- the pipeline could not be tested (plumbing, not a verdict about the bat)' }
-            $cmdline = ($fs.Trim() -replace '>>\s*"%REPORT%"\s*$', '').Replace('"%TEMP%\dz_pipe.tmp"', '"' + $tmp + '"')
-            Write-Host "running the bat's line: $cmdline"
-            $out = (& cmd.exe /c $cmdline) -join "`n"
             Write-Host $out
-            if ($out -notmatch 'Service Name:\s+dzsmoke_7045probe') { throw "the bat's findstr line did not print the planted 7045 record -- Section 16 would report no service was installed" }
-            if ($out -notmatch 'Service File Name:\s+.*dz_selftest_7045') { throw 'the image path of the planted record was not printed' }
-            # The tokens that shipped must print NOTHING against the same file,
-            # so this step is known to fail on the defect, not only pass on the fix.
-            $old = (& cmd.exe /c ('findstr /c:"TimeCreated" /c:"ServiceName" /c:"ImagePath" /c:"AccountName" "' + $tmp + '"')) -join "`n"
-            if ($old.Trim()) { throw 'the old XML-vocabulary tokens matched /f:text output -- this step no longer distinguishes the defect' }
-            Write-Host 'Section 16 7045 pipeline OK: the planted record prints through the bat''s own findstr line; the old tokens print nothing'
+            if ($out -notmatch 'dzsmoke_7045probe') { throw 'the 7045 record for the planted service never appeared in the listing within 60 s' }
+            if ($out -notmatch '(?m)^  Service Name: dzsmoke_7045probe$') { throw 'the listing did not print the planted service name from its field' }
+            if ($out -notmatch '(?m)^  Service File Name: .*dz_selftest_7045') { throw 'the listing did not print the planted image path from its field' }
+            if ($out -notmatch '(?m)^  Service Account: \S') { throw 'the listing did not print the service account' }
+            if ($out -notmatch '(?m)^\[INFO\] \d+ event\(s\) read from the System log') { throw 'the listing did not say how much it read' }
+            if (-not (Test-Path -LiteralPath (Join-Path $md 'dz_svclist_done.txt'))) { throw 'the listing wrote no done marker' }
+            if (@(Get-ChildItem -LiteralPath $md -Filter 'dz_svclist_*' | Where-Object { $_.Name -ne 'dz_svclist_done.txt' }).Count) { throw 'the listing wrote a gap or deferral marker on a log an administrator can read' }
+            Write-Host 'Section 16 7045 listing OK: the planted record prints from its fields'
           } finally {
             & sc.exe delete dzsmoke_7045probe 2>&1 | Out-Null
-            Remove-Item $tmp -Force -EA SilentlyContinue
+            Remove-Item -LiteralPath $md -Recurse -Force -EA SilentlyContinue
           }
+          $global:LASTEXITCODE = 0
           exit 0
 
       - name: threat_list_seed.ps1 -SelfTest + live (a runtime IOC copy behind the release is replaced; an old generated CTI launch gets -NonInteractive)
@@ -3468,7 +3475,7 @@ jobs:
           if not "%RC%"=="%REPRC%" ( echo EXIT CODE LOST ON THE CONSOLE-LOG PATH: process exited %RC%, report says %REPRC% & exit /b 1 )
           rem Section 16 lists the 7045 record the plant step left (it is real);
           rem Section 18 counts it as harness residue and does not list it.
-          findstr /r /c:"^Service Name: *dzsmoke_probe_residue" "%REP%" >nul || ( echo SECTION 16 DID NOT PRINT THE PLANTED 7045 RECORD & exit /b 1 )
+          findstr /r /c:"^ *Service Name: *dzsmoke_probe_residue" "%REP%" >nul || ( echo SECTION 16 DID NOT PRINT THE PLANTED 7045 RECORD & exit /b 1 )
           findstr /r /c:"system\. Service Name: *dzsmoke_probe_residue" "%REP%" >nul && ( echo SECTION 18 LISTED OUR OWN dz_probe RESIDUE AS A SUSPICIOUS SERVICE INSTALL & exit /b 1 )
           findstr /c:"(dz_selftest/dzsmoke/dz_probe) and were excluded" "%REP%" >nul || ( echo SECTION 18 DID NOT DECLARE THE EXCLUDED RESIDUE COUNT & exit /b 1 )
           echo Completed end-to-end through Section 18 and the exit handler.

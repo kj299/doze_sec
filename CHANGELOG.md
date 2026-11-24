@@ -6,6 +6,14 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Section 16-18 checks no longer read clean when they could not look
+- **Section 16, Event 7045 listing.** It was `wevtutil /f:text` piped through `findstr` on the English labels (`Service Name:`), so on a non-English Windows it matched nothing and printed `[OK] No recent service install events (7045) found.`; a log it could not read was `[INFO] ... skipped`. It now reads each record's fields by position (`tools/event_scan_check.ps1 -Check ServiceInstallList`), and a log it could not read is a raised gap (a counted deferral when a standard-user token is denied).
+- **18d, staging files.** `Test-Path` reads "access denied" as "not there". Each path is now asked for by name, and is absent only when its folder answers without it or does not exist. A path that could not be checked is named and raised (`dz_iochit_18d_unread.txt`); on a standard-user token, a folder outside the user's profile that refuses to list (`C:\Windows\Temp`) is a counted deferral. A file its folder lists but that cannot be opened by name is a match.
+- **18e, scheduled tasks.** The task list was read with `-EA SilentlyContinue`. A failure is now a raised gap (a deferral when a standard-user token is refused), and the `[OK]` says how many tasks it read and, on a standard-user token, that it covers only those.
+- **18a and 18g, processes.** A standard-user token is not shown the path or command line of another account's or an elevated process, and the `[OK]` covered them while they were matched by name alone. `tools/ioc_proc_snapshot.ps1` writes the same snapshot lines and counts those it could not see: an `[INFO]` for an administrator (protected processes), a counted deferral for a standard user.
+- **ADFS and Azure AD Connect.** `sc query <name> && set HIT` read any failure as "not installed". Only the service manager's 1060 means that now; any other answer is a raised gap, and a standard-user token refused the service is a counted deferral.
+- **CI:** a folder that refuses to list must raise the 18d gap beside a match; a planted 7045 record must print from its fields; the standard-user job asserts the 18a/18g deferrals and the 18d scope.
+
 ### Sysmon, service-signature and hidden-service checks no longer read clean when they could not look
 - **`tools/edr_presence.ps1` (Section 9).** Sysmon's three service names were looked up in empty catches, so a Sysmon whose service this token could not open read "Sysmon is not installed". They now go through the tool's own service-manager probe: only the SCM's 1060 means not installed. Anything else is the tool's existing gap when elevated, or deferral on a standard-user token. The tool gains its first `-SelfTest`.
 - **`tools/service_signature_check.ps1` (Section 7):**

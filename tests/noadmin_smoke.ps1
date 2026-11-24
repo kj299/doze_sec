@@ -654,9 +654,25 @@ try {
     Assert (-not @($ledger1 | Where-Object { $_ -match '^\w+\|18\|[^|]*\|.*NOT performed' }).Count) `
         'no Section 18 IOC match raised a NOT-performed gap on a standard-user token' `
         ("Section 18 raised a gap a standard user should not have: {0}" -f (($ledger1 | Where-Object { $_ -match '\|18\|[^|]*\|.*NOT performed' }) -join ' ; '))
-    Assert ($text1 -match '\[OK\] No scheduled task IOC matches\.|\[WARNING\] Scheduled task IOC matches found\.') `
+    Assert ($text1 -match '\[OK\] No scheduled task IOC matches among the \d+ task\(s\) read[.;]|\[WARNING\] Scheduled task IOC matches found\.') `
         'Section 18e compared the scheduled tasks a standard user can list' `
         'Section 18e printed neither its [OK] nor a match on a standard-user token'
+    # 18d asks for each staging path by name. A standard user cannot LIST
+    # C:\Windows\Temp, so those entries are a counted deferral -- never a row
+    # (asserted above) and never an [OK] that claims them.
+    Assert ($text1 -match '\[OK\] No known malware staging files (found \(\d+ path\(s\) checked\)|among the \d+ of \d+ path\(s\) this token can check)\.|\[CRITICAL\] Known malware staging files found:') `
+        'Section 18d checked the staging paths a standard user can check, and said how many' `
+        'Section 18d printed neither its scoped [OK] nor a match on a standard-user token'
+    Write-Host ("MEASURED: Section 18d on a standard-user token: " + $(if ($text1 -match '\[DEFERRED - ADMIN REQUIRED\] (\d+) staging path\(s\) are in folders a standard-user token cannot list') { $Matches[1] + ' path(s) deferred' } else { 'no path deferred' }))
+    # 18a/18g: a standard user is not shown the path or command line of a
+    # SYSTEM process, and every runner runs some. Matching those by name
+    # alone must be said and counted, never covered by the [OK] above it.
+    Assert ($text1 -match '\[DEFERRED - ADMIN REQUIRED\] \d+ of \d+ process\(es\) run under another account or elevated, so this token cannot read their command line;') `
+        'Section 18g declared the command lines a standard-user token cannot read' `
+        'Section 18g did not declare the processes whose command lines this token cannot read'
+    Assert ($text1 -match '\[DEFERRED - ADMIN REQUIRED\] \d+ of \d+ process\(es\) run under another account or elevated, so this token cannot read their executable path;') `
+        'Section 18a declared the executable paths a standard-user token cannot read' `
+        'Section 18a did not declare the processes whose paths this token cannot read'
     # Section 4's parent rule from a standard-user token: the parent PID,
     # session and creation time of other users' and SYSTEM's processes must be
     # readable here too (only their paths are not). The OK line proves the

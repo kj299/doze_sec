@@ -73,7 +73,7 @@ Write-Host 'TOP FINDINGS: every finding carries an analyst note'
 # print its [OK] or a match, never nothing.
 $s18gap = @(Get-Content -LiteralPath $led.FullName | Where-Object { $_ -match '^\w+\|18\|[^|]*\|.*NOT performed' })
 if ($s18gap.Count) { throw ("Section 18 raised gap row(s) on a healthy runner: {0}" -f ($s18gap -join ' ; ')) }
-if ($text -notmatch '(?m)^\[OK\] No scheduled task IOC matches\.|^\[WARNING\] Scheduled task IOC matches found\.') { throw 'Section 18e printed neither its [OK] nor a match' }
+if ($text -notmatch '(?m)^\[OK\] No scheduled task IOC matches among the \d+ task\(s\) read[.;]|^\[WARNING\] Scheduled task IOC matches found\.') { throw 'Section 18e printed neither its [OK] nor a match' }
 Write-Host 'Section 18: no gap row on a healthy runner; 18e compared the tasks'
 # 18h's bad-value judgement on real machine state: UAC is on on every
 # runner (EnableLUA=1), and the list names only EnableLUA=0. A runtime
