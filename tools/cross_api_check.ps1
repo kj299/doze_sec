@@ -457,7 +457,12 @@ try {
         # a service hidden behind a restrictive ACL would sit -- so it is named.
         $kp = $null
         try { $kp = Get-ItemProperty -LiteralPath $k.PSPath -ErrorAction Stop }
-        catch { [void]$typeUnread.Add($k.PSChildName); continue }
+        catch {
+            # A key removed between the listing and this read (a service
+            # uninstalled mid-run) is churn, not a key that refused us.
+            if (-not (($_.Exception -is [System.Management.Automation.ItemNotFoundException]) -or ([string]$_.FullyQualifiedErrorId -like 'PathNotFound*'))) { [void]$typeUnread.Add($k.PSChildName) }
+            continue
+        }
         if ($null -ne $kp -and $kp.PSObject.Properties['Type']) { $type = $kp.Type }
         # Only Win32 service types (0x10 own process, 0x20 share process, and the
         # interactive variants). Drivers (1/2/4/8) are not SCM services and would
@@ -555,7 +560,15 @@ try {
             # A folder node has no Id value (ordinary); a node that could not be
             # READ is counted, never passed.
             $np = $null
-            try { $np = Get-ItemProperty -LiteralPath $node.PSPath -ErrorAction Stop } catch { $treeUnread++ }
+            $nodeErr = $null
+            try { $np = Get-ItemProperty -LiteralPath $node.PSPath -ErrorAction Stop } catch { $nodeErr = $_ }
+            if ($nodeErr) {
+                # A node deleted mid-walk (a task re-registered by an updater)
+                # is churn; one that refused us is counted ONCE, and its
+                # children are not listed (that would count it again).
+                if (-not (($nodeErr.Exception -is [System.Management.Automation.ItemNotFoundException]) -or ([string]$nodeErr.FullyQualifiedErrorId -like 'PathNotFound*'))) { $treeUnread++ }
+                continue
+            }
             if ($null -ne $np -and $np.PSObject.Properties['Id']) { $id = $np.Id }
             if ($id) {
                 # REG_SZ values here carry a trailing NUL; leaving it in makes the
@@ -575,7 +588,7 @@ try {
             }
             $cErr = $null
             foreach ($c in @(Get-ChildItem -LiteralPath $node.PSPath -ErrorAction SilentlyContinue -ErrorVariable cErr)) { $stack.Push($c) }
-            $treeUnread += @($cErr | Where-Object { $null -ne $_ }).Count
+            $treeUnread += @($cErr | Where-Object { $null -ne $_ -and -not (($_.Exception -is [System.Management.Automation.ItemNotFoundException]) -or ([string]$_.FullyQualifiedErrorId -like 'PathNotFound*')) }).Count
         }
     } else { $tOk = $false }
 } catch { $tOk = $false }

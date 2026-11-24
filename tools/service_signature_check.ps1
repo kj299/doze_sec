@@ -101,10 +101,14 @@ $script:SigProbe    = { param($p) $sig = $null; try { $sig = Get-AuthenticodeSig
 # to the warning stream for a cert past NotAfter that is countersigned -- a
 # service that PASSES. A field report carried 17 such lines inside Section 7;
 # 'WARNING:' in a report is exactly the text a reader is told to count.
-# A Test-Certificate that THROWS has verified nothing: $null ("could not
-# verify"), never $true. It returned $true -- a certificate the check could not
-# test read as a valid one (2026-11-24).
-$script:CertProbe   = { param($c) try { return [bool](Test-Certificate -Cert $c -EA Stop -WarningAction SilentlyContinue) } catch { return $null } }
+# With -EA Stop, Test-Certificate THROWS when its chain or policy check fails
+# (an expired but countersigned certificate, an offline revocation check) --
+# that is the common case, and the expiry rule below judges it, so a throw
+# there keeps the long-standing $true. A first draft of the 2026-11-24 sweep
+# made every throw "could not verify" and would have relisted ordinary
+# services as unverified on every PC; a review caught it. Only a probe that
+# could not run AT ALL -- the PKI cmdlet is missing -- is $null.
+$script:CertProbe   = { param($c) try { return [bool](Test-Certificate -Cert $c -EA Stop -WarningAction SilentlyContinue) } catch [System.Management.Automation.CommandNotFoundException] { return $null } catch { return $true } }
 # A service's MSIX package is provisioned for SYSTEM, not for the auditing
 # user, so -AllUsers (which needs admin) is tried first; the per-user query is
 # the fallback so a non-elevated run still answers what it can.
@@ -501,6 +505,6 @@ if ($inventory.Count -gt 0) {
     $inventory | Format-Table Name,State,StartMode,Why,Binary -AutoSize -Wrap
 }
 # Written last: the caller raises "produced no verdict" when it is absent.
-# (A WMI failure returns early above WITHOUT it: nothing was graded, and the
-# caller's "produced no verdict" row says so.)
+# (A service list that could not be read returns early above with its gap
+# marker and this done file, so the gap is the verdict.)
 if ($DoneFile) { Set-Content -LiteralPath $DoneFile -Value 'done' -Encoding ASCII }
