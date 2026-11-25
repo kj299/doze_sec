@@ -6,6 +6,19 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Fixed: the AMSI-bypass, service-install and password-spray checks read no events (regression in #313)
+- The change that added the Security-log listings passed every other event check a field list of `@($null)`. PowerShell counts that as one element, so the shared event reader believed it had fields to fetch. As a result:
+  - it stopped rendering event messages, so the AMSI-bypass, service-install (Event 7045) and Script Block checks saw no text;
+  - it stopped reading the account name the password-spray check counts.
+- All of those checks read clean, apart from an `[INFO] ... NOT examined` line. Windows CI caught it:
+  - the end-to-end job: "SECTION 18 DID NOT DECLARE THE EXCLUDED RESIDUE COUNT";
+  - a planted spray of eleven accounts reported as "[OK] No password-spray pattern".
+- **The first fix was not enough.** Its helper returned `,@(...)`, and the reader calls it as `@(Get-FieldList ...)`. `@()` around a comma-returned array is one element holding the array, so the count stayed 1. Its self-test called the helper bare, so it tested a different expression from the one the code runs.
+- **Now:** the helper emits a plain pipeline. The self-test asserts the reader's exact `@(...)` expression, and a mutation with the comma return fails it. CI also checks that listed Script Block records carry their rendered text.
+- **Same review:**
+  - firewall access-denied is decided by error code, not by English message text;
+  - the printed Security-log `Command:` lines carry `-Label`, so they run.
+
 ### Listings that read English Windows output now read field names, objects and SIDs
 - **Seven Security-log listings piped `wevtutil /f:text` through `findstr` on English labels:** Events 4672, 4624, 4625, 4698/4702 (scheduled tasks created or changed), 4769 (Kerberos tickets), 4776 (NTLM) and 4648 (explicit credentials). The labels they matched were "Account Name", "Task Name", "Ticket Encryption".
   - On a non-English Windows each one printed nothing under its heading. So did a log that could not be read, and nothing was raised either way.

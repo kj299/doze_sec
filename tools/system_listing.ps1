@@ -162,8 +162,8 @@ if ($SelfTest) {
     exit 0
 }
 
-if (-not $Mode) { '[WARNING] System listing NOT performed -- -Mode is required.'; Write-Marker -Name 'listing_gap' -Sev 'WARNING'; exit 0 }
 foreach ($n in 'listing_gap', 'listing_done') { Remove-Item -LiteralPath (Join-Path $MarkerDir ("dz_{0}.txt" -f $n)) -Force -EA SilentlyContinue }
+if (-not $Mode) { '[WARNING] System listing NOT performed -- -Mode is required.'; Write-Marker -Name 'listing_gap' -Sev 'WARNING'; Write-Marker -Name 'listing_done' -Sev 'done'; exit 0 }
 
 if ($Mode -eq 'OsSummary') {
     # Context only: a failure is said, never a row.

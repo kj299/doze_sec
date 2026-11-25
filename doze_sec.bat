@@ -5136,17 +5136,17 @@ if not "!ACCTEV_STATE:~0,6!"=="e4720=" if exist "%SCRIPT_DIR%tools\account_event
 
 echo.>> "%REPORT%"
 echo --- Special Privilege Logon - Event 4672 --->> "%REPORT%"
-echo  Command: powershell -File tools\event_scan_check.ps1 -Check SecurityList -Ids 4672 -Fields SubjectUserName,SubjectDomainName,PrivilegeList   [each field read by name from the record XML]>> "%REPORT%"
+echo  Command: powershell -File tools\event_scan_check.ps1 -Check SecurityList -Ids 4672 -Fields SubjectUserName,SubjectDomainName,PrivilegeList -Label "Special privilege logons - Event 4672"   [each field read by name from the record XML]>> "%REPORT%"
 call :dz_seclist "4672" "SubjectUserName,SubjectDomainName,PrivilegeList" "Special privilege logons - Event 4672" 16 T1078
 
 echo.>> "%REPORT%"
 echo --- Failed Logins - Event 4625 (spray = many accounts, same source) --->> "%REPORT%"
-echo  Command: powershell -File tools\event_scan_check.ps1 -Check SecurityList -Ids 4625 -Fields TargetUserName,TargetDomainName,LogonType,IpAddress,Status,SubStatus   [each field read by name from the record XML]>> "%REPORT%"
+echo  Command: powershell -File tools\event_scan_check.ps1 -Check SecurityList -Ids 4625 -Fields TargetUserName,TargetDomainName,LogonType,IpAddress,Status,SubStatus -Label "Failed sign-ins - Event 4625"   [each field read by name from the record XML]>> "%REPORT%"
 call :dz_seclist "4625" "TargetUserName,TargetDomainName,LogonType,IpAddress,Status,SubStatus" "Failed sign-ins - Event 4625" 16 T1110.003
 
 echo.>> "%REPORT%"
 echo --- Successful Logins - Event 4624 --->> "%REPORT%"
-echo  Command: powershell -File tools\event_scan_check.ps1 -Check SecurityList -Ids 4624 -Fields TargetUserName,TargetDomainName,LogonType,IpAddress,WorkstationName   [each field read by name from the record XML]>> "%REPORT%"
+echo  Command: powershell -File tools\event_scan_check.ps1 -Check SecurityList -Ids 4624 -Fields TargetUserName,TargetDomainName,LogonType,IpAddress,WorkstationName -Label "Successful sign-ins - Event 4624"   [each field read by name from the record XML]>> "%REPORT%"
 call :dz_seclist "4624" "TargetUserName,TargetDomainName,LogonType,IpAddress,WorkstationName" "Successful sign-ins - Event 4624" 16 T1078
 
 echo.>> "%REPORT%"
@@ -5183,7 +5183,7 @@ del "%TEMP%\dz_svclist_done.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- Scheduled Task Changes - Events 4698, 4702 --->> "%REPORT%"
-echo  Command: powershell -File tools\event_scan_check.ps1 -Check SecurityList -Ids 4698,4702 -Fields TaskName,SubjectUserName   [each field read by name from the record XML]>> "%REPORT%"
+echo  Command: powershell -File tools\event_scan_check.ps1 -Check SecurityList -Ids 4698,4702 -Fields TaskName,SubjectUserName -Label "Scheduled task changes - Events 4698 and 4702"   [each field read by name from the record XML]>> "%REPORT%"
 call :dz_seclist "4698,4702" "TaskName,SubjectUserName" "Scheduled task changes - Events 4698 and 4702" 16 T1053.005
 
 echo.>> "%REPORT%"
@@ -5239,12 +5239,12 @@ wevtutil qe "Microsoft-Windows-Windows Defender/Operational" /q:"*[System[(Event
 
 echo.>> "%REPORT%"
 echo --- Kerberos RC4 Tickets - Event 4769 (Kerberoasting IOC) --->> "%REPORT%"
-echo  Command: powershell -File tools\event_scan_check.ps1 -Check SecurityList -Ids 4769 -Fields TargetUserName,ServiceName,TicketEncryptionType,IpAddress   [each field read by name from the record XML]>> "%REPORT%"
+echo  Command: powershell -File tools\event_scan_check.ps1 -Check SecurityList -Ids 4769 -Fields TargetUserName,ServiceName,TicketEncryptionType,IpAddress -Label "Kerberos service tickets - Event 4769"   [each field read by name from the record XML]>> "%REPORT%"
 call :dz_seclist "4769" "TargetUserName,ServiceName,TicketEncryptionType,IpAddress" "Kerberos service tickets - Event 4769" 16 T1558.003
 
 echo.>> "%REPORT%"
 echo --- NTLM Auth - Event 4776 (Forest Blizzard relay IOC) --->> "%REPORT%"
-echo  Command: powershell -File tools\event_scan_check.ps1 -Check SecurityList -Ids 4776 -Fields TargetUserName,Workstation,Status   [each field read by name from the record XML]>> "%REPORT%"
+echo  Command: powershell -File tools\event_scan_check.ps1 -Check SecurityList -Ids 4776 -Fields TargetUserName,Workstation,Status -Label "NTLM credential validation - Event 4776"   [each field read by name from the record XML]>> "%REPORT%"
 call :dz_seclist "4776" "TargetUserName,Workstation,Status" "NTLM credential validation - Event 4776" 16 T1550.002
 echo.>> "%REPORT%"
 
@@ -6641,7 +6641,7 @@ if exist "%TEMP%\dz_cloudcred_gap.txt" (
 :: --- [CTI] Explicit Credential Logon - Event 4648 (T1078) ---
 echo.>> "%REPORT%"
 echo --- [CTI][T1078] Explicit Credential Logons - Event 4648 --->> "%REPORT%"
-echo  Command: powershell -File tools\event_scan_check.ps1 -Check SecurityList -Ids 4648 -Fields SubjectUserName,TargetUserName,TargetServerName,ProcessName   [each field read by name from the record XML]>> "%REPORT%"
+echo  Command: powershell -File tools\event_scan_check.ps1 -Check SecurityList -Ids 4648 -Fields SubjectUserName,TargetUserName,TargetServerName,ProcessName -Label "Explicit-credential sign-ins - Event 4648"   [each field read by name from the record XML]>> "%REPORT%"
 call :dz_seclist "4648" "SubjectUserName,TargetUserName,TargetServerName,ProcessName" "Explicit-credential sign-ins - Event 4648" 18 T1078
 
 :: --- [CTI] SSH Server (OpenSSH) Enabled Check ---

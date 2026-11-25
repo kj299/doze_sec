@@ -287,6 +287,15 @@ function Get-EventScanVerdict {
     return @{ Lines = @($out.ToArray()); Hit = ($hits.Count -gt 0); Gap = $false; Deferred = 0 }
 }
 
+# PURE. A field list with every empty entry removed: the other checks pass
+# $null, and @($null).Count is 1. The items are emitted as a plain pipeline,
+# NEVER `return ,@(...)`: the caller writes @(Get-FieldList ...), and @()
+# around a comma-returned array is ONE element holding the array -- the
+# first fix did that, the count stayed 1, and Windows CI read a planted
+# password spray as "[OK] No password-spray pattern". The self-test asserts
+# the exact expression the reader runs.
+function Get-FieldList { param($Fields) @($Fields) | Where-Object { [string]$_ } }
+
 # PURE. A SecurityList configuration from the caller's strings, or $null when
 # one is missing or an ID is not a number.
 function Get-SecurityListConfig {
@@ -315,6 +324,9 @@ function Test-Denied {
 # events". Returns @{ Error; Denied; Records }.
 function Read-Events {
     param([string]$Log, [int[]]$Id, [int]$Max, [string[]]$Fields = @())
+    # @($null) is ONE element: a check with no field list must read as none,
+    # or every message and spray target goes unread (review, 2026-11-25).
+    $Fields = @(Get-FieldList $Fields)
     try { $null = Get-WinEvent -LogName $Log -MaxEvents 1 -ErrorAction Stop }
     catch {
         if ($_.FullyQualifiedErrorId -notmatch 'NoMatchingEventsFound') { return @{ Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message); Denied = (Test-Denied $_); Records = @() } }
@@ -475,6 +487,11 @@ if ($SelfTest) {
     T 'SecurityList: a record with none of the fields is counted and said' ($t -match '1 record\(s\) held none of the listed fields') $t
     $v = V 'SecurityList' @(@{ Time = 't'; Message = ''; Path = ''; Props = @(); Fields = [ordered]@{ TaskName = ('\x' + [char]10 + '[CRITICAL] forged'); SubjectUserName = 'a' } }); $t = $v.Lines -join "`n"
     T 'SecurityList: a field holding a newline cannot forge a severity line' ($t -notmatch '(?m)^\[CRITICAL\]') $t
+    # The EXACT expression Read-Events runs, @(Get-FieldList ...): a test of
+    # the bare call passed while the reader still saw one field.
+    T 'a check with no field list reads as NO fields, through the reader''s own @() (the trap that stopped every message and spray target being read)' (@(Get-FieldList $null).Count -eq 0 -and @(Get-FieldList @($null)).Count -eq 0 -and @(Get-FieldList @('', 'TaskName')).Count -eq 1 -and @(Get-FieldList @('a', 'b')).Count -eq 2) ("null={0} nullarr={1} one={2} two={3}" -f @(Get-FieldList $null).Count, @(Get-FieldList @($null)).Count, @(Get-FieldList @('', 'TaskName')).Count, @(Get-FieldList @('a', 'b')).Count)
+    function Get-FieldListCommaReturn { param($Fields) return ,@(@($Fields) | Where-Object { [string]$_ }) }
+    T 'mutation: the first fix''s `return ,@(...)` reads as ONE field through @() -- the assertion above can see the trap' (@(Get-FieldListCommaReturn $null).Count -eq 1) ''
     T 'SecurityList: a non-numeric ID or a missing label is no configuration' (($null -eq (Get-SecurityListConfig -Ids '4698;rm' -Fields 'TaskName' -Label 'x')) -and ($null -eq (Get-SecurityListConfig -Ids '4698' -Fields 'TaskName' -Label ''))) ''
 
     if ($fails) { Write-Output "[FAIL] $fails event_scan_check self-test expectation(s) unmet"; exit 1 }
