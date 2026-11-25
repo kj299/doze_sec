@@ -6,6 +6,18 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Browser extensions (Section 15): a profile or policy key it could not read is raised, not "no extensions"
+- `tools/browser_extensions.ps1` ran with `$ErrorActionPreference = 'SilentlyContinue'` and used `Test-Path` to decide what was absent. As a result:
+  - a `User Data` folder, a profile listing or a force-install policy key this account could not read looked like a browser that is not installed;
+  - an unparseable profile printed an unraised `[SKIPPED]`;
+  - the summary read "No browser profiles with extensions found", and Section 15 read CLEAN.
+- **Now:**
+  - every read that decides something asks with `-ErrorAction Stop`;
+  - a path is absent only when its folder answers without it;
+  - anything there but unreadable is `[WARNING] ... NOT performed` with its own row;
+  - a done marker backs it with a "produced no verdict" row.
+- Brave's force-install policy key is read too. It was missing, although Brave's profiles were read.
+
 ### Fixed: the AMSI-bypass, service-install and password-spray checks read no events (regression in #313)
 - The change that added the Security-log listings passed every other event check a field list of `@($null)`. PowerShell counts that as one element, so the shared event reader believed it had fields to fetch. As a result:
   - it stopped rendering event messages, so the AMSI-bypass, service-install (Event 7045) and Script Block checks saw no text;

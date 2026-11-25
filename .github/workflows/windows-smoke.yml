@@ -2817,6 +2817,12 @@ jobs:
           & .\.github\ci\root_cert_states.ps1
           exit $LASTEXITCODE
 
+      - name: "I3 on 5.1: browser extensions -- a corrupt profile, a denied User Data folder or a denied policy key is a raised gap, never no extensions"
+        shell: powershell
+        run: |
+          & .\.github\ci\i3_browser_states.ps1
+          exit $LASTEXITCODE
+
       - name: "I2 on 5.1: Security-log listings, firewall rules, TCP views and group members read from field names, objects and SIDs, in any Windows language"
         shell: powershell
         run: |

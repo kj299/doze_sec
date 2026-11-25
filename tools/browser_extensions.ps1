@@ -21,9 +21,18 @@
 #     legitimate (ad blockers, password managers) so it is only [INFO]
 #   - policy force-installed entries (ExtensionInstallForcelist) under HKLM/HKCU
 # Store extensions with notable-but-common perms or broad host alone are listed
-# at [OK] with the perms noted in brackets. A profile whose data cannot be read
-# (locked DB, corrupt JSON, access denied) is reported [SKIPPED] -- never a
-# silent clean.
+# at [OK] with the perms noted in brackets.
+#
+# WHAT IT COULD NOT READ IS RAISED (2026-11-25, group I3). It ran under
+# $ErrorActionPreference='SilentlyContinue' and decided absence with Test-Path,
+# so a User Data folder, a profile listing or a force-install policy key this
+# account could not read looked like a browser that is not installed, and an
+# unparseable profile printed an unraised [SKIPPED]; the summary then read
+# "No browser profiles with extensions found" and Section 15 read CLEAN. Now
+# every read that decides something asks with -ErrorAction Stop; a path is
+# absent only when its parent answers without it (Test-AbsentForSure); and
+# anything there but unreadable is "[WARNING] ... NOT performed", raised
+# through dz_browserext_gap.txt. dz_browserext_done.txt is written last.
 #
 # COMPATIBILITY: Windows PowerShell 5.1 (built into Win10/11). Read-only.
 # No pwsh-only syntax, no external tools, no admin required (own profile).
@@ -34,21 +43,85 @@
 # verdict the same way the Section 18 IOC sub-checks do.
 # ============================================================================
 [CmdletBinding()]
-param([switch]$SelfTest)
+param(
+    [string]$MarkerDir = $env:TEMP,
+    # CI-only hooks, so the real reader can be pointed at planted profiles and
+    # a throwaway policy key. Never set by the bats.
+    [string]$LocalAppData = $env:LOCALAPPDATA,
+    [string]$AppData = $env:APPDATA,
+    [string[]]$PolicyRoots = @('HKLM:\SOFTWARE\Policies', 'HKCU:\SOFTWARE\Policies'),
+    [switch]$SelfTest
+)
 
-$ErrorActionPreference = 'SilentlyContinue'
+$ErrorActionPreference = 'Continue'
+if (-not $MarkerDir) { $MarkerDir = [IO.Path]::GetTempPath() }
 
 # PowerShell adds these note-properties to every Get-ItemProperty result; they
 # are not registry values. Matched by EXACT name -- a '^PS' prefix match would
 # also swallow real values whose names start with "PS".
 $psNoteProps = @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider')
 
-$marker = Join-Path $env:TEMP 'dz_browserext_hit.txt'
-if (Test-Path -LiteralPath $marker) { Remove-Item -LiteralPath $marker -Force -EA SilentlyContinue }
+$marker = Join-Path $MarkerDir 'dz_browserext_hit.txt'
+$gapMarker = Join-Path $MarkerDir 'dz_browserext_gap.txt'
+$doneMarker = Join-Path $MarkerDir 'dz_browserext_done.txt'
 
 $script:warnCount = 0
 $script:okCount = 0
-$script:skipCount = 0
+$script:gaps = New-Object System.Collections.ArrayList
+
+function Test-AbsentForSure {
+    # A path is absent only when its parent ANSWERS without it, or the parent
+    # itself does not exist (a browser that is not installed). A parent that
+    # refuses to list is not an answer.
+    param([string]$Path)
+    $parent = [IO.Path]::GetDirectoryName($Path); $leaf = [IO.Path]::GetFileName($Path)
+    if (-not $parent -or -not $leaf) { return $false }
+    try { $names = @([IO.Directory]::GetFileSystemEntries($parent)) }
+    catch [System.IO.DirectoryNotFoundException] { return $true }
+    catch { return $false }
+    foreach ($n in $names) { if ([IO.Path]::GetFileName($n) -eq $leaf) { return $false } }
+    return $true
+}
+
+function Get-InnerMessage {
+    param($Err)
+    $x = $Err.Exception
+    while ($x.InnerException) { $x = $x.InnerException }
+    return (([string]$x.Message) -replace '\s+', ' ').Trim()
+}
+
+# A location that is there and could not be read: printed now, raised at the end.
+function Add-Gap {
+    param([string]$What, [string]$Why)
+    $w = (($What + ': ' + $Why) -replace '[\x00-\x1F\x7F]', ' ')
+    [void]$script:gaps.Add($w)
+    Write-Output ('[WARNING] Browser extension inventory NOT performed for ' + $w)
+}
+
+# PURE. The closing lines from what was found and what could not be read.
+# Returns @{ Lines; Gap }.
+function Get-BrowserExtSummary {
+    param([int]$Warn, [int]$Ok, [string[]]$Gaps)
+    $g = @($Gaps | Where-Object { $_ })
+    $out = @()
+    if ($g.Count -gt 0) {
+        $out += ('[WARNING] Browser extension check NOT performed in full -- ' + $g.Count + ' location(s) could not be read: ' + (($g | Select-Object -First 3) -join '; ') + $(if ($g.Count -gt 3) { '; ...' } else { '' }) + '. A malicious extension there would go unseen (T1176).')
+    }
+    if (($Warn + $Ok) -eq 0 -and $g.Count -eq 0) { $out += '[INFO] No browser profiles with extensions found for the current user.' }
+    elseif (($Warn + $Ok) -gt 0) { $out += ('[INFO] Browser extension inventory: ' + $Ok + ' OK, ' + $Warn + ' flagged' + $(if ($g.Count) { ', ' + $g.Count + ' location(s) not read' } else { '' }) + '.') }
+    return @{ Lines = $out; Gap = ($g.Count -gt 0) }
+}
+
+# Absent, or a gap: $true only when the parent answered without it.
+function Test-Present {
+    param([string]$Path, [string]$What)
+    try { $null = Get-Item -LiteralPath $Path -Force -ErrorAction Stop; return $true }
+    catch {
+        if (Test-AbsentForSure $Path) { return $false }
+        Add-Gap $What ($Path + ' is there but could not be read (' + (Get-InnerMessage $_) + ')')
+        return $false
+    }
+}
 
 # PROVENANCE IS PART OF THE GRADE, not just a reason string. A field report
 # (2026-09-06) flagged four extensions on a clean machine: Adobe Acrobat and
@@ -338,38 +411,65 @@ if ($SelfTest) {
     T 'a Firefox system add-on is a component' `
       ((Get-FirefoxProvenance -Addon (J '{"location":"app-system-defaults"}')) -eq 'component') ''
 
+    # ---- what could not be read (2026-11-25) --------------------------------
+    $v = Get-BrowserExtSummary -Warn 0 -Ok 0 -Gaps @()
+    T 'nothing found and nothing unread: the INFO line' ((-not $v.Gap) -and $v.Lines[0] -match '^\[INFO\] No browser profiles') ($v.Lines -join ' | ')
+    $v = Get-BrowserExtSummary -Warn 0 -Ok 0 -Gaps @('Chrome: denied')
+    T 'nothing found because a location could not be read: a raised gap, never "No browser profiles" (the defect)' ($v.Gap -and ($v.Lines -join ' ') -notmatch 'No browser profiles' -and $v.Lines[0] -match '^\[WARNING\] Browser extension check NOT performed in full -- 1 location') ($v.Lines -join ' | ')
+    $v = Get-BrowserExtSummary -Warn 2 -Ok 5 -Gaps @('Edge/Default: corrupt')
+    T 'findings and a gap: both said' ($v.Gap -and ($v.Lines -join ' ') -match '5 OK, 2 flagged, 1 location\(s\) not read') ($v.Lines -join ' | ')
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ('dz_bext_' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    try {
+        New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+        $script:gaps.Clear()
+        $o = @(Test-Present (Join-Path $tmp 'Google\Chrome\User Data') 'Chrome')
+        T 'a browser that is not installed is absent, silently, never a gap' (($o -contains $false) -and $script:gaps.Count -eq 0) ($o -join ' | ')
+        New-Item -ItemType Directory -Path (Join-Path $tmp 'x') -Force | Out-Null
+        $o = @(Test-Present (Join-Path $tmp 'x') 'X')
+        T 'a folder that is there is present' (($o -contains $true) -and $script:gaps.Count -eq 0) ($o -join ' | ')
+    } finally { Remove-Item -LiteralPath $tmp -Recurse -Force -EA SilentlyContinue; $script:gaps.Clear() }
+    $src = Get-Content -LiteralPath $PSCommandPath -Raw
+    # Built from fragments, so this line cannot match itself.
+    $oldSkip = [regex]::Escape(('Write-Output "[SKIP' + 'PED]'))
+    $oldEap = [regex]::Escape(('$ErrorAction' + 'Preference = ' + "'Silently" + "Continue'"))
+    T 'no unraised [SKIPPED] is printed any more, and nothing runs SilentlyContinue script-wide' ($src -notmatch $oldSkip -and $src -notmatch $oldEap) ''
+
     if ($fails) { Write-Output "[FAIL] $fails browser_extensions self-test expectation(s) unmet"; exit 1 }
-    Write-Output '[OK] browser_extensions self-test: store installs are graded on provenance, sideloaded and unknown are not downgraded, and debugger/proxy/capture stay findings anywhere.'
+    Write-Output '[OK] browser_extensions self-test: store installs are graded on provenance, sideloaded and unknown are not downgraded, debugger/proxy/capture stay findings anywhere, and a location that could not be read is a raised gap.'
     exit 0
 }
+
+foreach ($f in @($marker, $gapMarker, $doneMarker)) { Remove-Item -LiteralPath $f -Force -EA SilentlyContinue }
 
 # -------------------------------------------------------------------------
 # Chromium family
 # -------------------------------------------------------------------------
 $chromiumBrowsers = @(
-    @{ Name = 'Chrome';  Base = (Join-Path $env:LOCALAPPDATA 'Google\Chrome\User Data') },
-    @{ Name = 'Edge';    Base = (Join-Path $env:LOCALAPPDATA 'Microsoft\Edge\User Data') },
-    @{ Name = 'Brave';   Base = (Join-Path $env:LOCALAPPDATA 'BraveSoftware\Brave-Browser\User Data') },
-    @{ Name = 'Vivaldi'; Base = (Join-Path $env:LOCALAPPDATA 'Vivaldi\User Data') }
+    @{ Name = 'Chrome';  Base = (Join-Path $LocalAppData 'Google\Chrome\User Data') },
+    @{ Name = 'Edge';    Base = (Join-Path $LocalAppData 'Microsoft\Edge\User Data') },
+    @{ Name = 'Brave';   Base = (Join-Path $LocalAppData 'BraveSoftware\Brave-Browser\User Data') },
+    @{ Name = 'Vivaldi'; Base = (Join-Path $LocalAppData 'Vivaldi\User Data') }
 )
 
 foreach ($b in $chromiumBrowsers) {
-    if (-not (Test-Path -LiteralPath $b.Base)) { continue }
-    $profiles = @(Get-ChildItem -LiteralPath $b.Base -Directory -EA SilentlyContinue |
-        Where-Object { $_.Name -eq 'Default' -or $_.Name -like 'Profile *' })
+    if (-not (Test-Present $b.Base $b.Name)) { continue }
+    $profiles = $null
+    try {
+        $profiles = @(Get-ChildItem -LiteralPath $b.Base -Directory -Force -ErrorAction Stop |
+            Where-Object { $_.Name -eq 'Default' -or $_.Name -like 'Profile *' })
+    } catch { Add-Gap $b.Name ('its profiles could not be listed (' + (Get-InnerMessage $_) + ')'); continue }
     foreach ($prof in $profiles) {
         $tag = "$($b.Name)/$($prof.Name)"
         $prefFile = $null
         foreach ($cand in 'Secure Preferences','Preferences') {
             $p = Join-Path $prof.FullName $cand
-            if (Test-Path -LiteralPath $p) { $prefFile = $p; break }
+            if (Test-Present $p $tag) { $prefFile = $p; break }
         }
         if (-not $prefFile) { continue }
         try {
-            $json = Get-Content -LiteralPath $prefFile -Raw -EA Stop | ConvertFrom-Json -EA Stop
+            $json = Get-Content -LiteralPath $prefFile -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
         } catch {
-            Write-Output "[SKIPPED] $tag -- could not parse preferences (locked or corrupt); extension inventory NOT performed."
-            $script:skipCount++
+            Add-Gap $tag ((Split-Path -Leaf $prefFile) + ' could not be read or parsed (' + (Get-InnerMessage $_) + ')')
             continue
         }
         $settings = $null
@@ -407,17 +507,20 @@ foreach ($b in $chromiumBrowsers) {
 # -------------------------------------------------------------------------
 # Firefox
 # -------------------------------------------------------------------------
-$ffRoot = Join-Path $env:APPDATA 'Mozilla\Firefox\Profiles'
-if (Test-Path -LiteralPath $ffRoot) {
-    foreach ($prof in @(Get-ChildItem -LiteralPath $ffRoot -Directory -EA SilentlyContinue)) {
+$ffRoot = Join-Path $AppData 'Mozilla\Firefox\Profiles'
+if (Test-Present $ffRoot 'Firefox') {
+    $ffProfiles = $null
+    try { $ffProfiles = @(Get-ChildItem -LiteralPath $ffRoot -Directory -Force -ErrorAction Stop) }
+    catch { Add-Gap 'Firefox' ('its profiles could not be listed (' + (Get-InnerMessage $_) + ')') }
+    foreach ($prof in @($ffProfiles)) {
+        if (-not $prof) { continue }
         $tag = "Firefox/$($prof.Name)"
         $extJson = Join-Path $prof.FullName 'extensions.json'
-        if (-not (Test-Path -LiteralPath $extJson)) { continue }
+        if (-not (Test-Present $extJson $tag)) { continue }
         try {
-            $json = Get-Content -LiteralPath $extJson -Raw -EA Stop | ConvertFrom-Json -EA Stop
+            $json = Get-Content -LiteralPath $extJson -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
         } catch {
-            Write-Output "[SKIPPED] $tag -- could not parse extensions.json (locked or corrupt); extension inventory NOT performed."
-            $script:skipCount++
+            Add-Gap $tag ('extensions.json could not be read or parsed (' + (Get-InnerMessage $_) + ')')
             continue
         }
         if (-not $json.addons) { Write-Output "[INFO] $tag -- no add-ons registered."; continue }
@@ -426,8 +529,6 @@ if (Test-Path -LiteralPath $ffRoot) {
             $name = if ($a.defaultLocale -and $a.defaultLocale.name) { [string]$a.defaultLocale.name } else { [string]$a.id }
             $ver = [string]$a.version
             $id = [string]$a.id
-            $loc = [string]$a.location
-            $src = [string]$a.sourceURI
             $perms = @()
             if ($a.userPermissions -and $a.userPermissions.permissions) { $perms += @($a.userPermissions.permissions) }
             $origins = @()
@@ -440,35 +541,37 @@ if (Test-Path -LiteralPath $ffRoot) {
 }
 
 # -------------------------------------------------------------------------
-# Policy force-installed extensions (HKLM/HKCU ExtensionInstallForcelist)
+# Policy force-installed extensions (ExtensionInstallForcelist), machine and
+# user. Brave's key was never read although Brave's profiles were.
 # -------------------------------------------------------------------------
-$forceKeys = @(
-    'HKLM:\SOFTWARE\Policies\Google\Chrome\ExtensionInstallForcelist',
-    'HKLM:\SOFTWARE\Policies\Microsoft\Edge\ExtensionInstallForcelist',
-    'HKCU:\SOFTWARE\Policies\Google\Chrome\ExtensionInstallForcelist',
-    'HKCU:\SOFTWARE\Policies\Microsoft\Edge\ExtensionInstallForcelist'
-)
-foreach ($k in $forceKeys) {
-    if (-not (Test-Path -LiteralPath $k)) { continue }
-    $vals = Get-ItemProperty -LiteralPath $k -EA SilentlyContinue
-    if (-not $vals) { continue }
-    foreach ($p in $vals.PSObject.Properties) {
-        # Exact-name skip, not a '^PS' prefix match (see persistence_eval.ps1).
-        if ($psNoteProps -contains $p.Name) { continue }
-        $script:warnCount++
-        Write-Output ("[WARNING] Policy force-install ($k): " + [string]$p.Value)
+$forceSubs = @('Google\Chrome\ExtensionInstallForcelist', 'Microsoft\Edge\ExtensionInstallForcelist', 'BraveSoftware\Brave\ExtensionInstallForcelist')
+foreach ($root in $PolicyRoots) {
+    foreach ($sub in $forceSubs) {
+        $k = Join-Path $root $sub
+        $vals = $null
+        try {
+            $null = Get-Item -LiteralPath $k -ErrorAction Stop
+            $vals = Get-ItemProperty -LiteralPath $k -ErrorAction Stop
+        } catch [System.Management.Automation.ItemNotFoundException] { continue }
+        catch { Add-Gap ('force-install policy ' + $k) ('it could not be read (' + (Get-InnerMessage $_) + ')'); continue }
+        if (-not $vals) { continue }
+        foreach ($p in $vals.PSObject.Properties) {
+            # Exact-name skip, not a '^PS' prefix match (see persistence_eval.ps1).
+            if ($psNoteProps -contains $p.Name) { continue }
+            $script:warnCount++
+            Write-Output ("[WARNING] Policy force-install ($k): " + ([string]$p.Value -replace '[\x00-\x1F\x7F]', ' '))
+        }
     }
 }
 
 # -------------------------------------------------------------------------
 # Summary
 # -------------------------------------------------------------------------
-if (($script:warnCount + $script:okCount + $script:skipCount) -eq 0) {
-    Write-Output '[INFO] No browser profiles with extensions found for the current user.'
-} else {
-    Write-Output ("[INFO] Browser extension inventory: $($script:okCount) OK, $($script:warnCount) flagged, $($script:skipCount) skipped.")
-}
+$sum = Get-BrowserExtSummary -Warn $script:warnCount -Ok $script:okCount -Gaps @($script:gaps)
+$sum.Lines
 if ($script:warnCount -gt 0) {
     New-Item -Path $marker -ItemType File -Force | Out-Null
     Write-Output '[INFO] Review [WARNING] extensions: remove anything sideloaded or unrecognised via the browser Extensions page.'
 }
+if ($sum.Gap) { Set-Content -LiteralPath $gapMarker -Value 'WARNING' -Encoding ASCII }
+Set-Content -LiteralPath $doneMarker -Value 'done' -Encoding ASCII

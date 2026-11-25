@@ -4680,18 +4680,31 @@ echo.>> "%REPORT%"
 echo --- Browser Extensions (T1176 - cred theft / session hijack via add-ons) --->> "%REPORT%"
 echo  Command: powershell -File tools\browser_extensions.ps1  [Chrome/Edge/Brave/Vivaldi/Firefox]>> "%REPORT%"
 echo  Inventories installed extensions; flags sideloaded/dev-mode, malware-favored>> "%REPORT%"
-echo  permissions, and policy force-installs. [SKIPPED] if a profile is locked.>> "%REPORT%"
+echo  permissions, and policy force-installs. A profile or policy key it cannot read is raised as NOT performed.>> "%REPORT%"
 echo  Runs fully without admin (reads the current user's own browser profiles).>> "%REPORT%"
 del "%TEMP%\dz_browserext_hit.txt" 2>nul
+del "%TEMP%\dz_browserext_gap.txt" 2>nul
+del "%TEMP%\dz_browserext_done.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\browser_extensions.ps1" (
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\browser_extensions.ps1">> "%REPORT%" 2>&1
 ) else (
     echo  [WARNING] Browser extension check NOT performed -- tools\browser_extensions.ps1 not found, so a malicious or force-installed extension would go unseen.>> "%REPORT%"
     call :dz_finding WARNING 15 T1176 "Browser extension check NOT performed - tools\browser_extensions.ps1 missing"
 )
+if not exist "%TEMP%\dz_browserext_done.txt" if exist "%SCRIPT_DIR%tools\browser_extensions.ps1" (
+    echo [WARNING] Browser extension check produced no verdict -- NOT performed: tools\browser_extensions.ps1 ran but did not finish.>> "%REPORT%"
+    call :dz_finding WARNING 15 T1176 "Browser extension check produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_browserext_done.txt" 2>nul
 if exist "%TEMP%\dz_browserext_hit.txt" (
     call :dz_finding WARNING 15 T1176 "Suspicious browser extension flagged"
     del "%TEMP%\dz_browserext_hit.txt" 2>nul
+)
+rem A profile, file or policy key that is there and could not be read: its
+rem own row, beside a finding or alone.
+if exist "%TEMP%\dz_browserext_gap.txt" (
+    call :dz_finding WARNING 15 T1176 "Browser extension check NOT performed in full - a profile or policy key could not be read"
+    del "%TEMP%\dz_browserext_gap.txt" 2>nul
 )
 echo.>> "%REPORT%"
 
