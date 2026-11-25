@@ -90,12 +90,13 @@ function Get-InnerMessage {
     return (([string]$x.Message) -replace '\s+', ' ').Trim()
 }
 
-# A location that is there and could not be read: printed now, raised at the end.
+# A location that is there and could not be read: RECORDED only, and printed
+# by the summary. It must print nothing itself: Test-Present calls it inside
+# an `if (...)`, where an extra output line turns the $false it returns into
+# a truthy two-item array -- a gap read as "present", and its line lost.
 function Add-Gap {
     param([string]$What, [string]$Why)
-    $w = (($What + ': ' + $Why) -replace '[\x00-\x1F\x7F]', ' ')
-    [void]$script:gaps.Add($w)
-    Write-Output ('[WARNING] Browser extension inventory NOT performed for ' + $w)
+    [void]$script:gaps.Add((($What + ': ' + $Why) -replace '[\x00-\x1F\x7F]', ' '))
 }
 
 # PURE. The closing lines from what was found and what could not be read.
@@ -104,6 +105,7 @@ function Get-BrowserExtSummary {
     param([int]$Warn, [int]$Ok, [string[]]$Gaps)
     $g = @($Gaps | Where-Object { $_ })
     $out = @()
+    foreach ($w in $g) { $out += ('[WARNING] Browser extension inventory NOT performed for ' + $w) }
     if ($g.Count -gt 0) {
         $out += ('[WARNING] Browser extension check NOT performed in full -- ' + $g.Count + ' location(s) could not be read: ' + (($g | Select-Object -First 3) -join '; ') + $(if ($g.Count -gt 3) { '; ...' } else { '' }) + '. A malicious extension there would go unseen (T1176).')
     }
@@ -415,7 +417,7 @@ if ($SelfTest) {
     $v = Get-BrowserExtSummary -Warn 0 -Ok 0 -Gaps @()
     T 'nothing found and nothing unread: the INFO line' ((-not $v.Gap) -and $v.Lines[0] -match '^\[INFO\] No browser profiles') ($v.Lines -join ' | ')
     $v = Get-BrowserExtSummary -Warn 0 -Ok 0 -Gaps @('Chrome: denied')
-    T 'nothing found because a location could not be read: a raised gap, never "No browser profiles" (the defect)' ($v.Gap -and ($v.Lines -join ' ') -notmatch 'No browser profiles' -and $v.Lines[0] -match '^\[WARNING\] Browser extension check NOT performed in full -- 1 location') ($v.Lines -join ' | ')
+    T 'nothing found because a location could not be read: a raised gap, never "No browser profiles" (the defect)' ($v.Gap -and ($v.Lines -join ' ') -notmatch 'No browser profiles' -and ($v.Lines -join "`n") -match '(?m)^\[WARNING\] Browser extension check NOT performed in full -- 1 location') ($v.Lines -join ' | ')
     $v = Get-BrowserExtSummary -Warn 2 -Ok 5 -Gaps @('Edge/Default: corrupt')
     T 'findings and a gap: both said' ($v.Gap -and ($v.Lines -join ' ') -match '5 OK, 2 flagged, 1 location\(s\) not read') ($v.Lines -join ' | ')
     $tmp = Join-Path ([IO.Path]::GetTempPath()) ('dz_bext_' + [guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -423,10 +425,17 @@ if ($SelfTest) {
         New-Item -ItemType Directory -Path $tmp -Force | Out-Null
         $script:gaps.Clear()
         $o = @(Test-Present (Join-Path $tmp 'Google\Chrome\User Data') 'Chrome')
-        T 'a browser that is not installed is absent, silently, never a gap' (($o -contains $false) -and $script:gaps.Count -eq 0) ($o -join ' | ')
+        T 'a browser that is not installed is absent, silently, never a gap' ($o.Count -eq 1 -and $o[0] -eq $false -and $script:gaps.Count -eq 0) ($o -join ' | ')
         New-Item -ItemType Directory -Path (Join-Path $tmp 'x') -Force | Out-Null
         $o = @(Test-Present (Join-Path $tmp 'x') 'X')
-        T 'a folder that is there is present' (($o -contains $true) -and $script:gaps.Count -eq 0) ($o -join ' | ')
+        T 'a folder that is there is present' ($o.Count -eq 1 -and $o[0] -eq $true -and $script:gaps.Count -eq 0) ($o -join ' | ')
+        # The trap: a gap must come back as ONE $false, or `if (-not (Test-Present ...))`
+        # reads a truthy array and treats the gap as present.
+        Add-Gap 'probe' 'x'
+        $o = @(& { Add-Gap 'probe2' 'y'; $false })
+        T 'recording a gap prints nothing, so a caller''s if sees only the bool' ($o.Count -eq 1 -and $o[0] -eq $false -and $script:gaps.Count -eq 2) ($o -join ' | ')
+        $v = Get-BrowserExtSummary -Warn 0 -Ok 0 -Gaps @($script:gaps)
+        T 'the summary prints every recorded gap line' (@($v.Lines | Where-Object { $_ -match '^\[WARNING\] Browser extension inventory NOT performed for probe' }).Count -eq 2) ($v.Lines -join ' | ')
     } finally { Remove-Item -LiteralPath $tmp -Recurse -Force -EA SilentlyContinue; $script:gaps.Clear() }
     $src = Get-Content -LiteralPath $PSCommandPath -Raw
     # Built from fragments, so this line cannot match itself.
