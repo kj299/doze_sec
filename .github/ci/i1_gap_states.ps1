@@ -49,9 +49,13 @@ try {
   $o = (& .\tools\edr_presence.ps1 -MarkerDir $scr) -join "`n"; Write-Host $o
   # GitHub's Windows runners are Windows Server, which has no Security Center:
   # said as such, never a gap (a client PC with it unreadable is the gap).
+  # MEASURED 2026-11-25: the windows-latest image is Windows Server
+  # (ProductType 3) and DOES answer root\SecurityCenter2, so the Server
+  # branch (for a query that fails) is not taken there; -SelfTest pins it.
   $pt = [int](Get-CimInstance Win32_OperatingSystem).ProductType
-  if ($pt -ne 1 -and $o -notmatch '\[INFO\] Security Center does not exist on Server editions') { throw "a Server runner (ProductType $pt) did not say Security Center does not exist there" }
+  Write-Host ("[MEASURED] ProductType {0}; Security Center answered: {1}" -f $pt, $(if ($o -match 'Security Center (lists|names)|registered antivirus') { 'yes' } else { 'no' }))
   if ($o -match 'Security Center check NOT performed') { throw "Security Center raised a gap on this runner (ProductType $pt)" }
+  if ($pt -eq 1 -and $o -match 'Security Center does not exist on Server editions') { throw 'a client Windows runner was told Security Center does not exist' }
 
   # ---- :dz_section_clean, the real subroutine, under cmd.exe ----
   foreach ($bat in 'doze_sec.bat', 'doze_sec_noAdmin.bat') {
