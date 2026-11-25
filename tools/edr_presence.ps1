@@ -197,9 +197,14 @@ try {
         }
     }
     if ($av.Count -eq 0) { '[INFO] Security Center lists no registered antivirus product.' }
-} catch { $scOk = $false }
+} catch { $scOk = $false; $scErr = (([string]$_.Exception.Message) -replace '\s+', ' ').Trim() }
 if (-not $scOk) {
-    '[SKIPPED] root\SecurityCenter2 could not be queried -- registered security products NOT enumerated (this namespace is absent on Server editions).'
+    # A raised gap (2026-11-25), not an unraised [SKIPPED]: the audit refuses
+    # Server editions, so on every Windows it runs on this namespace exists,
+    # and a standard user can read it. Unreadable, an antivirus registered
+    # but switched off (the finding above) would go unseen.
+    '[WARNING] Security Center check NOT performed -- root\SecurityCenter2 could not be queried' + $(if ($scErr) { ' (' + $scErr + ')' } else { '' }) + ', so a registered antivirus that is switched off would go unseen (T1562.001).'
+    Write-Marker -Name 'edr_gap' -Sev 'WARNING'
 }
 
 # ---- Sysmon ---------------------------------------------------------------

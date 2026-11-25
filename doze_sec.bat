@@ -2560,7 +2560,31 @@ del "%TEMP%\dz_masq_parent.txt" 2>nul
 del "%TEMP%\dz_masq_count.txt" 2>nul
 del "%TEMP%\dz_masq_lsacopy.txt" 2>nul
 del "%TEMP%\dz_masq_copy.txt" 2>nul
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\masquerade_check.ps1" -Path "%TEMP%\dz_proc4.tmp" -MarkerFile "%TEMP%\dz_masq.txt" -TreePath "%TEMP%\dz_proc4_tree.tmp" -ParentMarkerFile "%TEMP%\dz_masq_parent.txt" -CountMarkerFile "%TEMP%\dz_masq_count.txt" -LsassCopyMarkerFile "%TEMP%\dz_masq_lsacopy.txt" -CopyMarkerFile "%TEMP%\dz_masq_copy.txt">> "%REPORT%" 2>&1
+del "%TEMP%\dz_masq_gap.txt" 2>nul
+del "%TEMP%\dz_masq_deferred.txt" 2>nul
+del "%TEMP%\dz_masq_done.txt" 2>nul
+if not exist "%SCRIPT_DIR%tools\masquerade_check.ps1" (
+    echo [WARNING] Masquerading check NOT performed -- tools\masquerade_check.ps1 not found, so a system-process name running from the wrong place or parent, or an LSASS copy, would go unseen.>> "%REPORT%"
+    call :dz_finding WARNING 4 T1036 "Masquerading check NOT performed - tools\masquerade_check.ps1 missing"
+    goto :sec4_masq_done
+)
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\masquerade_check.ps1" -Path "%TEMP%\dz_proc4.tmp" -MarkerFile "%TEMP%\dz_masq.txt" -TreePath "%TEMP%\dz_proc4_tree.tmp" -ParentMarkerFile "%TEMP%\dz_masq_parent.txt" -CountMarkerFile "%TEMP%\dz_masq_count.txt" -LsassCopyMarkerFile "%TEMP%\dz_masq_lsacopy.txt" -CopyMarkerFile "%TEMP%\dz_masq_copy.txt" -GapFile "%TEMP%\dz_masq_gap.txt" -DeferredFile "%TEMP%\dz_masq_deferred.txt" -DoneFile "%TEMP%\dz_masq_done.txt">> "%REPORT%" 2>&1
+:: Each skip used to be an unraised [SKIPPED]: a missing process tree lost the
+:: LSASS-copy signal with Section 4 CLEAN. A gap is its own row; a standard-
+:: user token that can grade nothing is a counted deferral.
+if exist "%TEMP%\dz_masq_gap.txt" (
+    call :dz_finding WARNING 4 T1036 "Masquerading check NOT performed in full - the process snapshot or tree could not be graded"
+    del "%TEMP%\dz_masq_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_masq_deferred.txt" (
+    set /a DEFERRED_COUNT+=1
+    del "%TEMP%\dz_masq_deferred.txt" 2>nul
+)
+if not exist "%TEMP%\dz_masq_done.txt" (
+    echo [WARNING] Masquerading check produced no verdict -- NOT performed: tools\masquerade_check.ps1 ran but did not finish.>> "%REPORT%"
+    call :dz_finding WARNING 4 T1036 "Masquerading check produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_masq_done.txt" 2>nul
 if exist "%TEMP%\dz_masq.txt" (
     call :dz_finding WARNING 4 T1036 "System-process name running outside its canonical directory"
     del "%TEMP%\dz_masq.txt" 2>nul
@@ -3448,8 +3472,8 @@ if exist "%TEMP%\dz_edr.txt" (
     del "%TEMP%\dz_edr.txt" 2>nul
 )
 if exist "%TEMP%\dz_edr_gap.txt" (
-    rem A listed agent service the service manager would not answer for.
-    call :dz_finding WARNING 9 T1562.001 "Endpoint-agent check NOT performed in full - agent services could not be queried"
+    rem An agent service the service manager would not answer for, or Security Center.
+    call :dz_finding WARNING 9 T1562.001 "Endpoint-agent check NOT performed in full - agent services or Security Center could not be queried"
     del "%TEMP%\dz_edr_gap.txt" 2>nul
 )
 if exist "%TEMP%\dz_edr_deferred.txt" (
@@ -3533,6 +3557,12 @@ if defined DEFCORE_LINE for /f "tokens=1,2,3,4,5 delims=|" %%a in ("%DEFCORE_LIN
     set "DEFCORE_SIGAGE=%%e"
 )
 del "%TEMP%\dz_defcore_state.txt" 2>nul
+:: A tool that died before its state line wrote no verdict and no gap:
+:: say so and raise it. Every exit of defender_core_check.ps1 writes the state.
+if not defined DEFCORE_LINE if exist "%SCRIPT_DIR%tools\defender_core_check.ps1" (
+    echo [WARNING] Defender status check produced no verdict -- NOT performed: tools\defender_core_check.ps1 ran but wrote no state line.>> "%REPORT%"
+    call :dz_finding WARNING 9 T1562.001 "Defender status check produced no verdict - NOT performed"
+)
 
 echo.>> "%REPORT%"
 echo --- CRITICAL: Defender Exclusions (paths, processes, extensions) --->> "%REPORT%"
@@ -3592,6 +3622,12 @@ if defined DEFEXCL_LINE for /f "tokens=1,2,3,4 delims=|" %%a in ("%DEFEXCL_LINE%
     set "DEFEXCL_EXTS=%%d"
 )
 del "%TEMP%\dz_defexcl_state.txt" 2>nul
+:: A tool that died before its state line wrote no verdict and no gap:
+:: say so and raise it. Every exit of defender_exclusions_check.ps1 writes the state.
+if not defined DEFEXCL_LINE if exist "%SCRIPT_DIR%tools\defender_exclusions_check.ps1" (
+    echo [WARNING] Defender exclusions check produced no verdict -- NOT performed: tools\defender_exclusions_check.ps1 ran but wrote no state line.>> "%REPORT%"
+    call :dz_finding WARNING 9 T1562.001 "Defender exclusions check produced no verdict - NOT performed"
+)
 
 echo.>> "%REPORT%"
 echo --- Attack Surface Reduction Rules Audit (T1566.001 / T1003.001 / T1068) --->> "%REPORT%"
@@ -3920,14 +3956,27 @@ echo --- PSv2 Engine Status (MUST be Disabled) --->> "%REPORT%"
 echo  Command: tools\psv2_check.ps1   [tries: powershell -Version 2, DISM, CIM, registry engine key]>> "%REPORT%"
 del "%TEMP%\dz_psv2_hit.txt" 2>nul
 del "%TEMP%\dz_psv2_state.txt" 2>nul
+del "%TEMP%\dz_psv2_gap.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\psv2_check.ps1" (
-    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\psv2_check.ps1" -MarkerFile "%TEMP%\dz_psv2_hit.txt" -StateFile "%TEMP%\dz_psv2_state.txt">> "%REPORT%" 2>&1
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\psv2_check.ps1" -MarkerFile "%TEMP%\dz_psv2_hit.txt" -StateFile "%TEMP%\dz_psv2_state.txt" -GapFile "%TEMP%\dz_psv2_gap.txt">> "%REPORT%" 2>&1
+    rem The state file is written on every path that reaches a verdict; the
+    rem dashboard reads it later, so it is only tested here, not deleted.
+    if not exist "%TEMP%\dz_psv2_state.txt" (
+        echo [WARNING] PSv2 engine check produced no verdict -- NOT performed: tools\psv2_check.ps1 ran but wrote no state.>> "%REPORT%"
+        call :dz_finding WARNING 11 T1059.001 "PSv2 engine check produced no verdict - NOT performed"
+    )
 ) else (
-    echo [SKIPPED] tools\psv2_check.ps1 missing -- PSv2 engine state NOT determined.>> "%REPORT%"
+    echo [WARNING] PSv2 engine check NOT performed -- tools\psv2_check.ps1 not found, so an AMSI downgrade path would go unseen.>> "%REPORT%"
+    call :dz_finding WARNING 11 T1059.001 "PSv2 engine check NOT performed - tools\psv2_check.ps1 missing"
 )
 if exist "%TEMP%\dz_psv2_hit.txt" (
     call :dz_finding WARNING 11 T1059.001 "PowerShell v2 enabled - AMSI downgrade path"
     del "%TEMP%\dz_psv2_hit.txt" 2>nul
+)
+rem An undetermined engine state was an unraised [SKIPPED]; it is a gap row.
+if exist "%TEMP%\dz_psv2_gap.txt" (
+    call :dz_finding WARNING 11 T1059.001 "PSv2 engine state NOT determined - an AMSI downgrade path may exist"
+    del "%TEMP%\dz_psv2_gap.txt" 2>nul
 )
 
 echo.>> "%REPORT%"
@@ -4468,7 +4517,8 @@ del "%TEMP%\dz_bootchain_gap.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\boot_chain_check.ps1" (
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\boot_chain_check.ps1" -CodeIntegrityState "%CODEINT_STATE%">> "%REPORT%" 2>&1
 ) else (
-    echo  [INFO] tools\boot_chain_check.ps1 not found -- boot-chain audit skipped.>> "%REPORT%"
+    echo  [WARNING] Boot-chain check NOT performed -- tools\boot_chain_check.ps1 not found, so a boot-loader integrity flag turned off would go unseen.>> "%REPORT%"
+    call :dz_finding WARNING 13 T1542.003 "Boot-chain check NOT performed - tools\boot_chain_check.ps1 missing"
 )
 if exist "%TEMP%\dz_bootchain.txt" (
     set "_BCSEV="
@@ -4493,7 +4543,8 @@ del "%TEMP%\dz_cbs_gap.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\cbs_integrity_check.ps1" (
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\cbs_integrity_check.ps1">> "%REPORT%" 2>&1
 ) else (
-    echo  [INFO] tools\cbs_integrity_check.ps1 not found -- system-file integrity check skipped.>> "%REPORT%"
+    echo  [WARNING] System-file integrity check NOT performed -- tools\cbs_integrity_check.ps1 not found, so a corrupt system binary Windows recorded would go unseen.>> "%REPORT%"
+    call :dz_finding WARNING 13 T1554 "System-file integrity check NOT performed - tools\cbs_integrity_check.ps1 missing"
 )
 if exist "%TEMP%\dz_cbs.txt" (
     set "_CBSSEV="
@@ -4905,7 +4956,8 @@ del "%TEMP%\dz_browserext_hit.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\browser_extensions.ps1" (
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\browser_extensions.ps1">> "%REPORT%" 2>&1
 ) else (
-    echo  [INFO] tools\browser_extensions.ps1 not found -- browser extension inventory skipped.>> "%REPORT%"
+    echo  [WARNING] Browser extension check NOT performed -- tools\browser_extensions.ps1 not found, so a malicious or force-installed extension would go unseen.>> "%REPORT%"
+    call :dz_finding WARNING 15 T1176 "Browser extension check NOT performed - tools\browser_extensions.ps1 missing"
 )
 if exist "%TEMP%\dz_browserext_hit.txt" (
     call :dz_finding WARNING 15 T1176 "Suspicious browser extension flagged"
@@ -4966,7 +5018,8 @@ del "%TEMP%\dz_loggap_deferred.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\log_gap_check.ps1" (
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\log_gap_check.ps1">> "%REPORT%" 2>&1
 ) else (
-    echo  [INFO] tools\log_gap_check.ps1 not found -- event-log gap check skipped.>> "%REPORT%"
+    echo  [WARNING] Event-log gap check NOT performed -- tools\log_gap_check.ps1 not found, so event-log records deleted without a clear event would go unseen.>> "%REPORT%"
+    call :dz_finding WARNING 16 T1070.001 "Event-log gap check NOT performed - tools\log_gap_check.ps1 missing"
 )
 if exist "%TEMP%\dz_loggap.txt" (
     set "_LGSEV="
@@ -5031,7 +5084,8 @@ del "%TEMP%\dz_auditpol_gap.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\audit_policy_check.ps1" (
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\audit_policy_check.ps1">> "%REPORT%" 2>&1
 ) else (
-    echo  [INFO] tools\audit_policy_check.ps1 not found -- audit-policy visibility not verified.>> "%REPORT%"
+    echo  [WARNING] Audit-policy check NOT performed -- tools\audit_policy_check.ps1 not found, so the audit cannot say whether the event-based checks can see anything.>> "%REPORT%"
+    call :dz_finding WARNING 16 T1562.002 "Audit-policy check NOT performed - tools\audit_policy_check.ps1 missing"
 )
 if exist "%TEMP%\dz_auditpol.txt" (
     set "_APSEV="
@@ -5628,7 +5682,8 @@ del "%TEMP%\dz_crossapi_deferred.txt" 2>nul
 if exist "%SCRIPT_DIR%tools\cross_api_check.ps1" (
     "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\cross_api_check.ps1">> "%REPORT%" 2>&1
 ) else (
-    echo  [INFO] tools\cross_api_check.ps1 not found -- cross-API consistency check skipped.>> "%REPORT%"
+    echo  [WARNING] Cross-API and hidden-task check NOT performed -- tools\cross_api_check.ps1 not found, so a rootkit that hides a process, service or task from one API would go unseen.>> "%REPORT%"
+    call :dz_finding WARNING 17 T1014 "Cross-API and hidden-task check NOT performed - tools\cross_api_check.ps1 missing"
 )
 if exist "%TEMP%\dz_crossapi.txt" (
     set "_CASEV="
@@ -7353,9 +7408,26 @@ endlocal & exit /b %EXIT_CODE%
 :: cannot collide with "|1|". Placed after the final exit; call-only.
 :: ====================================================================
 :dz_section_clean
-set "DZ_SEC_CLEAN=1"
-if not defined LEDGER goto :eof
-findstr /b /c:"CRITICAL|%~1|" /c:"WARNING|%~1|" "%LEDGER%" >nul 2>&1 && set "DZ_SEC_CLEAN=0"
+:: A ledger that could not be read is not a clean section (group I1,
+:: 2026-11-25). The ledger is created by the first :dz_finding append, so an
+:: absent file is "nothing raised yet" ONLY while FINDINGS is 0; absent with
+:: findings counted means the appends failed, and the old test read that as
+:: CLEAN for every section. findstr also exits 1 for a file it cannot open,
+:: so that case is caught here, by the count, not by its exit code; exit 2
+:: (bad syntax) is not an answer either. A verdict that could not be read is
+:: said and never CLEAN; it cannot be raised as a row, since the ledger is
+:: what failed.
+set "DZ_SEC_CLEAN=0"
+if not defined LEDGER goto :dz_section_clean_unread
+if not exist "%LEDGER%" if "%FINDINGS%"=="0" set "DZ_SEC_CLEAN=1"
+if not exist "%LEDGER%" if "%FINDINGS%"=="0" goto :eof
+if not exist "%LEDGER%" goto :dz_section_clean_unread
+findstr /b /c:"CRITICAL|%~1|" /c:"WARNING|%~1|" "%LEDGER%" >nul 2>&1
+if errorlevel 2 goto :dz_section_clean_unread
+if errorlevel 1 set "DZ_SEC_CLEAN=1"
+goto :eof
+:dz_section_clean_unread
+echo [WARNING] Section %~1 verdict NOT determined -- the findings ledger could not be read, so this section is not reported CLEAN.>> "%REPORT%"
 goto :eof
 
 :: ====================================================================

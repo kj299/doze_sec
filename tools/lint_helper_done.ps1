@@ -67,4 +67,31 @@ $ms['persistence_eval'] = $ms['persistence_eval'].Replace("if (`$DoneFile) { Wri
 $mb = @(Get-Defects $m $ms)
 if (-not ($mb -match 'doze_sec_noAdmin\.bat hosts_check: no .produced no verdict. backstop') -or -not ($mb -match 'bits_history\.ps1 writes no done marker') -or -not ($mb -match 'doze_sec\.bat service_signature_check: the call does not pass -DoneFile') -or -not ($mb -match 'persistence_eval\.ps1 writes no done marker')) { "[FAIL] the check did not fail on a removed backstop and a removed marker: $($mb -join ' | ')"; exit 1 }
 '[OK] the check fails on a removed backstop, a call that no longer passes -DoneFile, and a tool that writes no done marker (including persistence_eval, whose OtherAccounts branch writes one of its own)'
+
+# A MISSING TOOL IS A RAISED ROW, NOT AN [INFO] (group I1, 2026-11-25). Six
+# checks still printed "[INFO] tools\X.ps1 not found -- ... skipped" and
+# raised nothing, so cross_api_check (the rootkit check), log_gap_check and
+# four more read as a CLEAN section when their tool was absent. Fail on any
+# [INFO] or [SKIPPED] "tools\X.ps1 not found/missing" line in either bat,
+# outside the allowlist below, which needs a reason.
+$missAllow = @{
+  # The optional threat-list updater: the audit still runs on the shipped
+  # lists, so no check is lost when it is absent.
+  'threat_list_sync' = 'optional updater; the shipped lists still apply'
+}
+function Get-UnraisedMissing([hashtable]$Texts) {
+  $out = @()
+  foreach ($bat in $Texts.Keys) {
+    foreach ($m in [regex]::Matches($Texts[$bat], '(?m)^.*\[(INFO|SKIPPED)\][^\r\n]*tools\\([a-z0-9_]+)\.ps1 (not found|missing)')) {
+      if (-not $missAllow.ContainsKey($m.Groups[2].Value)) { $out += ("{0}: a missing tools\{1}.ps1 prints {2} and raises nothing" -f $bat, $m.Groups[2].Value, $m.Groups[1].Value) }
+    }
+  }
+  return $out
+}
+$um = @(Get-UnraisedMissing $texts)
+if ($um.Count) { $um | ForEach-Object { "[FAIL] $_" }; '  A missing tool prints [WARNING] <check> NOT performed -- tools\X.ps1 not found, and calls :dz_finding.'; exit 1 }
+"[OK] no missing tool prints an unraised [INFO] or [SKIPPED] in either bat ($($missAllow.Count) allowlisted with a reason)"
+$m2 = $texts.Clone(); $m2['doze_sec.bat'] += "`r`n    echo  [INFO] tools\cross_api_check.ps1 not found -- cross-API consistency check skipped.>> `"%REPORT%`"`r`n"
+if (-not (@(Get-UnraisedMissing $m2) -match 'cross_api_check')) { '[FAIL] the missing-tool check did not fail on the old [INFO] line'; exit 1 }
+'[OK] the missing-tool check fails on the old cross_api_check [INFO] line'
 exit 0

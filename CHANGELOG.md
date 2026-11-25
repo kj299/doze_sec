@@ -6,6 +6,28 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### A check that could not run is raised, and an unreadable ledger never makes a section CLEAN
+- **Section 4, masquerading.** Each of `masquerade_check`'s six "could not run" exits printed an unraised `[SKIPPED]` and wrote no marker, as did the report's own "nothing could be graded" and "snapshot incomplete" lines. A missing or unreadable process tree therefore lost the CRITICAL "LSASS copy running" signal, and the wrong-parent checks, while Section 4 read CLEAN.
+  - Each is now `[WARNING] Masquerading... check NOT performed` with its own ledger row.
+  - On a standard-user token, a run where no system-process path is visible is a counted deferral.
+  - A done marker backs it with a "produced no verdict" row.
+  - A missing tool is a raised row; the bat used to run it without checking that it was there.
+- **Section 9, Defender status and exclusions.** Both tools now have a "produced no verdict" backstop, read from the state line they write on every path. Before, a tool that died left no row at all.
+- **Section 9, `edr_presence`.** When `root\SecurityCenter2` could not be queried, it printed an unraised `[SKIPPED]`; it is now a raised gap. The audit refuses Server editions, so this namespace exists everywhere it runs.
+- **Section 11, PowerShell 2.** "Not determined by any of the five methods" was an unraised `[SKIPPED]`; it is now a raised gap on either token. The registry key and the v2 launch need no admin, so the token does not explain it. A missing tool and a tool that wrote no state are raised too.
+- **Six missing tools printed `[INFO] ... skipped` and raised nothing:**
+  - `cross_api_check` (the rootkit cross-check)
+  - `log_gap_check`
+  - `audit_policy_check`
+  - `boot_chain_check`
+  - `cbs_integrity_check`
+  - `browser_extensions`
+
+  Each is now a raised WARNING row. `tools/lint_helper_done.ps1` fails on any `[INFO]` or `[SKIPPED]` "tools\X.ps1 not found" line in either bat, outside a reasoned allowlist; the only entry is the optional threat-list updater.
+- **Section verdicts.** `:dz_section_clean` read the ledger with `findstr ... && set not-clean`, so a ledger whose appends had failed made every section CLEAN.
+  - The ledger is created by the first finding, so a missing ledger now counts as "nothing raised yet" only while the findings count is 0.
+  - Otherwise each section prints `[WARNING] Section N verdict NOT determined` and is never reported CLEAN.
+
 ### VirusTotal lookups, the baseline diff, the process-path scope and this account's own files say what they did not look at
 - **VirusTotal (18j files, 18l addresses, the INIT pre-flight check)** printed `[OK] VirusTotal: no malicious matches in N candidate files.` when every lookup had failed (no network, a proxy, a 5xx), and `[INFO] ... skipped` or `[INFO] ... aborted` for a missing or rejected key or a rate limit -- after the person had asked for the check with `-vt`. A candidate that was not looked up is now `[WARNING] ... NOT performed in full -- N of M ...` with its own ledger row; `[OK]` only when every candidate was answered. The pre-flight check exits 2 for "not verified" and the bats raise it. A VirusTotal-flagged file or address is now a CRITICAL row, as the report prints it (the row was WARNING). A missing tool is a raised row, not an `[INFO]`.
 - **18l's connection list.** `Get-NetTCPConnection -State Established` throws when nothing matches, so a quiet machine fell back to `netstat`, whose parser matched the English word `ESTABLISHED` -- German Windows prints `HERGESTELLT` -- and read `[OK]` having parsed nothing. The CIM query filters by the `State` property, netstat is parsed by column, and a fallback that recovers no TCP row is a raised gap.
