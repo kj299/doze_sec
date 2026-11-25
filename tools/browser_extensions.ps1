@@ -114,6 +114,39 @@ function Get-BrowserExtSummary {
     return @{ Lines = $out; Gap = ($g.Count -gt 0) }
 }
 
+# Real browser preference files may hold an empty-string key or keys that
+# differ only in case, and Windows PowerShell 5.1's ConvertFrom-Json rejects
+# both. That used to be an unraised [SKIPPED]; raised as a gap it would be a
+# false Section 15 row on every such machine. So a document ConvertFrom-Json
+# refuses is parsed again with a tolerant parser -- JavaScriptSerializer on
+# 5.1 (case-sensitive dictionaries, empty keys allowed), -AsHashtable on
+# pwsh -- and only a document neither can read is a gap.
+function ConvertFrom-JsonTolerant {
+    param([string]$Text)
+    try { return ($Text | ConvertFrom-Json -ErrorAction Stop) } catch { $first = $_ }
+    if ((Get-Command ConvertFrom-Json).Parameters.ContainsKey('AsHashtable')) {
+        return ($Text | ConvertFrom-Json -AsHashtable -ErrorAction Stop)
+    }
+    try {
+        Add-Type -AssemblyName System.Web.Extensions -ErrorAction Stop
+        $js = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+        $js.MaxJsonLength = [int]::MaxValue
+        $js.RecursionLimit = 512
+        return $js.DeserializeObject($Text)
+    } catch { throw $first }
+}
+
+# The name/value pairs of a parsed JSON object, whichever parser built it.
+function Get-JsonEntries {
+    param($Obj)
+    if ($null -eq $Obj) { return }
+    if ($Obj -is [System.Collections.IDictionary]) {
+        foreach ($k in @($Obj.Keys)) { [pscustomobject]@{ Name = [string]$k; Value = $Obj[$k] } }
+        return
+    }
+    foreach ($pp in $Obj.PSObject.Properties) { [pscustomobject]@{ Name = $pp.Name; Value = $pp.Value } }
+}
+
 # Absent, or a gap: $true only when the parent answered without it.
 function Test-Present {
     param([string]$Path, [string]$What)
@@ -437,6 +470,17 @@ if ($SelfTest) {
         $v = Get-BrowserExtSummary -Warn 0 -Ok 0 -Gaps @($script:gaps)
         T 'the summary prints every recorded gap line' (@($v.Lines | Where-Object { $_ -match '^\[WARNING\] Browser extension inventory NOT performed for probe' }).Count -eq 2) ($v.Lines -join ' | ')
     } finally { Remove-Item -LiteralPath $tmp -Recurse -Force -EA SilentlyContinue; $script:gaps.Clear() }
+    # The JSON Windows PowerShell 5.1 refuses: an empty key and keys that
+    # differ only in case. Parsed tolerantly, the extension in it is graded.
+    $odd = '{"":1,"Media":{"a":1},"media":{"b":2},"extensions":{"settings":{"abcdefghijklmnopabcdefghijklmnop":{"location":4,"manifest":{"name":"Odd","version":"2","permissions":["proxy"]}}}}}'
+    $pj = $null; $perr = ''
+    try { $pj = ConvertFrom-JsonTolerant $odd } catch { $perr = $_.Exception.Message }
+    $ents = @(Get-JsonEntries $pj.extensions.settings)
+    T 'a preferences file with an empty key and case-twin keys is parsed, not a gap' ($null -ne $pj -and $ents.Count -eq 1 -and $ents[0].Name -eq 'abcdefghijklmnopabcdefghijklmnop' -and [string]$ents[0].Value.manifest.name -eq 'Odd') $perr
+    $pv = Get-ChromiumProvenance -Ext $ents[0].Value -Manifest $ents[0].Value.manifest
+    T 'an extension read through the tolerant parser keeps its provenance' ($pv -eq 'unpacked') $pv
+    $bad = $null; try { $bad = ConvertFrom-JsonTolerant '{not json' } catch { $bad = 'threw' }
+    T 'a document neither parser can read still throws (it is the gap)' ($bad -eq 'threw') ([string]$bad)
     $src = Get-Content -LiteralPath $PSCommandPath -Raw
     # Built from fragments, so this line cannot match itself.
     $oldSkip = [regex]::Escape(('Write-Output "[SKIP' + 'PED]'))
@@ -476,7 +520,7 @@ foreach ($b in $chromiumBrowsers) {
         }
         if (-not $prefFile) { continue }
         try {
-            $json = Get-Content -LiteralPath $prefFile -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            $json = ConvertFrom-JsonTolerant (Get-Content -LiteralPath $prefFile -Raw -ErrorAction Stop)
         } catch {
             Add-Gap $tag ((Split-Path -Leaf $prefFile) + ' could not be read or parsed (' + (Get-InnerMessage $_) + ')')
             continue
@@ -490,7 +534,7 @@ foreach ($b in $chromiumBrowsers) {
         if ($json.extensions -and $json.extensions.ui -and $null -ne $json.extensions.ui.developer_mode) {
             $devMode = [bool]$json.extensions.ui.developer_mode
         }
-        foreach ($prop in $settings.PSObject.Properties) {
+        foreach ($prop in @(Get-JsonEntries $settings)) {
             $id = $prop.Name
             $ext = $prop.Value
             $man = $ext.manifest
@@ -527,7 +571,7 @@ if (Test-Present $ffRoot 'Firefox') {
         $extJson = Join-Path $prof.FullName 'extensions.json'
         if (-not (Test-Present $extJson $tag)) { continue }
         try {
-            $json = Get-Content -LiteralPath $extJson -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            $json = ConvertFrom-JsonTolerant (Get-Content -LiteralPath $extJson -Raw -ErrorAction Stop)
         } catch {
             Add-Gap $tag ('extensions.json could not be read or parsed (' + (Get-InnerMessage $_) + ')')
             continue

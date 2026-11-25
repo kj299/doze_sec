@@ -31,6 +31,11 @@ try {
   Set-Content -LiteralPath (Join-Path $ud 'Default\Preferences') -Encoding ASCII -Value '{"extensions":{"settings":{"abcdefghijklmnopabcdefghijklmnop":{"location":4,"from_webstore":false,"manifest":{"name":"Helper","version":"1.0","permissions":["nativeMessaging","<all_urls>"]}}}}}'
   $r = Run-BE
   if (-not $r.Hit -or $r.Gap -or -not $r.Done) { throw 'a sideloaded extension with nativeMessaging was not the hit, or a gap was raised' }
+  # An empty key and case-twin keys: Windows PowerShell 5.1's ConvertFrom-Json
+  # rejects both, and a real profile may hold them. Parsed tolerantly, never a gap.
+  Set-Content -LiteralPath (Join-Path $ud 'Default\Preferences') -Encoding ASCII -Value '{"":1,"Media":{"a":1},"media":{"b":2},"extensions":{"settings":{"abcdefghijklmnopabcdefghijklmnop":{"location":4,"from_webstore":false,"manifest":{"name":"Helper","version":"1.0","permissions":["nativeMessaging","<all_urls>"]}}}}}'
+  $r = Run-BE
+  if (-not $r.Hit -or $r.Gap) { throw 'a preferences file with an empty key and case-twin keys was a gap, or its sideloaded extension was not the hit' }
   Set-Content -LiteralPath (Join-Path $ud 'Profile 1\Preferences') -Encoding ASCII -Value '{not json'
   $r = Run-BE
   if (-not $r.Gap -or $r.Out -match '\[SKIPPED\]' -or $r.Out -notmatch 'NOT performed for Chrome/Profile 1') { throw 'a corrupt Preferences was not a raised gap' }
