@@ -53,14 +53,32 @@
 #
 # Usage:
 #   powershell -File tools\event_scan_check.ps1 -Check <AmsiBypass|ServiceInstalls|ScriptBlockList|ServiceInstallList|Spray> [-MarkerDir <dir>] [-Elevated 0|1] [-SblState <sbl=on|sbl=off|...>]
+#   powershell -File tools\event_scan_check.ps1 -Check SecurityList -Ids 4698,4702 -Fields TaskName,SubjectUserName -Label "Scheduled task changes (4698, 4702)" -Tech T1053.005
+#
+# -Check SecurityList (2026-11-25, group I2) lists the newest Security-log
+# events of the given IDs, each field read from the record's XML by its
+# NAME (EventData/Data[@Name]), which Windows does not translate. The seven
+# listings it replaces piped `wevtutil /f:text` through findstr on English
+# labels ("Account Name", "Task Name", "Ticket Encryption"): on a non-English
+# Windows each printed nothing under its heading, and so did a log that
+# could not be read, with no row. A log that could not be read is now a
+# raised gap (seclist_gap), a counted deferral on a standard-user token, and
+# no events is said.
 #   powershell -File tools\event_scan_check.ps1 -SelfTest   (reads no log)
 #
 # Windows PowerShell 5.1 compatible; pure ASCII. Read-only.
 
 [CmdletBinding()]
 param(
-    [ValidateSet('AmsiBypass', 'ServiceInstalls', 'ScriptBlockList', 'ServiceInstallList', 'Spray')]
+    [ValidateSet('AmsiBypass', 'ServiceInstalls', 'ScriptBlockList', 'ServiceInstallList', 'Spray', 'SecurityList')]
     [string]$Check,
+    # SecurityList only. Comma-separated: powershell -File hands a comma list
+    # over as ONE string, so they are split here rather than typed as arrays.
+    [string]$Ids = '',
+    [string]$Fields = '',
+    [string]$Label = '',
+    [string]$Tech = '',
+    [int]$Max = 20,
     [string]$MarkerDir = $env:TEMP,
     [int]$Elevated = -1,
     # Section 11's verdict on Script Block Logging, as the bat holds it.
@@ -99,6 +117,7 @@ $script:Checks = @{
     ServiceInstallList = @{ Log = 'System'; Id = 7045; Max = 20; What = 'Service-install event listing (Event 7045)'; Tech = 'T1543.003'; Miss = 'recent service installs are not shown' }
     ScriptBlockList = @{ Log = 'Microsoft-Windows-PowerShell/Operational'; Id = 4104; Max = 200; What = 'Script Block event listing'; Tech = 'T1059.001'; Miss = 'recent PowerShell activity is not shown' }
     Spray           = @{ Log = 'Security'; Id = 4625; Max = 200; What = 'Password-spray check (Event 4625)'; Tech = 'T1110.003'; Miss = 'failed sign-ins spread over many accounts would go unseen' }
+    SecurityList    = @{ Log = 'Security'; Id = @(); Max = 20; What = 'Security event listing'; Tech = 'T1078'; Miss = 'these events are not shown'; Fields = @() }
 }
 # The audit's own script blocks, by the path the event records.
 $script:SelfPath = 'AuditPS_\d{8}_\d{6}\.ps1|doze_sec_noAdmin\.bat|doze_sec\.bat'
@@ -150,6 +169,12 @@ function Get-EventScan {
             if ([string]$msg -match $script:SuspInstall) { [void]$scan.Hits.Add(('[' + [string]$r.Time + '] ' + (ConvertTo-PrintableText (([string]$msg) -replace '[\r\n]+', ' ')))) }
             continue
         }
+        if ($Check -eq 'SecurityList') {
+            # Listed from the record's named fields; none at all is a record
+            # this listing cannot show, and it says so.
+            if ($null -eq $r.Fields -or @($r.Fields.Values | Where-Object { [string]$_ }).Count -eq 0) { $scan.NoText++; continue }
+            [void]$scan.Shown.Add($r); continue
+        }
         if ($Check -eq 'ServiceInstallList') {
             # Listed from the record's own fields, by position. No fields at
             # all is a record this listing cannot show, and it says so.
@@ -195,6 +220,21 @@ function Get-EventScanVerdict {
             }
         }
         [void]$out.Add(('[INFO] ' + $scope + '; ' + [string]$Scan.Own + ' were the audit''s own and are not listed.'))
+        return @{ Lines = @($out.ToArray()); Hit = $false; Gap = $false; Deferred = 0 }
+    }
+    if ($Check -eq 'SecurityList') {
+        $shown = @($Scan.Shown)
+        if ([int]$Scan.Total -eq 0) { [void]$out.Add(('[INFO] No ' + $c.Label + ' events in the Security log.')) }
+        foreach ($r in $shown) {
+            [void]$out.Add(('TimeCreated: ' + [string]$r.Time))
+            foreach ($k in @($c.Fields)) {
+                $val = [string]$r.Fields[$k]
+                [void]$out.Add(('  ' + $k + ': ' + $(if ($val) { ConvertTo-PrintableText $val } else { '(not recorded)' })))
+            }
+            [void]$out.Add('')
+        }
+        [void]$out.Add(('[INFO] ' + $scope + '. Listed for review; fields read by name from each record, in any Windows language.'))
+        if ([int]$Scan.NoText -gt 0) { [void]$out.Add(('[INFO] ' + [string]$Scan.NoText + ' record(s) held none of the listed fields, so they are NOT listed.')) }
         return @{ Lines = @($out.ToArray()); Hit = $false; Gap = $false; Deferred = 0 }
     }
     if ($Check -eq 'ServiceInstallList') {
@@ -247,6 +287,18 @@ function Get-EventScanVerdict {
     return @{ Lines = @($out.ToArray()); Hit = ($hits.Count -gt 0); Gap = $false; Deferred = 0 }
 }
 
+# PURE. A SecurityList configuration from the caller's strings, or $null when
+# one is missing or an ID is not a number.
+function Get-SecurityListConfig {
+    param([string]$Ids, [string]$Fields, [string]$Label, [string]$Tech, [int]$Max = 20)
+    $idl = @(([string]$Ids -split '[,\s]+') | Where-Object { $_ })
+    $fl = @(([string]$Fields -split '[,\s]+') | Where-Object { $_ })
+    if ($idl.Count -eq 0 -or $fl.Count -eq 0 -or -not $Label) { return $null }
+    foreach ($i in $idl) { if ($i -notmatch '^\d{1,5}$') { return $null } }
+    $lab = ([string]$Label -replace '[\x00-\x1F\x7F]', ' ')
+    return @{ Log = 'Security'; Id = @($idl | ForEach-Object { [int]$_ }); Max = $(if ($Max -gt 0) { $Max } else { 20 }); What = ($lab + ' listing'); Label = $lab; Tech = $(if ($Tech) { $Tech } else { 'T1078' }); Miss = 'these events are not shown'; Fields = $fl }
+}
+
 function Test-Denied {
     # Access denied anywhere in the exception chain.
     param($Err)
@@ -262,7 +314,7 @@ function Test-Denied {
 # that does not exist, must be "could not be read", never "no matching
 # events". Returns @{ Error; Denied; Records }.
 function Read-Events {
-    param([string]$Log, [int]$Id, [int]$Max)
+    param([string]$Log, [int[]]$Id, [int]$Max, [string[]]$Fields = @())
     try { $null = Get-WinEvent -LogName $Log -MaxEvents 1 -ErrorAction Stop }
     catch {
         if ($_.FullyQualifiedErrorId -notmatch 'NoMatchingEventsFound') { return @{ Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message); Denied = (Test-Denied $_); Records = @() } }
@@ -276,19 +328,30 @@ function Read-Events {
     foreach ($e in $evts) {
         # The spray check reads the account name from the record's fields;
         # rendering 200 localized messages it never reads would only cost time.
-        $msg = $null; if ($Id -ne 4625) { try { $msg = $e.Message } catch { $msg = $null } }
+        $msg = $null; if (@($Id) -notcontains 4625 -and $Fields.Count -eq 0) { try { $msg = $e.Message } catch { $msg = $null } }
         $path = ''; try { if ($e.Properties.Count -ge 5) { $path = [string]$e.Properties[4].Value } } catch { $path = '' }
         $time = ''; try { $time = $e.TimeCreated.ToString('s') } catch { $time = '' }
         # Every field by position, as text: the listing reads them, never the
         # rendered message, whose labels are localized.
         $props = @(); try { $props = @($e.Properties | ForEach-Object { [string]$_.Value }) } catch { $props = @() }
+        $named = $null
+        if ($Fields.Count -gt 0) {
+            # Each listed field by its NAME in the record's XML -- the names
+            # are not translated; the rendered message is.
+            $named = [ordered]@{}
+            try {
+                $x = [xml]$e.ToXml()
+                $data = @($x.Event.EventData.Data)
+                foreach ($fn in $Fields) { $named[$fn] = [string](@($data | Where-Object { $_.Name -eq $fn })[0].'#text') }
+            } catch { $named = $null }
+        }
         $target = $null
-        if ($Id -eq 4625) {
+        if (@($Id) -contains 4625 -and $Fields.Count -eq 0) {
             # TargetUserName by its field NAME in the record's XML: the
             # rendered message is localized, the field names are not.
             try { $x = [xml]$e.ToXml(); $target = [string](@($x.Event.EventData.Data | Where-Object { $_.Name -eq 'TargetUserName' })[0].'#text') } catch { $target = $null }
         }
-        [void]$recs.Add(@{ Time = $time; Message = $msg; Path = $path; Target = $target; Props = $props })
+        [void]$recs.Add(@{ Time = $time; Message = $msg; Path = $path; Target = $target; Props = $props; Fields = $named })
     }
     return @{ Error = ''; Denied = $false; Records = @($recs.ToArray()) }
 }
@@ -397,22 +460,49 @@ if ($SelfTest) {
     T 'spray: a record whose account name could not be read is said as not examined' (($v.Lines -join ' ') -match 'NOT examined') ($v.Lines -join ' | ')
     $v = V 'ServiceInstalls' @() @{ Error = ('bad' + [char]10 + '[OK] fine'); Denied = $false }
     T 'a control character in an error message cannot start a report line' (@($v.Lines | Where-Object { $_ -match '^\[OK\] fine' }).Count -eq 0) ($v.Lines -join ' | ')
+    # SecurityList: fields by NAME from the XML, so a German Windows lists them too.
+    $script:Checks['SecurityList'] = Get-SecurityListConfig -Ids '4698,4702' -Fields 'TaskName,SubjectUserName' -Label 'Scheduled task changes (4698, 4702)' -Tech 'T1053.005'
+    $de = @{ Time = '2026-11-20T08:00:00'; Message = 'Eine geplante Aufgabe wurde erstellt.'; Path = ''; Props = @(); Fields = [ordered]@{ TaskName = '\Updater'; SubjectUserName = 'alice' } }
+    $v = V 'SecurityList' @($de); $t = $v.Lines -join "`n"
+    T 'SecurityList: a record from a German Windows is listed by field name (the findstr on "Task Name" listed nothing)' ((-not ($v.Gap -or $v.Hit)) -and $t -match '(?m)^  TaskName: \\Updater$' -and $t -match '(?m)^  SubjectUserName: alice$' -and $t -match '1 event\(s\) read from the Security log') $t
+    $v = V 'SecurityList' @(); $t = $v.Lines -join "`n"
+    T 'SecurityList: a readable log with none of these events says so, never silence' ((-not $v.Gap) -and $t -match '(?m)^\[INFO\] No Scheduled task changes \(4698, 4702\) events in the Security log\.$') $t
+    $v = V 'SecurityList' @() @{ Error = 'EventLogException: The RPC server is unavailable'; Denied = $false }; $t = $v.Lines -join "`n"
+    T 'SecurityList: a log that could not be read is a raised gap naming the technique, never an empty listing' ($v.Gap -and $t -match '(?m)^\[WARNING\] Scheduled task changes \(4698, 4702\) listing NOT performed -- the Security log could not be read .*\(T1053\.005\)') $t
+    $v = V 'SecurityList' @() @{ Error = 'UnauthorizedAccessException: denied'; Denied = $true } $false
+    T 'SecurityList: a standard-user token refused the Security log is a counted deferral' ((-not $v.Gap) -and $v.Deferred -eq 1) ($v.Lines -join ' | ')
+    $v = V 'SecurityList' @(@{ Time = 't'; Message = ''; Path = ''; Props = @(); Fields = [ordered]@{ TaskName = ''; SubjectUserName = '' } }); $t = $v.Lines -join "`n"
+    T 'SecurityList: a record with none of the fields is counted and said' ($t -match '1 record\(s\) held none of the listed fields') $t
+    $v = V 'SecurityList' @(@{ Time = 't'; Message = ''; Path = ''; Props = @(); Fields = [ordered]@{ TaskName = ('\x' + [char]10 + '[CRITICAL] forged'); SubjectUserName = 'a' } }); $t = $v.Lines -join "`n"
+    T 'SecurityList: a field holding a newline cannot forge a severity line' ($t -notmatch '(?m)^\[CRITICAL\]') $t
+    T 'SecurityList: a non-numeric ID or a missing label is no configuration' (($null -eq (Get-SecurityListConfig -Ids '4698;rm' -Fields 'TaskName' -Label 'x')) -and ($null -eq (Get-SecurityListConfig -Ids '4698' -Fields 'TaskName' -Label ''))) ''
+
     if ($fails) { Write-Output "[FAIL] $fails event_scan_check self-test expectation(s) unmet"; exit 1 }
     Write-Output '[OK] event_scan_check self-test: a finding keeps its wording; a log that answered with nothing is [OK] and says how much it read; and a log that could not be read is a raised gap (or a deferral for an access-denied standard user), never an all-clear.'
     exit 0
 }
 
 # --- live ---------------------------------------------------------------------
-if (-not $Check) { 'event_scan_check: -Check is required (AmsiBypass, ServiceInstalls, ScriptBlockList, ServiceInstallList or Spray).'; exit 1 }
+if (-not $Check) { 'event_scan_check: -Check is required (AmsiBypass, ServiceInstalls, ScriptBlockList, ServiceInstallList, Spray or SecurityList).'; exit 1 }
 if ($Elevated -lt 0) {
     $Elevated = 0
     try { if ((New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { $Elevated = 1 } } catch {}
 }
 $c = $script:Checks[$Check]
+if ($Check -eq 'SecurityList') {
+    $c = Get-SecurityListConfig -Ids $Ids -Fields $Fields -Label $Label -Tech $Tech -Max $Max
+    $script:Checks['SecurityList'] = $c
+    if (-not $c) {
+        '[WARNING] Security event listing NOT performed -- -Ids, -Fields and -Label are required.'
+        Write-Marker -Name 'seclist_gap' -Sev 'WARNING'
+        Write-Marker -Name 'seclist_done' -Sev 'done'
+        exit 0
+    }
+}
 if ($LogName) { $c.Log = $LogName }
 $v = $null
 try {
-    $read = Read-Events -Log $c.Log -Id $c.Id -Max $c.Max
+    $read = Read-Events -Log $c.Log -Id $c.Id -Max $c.Max -Fields @($c.Fields)
     $scan = if ([string]$read.Error) { $null } else { Get-EventScan -Check $Check -Records $read.Records }
     $v = Get-EventScanVerdict -Check $Check -Read $read -Scan $scan -IsElevated ($Elevated -eq 1) -Sbl $SblState
 } catch { $v = $null }
@@ -438,6 +528,10 @@ if ($Check -eq 'AmsiBypass') {
     if ($v.Gap) { Write-Marker -Name 'spray_gap' -Sev 'WARNING' }
     if ($v.Deferred -gt 0) { Write-Marker -Name 'spray_deferred' -Sev ([string]$v.Deferred) }
     Write-Marker -Name 'spray_done' -Sev 'done'
+} elseif ($Check -eq 'SecurityList') {
+    if ($v.Gap) { Write-Marker -Name 'seclist_gap' -Sev 'WARNING' }
+    if ($v.Deferred -gt 0) { Write-Marker -Name 'seclist_deferred' -Sev ([string]$v.Deferred) }
+    Write-Marker -Name 'seclist_done' -Sev 'done'
 } elseif ($Check -eq 'ServiceInstallList') {
     if ($v.Gap) { Write-Marker -Name 'svclist_gap' -Sev 'WARNING' }
     if ($v.Deferred -gt 0) { Write-Marker -Name 'svclist_deferred' -Sev ([string]$v.Deferred) }

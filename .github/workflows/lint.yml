@@ -684,6 +684,8 @@ jobs:
           branch=$(awk '/^:sec8_noadmin/{f=1;next} /^:sec8_run/{f=0} f' "$nb")
           echo "$branch" | grep -qF 'goto :sec8_fwstate' || { echo "$nb: the standard-user Section 8 branch no longer reaches the firewall-state tool"; exit 1; }
           echo "$branch" | grep -qF 'goto :sec8_verdict' && { echo "$nb: the standard-user Section 8 branch skips the firewall-state tool again"; exit 1; }
+          # ...and lists the rules: netsh needs admin, the rule objects may not.
+          for v in InboundAllow OutboundBlock; do echo "$branch" | grep -qF "call :dz_fwrules $v" || { echo "$nb: the standard-user Section 8 branch no longer lists the $v firewall rules"; exit 1; }; done
           la=$(grep -n '^:sec8_fwstate' "$nb" | head -1 | cut -d: -f1); tc=$(grep -n 'tools\\firewall_state_check.ps1">>' "$nb" | head -1 | cut -d: -f1)
           [ -n "$la" ] && [ -n "$tc" ] && [ "$la" -lt "$tc" ] || { echo "$nb: :sec8_fwstate must come before the firewall-state tool call (label=$la call=$tc)"; exit 1; }
           echo 'firewall and SMBv1: a failed read is a gap; tiles and fixes read the section and the ledger; the standard-user path grades the firewall state'

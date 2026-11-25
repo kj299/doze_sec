@@ -6,6 +6,22 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Listings that read English Windows output now read field names, objects and SIDs
+- **Seven Security-log listings piped `wevtutil /f:text` through `findstr` on English labels:** Events 4672, 4624, 4625, 4698/4702 (scheduled tasks created or changed), 4769 (Kerberos tickets), 4776 (NTLM) and 4648 (explicit credentials). The labels they matched were "Account Name", "Task Name", "Ticket Encryption".
+  - On a non-English Windows each one printed nothing under its heading. So did a log that could not be read, and nothing was raised either way.
+  - They now go through `event_scan_check -Check SecurityList`. It reads each field by its name in the record's XML, which Windows does not translate.
+  - A log that could not be read is a raised gap, or a counted deferral on a standard-user token. No events is said.
+- **Firewall rules (Section 8).** The inbound ALLOW and outbound BLOCK dumps were `netsh ... | findstr "Rule Name"`, so they were empty on a non-English Windows. A standard-user token skipped them entirely.
+  - `tools/firewall_rules_list.ps1` reads `Get-NetFirewallRule` and its filters by property, on both tokens. Only the `netsh` profile dump stays deferred.
+  - A read that failed is a raised gap.
+- **TCP views (Section 3).** The ESTABLISHED and LISTENING views were `netstat | findstr` on English state words, so they were empty on a non-English Windows (HERGESTELLT, ABHOEREN).
+  - Now `tools/system_listing.ps1` uses `Get-NetTCPConnection`, with the state read by property. netstat remains as a fallback, parsed by column.
+  - Nothing read is a raised gap.
+- **Group members (Section 2).** `net localgroup administrators` and "Remote Desktop Users" used the English group names, so a German PC (Administratoren) got only an error.
+  - Both groups are now read by SID, with `net localgroup <the SID's own name>` parsed by position as the fallback.
+  - An Administrators group read as empty is a gap: the built-in Administrator is always a member.
+- **OS summary (Section 1).** It was `systeminfo | findstr "OS Name"`, which is empty on a non-English Windows; it is now read from CIM.
+
 ### A check that could not run is raised, and an unreadable ledger never makes a section CLEAN
 - **Section 4, masquerading.** Each of `masquerade_check`'s six "could not run" exits printed an unraised `[SKIPPED]` and wrote no marker, as did the report's own "nothing could be graded" and "snapshot incomplete" lines. A missing or unreadable process tree therefore lost the CRITICAL "LSASS copy running" signal, and the wrong-parent checks, while Section 4 read CLEAN.
   - Each is now `[WARNING] Masquerading... check NOT performed` with its own ledger row.
