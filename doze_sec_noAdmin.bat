@@ -7313,8 +7313,8 @@ endlocal & exit /b %EXIT_CODE%
 :: absent file is "nothing raised yet" ONLY while FINDINGS is 0; absent with
 :: findings counted means the appends failed, and the old test read that as
 :: CLEAN for every section. findstr also exits 1 for a file it cannot open,
-:: so that case is caught here, by the count, not by its exit code; exit 2
-:: (bad syntax) is not an answer either. A verdict that could not be read is
+:: so a present ledger is read with type first; exit 2 (bad syntax) is not an
+:: answer either. A verdict that could not be read is
 :: said and never CLEAN; it cannot be raised as a row, since the ledger is
 :: what failed.
 set "DZ_SEC_CLEAN=0"
@@ -7322,6 +7322,9 @@ if not defined LEDGER goto :dz_section_clean_unread
 if not exist "%LEDGER%" if "%FINDINGS%"=="0" set "DZ_SEC_CLEAN=1"
 if not exist "%LEDGER%" if "%FINDINGS%"=="0" goto :eof
 if not exist "%LEDGER%" goto :dz_section_clean_unread
+:: A ledger that exists but cannot be opened (held open by a scanner) makes
+:: findstr exit 1, "no match": prove it is readable first.
+type "%LEDGER%" >nul 2>&1 || goto :dz_section_clean_unread
 findstr /b /c:"CRITICAL|%~1|" /c:"WARNING|%~1|" "%LEDGER%" >nul 2>&1
 if errorlevel 2 goto :dz_section_clean_unread
 if errorlevel 1 set "DZ_SEC_CLEAN=1"

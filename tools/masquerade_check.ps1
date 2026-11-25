@@ -813,9 +813,12 @@ function Get-ParentReport {
         } elseif ($ok -gt 0) {
             [void]$out.Add(('[OK] ' + $ok + ' system-process name(s) were started by the parent Windows uses, one of each where Windows runs one -- no masquerading by parent.'))
         } else {
+            # A plain gap on either token: a standard user reads every process's
+            # parent and creation time (proc_snapshot), so the token does not
+            # explain a tree with nothing gradable.
             $g = '[WARNING] Masquerading-by-parent check NOT performed -- no system-process parent could be graded.'
             [void]$out.Add($g)
-            return @{ Lines = @($out.ToArray()); Marker = $null; CountMarker = $null; LsassCopyMarker = $null; CopyMarker = $null; Gap = 'nograde'; GapLine = $g }
+            return @{ Lines = @($out.ToArray()); Marker = $null; CountMarker = $null; LsassCopyMarker = $null; CopyMarker = $null; Gap = 'gap'; GapLine = $g }
         }
         return @{ Lines = @($out.ToArray()); Marker = $null; CountMarker = $null; LsassCopyMarker = $null; CopyMarker = $null }
     }

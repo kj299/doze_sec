@@ -47,7 +47,11 @@ try {
   $o = (& .\tools\psv2_check.ps1 -StateFile (Join-Path $scr 'psv2state') -GapFile $g) -join "`n"; Write-Host $o
   if (Test-Path $g) { throw 'psv2_check raised a gap on a runner, where PSv2 state is knowable' }
   $o = (& .\tools\edr_presence.ps1 -MarkerDir $scr) -join "`n"; Write-Host $o
-  if ($o -match 'Security Center check NOT performed') { throw 'root\SecurityCenter2 could not be queried on a client runner' }
+  # GitHub's Windows runners are Windows Server, which has no Security Center:
+  # said as such, never a gap (a client PC with it unreadable is the gap).
+  $pt = [int](Get-CimInstance Win32_OperatingSystem).ProductType
+  if ($pt -ne 1 -and $o -notmatch '\[INFO\] Security Center does not exist on Server editions') { throw "a Server runner (ProductType $pt) did not say Security Center does not exist there" }
+  if ($o -match 'Security Center check NOT performed') { throw "Security Center raised a gap on this runner (ProductType $pt)" }
 
   # ---- :dz_section_clean, the real subroutine, under cmd.exe ----
   foreach ($bat in 'doze_sec.bat', 'doze_sec_noAdmin.bat') {
@@ -67,9 +71,19 @@ try {
     $o = (& cmd.exe /d /c "`"$h`"") -join "`n"; Write-Host "${bat}: $o"
     if ($o -notmatch 'A=0' -or $o -notmatch 'B=1' -or $o -notmatch 'C=0' -or $o -notmatch 'D=1') { throw "${bat}: :dz_section_clean answered wrongly (want A=0 B=1 C=0 D=1): $o" }
     if ((Get-Content -LiteralPath $rep -Raw) -notmatch '\[WARNING\] Section 4 verdict NOT determined') { throw "${bat}: an absent ledger with findings counted did not say NOT determined" }
-    # Measured, not assumed: what findstr exits for a ledger held open with no sharing.
+    # A ledger that exists but is held open with no sharing (a scanner): findstr
+    # exits 1 ("no match") for it, so the subroutine must test it readable first.
     $fs = [IO.File]::Open($led, 'Open', 'Read', 'None')
-    try { $null = & cmd.exe /d /c "findstr /b /c:`"WARNING|4|`" `"$led`" >nul 2>&1"; Write-Host "[MEASURED] findstr on a ledger held open with no sharing exits $LASTEXITCODE" } finally { $fs.Close() }
+    try {
+      $null = & cmd.exe /d /c "findstr /b /c:`"WARNING|4|`" `"$led`" >nul 2>&1"; Write-Host "[MEASURED] findstr on a ledger held open with no sharing exits $LASTEXITCODE"
+      Remove-Item -LiteralPath $rep -Force -EA SilentlyContinue
+      $body2 = @('@echo off', 'setlocal EnableDelayedExpansion', ('set "REPORT=' + $rep + '"'), ('set "LEDGER=' + $led + '"'), 'set "FINDINGS=1"',
+        'call :dz_section_clean 5', 'echo E=!DZ_SEC_CLEAN!', 'exit /b 0') + $L[$a..$b]
+      [IO.File]::WriteAllLines($h, [string[]]$body2)
+      $o = (& cmd.exe /d /c "`"$h`"") -join "`n"; Write-Host "${bat} locked: $o"
+      if ($o -notmatch 'E=0') { throw "${bat}: a ledger held open with no sharing made the section CLEAN" }
+      if ((Get-Content -LiteralPath $rep -Raw) -notmatch 'Section 5 verdict NOT determined') { throw "${bat}: a locked ledger did not say NOT determined" }
+    } finally { $fs.Close() }
   }
   Write-Host '[OK] I1: a masquerade check that could not run is a raised gap (a deferral where the token explains it), the runner raised none, and a ledger that could not be read never makes a section CLEAN.'
 } finally {

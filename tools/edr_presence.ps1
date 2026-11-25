@@ -66,6 +66,16 @@ function Write-Marker {
     }
     Set-Content -LiteralPath (Join-Path $MarkerDir ("dz_{0}.txt" -f $Name)) -Value $Sev -Encoding ASCII
 }
+# PURE. What an unreadable root\SecurityCenter2 means, by product type
+# (1 workstation, 2 domain controller, 3 server; $null unread).
+function Get-SecurityCenterGap {
+    param($ProductType, [string]$Err = '')
+    if ($null -ne $ProductType -and [int]$ProductType -ne 1) {
+        return @{ Gap = $false; Line = '[INFO] Security Center does not exist on Server editions (root\SecurityCenter2 is a client feature) -- registered security products were not listed from it.' }
+    }
+    return @{ Gap = $true; Line = ('[WARNING] Security Center check NOT performed -- root\SecurityCenter2 could not be queried' + $(if ($Err) { ' (' + $Err + ')' } else { '' }) + ', so a registered antivirus that is switched off would go unseen (T1562.001).') }
+}
+
 function Test-MdeOnboarded {
     # OnboardingState = 1 under this key is how Defender for Endpoint records a
     # completed enrollment; the key is absent on machines never onboarded.
@@ -94,6 +104,9 @@ if ($SelfTest) {
     T 'access denied (5) is a service this token could not check, never "not installed"' ((Get-ScmAbsence 5) -eq 'unprobed')
     T 'no exit code at all is unprobed, never "not installed"' ((Get-ScmAbsence $null) -eq 'unprobed')
     T 'a failed sc.exe launch (-1) is unprobed' ((Get-ScmAbsence -1) -eq 'unprobed')
+    T 'Security Center unreadable on client Windows is a raised gap' ((Get-SecurityCenterGap -ProductType 1 -Err 'x').Gap)
+    T 'Security Center unreadable with the product type unread is a raised gap' ((Get-SecurityCenterGap -ProductType $null).Gap)
+    T 'a Server edition (a CI runner) has no Security Center: said, never a gap' (-not (Get-SecurityCenterGap -ProductType 3).Gap -and (Get-SecurityCenterGap -ProductType 3).Line -match '^\[INFO\] Security Center does not exist on Server editions')
     if ($fails) { "[FAIL] edr_presence self-test: $fails case(s) failed"; exit 1 }
     '[OK] edr_presence self-test: only the service manager''s own 1060 reads as not installed.'
     exit 0
@@ -199,12 +212,18 @@ try {
     if ($av.Count -eq 0) { '[INFO] Security Center lists no registered antivirus product.' }
 } catch { $scOk = $false; $scErr = (([string]$_.Exception.Message) -replace '\s+', ' ').Trim() }
 if (-not $scOk) {
-    # A raised gap (2026-11-25), not an unraised [SKIPPED]: the audit refuses
-    # Server editions, so on every Windows it runs on this namespace exists,
-    # and a standard user can read it. Unreadable, an antivirus registered
-    # but switched off (the finding above) would go unseen.
-    '[WARNING] Security Center check NOT performed -- root\SecurityCenter2 could not be queried' + $(if ($scErr) { ' (' + $scErr + ')' } else { '' }) + ', so a registered antivirus that is switched off would go unseen (T1562.001).'
-    Write-Marker -Name 'edr_gap' -Sev 'WARNING'
+    # Server editions have no Security Center at all (ProductType 2 or 3):
+    # said, not raised -- the audit refuses Server except under -dev, which
+    # is how CI runs on Windows Server runners. On client Windows (1) the
+    # namespace always exists and a standard user can read it, so failing to
+    # ask it is a raised gap (2026-11-25): an antivirus registered but
+    # switched off would otherwise go unseen. A product type that cannot be
+    # read is a client until shown otherwise.
+    $ptype = $null
+    try { $ptype = [int](Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).ProductType } catch {}
+    $scv = Get-SecurityCenterGap -ProductType $ptype -Err $scErr
+    $scv.Line
+    if ($scv.Gap) { Write-Marker -Name 'edr_gap' -Sev 'WARNING' }
 }
 
 # ---- Sysmon ---------------------------------------------------------------

@@ -28,3 +28,4 @@
 
 # ---- per-item lines whose aggregate raise is elsewhere ----------------------
 *|SMART failure status on PhysicalDrive|per-drive detail line; the aggregate raise is `call :dz_finding WARNING INIT SMART` after the loop, and raising per drive would count one failing disk many times
+*|verdict NOT determined -- the findings ledger could not be read|audit self-degradation: the ledger is the thing that failed, so this notice cannot be a ledger row; the section is reported not CLEAN instead (group I1, 2026-11-25)
