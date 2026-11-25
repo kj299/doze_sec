@@ -6,6 +6,15 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### Persistence locations no longer read as empty when they could not be read (Section 5)
+- Several checks decided "nothing there" with `Test-Path`, which answers false for a path or key this account may not open. All of these now ask with `-ErrorAction Stop`, and the failures are raised:
+  - **PowerShell profiles:** a denied profile folder read "[OK] No PowerShell profile scripts present". The ISE and VS Code host profiles, and PowerShell 7's own profile folder, were never read; they are now.
+  - **Print port monitors, time providers and netsh helpers:** these keys exist on every Windows. A key reported missing or unreadable read "All 0 registered ... [OK]"; it is now a raised gap.
+  - **Startup folder:** a folder Windows reports but this account could not open read "Startup folder not present".
+  - **AppCertDlls:** a missing key is still stock Windows. Only a key that is there and unreadable is a gap.
+  - **IFEO Debugger values:** they were read with `-EA SilentlyContinue`, so a value this account could not read was skipped uncounted. Each is now counted under the existing administrator-gap / standard-user-deferral rule.
+- **Also:** the IFEO read used `-Path`, which treats `[ ]` in a subkey name as a wildcard. It now uses `-LiteralPath`.
+
 ### Browser extensions (Section 15): a profile or policy key it could not read is raised, not "no extensions"
 - `tools/browser_extensions.ps1` ran with `$ErrorActionPreference = 'SilentlyContinue'` and used `Test-Path` to decide what was absent. As a result:
   - a `User Data` folder, a profile listing or a force-install policy key this account could not read looked like a browser that is not installed;

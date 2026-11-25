@@ -49,10 +49,58 @@
 
 [CmdletBinding()]
 param(
-    [string]$MarkerDir = $env:TEMP
+    [string]$MarkerDir = $env:TEMP,
+    # CI-only: planted Startup folders and AppCertDlls key. Prefixed Ci so no
+    # name collides, case-insensitively, with a variable of the script.
+    [string[]]$CiStartupFolders = @(),
+    [string]$CiAppCertKey = '',
+    [switch]$SelfTest
 )
 
 $ErrorActionPreference = 'Continue'
+
+function Test-AbsentForSure {
+    # A path is absent only when its parent ANSWERS without it, or the parent
+    # itself does not exist (a browser that is not installed). A parent that
+    # refuses to list is not an answer.
+    param([string]$Path)
+    $parent = [IO.Path]::GetDirectoryName($Path); $leaf = [IO.Path]::GetFileName($Path)
+    if (-not $parent -or -not $leaf) { return $false }
+    try { $names = @([IO.Directory]::GetFileSystemEntries($parent)) }
+    catch [System.IO.DirectoryNotFoundException] { return $true }
+    catch { return $false }
+    foreach ($n in $names) { if ([IO.Path]::GetFileName($n) -eq $leaf) { return $false } }
+    return $true
+}
+
+# A folder's state (2026-11-25, I4a): absent only when its parent answers
+# without it. Test-Path answered false for a folder this account may not
+# open, and the check printed "[OK] Startup folder not present".
+function Get-FolderState {
+    param([string]$Path)
+    try { $null = Get-Item -LiteralPath $Path -Force -ErrorAction Stop; return @{ State = 'present'; Why = '' } }
+    catch {
+        if (Test-AbsentForSure $Path) { return @{ State = 'absent'; Why = '' } }
+        return @{ State = 'unread'; Why = (([string]$_.Exception.Message) -replace '\s+', ' ').Trim() }
+    }
+}
+
+if ($SelfTest) {
+    $fails = 0
+    function T { param([string]$N, [bool]$Ok, [string]$Got)
+        if ($Ok) { Write-Output "[OK]   $N" } else { Write-Output "[FAIL] $N$(if ($Got) { ": $Got" })"; $script:fails++ }
+    }
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ('dz_se_' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    try {
+        New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+        T 'a Startup folder that is there is present' ((Get-FolderState $tmp).State -eq 'present') ''
+        T 'a Startup folder whose parent answers without it is absent' ((Get-FolderState (Join-Path $tmp 'Startup')).State -eq 'absent') ''
+        T 'a Startup folder under a parent that does not exist is absent' ((Get-FolderState (Join-Path $tmp 'a\b\Startup')).State -eq 'absent') ''
+    } finally { Remove-Item -LiteralPath $tmp -Recurse -Force -EA SilentlyContinue }
+    if ($fails) { Write-Output "[FAIL] $fails startup_eval self-test expectation(s) unmet"; exit 1 }
+    Write-Output '[OK] startup_eval self-test: a Startup folder is absent only when its parent answers without it; anything else is read or a gap.'
+    exit 0
+}
 
 # Registry key last-write time. PowerShell's registry provider does NOT expose
 # it -- Get-Item on a key returns a RegistryKey with no LastWriteTime -- so it
@@ -220,13 +268,20 @@ foreach ($sf in @('Startup', 'CommonStartup')) {
     try { $path = [Environment]::GetFolderPath($sf) } catch {}
     if ($path) { $folders += $path }
 }
+if ($CiStartupFolders.Count) { $folders = @($CiStartupFolders) }
 if (-not $folders.Count) {
     '[WARNING] Could not resolve the Startup folder paths -- check NOT performed.'
     $startupGap = 'WARNING'
 } else {
     foreach ($folder in $folders) {
-        if (-not (Test-Path -LiteralPath $folder)) {
+        $fs = Get-FolderState $folder
+        if ($fs.State -eq 'absent') {
             "[OK] Startup folder not present: $folder"
+            continue
+        }
+        if ($fs.State -eq 'unread') {
+            "[WARNING] Startup folder check NOT performed -- $folder could not be opened ($($fs.Why)), so a program placed there to run at sign-in would go unseen (T1547.001)."
+            $startupGap = 'WARNING'
             continue
         }
         $items = $null
@@ -296,12 +351,16 @@ if ($startupGap -ne 'OK') { Write-Marker -Name 'startup_folder_gap' -Sev $startu
 '--- [T1546.009] AppCert DLLs (load into every CreateProcess caller) ---'
 $appcertSev = 'OK'
 $appcertGap = 'OK'
-$acKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\AppCertDlls'
+$acKey = if ($CiAppCertKey) { $CiAppCertKey } else { 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\AppCertDlls' }
 $acOk = $true
 $acProps = $null
+# Absent IS stock Windows for this key; only a key that is there and could
+# not be read is the gap. Test-Path read both as absent (2026-11-25, I4a).
 try {
-    if (Test-Path $acKey) { $acProps = Get-ItemProperty -Path $acKey -EA Stop }
-} catch { $acOk = $false }
+    $null = Get-Item -LiteralPath $acKey -ErrorAction Stop
+    $acProps = Get-ItemProperty -LiteralPath $acKey -EA Stop
+} catch [System.Management.Automation.ItemNotFoundException] { $acProps = $null }
+catch { $acOk = $false }
 if (-not $acOk) {
     '[WARNING] AppCertDlls key could not be read -- check NOT performed.'
     $appcertGap = 'WARNING'
