@@ -51,12 +51,16 @@ function ConvertTo-Field {
 }
 
 function Test-AccessDenied {
-    # Access denied anywhere in the exception chain, or a CIM/WMI access code.
+    # Access denied by TYPE or CODE, never by the message's words: the text
+    # is translated, and an English match turned a standard user's refusal
+    # into a raised gap on every non-English Windows (review, 2026-11-25).
     param($Err)
+    try { if ([string]$Err.CategoryInfo.Category -eq 'PermissionDenied') { return $true } } catch {}
     $x = $Err.Exception
     while ($x) {
         if ($x -is [System.UnauthorizedAccessException]) { return $true }
-        if ([string]$x.Message -match 'Access is denied|0x80070005|0x80041003') { return $true }
+        try { if ([string]$x.NativeErrorCode -eq 'AccessDenied') { return $true } } catch {}
+        try { if ([int]$x.HResult -eq [int]0x80070005 -or [int]$x.HResult -eq [int]0x80041003) { return $true } } catch {}
         $x = $x.InnerException
     }
     return $false
@@ -129,8 +133,8 @@ if ($SelfTest) {
     exit 0
 }
 
-if (-not $View) { '[WARNING] Firewall rule listing NOT performed -- -View is required.'; Write-Marker -Name 'fwrules_gap' -Sev 'WARNING'; exit 0 }
 foreach ($n in 'fwrules_gap', 'fwrules_deferred', 'fwrules_done') { Remove-Item -LiteralPath (Join-Path $MarkerDir ("dz_{0}.txt" -f $n)) -Force -EA SilentlyContinue }
+if (-not $View) { '[WARNING] Firewall rule listing NOT performed -- -View is required.'; Write-Marker -Name 'fwrules_gap' -Sev 'WARNING'; Write-Marker -Name 'fwrules_done' -Sev 'done'; exit 0 }
 if ($Elevated -lt 0) {
     $Elevated = 0
     try { if ((New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.SecurityIdentifier]'S-1-5-32-544')) { $Elevated = 1 } } catch {}

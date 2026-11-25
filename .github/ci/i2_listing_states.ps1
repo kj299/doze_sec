@@ -34,6 +34,16 @@ try {
   Write-Host $o
   if (-not (Has 'seclist_gap') -or $o -notmatch '\[WARNING\] Planted listing NOT performed -- the dz-ci-no-such-log log could not be read') { throw 'a log that does not exist was not a raised gap' }
 
+  # The reader change must not stop the OTHER checks reading messages: a
+  # field list of @($null) once read as one field, so no message was
+  # rendered and AMSI, service-install and spray checks read clean.
+  Clear-M
+  $o = (& .\tools\event_scan_check.ps1 -Check ScriptBlockList -MarkerDir $md -Elevated 1) -join "`n"
+  $shown = ([regex]::Matches($o, '(?m)^TimeCreated: ')).Count
+  Write-Host ("[MEASURED] ScriptBlockList: {0} block(s) listed" -f $shown)
+  if ($shown -gt 0 -and $o -notmatch '(?m)^  ScriptBlock ID:') { Write-Host $o; throw 'Script Block records were listed with no rendered message (ScriptBlock ID) -- the reader stopped rendering messages' }
+  if ($o -match 'had no text Windows could render') { Write-Host $o; throw 'the reader reported Script Block events with no text on a runner' }
+
   # ---- firewall_rules_list ----
   Clear-M
   $o = (& .\tools\firewall_rules_list.ps1 -View InboundAllow -MarkerDir $md) -join "`n"
