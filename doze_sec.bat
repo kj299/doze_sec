@@ -2037,7 +2037,8 @@ echo       and Mulberry Typhoon used CVE-2022-27518. Patch fast.>> "%REPORT%"
 echo  Scanned: %date% %time%>> "%REPORT%"
 echo ====================================================================>> "%REPORT%"
 
-systeminfo | findstr /i /c:"OS Name" /c:"OS Version" /c:"System Boot" /c:"Domain" /c:"Logon Server" /c:"Total Physical" /c:"Hotfix">> "%REPORT%" 2>&1
+echo  Command: powershell -File tools\system_listing.ps1 -Mode OsSummary   [CIM: Win32_OperatingSystem, Win32_ComputerSystem, Win32_QuickFixEngineering]>> "%REPORT%"
+call :dz_listing OsSummary - 1 AUDITGAP "Operating-system summary"
 
 echo.>> "%REPORT%"
 echo --- Last 20 Hotfixes (newest first) --->> "%REPORT%"
@@ -2132,13 +2133,13 @@ echo Get-LocalUser ^| Select-Object Name,Enabled,LastLogon,PasswordLastSet,Passw
 
 echo.>> "%REPORT%"
 echo --- Local Administrators Group --->> "%REPORT%"
-echo  Command: net localgroup administrators>> "%REPORT%"
-net localgroup administrators>> "%REPORT%" 2>&1
+echo  Command: powershell -File tools\system_listing.ps1 -Mode Group -Sid S-1-5-32-544   [by SID: the group is Administratoren, Administrateurs... elsewhere]>> "%REPORT%"
+call :dz_listing Group S-1-5-32-544 2 T1078.001 "Administrators group"
 
 echo.>> "%REPORT%"
 echo --- Remote Desktop Users Group --->> "%REPORT%"
-echo  Command: net localgroup "Remote Desktop Users">> "%REPORT%"
-net localgroup "Remote Desktop Users">> "%REPORT%" 2>&1
+echo  Command: powershell -File tools\system_listing.ps1 -Mode Group -Sid S-1-5-32-555   [by SID, in any Windows language]>> "%REPORT%"
+call :dz_listing Group S-1-5-32-555 2 T1078.001 "Remote Desktop Users group"
 
 echo.>> "%REPORT%"
 echo --- Guest Account (must be Disabled) --->> "%REPORT%"
@@ -2220,14 +2221,14 @@ netstat -ano>> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- ESTABLISHED Connections --->> "%REPORT%"
-echo  Command: netstat -ano ^| findstr /c:"ESTABLISHED">> "%REPORT%"
-netstat -ano | findstr /c:"ESTABLISHED">> "%REPORT%" 2>&1
+echo  Command: powershell -File tools\system_listing.ps1 -Mode TcpEstablished   [Get-NetTCPConnection, the state read by property]>> "%REPORT%"
+call :dz_listing TcpEstablished - 3 T1071 "Established TCP connections"
 echo  [INFO] Review ESTABLISHED connections against known-good baselines.>> "%REPORT%"
 
 echo.>> "%REPORT%"
 echo --- LISTENING Ports --->> "%REPORT%"
-echo  Command: netstat -ano ^| findstr /c:"LISTENING">> "%REPORT%"
-netstat -ano | findstr /c:"LISTENING">> "%REPORT%" 2>&1
+echo  Command: powershell -File tools\system_listing.ps1 -Mode TcpListening   [Get-NetTCPConnection, the state read by property]>> "%REPORT%"
+call :dz_listing TcpListening - 3 T1071 "Listening TCP ports"
 echo  [INFO] Review listening ports for unexpected services.>> "%REPORT%"
 
 echo.>> "%REPORT%"
@@ -3358,13 +3359,13 @@ netsh advfirewall show allprofiles>> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
 echo --- Inbound ALLOW Rules --->> "%REPORT%"
-echo  Command: netsh advfirewall firewall show rule name=all dir=in action=allow ^| findstr /i /c:"Rule Name" /c:"LocalPort" /c:"RemoteIP" /c:"Enabled" /c:"Program" /c:"Action">> "%REPORT%"
-netsh advfirewall firewall show rule name=all dir=in action=allow | findstr /i /c:"Rule Name" /c:"LocalPort" /c:"RemoteIP" /c:"Enabled" /c:"Program" /c:"Action">> "%REPORT%" 2>&1
+echo  Command: powershell -File tools\firewall_rules_list.ps1 -View InboundAllow   [Get-NetFirewallRule and its filters, read by property]>> "%REPORT%"
+call :dz_fwrules InboundAllow
 
 echo.>> "%REPORT%"
 echo --- Outbound BLOCK Rules --->> "%REPORT%"
-echo  Command: netsh advfirewall firewall show rule name=all dir=out action=block ^| findstr /i /c:"Rule Name" /c:"RemoteIP" /c:"Enabled" /c:"Program">> "%REPORT%"
-netsh advfirewall firewall show rule name=all dir=out action=block | findstr /i /c:"Rule Name" /c:"RemoteIP" /c:"Enabled" /c:"Program">> "%REPORT%" 2>&1
+echo  Command: powershell -File tools\firewall_rules_list.ps1 -View OutboundBlock   [Get-NetFirewallRule and its filters, read by property]>> "%REPORT%"
+call :dz_fwrules OutboundBlock
 
 echo.>> "%REPORT%"
 echo --- Firewall Profile State (evaluated) --->> "%REPORT%"
@@ -5135,18 +5136,18 @@ if not "!ACCTEV_STATE:~0,6!"=="e4720=" if exist "%SCRIPT_DIR%tools\account_event
 
 echo.>> "%REPORT%"
 echo --- Special Privilege Logon - Event 4672 --->> "%REPORT%"
-echo  Command: wevtutil qe Security /q:"*[System[(EventID=4672)]]" /c:20 /rd:true /f:text ^| findstr /c:"TimeCreated" /c:"Account Name" /c:"Privileges">> "%REPORT%"
-wevtutil qe Security /q:"*[System[(EventID=4672)]]" /c:20 /rd:true /f:text | findstr /c:"TimeCreated" /c:"Account Name" /c:"Privileges">> "%REPORT%" 2>&1
+echo  Command: powershell -File tools\event_scan_check.ps1 -Check SecurityList -Ids 4672 -Fields SubjectUserName,SubjectDomainName,PrivilegeList   [each field read by name from the record XML]>> "%REPORT%"
+call :dz_seclist "4672" "SubjectUserName,SubjectDomainName,PrivilegeList" "Special privilege logons - Event 4672" 16 T1078
 
 echo.>> "%REPORT%"
 echo --- Failed Logins - Event 4625 (spray = many accounts, same source) --->> "%REPORT%"
-echo  Command: wevtutil qe Security /q:"*[System[(EventID=4625)]]" /c:25 /rd:true /f:text ^| findstr /c:"TimeCreated" /c:"Account Name" /c:"Failure Reason" /c:"Source Network" /c:"Logon Type">> "%REPORT%"
-wevtutil qe Security /q:"*[System[(EventID=4625)]]" /c:25 /rd:true /f:text | findstr /c:"TimeCreated" /c:"Account Name" /c:"Failure Reason" /c:"Source Network" /c:"Logon Type">> "%REPORT%" 2>&1
+echo  Command: powershell -File tools\event_scan_check.ps1 -Check SecurityList -Ids 4625 -Fields TargetUserName,TargetDomainName,LogonType,IpAddress,Status,SubStatus   [each field read by name from the record XML]>> "%REPORT%"
+call :dz_seclist "4625" "TargetUserName,TargetDomainName,LogonType,IpAddress,Status,SubStatus" "Failed sign-ins - Event 4625" 16 T1110.003
 
 echo.>> "%REPORT%"
 echo --- Successful Logins - Event 4624 --->> "%REPORT%"
-echo  Command: wevtutil qe Security /q:"*[System[(EventID=4624)]]" /c:25 /rd:true /f:text ^| findstr /c:"TimeCreated" /c:"Account Name" /c:"Logon Type" /c:"Source Network">> "%REPORT%"
-wevtutil qe Security /q:"*[System[(EventID=4624)]]" /c:25 /rd:true /f:text | findstr /c:"TimeCreated" /c:"Account Name" /c:"Logon Type" /c:"Source Network">> "%REPORT%" 2>&1
+echo  Command: powershell -File tools\event_scan_check.ps1 -Check SecurityList -Ids 4624 -Fields TargetUserName,TargetDomainName,LogonType,IpAddress,WorkstationName   [each field read by name from the record XML]>> "%REPORT%"
+call :dz_seclist "4624" "TargetUserName,TargetDomainName,LogonType,IpAddress,WorkstationName" "Successful sign-ins - Event 4624" 16 T1078
 
 echo.>> "%REPORT%"
 echo --- New Service Installed - Event 7045 --->> "%REPORT%"
@@ -5182,8 +5183,8 @@ del "%TEMP%\dz_svclist_done.txt" 2>nul
 
 echo.>> "%REPORT%"
 echo --- Scheduled Task Changes - Events 4698, 4702 --->> "%REPORT%"
-echo  Command: wevtutil qe Security /q:"*[System[(EventID=4698 or EventID=4702)]]" /c:20 /rd:true /f:text ^| findstr /c:"TimeCreated" /c:"Task Name" /c:"Subject">> "%REPORT%"
-wevtutil qe Security /q:"*[System[(EventID=4698 or EventID=4702)]]" /c:20 /rd:true /f:text | findstr /c:"TimeCreated" /c:"Task Name" /c:"Subject">> "%REPORT%" 2>&1
+echo  Command: powershell -File tools\event_scan_check.ps1 -Check SecurityList -Ids 4698,4702 -Fields TaskName,SubjectUserName   [each field read by name from the record XML]>> "%REPORT%"
+call :dz_seclist "4698,4702" "TaskName,SubjectUserName" "Scheduled task changes - Events 4698 and 4702" 16 T1053.005
 
 echo.>> "%REPORT%"
 echo --- PS Script Block Executions - Event 4104 --->> "%REPORT%"
@@ -5238,13 +5239,13 @@ wevtutil qe "Microsoft-Windows-Windows Defender/Operational" /q:"*[System[(Event
 
 echo.>> "%REPORT%"
 echo --- Kerberos RC4 Tickets - Event 4769 (Kerberoasting IOC) --->> "%REPORT%"
-echo  Command: wevtutil qe Security /q:"*[System[(EventID=4769)]]" /c:20 /rd:true /f:text ^| findstr /c:"TimeCreated" /c:"Account Name" /c:"Service Name" /c:"Ticket Encryption">> "%REPORT%"
-wevtutil qe Security /q:"*[System[(EventID=4769)]]" /c:20 /rd:true /f:text | findstr /c:"TimeCreated" /c:"Account Name" /c:"Service Name" /c:"Ticket Encryption">> "%REPORT%" 2>&1
+echo  Command: powershell -File tools\event_scan_check.ps1 -Check SecurityList -Ids 4769 -Fields TargetUserName,ServiceName,TicketEncryptionType,IpAddress   [each field read by name from the record XML]>> "%REPORT%"
+call :dz_seclist "4769" "TargetUserName,ServiceName,TicketEncryptionType,IpAddress" "Kerberos service tickets - Event 4769" 16 T1558.003
 
 echo.>> "%REPORT%"
 echo --- NTLM Auth - Event 4776 (Forest Blizzard relay IOC) --->> "%REPORT%"
-echo  Command: wevtutil qe Security /q:"*[System[(EventID=4776)]]" /c:20 /rd:true /f:text ^| findstr /c:"TimeCreated" /c:"Logon Account" /c:"Source Workstation" /c:"Error Code">> "%REPORT%"
-wevtutil qe Security /q:"*[System[(EventID=4776)]]" /c:20 /rd:true /f:text | findstr /c:"TimeCreated" /c:"Logon Account" /c:"Source Workstation" /c:"Error Code">> "%REPORT%" 2>&1
+echo  Command: powershell -File tools\event_scan_check.ps1 -Check SecurityList -Ids 4776 -Fields TargetUserName,Workstation,Status   [each field read by name from the record XML]>> "%REPORT%"
+call :dz_seclist "4776" "TargetUserName,Workstation,Status" "NTLM credential validation - Event 4776" 16 T1550.002
 echo.>> "%REPORT%"
 
 :: ====================================================================
@@ -6640,8 +6641,8 @@ if exist "%TEMP%\dz_cloudcred_gap.txt" (
 :: --- [CTI] Explicit Credential Logon - Event 4648 (T1078) ---
 echo.>> "%REPORT%"
 echo --- [CTI][T1078] Explicit Credential Logons - Event 4648 --->> "%REPORT%"
-echo  Command: wevtutil qe Security /q:"*[System[(EventID=4648)]]" /c:20 /rd:true /f:text ^| findstr /c:"TimeCreated" /c:"Subject:" /c:"Account Name" /c:"Target Server">> "%REPORT%"
-wevtutil qe Security /q:"*[System[(EventID=4648)]]" /c:20 /rd:true /f:text | findstr /c:"TimeCreated" /c:"Subject:" /c:"Account Name" /c:"Target Server">> "%REPORT%" 2>&1
+echo  Command: powershell -File tools\event_scan_check.ps1 -Check SecurityList -Ids 4648 -Fields SubjectUserName,TargetUserName,TargetServerName,ProcessName   [each field read by name from the record XML]>> "%REPORT%"
+call :dz_seclist "4648" "SubjectUserName,TargetUserName,TargetServerName,ProcessName" "Explicit-credential sign-ins - Event 4648" 18 T1078
 
 :: --- [CTI] SSH Server (OpenSSH) Enabled Check ---
 echo.>> "%REPORT%"
@@ -7563,6 +7564,93 @@ goto :eof
 echo [WARNING] tools\policy_value_check.ps1 not found -- %~4 NOT performed.>> "%REPORT%"
 call :dz_finding WARNING %2 %3 "%~4 NOT performed - tool missing"
 goto :eof
+:: ====================================================================
+:: :dz_listing -- one listing through tools\system_listing.ps1 (group I2,
+:: 2026-11-25). %1 mode, %2 SID or -, %3 section, %4 technique, %5 label (no
+:: parentheses). Replaced netstat, net localgroup and systeminfo output read
+:: through findstr on English words: empty on a non-English Windows.
+:: ====================================================================
+:dz_listing
+if not exist "%SCRIPT_DIR%tools\system_listing.ps1" (
+    echo [WARNING] %~5 listing NOT performed -- tools\system_listing.ps1 not found.>> "%REPORT%"
+    call :dz_finding WARNING %3 %4 "%~5 listing NOT performed - tools\system_listing.ps1 missing"
+    goto :eof
+)
+if "%~2"=="-" "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\system_listing.ps1" -Mode %1>> "%REPORT%" 2>&1
+if not "%~2"=="-" "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\system_listing.ps1" -Mode %1 -Sid %2>> "%REPORT%" 2>&1
+if exist "%TEMP%\dz_listing_gap.txt" (
+    call :dz_finding WARNING %3 %4 "%~5 listing NOT performed - it could not be read"
+    del "%TEMP%\dz_listing_gap.txt" 2>nul
+)
+if not exist "%TEMP%\dz_listing_done.txt" (
+    echo [WARNING] %~5 listing produced no verdict -- NOT performed: tools\system_listing.ps1 ran but did not finish.>> "%REPORT%"
+    call :dz_finding WARNING %3 %4 "%~5 listing produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_listing_done.txt" 2>nul
+goto :eof
+
+:: ====================================================================
+:: :dz_fwrules -- one firewall rule listing through tools\firewall_rules_list.ps1
+:: (group I2, 2026-11-25). %1 = InboundAllow or OutboundBlock. It replaced
+:: netsh ... | findstr on English labels, empty on a non-English Windows.
+:: ====================================================================
+:dz_fwrules
+if not exist "%SCRIPT_DIR%tools\firewall_rules_list.ps1" (
+    echo [WARNING] Firewall rule listing NOT performed -- tools\firewall_rules_list.ps1 not found.>> "%REPORT%"
+    call :dz_finding WARNING 8 T1562.004 "Firewall rule listing NOT performed - tools\firewall_rules_list.ps1 missing"
+    goto :eof
+)
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\firewall_rules_list.ps1" -View %1>> "%REPORT%" 2>&1
+if exist "%TEMP%\dz_fwrules_gap.txt" (
+    call :dz_finding WARNING 8 T1562.004 "Firewall rule listing NOT performed - the firewall rules could not be read"
+    del "%TEMP%\dz_fwrules_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_fwrules_deferred.txt" (
+    set /a DEFERRED_COUNT+=1
+    del "%TEMP%\dz_fwrules_deferred.txt" 2>nul
+)
+if not exist "%TEMP%\dz_fwrules_done.txt" (
+    echo [WARNING] Firewall rule listing produced no verdict -- NOT performed: tools\firewall_rules_list.ps1 ran but did not finish.>> "%REPORT%"
+    call :dz_finding WARNING 8 T1562.004 "Firewall rule listing produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_fwrules_done.txt" 2>nul
+goto :eof
+
+:: ====================================================================
+:: :dz_seclist -- one Security-log listing through tools\event_scan_check.ps1
+:: -Check SecurityList (group I2, 2026-11-25). Args: %1 ids "4698,4702",
+:: %2 field names, %3 label (NO parentheses: it is expanded inside the
+:: blocks below), %4 section, %5 technique. It replaced wevtutil /f:text |
+:: findstr on English labels, which listed nothing on a non-English Windows
+:: and nothing for a log it could not read, with no row either way. Fields
+:: are read by name from each record's XML; a log that could not be read is
+:: a raised gap, a standard-user refusal a counted deferral.
+:: ====================================================================
+:dz_seclist
+del "%TEMP%\dz_seclist_gap.txt" 2>nul
+del "%TEMP%\dz_seclist_deferred.txt" 2>nul
+del "%TEMP%\dz_seclist_done.txt" 2>nul
+if not exist "%SCRIPT_DIR%tools\event_scan_check.ps1" (
+    echo [WARNING] %~3 listing NOT performed -- tools\event_scan_check.ps1 not found.>> "%REPORT%"
+    call :dz_finding WARNING %4 %5 "%~3 listing NOT performed - tools\event_scan_check.ps1 missing"
+    goto :eof
+)
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\event_scan_check.ps1" -Check SecurityList -Ids "%~1" -Fields "%~2" -Label "%~3" -Tech %5>> "%REPORT%" 2>&1
+if exist "%TEMP%\dz_seclist_gap.txt" (
+    call :dz_finding WARNING %4 %5 "%~3 listing NOT performed - the Security log could not be read"
+    del "%TEMP%\dz_seclist_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_seclist_deferred.txt" (
+    set /a DEFERRED_COUNT+=1
+    del "%TEMP%\dz_seclist_deferred.txt" 2>nul
+)
+if not exist "%TEMP%\dz_seclist_done.txt" (
+    echo [WARNING] %~3 listing produced no verdict -- NOT performed: tools\event_scan_check.ps1 ran but did not finish.>> "%REPORT%"
+    call :dz_finding WARNING %4 %5 "%~3 listing produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_seclist_done.txt" 2>nul
+goto :eof
+
 :dz_evt_verdict
 rem The verdict for an Event 4688 listing.
 rem   %1 section   %2 technique   %3 list or labels   %4 what (quoted)

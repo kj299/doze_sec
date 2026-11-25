@@ -2817,6 +2817,12 @@ jobs:
           & .\.github\ci\root_cert_states.ps1
           exit $LASTEXITCODE
 
+      - name: "I2 on 5.1: Security-log listings, firewall rules, TCP views and group members read from field names, objects and SIDs, in any Windows language"
+        shell: powershell
+        run: |
+          & .\.github\ci\i2_listing_states.ps1
+          exit $LASTEXITCODE
+
       - name: "I1 on 5.1: a masquerade check that could not run, an undetermined PSv2 state and an unreadable ledger are raised or said, never CLEAN"
         shell: powershell
         run: |
