@@ -2736,14 +2736,14 @@ jobs:
           Remove-Item $mk, $sf -Force -EA SilentlyContinue
           $out = (.\tools\psv2_check.ps1 -MarkerFile $mk -StateFile $sf) -join "`n"
           Write-Host $out
-          if ($out -match '\[SKIPPED\]') { throw 'psv2_check could not determine PSv2 state on a real runner -- all four methods were inconclusive' }
+          if ($out -match '\[SKIPPED\]|NOT determined') { throw 'psv2_check could not determine PSv2 state on a real runner -- all five methods were inconclusive' }
           if ($out -notmatch 'determined by:') { throw 'psv2_check did not name the method that answered' }
           $state = (Get-Content $sf -EA SilentlyContinue | Select-Object -First 1)
           if ($state -notin @('ENABLED','DISABLED')) { throw "state file says '$state' -- expected a definite ENABLED or DISABLED" }
           # The marker and the verdict must agree: a WARNING with no marker is a
           # finding that never reaches the ledger, which is this repo's oldest bug.
           $hit = Test-Path $mk
-          if (($out -match '\[WARNING\]') -ne $hit) { throw "verdict and marker disagree: WARNING=$($out -match '\[WARNING\]') marker=$hit" }
+          if (($out -match 'PowerShell v2 ENABLED') -ne $hit) { throw "verdict and marker disagree: ENABLED=$($out -match 'PowerShell v2 ENABLED') marker=$hit" }
           Remove-Item $mk, $sf -Force -EA SilentlyContinue
           .\tools\psv2_check.ps1 -SelfTest
           if ($LASTEXITCODE -ne 0) { throw 'psv2_check self-test failed' }
@@ -2815,6 +2815,12 @@ jobs:
         shell: powershell
         run: |
           & .\.github\ci\root_cert_states.ps1
+          exit $LASTEXITCODE
+
+      - name: "I1 on 5.1: a masquerade check that could not run, an undetermined PSv2 state and an unreadable ledger are raised or said, never CLEAN"
+        shell: powershell
+        run: |
+          & .\.github\ci\i1_gap_states.ps1
           exit $LASTEXITCODE
 
       - name: "H2b on 5.1: VT with no key, a baseline category not captured, a denied credential or history folder are raised gaps, never an all-clear"

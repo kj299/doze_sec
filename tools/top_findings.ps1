@@ -46,6 +46,13 @@ if (-not $lines -or $lines.Count -eq 0) { return }
 # regex matched against the FULL finding line (case-insensitive).
 # Add to this table as new findings are introduced.
 $whyTable = [ordered]@{
+    # First on purpose: a check whose helper script is missing gets this note,
+    # whatever the check is (first match wins).
+    'NOT performed -- tools\\[A-Za-z0-9_]+\.ps1 not found' = 'A helper script this check needs is missing from the tools folder, so the check did not run. This is missing coverage, not a pass. Copy the whole doze_sec folder again (the tools folder must sit beside the .bat), or re-run from a fresh download.'
+    'Masquerading-by-name check NOT performed|Masquerading-by-parent check NOT performed' = 'The process snapshot or process tree could not be read or graded, so a copy of a Windows process running from the wrong place, started by the wrong parent, or an LSASS copy (how credential dumpers read its memory) would go unseen. This is missing coverage, not a pass; the line says what could not be read.'
+    'PSv2 engine state NOT determined' = 'None of the five ways of asking could say whether the PowerShell 2 engine is installed. PowerShell 2 predates AMSI, so if it is there an attacker can run scripts antivirus never scans. This is missing coverage, not a pass; the line lists what was tried.'
+    'Security Center check NOT performed' = 'Windows Security Center could not be asked which antivirus products are registered, so one that is registered but switched off would go unseen. Security Center exists on every Windows 10 and 11 PC; a broken WMI repository is a common cause.'
+    'Section \d+ verdict NOT determined' = 'The audit could not read back its own list of findings, so it would not call this section CLEAN. The findings printed in the section still stand; re-run the audit, and check that the output folder is writable.'
     'LSASS PPL DISABLED|LSASS PPL not configured|LSASS PPL not enabled|LSASS protection set but not in effect' = 'LSASS Protected Process Light is disabled or unset. Without PPL, Mimikatz can dump cleartext credentials directly from LSASS memory.'
     'WDigest ENABLED'      = 'WDigest plaintext credential caching is on. Attackers extract cleartext passwords from LSASS using documented techniques.'
     'NTLMv1 allowed'       = 'NTLMv1 is crackable in minutes via Responder + hashcat. Set LmCompatibilityLevel=5 to require NTLMv2.'

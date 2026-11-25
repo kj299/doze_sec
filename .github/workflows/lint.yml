@@ -492,7 +492,7 @@ jobs:
                    'RuntimeBroker.exe whose parent PID belongs to a LATER svchost.exe is named as a reused number, and the clock is not blamed' \
                    'dwm.exe in session 1 under the winlogon.exe of session 2 is WARNING (a winlogon.exe only starts processes in its own session)' \
                    'smss.exe whose parent calls itself System but is not PID 4 is WARNING: System is PID 4 and nothing else' \
-                   'a snapshot with no lsass.exe is SKIPPED, never OK (every running Windows has one)' \
+                   'a snapshot with no lsass.exe is a gap, never OK (every running Windows has one)' \
                    'a ten-digit session ID parses (4294967295 is not dropped or overflowed)' \
                    'a dwm.exe under services.exe in session 0 is a finding, never "a session that is ending"' \
                    'userinit.exe under a living, OLDER cmd.exe in a session that is ending is WARNING: an older holder is no reused number, it started the child' \

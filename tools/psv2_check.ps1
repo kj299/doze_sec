@@ -40,6 +40,12 @@ param(
     # can be exercised without a machine in that state. Never set in the bats.
     [ValidateSet('', 'Enabled', 'Disabled', 'Inconclusive')]
     [string]$ForceResult = '',
+    # Written when no method could tell (2026-11-25). That verdict was an
+    # unraised [SKIPPED], so an undetermined AMSI-downgrade path reached no
+    # ledger row and Section 11 read CLEAN. It is a raised gap on either
+    # token: the registry engine key and the v2 launch need no admin, so a
+    # standard-user token does not explain an all-inconclusive result.
+    [string]$GapFile,
     [switch]$SelfTest
 )
 
@@ -153,7 +159,7 @@ if ($SelfTest) {
     foreach ($case in @(
         @{ Force = 'Enabled';      Sev = 'WARNING';  Needle = 'PowerShell v2 ENABLED';   Marker = $true;  State = 'ENABLED'  },
         @{ Force = 'Disabled';     Sev = 'OK';       Needle = 'PowerShell v2 disabled';  Marker = $false; State = 'DISABLED' },
-        @{ Force = 'Inconclusive'; Sev = 'SKIPPED';  Needle = 'all 5 method';            Marker = $false; State = 'UNKNOWN'  }
+        @{ Force = 'Inconclusive'; Sev = 'GAP';      Needle = 'all 5 method';            Marker = $false; State = 'UNKNOWN'  }
     )) {
         $mk = Join-Path ([System.IO.Path]::GetTempPath()) ('dz_psv2_st_' + [guid]::NewGuid().ToString('N').Substring(0,8) + '.txt')
         $sf = "$mk.state"
@@ -174,11 +180,19 @@ if ($SelfTest) {
         if ($out -notlike ('*' + $n + '*')) { Write-Output "[FAIL] inconclusive output does not name the method '$n'"; $fails++ }
     }
     if ($fails -eq 0) { Write-Output "[OK]   an inconclusive result names all five methods it tried" }
+    $gf = Join-Path ([System.IO.Path]::GetTempPath()) ('dz_psv2_gap_' + [guid]::NewGuid().ToString('N').Substring(0,8) + '.txt')
+    $out = (& $PSCommandPath -ForceResult Inconclusive -GapFile $gf) -join "`n"
+    if ($out -match '\[SKIPPED\]' -or $out -notmatch '(?m)^\[WARNING\] PSv2 engine state NOT determined' -or -not (Test-Path -LiteralPath $gf)) { Write-Output "[FAIL] an inconclusive result is not a raised gap (the unraised [SKIPPED] it replaced): $out"; $fails++ }
+    else { Write-Output '[OK]   an inconclusive result is a raised gap, never an unraised [SKIPPED]' }
+    $out = (& $PSCommandPath -ForceResult Disabled -GapFile $gf) -join "`n"
+    if (Test-Path -LiteralPath $gf) { Write-Output '[FAIL] a definite answer left a gap marker behind'; $fails++ } else { Write-Output '[OK]   a definite answer clears the gap marker' }
+    Remove-Item -LiteralPath $gf -Force -EA SilentlyContinue
     if ($fails) { Write-Output "[FAIL] $fails psv2_check self-test expectation(s) unmet"; exit 1 }
-    Write-Output '[OK] psv2_check self-test: enabled raises, disabled is clean, inconclusive is declared and itemised.'
+    Write-Output '[OK] psv2_check self-test: enabled raises, disabled is clean, inconclusive is a raised gap that names what it tried.'
     exit 0
 }
 
+if ($GapFile) { Remove-Item -LiteralPath $GapFile -Force -EA SilentlyContinue }
 $v = Get-Psv2Verdict -Force $ForceResult
 
 if ($StateFile) {
@@ -189,7 +203,8 @@ if ($StateFile) {
 }
 
 if ($null -eq $v.Enabled) {
-    Write-Output ("[SKIPPED] PSv2 state undetermined -- all {0} methods were inconclusive: {1}. This is NOT a clean result: an AMSI-downgrade path may exist and this run could not tell." -f $v.Tried.Count, ($v.Tried -join '; '))
+    Write-Output ("[WARNING] PSv2 engine state NOT determined -- all {0} methods were inconclusive: {1}. This is NOT a clean result: an AMSI-downgrade path may exist and this run could not tell." -f $v.Tried.Count, ($v.Tried -join '; '))
+    if ($GapFile) { Write-MarkerFile -Path $GapFile -Value 'WARNING' }
     exit 0
 }
 if ($v.Enabled) {

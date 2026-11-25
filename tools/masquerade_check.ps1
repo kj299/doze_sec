@@ -58,6 +58,17 @@ param(
     [string]$LsassCopyMarkerFile,
     [string]$CopyMarkerFile,
     [string]$SystemRoot = $env:SystemRoot,
+    # A check that could not run is said AND raised (2026-11-25): every exit
+    # below printed an unraised [SKIPPED] and exit 0, so a missing process
+    # tree lost the CRITICAL "LSASS copy running" signal while Section 4
+    # read CLEAN. -GapFile is written for a gap, -DeferredFile when a
+    # standard-user token is the whole reason nothing could be graded, and
+    # -DoneFile last on every path that reached a verdict or a declared gap
+    # (the bat's "produced no verdict" backstop reads it).
+    [string]$GapFile,
+    [string]$DeferredFile,
+    [string]$DoneFile,
+    [int]$Elevated = -1,
     [switch]$SelfTest
 )
 $ErrorActionPreference = 'Continue'
@@ -187,8 +198,9 @@ function Get-MasqueradeReport {
         }
     }
     if ($parsed -eq 0) {
-        [void]$out.Add('[SKIPPED] the process snapshot held no parseable lines -- masquerading check NOT performed.')
-        return @{ Lines = @($out.ToArray()); Marker = $null }
+        $g = '[WARNING] Masquerading check NOT performed -- the process snapshot held no parseable lines.'
+        [void]$out.Add($g)
+        return @{ Lines = @($out.ToArray()); Marker = $null; Gap = 'gap'; GapLine = $g }
     }
     if ($unverified -gt 0) {
         [void]$out.Add(('[INFO] ' + $unverified + ' system-process name(s) had no readable path (protected, or another user''s on a non-admin run) -- not graded, not cleared.'))
@@ -199,7 +211,9 @@ function Get-MasqueradeReport {
         } else {
             # Nothing could be graded. That is not an all-clear, and it must
             # not read like one.
-            [void]$out.Add('[SKIPPED] no system-process path could be graded -- masquerading by name NOT verified.')
+            $g = '[WARNING] Masquerading-by-name check NOT performed -- no system-process path could be graded.'
+            [void]$out.Add($g)
+            return @{ Lines = @($out.ToArray()); Marker = $null; Gap = 'nograde'; GapLine = $g }
         }
         return @{ Lines = @($out.ToArray()); Marker = $null }
     }
@@ -622,8 +636,9 @@ function Get-ParentReport {
     foreach ($rec in $records) { $byPid[$rec.Pid] = $rec }
     $siloOf = @{}; if ($null -ne $Containers -and $null -ne $Containers.Silos) { $siloOf = $Containers.Silos }
     if ($records.Count -eq 0) {
-        [void]$out.Add('[SKIPPED] the process tree snapshot held no parseable lines -- masquerading by parent NOT verified.')
-        return @{ Lines = @($out.ToArray()); Marker = $null }
+        $g = '[WARNING] Masquerading-by-parent check NOT performed -- the process tree snapshot held no parseable lines.'
+        [void]$out.Add($g)
+        return @{ Lines = @($out.ToArray()); Marker = $null; Gap = 'gap'; GapLine = $g }
     }
     # The names the snapshot holds, and the names each session holds. System
     # counts only at PID 4: a process elsewhere calling itself System is not it.
@@ -792,11 +807,18 @@ function Get-ParentReport {
         if ($missing.Count -gt 0) {
             # A snapshot without the core processes cannot clear anything: the
             # processes it lost are exactly the ones this check compares against.
-            [void]$out.Add(('[SKIPPED] the process snapshot holds no ' + ($missing -join ', ') + ', which every running Windows has -- the snapshot is incomplete, so masquerading by parent is NOT verified.'))
+            $g = ('[WARNING] Masquerading-by-parent check NOT performed -- the process snapshot holds no ' + ($missing -join ', ') + ', which every running Windows has, so it is incomplete.')
+            [void]$out.Add($g)
+            return @{ Lines = @($out.ToArray()); Marker = $null; CountMarker = $null; LsassCopyMarker = $null; CopyMarker = $null; Gap = 'gap'; GapLine = $g }
         } elseif ($ok -gt 0) {
             [void]$out.Add(('[OK] ' + $ok + ' system-process name(s) were started by the parent Windows uses, one of each where Windows runs one -- no masquerading by parent.'))
         } else {
-            [void]$out.Add('[SKIPPED] no system-process parent could be graded -- masquerading by parent NOT verified.')
+            # A plain gap on either token: a standard user reads every process's
+            # parent and creation time (proc_snapshot), so the token does not
+            # explain a tree with nothing gradable.
+            $g = '[WARNING] Masquerading-by-parent check NOT performed -- no system-process parent could be graded.'
+            [void]$out.Add($g)
+            return @{ Lines = @($out.ToArray()); Marker = $null; CountMarker = $null; LsassCopyMarker = $null; CopyMarker = $null; Gap = 'gap'; GapLine = $g }
         }
         return @{ Lines = @($out.ToArray()); Marker = $null; CountMarker = $null; LsassCopyMarker = $null; CopyMarker = $null }
     }
@@ -947,9 +969,9 @@ if ($SelfTest) {
     $clean = Get-MasqueradeReport -Lines ($dump | Select-Object -First 5) -SystemRoot $root
     T 'the same snapshot without the impostor is OK with no marker' ($null -eq $clean.Marker -and (($clean.Lines -join "`n") -match '\[OK\] 2 system-process name\(s\) run from their canonical directories')) ($clean.Lines -join ' | ')
     $none = Get-MasqueradeReport -Lines @('', '   ') -SystemRoot $root
-    T 'an empty snapshot is SKIPPED, never OK' ($null -eq $none.Marker -and (($none.Lines -join "`n") -match '^\[SKIPPED\]')) ($none.Lines -join ' | ')
+    T 'an empty snapshot is a raised gap, never OK' ($null -eq $none.Marker -and $none.Gap -eq 'gap' -and (($none.Lines -join "`n") -match '^\[WARNING\] Masquerading check NOT performed')) ($none.Lines -join ' | ')
     $noroot = Get-MasqueradeReport -Lines $dump -SystemRoot ''
-    T 'no Windows directory: every system name is unverified, nothing is cleared, and the block says SKIPPED' ($null -eq $noroot.Marker -and (($noroot.Lines -join "`n") -notmatch '\[OK\]') -and (($noroot.Lines -join "`n") -match '\[INFO\] 4 system-process name') -and (($noroot.Lines -join "`n") -match '\[SKIPPED\] no system-process path could be graded')) ($noroot.Lines -join ' | ')
+    T 'no Windows directory: every system name is unverified, nothing is cleared, and the block is a gap (a deferral on a standard-user token)' ($null -eq $noroot.Marker -and (($noroot.Lines -join "`n") -notmatch '\[OK\]') -and (($noroot.Lines -join "`n") -match '\[INFO\] 4 system-process name') -and $noroot.Gap -eq 'nograde' -and (($noroot.Lines -join "`n") -match '\[WARNING\] Masquerading-by-name check NOT performed -- no system-process path could be graded')) ($noroot.Lines -join ' | ')
 
     # ---- by parent ----
     function PV { param([string]$n, $ct, $par, [bool]$present = $true, [bool]$moved = $false, $cs = $null, $alive = $true) Get-ParentVerdict -Name $n -ChildTicks $ct -ChildSession $cs -Parent $par -RightfulPresent $present -ClockMoved $moved -AliveInSession $alive }
@@ -1159,21 +1181,21 @@ if ($SelfTest) {
     T 'a clock that moved backward: nothing is flagged for it, and the report says time was not used' ($null -eq $pr.Marker -and $pt -match '\[INFO\] The clock moved backward since this boot') $pt
     # Incomplete snapshots: they can show an impostor, never clear anything.
     $pr = Get-ParentReport -Tree ($tree | Where-Object { $_ -notlike '900|*' })
-    T 'a snapshot that lost services.exe does not turn every svchost.exe into a finding, and is SKIPPED, not OK' ($null -eq $pr.Marker -and ($pr.Lines -join "`n") -match 'could not be graded by parent' -and ($pr.Lines -join "`n") -match '\[SKIPPED\] the process snapshot holds no services\.exe' -and ($pr.Lines -join "`n") -notmatch '\[OK\]') ($pr.Lines -join ' | ')
+    T 'a snapshot that lost services.exe does not turn every svchost.exe into a finding, and is a gap, not OK' ($null -eq $pr.Marker -and ($pr.Lines -join "`n") -match 'could not be graded by parent' -and ($pr.Lines -join "`n") -match '\[WARNING\] Masquerading-by-parent check NOT performed -- the process snapshot holds no services\.exe' -and $pr.Gap -eq 'gap' -and ($pr.Lines -join "`n") -notmatch '\[OK\]') ($pr.Lines -join ' | ')
     $pr = Get-ParentReport -Tree ($tree | Where-Object { $_ -notlike '920|*' })
-    T 'a snapshot with no lsass.exe is SKIPPED, never OK (every running Windows has one)' ($null -eq $pr.Marker -and ($pr.Lines -join "`n") -match '(?m)^\[SKIPPED\] the process snapshot holds no lsass\.exe, which every running Windows has' -and ($pr.Lines -join "`n") -notmatch '\[OK\]') ($pr.Lines -join ' | ')
+    T 'a snapshot with no lsass.exe is a gap, never OK (every running Windows has one)' ($null -eq $pr.Marker -and ($pr.Lines -join "`n") -match '(?m)^\[WARNING\] Masquerading-by-parent check NOT performed -- the process snapshot holds no lsass\.exe, which every running Windows has' -and ($pr.Lines -join "`n") -notmatch '\[OK\]') ($pr.Lines -join ' | ')
     $pr = Get-ParentReport -Tree (@($tree | Where-Object { $_ -notlike '920|*' }) + @('4242|3000|6000|1|C:\Windows\System32\svchost.exe|svchost.exe'))
     T 'an incomplete snapshot still shows an impostor, and says it is incomplete' ($pr.Marker -eq 'WARNING' -and ($pr.Lines -join "`n") -match '\(PID 4242\) has the wrong parent' -and ($pr.Lines -join "`n") -match '\[INFO\] The process snapshot holds no lsass\.exe') ($pr.Lines -join ' | ')
     $pr = Get-ParentReport -Tree (@($tree | Where-Object { $_ -notlike '4|*' }) + @('666|3000|1500|1|C:\Users\Public\System|System'))
-    T 'a process calling itself System that is not PID 4 does not stand in for it: SKIPPED, not OK' ($null -eq $pr.Marker -and ($pr.Lines -join "`n") -match '\[SKIPPED\] the process snapshot holds no System \(PID 4\)' -and ($pr.Lines -join "`n") -notmatch '\[OK\]') ($pr.Lines -join ' | ')
+    T 'a process calling itself System that is not PID 4 does not stand in for it: a gap, not OK' ($null -eq $pr.Marker -and ($pr.Lines -join "`n") -match '\[WARNING\] Masquerading-by-parent check NOT performed -- the process snapshot holds no System \(PID 4\)' -and ($pr.Lines -join "`n") -notmatch '\[OK\]') ($pr.Lines -join ' | ')
     $pr = Get-ParentReport -Tree ($tree + @('666|3000|1500|1|C:\Users\Public\System|System', '6400|666|1600|1||smss.exe'))
     T 'smss.exe started by a fake System (not PID 4) is a finding' ($pr.Marker -eq 'WARNING' -and ($pr.Lines -join "`n") -match '\(PID 6400\) has the wrong parent: PID 666 belongs to System -- Windows starts smss\.exe only from System or the first smss\.exe') ($pr.Lines -join ' | ')
     $pr = Get-ParentReport -Tree @('', 'garbage', '1|2|3|svchost.exe')
-    T 'an empty, unparseable or old-format tree is SKIPPED, never OK' ($null -eq $pr.Marker -and ($pr.Lines -join "`n") -match '^\[SKIPPED\] the process tree snapshot held no parseable lines') ($pr.Lines -join ' | ')
+    T 'an empty, unparseable or old-format tree is a gap, never OK' ($null -eq $pr.Marker -and ($pr.Lines -join "`n") -match '^\[WARNING\] Masquerading-by-parent check NOT performed -- the process tree snapshot held no parseable lines' -and $pr.Gap -eq 'gap') ($pr.Lines -join ' | ')
     $pr = Get-ParentReport -Tree @('4|0||0||System', '520|4||0||smss.exe', '700|612|||C:\Windows\System32\csrss.exe|csrss.exe', '900|780|||C:\Windows\System32\services.exe|services.exe', '920|780|||C:\Windows\System32\lsass.exe|lsass.exe', '1000|900|||C:\Windows\System32\svchost.exe|svchost.exe', '780|612|||C:\Windows\System32\wininit.exe|wininit.exe')
     T 'a tree with no creation times still grades, by name, the parents that are one process' ($null -eq $pr.Marker -and ($pr.Lines -join "`n") -match '\[OK\] 4 system-process name') ($pr.Lines -join ' | ')
     $pr = Get-ParentReport -Tree @('9|4|1|0||Registry', '10|9|2|0||conhost.exe')
-    T 'a tree with nothing gradable says SKIPPED, never OK' ($null -eq $pr.Marker -and ($pr.Lines -join "`n") -match '(?m)^\[SKIPPED\]' -and ($pr.Lines -join "`n") -notmatch '\[OK\]') ($pr.Lines -join ' | ')
+    T 'a tree with nothing gradable is a gap, never OK' ($null -eq $pr.Marker -and @('gap', 'nograde') -contains $pr.Gap -and ($pr.Lines -join "`n") -match '(?m)^\[WARNING\] Masquerading-by-parent check NOT performed' -and ($pr.Lines -join "`n") -notmatch '\[OK\]') ($pr.Lines -join ' | ')
     $pr = Get-ParentReport -Tree @('900|780|1020|0||services.exe', '780|612|1011|0||wininit.exe', '1000|3000|1300|0||svchost.exe', ('3000|1|1250|1||evil' + [char]7 + 'name.exe'))
     T 'a control character in a parent name is not printed' ((($pr.Lines -join "`n") -notmatch [char]7) -and (($pr.Lines -join "`n") -match 'evil\?name\.exe')) ($pr.Lines -join ' | ')
     $pr = Get-ParentReport -Tree @('900|780|1020|0||services.exe', '780|612|1011|0||wininit.exe', '1000|900|1030|0||svchost.exe', '1000|3000|1030|0||svchost.exe')
@@ -1309,45 +1331,62 @@ if ($SelfTest) {
     T 'a second lsass.exe in session 0 never asks the kernel, and no container note casts doubt on it (a container''s lsass never runs in session 0)' (-not $cr.ReaderCalled -and $script:ReaderCalls -eq 0 -and $cr.Report.CountMarker -eq 'WARNING' -and ($cr.Report.Lines -join "`n") -notmatch 'container') ($cr.Report.Lines -join ' | ')
 
     if ($fails) { Write-Output "[FAIL] $fails masquerade_check self-test expectation(s) unmet"; exit 1 }
-    Write-Output '[OK] masquerade_check self-test: canonical directories in any casing are clean, a system name anywhere else is a WARNING, and a name with no path is stated as unverified; by parent, a parent that is one process (System at PID 4, smss, wininit, services) or the winlogon of the child''s own session is clean whatever the clock did, a service host counts only when it is older than the child, anything else at a parent that cannot exit is a WARNING, a session that is ending is counted not flagged, csrss/wininit/winlogon are graded by one per session and never by the clock, a snapshot missing a core process is SKIPPED, never OK, and a system process that is a copy of its parent is named as one (an LSASS copy CRITICAL), while browsers, explorer and the per-session smss are not; a process-isolated container is graded inside its own server silo only when the kernel confirms the silo and the session has a container''s shape, and an impostor beside it is not.'
+    Write-Output '[OK] masquerade_check self-test: canonical directories in any casing are clean, a system name anywhere else is a WARNING, and a name with no path is stated as unverified; by parent, a parent that is one process (System at PID 4, smss, wininit, services) or the winlogon of the child''s own session is clean whatever the clock did, a service host counts only when it is older than the child, anything else at a parent that cannot exit is a WARNING, a session that is ending is counted not flagged, csrss/wininit/winlogon are graded by one per session and never by the clock, a snapshot missing a core process is a raised gap, never OK, and a system process that is a copy of its parent is named as one (an LSASS copy CRITICAL), while browsers, explorer and the per-session smss are not; a process-isolated container is graded inside its own server silo only when the kernel confirms the silo and the session has a container''s shape, and an impostor beside it is not.'
     exit 0
+}
+
+foreach ($f in @($GapFile, $DeferredFile, $DoneFile)) { if ($f) { Remove-Item -LiteralPath $f -Force -EA SilentlyContinue } }
+if ($Elevated -lt 0) {
+    $Elevated = 0
+    try { if ((New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.SecurityIdentifier]'S-1-5-32-544')) { $Elevated = 1 } } catch {}
+}
+function Exit-Gap {
+    param([string]$Line)
+    $Line
+    Write-MarkerFile -Path $GapFile -Value 'WARNING'
+    Write-MarkerFile -Path $DoneFile -Value 'done'
+    exit 0
+}
+# A report's own gap: print its lines, turning a "nothing gradable" gap into
+# a counted deferral where a standard-user token explains it (another
+# account's processes expose no path to it), and raise every other gap.
+function Out-ReportLines {
+    param($Report)
+    foreach ($l in $Report.Lines) {
+        if ($Report.Gap -eq 'nograde' -and $Elevated -ne 1 -and $l -ceq $Report.GapLine) {
+            '[DEFERRED - ADMIN REQUIRED] ' + ($l -replace '^\[WARNING\] ', '' -replace ' NOT performed --', ' not performed from this token --') + ' Re-run as administrator.'
+            Write-MarkerFile -Path $DeferredFile -Value '1'
+            continue
+        }
+        $l
+    }
+    if ($Report.Gap -eq 'gap' -or ($Report.Gap -eq 'nograde' -and $Elevated -eq 1)) { Write-MarkerFile -Path $GapFile -Value 'WARNING' }
 }
 
 '--- [T1036] System-process name masquerading (a system name running outside its directory) ---'
-if (-not $Path) {
-    '[SKIPPED] masquerade_check: -Path <process snapshot> required -- the audit passes the Section 4 dump; masquerading check NOT performed.'
-    exit 0
-}
-if (-not (Test-Path -LiteralPath $Path)) {
-    "[SKIPPED] masquerade_check: snapshot '$Path' not found -- masquerading check NOT performed."
-    exit 0
-}
+if (-not $Path) { Exit-Gap '[WARNING] Masquerading check NOT performed -- no process snapshot was given (-Path).' }
+if (-not (Test-Path -LiteralPath $Path)) { Exit-Gap "[WARNING] Masquerading check NOT performed -- the process snapshot '$Path' was not found." }
 $lines = @()
 try { $lines = @(Get-Content -LiteralPath $Path -EA Stop) } catch {
-    "[SKIPPED] masquerade_check: snapshot unreadable ($($_.Exception.Message)) -- masquerading check NOT performed."
-    exit 0
+    Exit-Gap "[WARNING] Masquerading check NOT performed -- the process snapshot could not be read ($($_.Exception.Message))."
 }
 $report = Get-MasqueradeReport -Lines $lines -SystemRoot $SystemRoot
-foreach ($l in $report.Lines) { $l }
+Out-ReportLines $report
 if ($report.Marker) { Write-MarkerFile -Path $MarkerFile -Value $report.Marker }
 
 '--- [T1036] System-process name masquerading by parent (a system name started by a parent Windows never uses) ---'
-if (-not $TreePath) {
-    '[SKIPPED] masquerade_check: -TreePath <process tree> not given -- masquerading by parent NOT verified.'
-    exit 0
-}
-if (-not (Test-Path -LiteralPath $TreePath)) {
-    "[SKIPPED] masquerade_check: process tree '$TreePath' not found -- masquerading by parent NOT verified."
-    exit 0
-}
+# The tree is written by proc_snapshot.ps1 from the same query; the bat's
+# inline fallback writes none, and that is this gap.
+if (-not $TreePath) { Exit-Gap '[WARNING] Masquerading-by-parent check NOT performed -- no process tree was given (-TreePath), so a wrong parent or an LSASS copy would go unseen.' }
+if (-not (Test-Path -LiteralPath $TreePath)) { Exit-Gap "[WARNING] Masquerading-by-parent check NOT performed -- the process tree '$TreePath' was not found, so a wrong parent or an LSASS copy would go unseen." }
 $tree = @()
 try { $tree = @(Get-Content -LiteralPath $TreePath -EA Stop) } catch {
-    "[SKIPPED] masquerade_check: process tree unreadable ($($_.Exception.Message)) -- masquerading by parent NOT verified."
-    exit 0
+    Exit-Gap "[WARNING] Masquerading-by-parent check NOT performed -- the process tree could not be read ($($_.Exception.Message)), so a wrong parent or an LSASS copy would go unseen."
 }
 $parentReport = (Get-ParentReportWithContainers -Tree $tree -SiloReader $script:LiveSiloReader -SystemRoot $SystemRoot).Report
-foreach ($l in $parentReport.Lines) { $l }
+Out-ReportLines $parentReport
 if ($parentReport.Marker) { Write-MarkerFile -Path $ParentMarkerFile -Value $parentReport.Marker }
 if ($parentReport.CountMarker) { Write-MarkerFile -Path $CountMarkerFile -Value $parentReport.CountMarker }
 if ($parentReport.LsassCopyMarker) { Write-MarkerFile -Path $LsassCopyMarkerFile -Value $parentReport.LsassCopyMarker }
 if ($parentReport.CopyMarker) { Write-MarkerFile -Path $CopyMarkerFile -Value $parentReport.CopyMarker }
+Write-MarkerFile -Path $DoneFile -Value 'done'
