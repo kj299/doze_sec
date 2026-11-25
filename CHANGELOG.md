@@ -24,6 +24,7 @@ are a separate, machine-specific record of changes each audit made.
   - `browser_extensions`
 
   Each is now a raised WARNING row. `tools/lint_helper_done.ps1` fails on any `[INFO]` or `[SKIPPED]` "tools\X.ps1 not found" line in either bat, outside a reasoned allowlist; the only entry is the optional threat-list updater.
+- **CI.** The Security Center assertion in `.github/ci/i1_gap_states.ps1` assumed a Windows Server runner has no `root\SecurityCenter2`. The windows-latest image (ProductType 3) does answer it, so the assertion failed on a correct result. It now fails only on a raised gap, or on the Server wording printed on client Windows, and it logs what it measured.
 - **Section verdicts.** `:dz_section_clean` read the ledger with `findstr ... && set not-clean`, so a ledger whose appends had failed made every section CLEAN.
   - The ledger is created by the first finding, so a missing ledger now counts as "nothing raised yet" only while the findings count is 0.
   - Otherwise each section prints `[WARNING] Section N verdict NOT determined` and is never reported CLEAN.
