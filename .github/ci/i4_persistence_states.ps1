@@ -58,19 +58,23 @@ try {
   $o = (& .\tools\persistence_extra.ps1 -MarkerDir $md -CiMonitorRoot "$hk\Monitors" -CiTimeProvRoot "$hk\TimeProviders" -CiNetshKey "$hk\Netsh") -join "`n"
   foreach ($n in 'portmon_gap', 'timeprov_gap', 'netsh_gap') { if (-not (Has $n)) { Write-Host $o; throw "a missing always-there key did not raise $n" } }
   if ($o -match 'All 0 registered port monitor|All 0 registered time provider|No netsh helper DLLs registered') { Write-Host $o; throw 'a missing always-there key read as an empty [OK] (the defect)' }
-  New-Item -Path "$hk\Monitors\Standard TCP/IP Port" -Force | Out-Null
+  New-Item -Path "$hk\Monitors\Standard TCP-IP Port" -Force | Out-Null
   Deny-Key "$sub\Monitors"
   Clear-M
   $o = (& .\tools\persistence_extra.ps1 -MarkerDir $md -CiMonitorRoot "$hk\Monitors") -join "`n"
   if (-not (Has 'portmon_gap') -or $o -match 'All 0 registered port monitor') { Write-Host $o; throw 'a Monitors key this account may not read was not a raised gap' }
 
   # ---- Startup folder and AppCertDlls ----
-  $sdir = Join-Path $scr 'Startup'
+  # The deny goes on the PARENT: Windows answers a folder's own attributes
+  # from its parent's listing, so a deny on the folder itself is caught by
+  # the later enumeration, not by the absence test this case is about.
+  $sp = Join-Path $scr 'SP'
+  $sdir = Join-Path $sp 'Startup'
   New-Item -ItemType Directory -Path $sdir -Force | Out-Null
-  Deny-Dir $sdir
+  Deny-Dir $sp
   Clear-M
   $o = (& .\tools\startup_eval.ps1 -MarkerDir $md -CiStartupFolders @($sdir) -CiAppCertKey "$hk\AppCertDlls") -join "`n"
-  if (-not (Has 'startup_folder_gap') -or $o -match 'Startup folder not present') { Write-Host $o; throw 'a Startup folder this account may not open was not a raised gap' }
+  if (-not (Has 'startup_folder_gap') -or $o -match 'Startup folder not present' -or $o -notmatch 'Startup folder check NOT performed') { Write-Host $o; throw 'a Startup folder under a parent this account may not list was not the raised gap (Test-Path read it as not present)' }
   if ((Has 'appcert_gap') -or $o -notmatch 'AppCertDlls not present or empty') { Write-Host $o; throw 'a missing AppCertDlls key (stock Windows) was not the [OK]' }
 
   # ---- the runner itself ----

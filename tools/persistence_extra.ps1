@@ -1144,7 +1144,7 @@ if ($nsGapLine) {
     $nsGapLine
     $netshGap = 'WARNING'
 } elseif (-not $nsOk) {
-    '[WARNING] Netsh helper key could not be read -- check NOT performed.'
+    '[WARNING] Netsh helper check NOT performed -- the Netsh key could not be read.'
     $netshGap = 'WARNING'
 } elseif (-not $nsProps) {
     '[OK] No netsh helper DLLs registered.'
