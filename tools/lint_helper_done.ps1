@@ -22,7 +22,8 @@ $specs = @(
   @{ Tool = 'edr_presence';            Done = 'dz_edr_done.txt';           Src = "'edr_done'" },
   @{ Tool = 'hosts_check';             Done = 'dz_hosts_done.txt';         Src = "'hosts_done'" },
   @{ Tool = 'bits_history';            Done = 'dz_bitshist_done.txt';      Src = "'bitshist_done'" },
-  @{ Tool = 'com_clsid_check';         Done = 'dz_com_done.txt';           Src = "Write-Marker -Name 'com_done' -Sev 'done'" })
+  @{ Tool = 'com_clsid_check';         Done = 'dz_com_done.txt';           Src = "Write-Marker -Name 'com_done' -Sev 'done'" },
+  @{ Tool = 'browser_extensions';      Done = 'dz_browserext_done.txt';    Src = "Set-Content -LiteralPath `$doneMarker -Value 'done' -Encoding ASCII" })
 function Get-Defects([hashtable]$Texts, [hashtable]$Sources) {
   $bad = @()
   foreach ($bat in $Texts.Keys) {
