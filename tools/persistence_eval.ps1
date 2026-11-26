@@ -298,6 +298,21 @@ function Get-IfeoVerdict {
 # graded, not cleared); elevated, an IFEO entry an administrator cannot read
 # is itself worth a finding (WARNING) -- a Debugger value there cannot be
 # audited, and a restricted ACL is how one would be hidden.
+# One IFEO Debugger read, decided by the shape of its failure. $Read is a
+# scriptblock (so -SelfTest can inject each failure). Returns @{ State =
+# value|none|unread; Value }.
+function Get-IfeoDebuggerRead {
+    param([scriptblock]$Read)
+    try {
+        $d = & $Read
+        if ($d -and [string]$d.Debugger) { return @{ State = 'value'; Value = [string]$d.Debugger } }
+        return @{ State = 'none'; Value = '' }
+    }
+    catch [System.Management.Automation.PSArgumentException] { return @{ State = 'none'; Value = '' } }
+    catch [System.Management.Automation.ItemNotFoundException] { return @{ State = 'none'; Value = '' } }
+    catch { return @{ State = 'unread'; Value = '' } }
+}
+
 function Get-IfeoReadReport {
     param([string[]]$Unreadable, [bool]$IsElevated)
     $u = @($Unreadable | Where-Object { $_ })
@@ -570,6 +585,13 @@ if ($SelfTest) {
     T 'IFEO subkeys an ADMINISTRATOR cannot read are a WARNING that names them' ($r.Sev -eq 'WARNING' -and $r.Lines[0] -match '^\[WARNING\] 2 IFEO entries not readable by an administrator: a\.exe, b\.exe') ($r.Lines -join ' | ')
     $r = Get-IfeoReadReport -Unreadable @() -IsElevated $false
     T 'no unreadable IFEO subkeys prints nothing and raises nothing' ($r.Sev -eq 'OK' -and $r.Lines.Count -eq 0) ($r.Lines -join ' | ')
+    # Each Debugger VALUE, by the shape of its failure (2026-11-25, I4a).
+    $d = Get-IfeoDebuggerRead -Read { [pscustomobject]@{ Debugger = 'C:\x\evil.exe' } }
+    T 'an IFEO Debugger value that reads is returned' ($d.State -eq 'value' -and $d.Value -eq 'C:\x\evil.exe') $d.State
+    $d = Get-IfeoDebuggerRead -Read { throw (New-Object System.Management.Automation.PSArgumentException 'Property Debugger does not exist') }
+    T 'no Debugger value (PSArgumentException) is the ordinary answer, not unread' ($d.State -eq 'none') $d.State
+    $d = Get-IfeoDebuggerRead -Read { throw (New-Object System.Security.SecurityException 'Requested registry access is not allowed.') }
+    T 'a Debugger value this account may not read is counted unread, never skipped (-EA SilentlyContinue skipped it uncounted)' ($d.State -eq 'unread') $d.State
 
     # OTHER ACCOUNTS (Section 5): graded like HKCU, a failed read is a gap.
     $ok = { param($vals) @{ State = 'ok'; Error = ''; Values = @($vals) } }
@@ -839,13 +861,27 @@ if (-not $ifeoOk) {
         if (-not $t) { $t = [string]$e.CategoryInfo.TargetName }
         if ($t) { $ifeoUnreadable += ($t -replace '^.*[\\/]', '') }
     }
+    # Each Debugger value asked with -ErrorAction Stop BEFORE the read report
+    # (2026-11-25, I4a): -EA SilentlyContinue skipped a value this account
+    # could not read, uncounted, under the all-clear. "No such value" and a
+    # subkey that vanished mid-read are ordinary; anything else joins the
+    # unreadable list, graded by the same elevated-gap / deferral rule.
+    # -LiteralPath: the subkey name is attacker-controlled, and -Path reads
+    # [ ] in it as a wildcard (the port-monitor lesson in persistence_extra).
+    $ifeoDbg = @()
+    foreach ($sub in $subs) {
+        $d = Get-IfeoDebuggerRead -Read { Get-ItemProperty -LiteralPath $sub.PSPath -Name Debugger -ErrorAction Stop }
+        # A subkey Get-ChildItem already could not open is listed once.
+        if ($d.State -eq 'unread') { if ($ifeoUnreadable -notcontains [string]$sub.PSChildName) { $ifeoUnreadable += [string]$sub.PSChildName } }
+        elseif ($d.State -eq 'value') { $ifeoDbg += @{ Sub = $sub; Debugger = $d.Value } }
+    }
     $rr = Get-IfeoReadReport -Unreadable $ifeoUnreadable -IsElevated ($Elevated -eq 1)
     foreach ($l in $rr.Lines) { $l }
     if ($rr.Sev -eq 'WARNING') { $found = $true }
-    foreach ($sub in $subs) {
-        $d = Get-ItemProperty -Path $sub.PSPath -Name Debugger -EA SilentlyContinue
-        if ($d -and $d.Debugger) {
-            $dbg = [string]$d.Debugger
+    foreach ($entry in $ifeoDbg) {
+        $sub = $entry.Sub
+        if ($entry.Debugger) {
+            $dbg = [string]$entry.Debugger
             $bin = Get-AutorunBinary $dbg
             $signed = $false; $signer = ''
             if ($bin) {

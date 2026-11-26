@@ -2817,6 +2817,12 @@ jobs:
           & .\.github\ci\root_cert_states.ps1
           exit $LASTEXITCODE
 
+      - name: "I4a on 5.1: a denied profile folder, Startup folder or Monitors key and a missing always-there key are raised gaps, never an empty all-clear"
+        shell: powershell
+        run: |
+          & .\.github\ci\i4_persistence_states.ps1
+          exit $LASTEXITCODE
+
       - name: "I3 on 5.1: browser extensions -- a corrupt profile, a denied User Data folder or a denied policy key is a raised gap, never no extensions"
         shell: powershell
         run: |

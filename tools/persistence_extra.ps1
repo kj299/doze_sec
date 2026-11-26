@@ -74,6 +74,12 @@
 param(
     [string]$MarkerDir = $env:TEMP,
     [int]$BitsAgeDays  = 30,
+    # CI-only: point the reads at planted keys and profiles. Prefixed Ci so
+    # no name collides, case-insensitively, with a variable of the script.
+    [string]$CiNetshKey = '',
+    [string]$CiMonitorRoot = '',
+    [string]$CiTimeProvRoot = '',
+    [string[]]$CiProfilePaths = @(),
     [switch]$SelfTest
 )
 
@@ -184,6 +190,41 @@ function Get-MaxSev {
     if ($A -eq 'CRITICAL' -or $B -eq 'CRITICAL') { return 'CRITICAL' }
     if ($A -eq 'WARNING'  -or $B -eq 'WARNING')  { return 'WARNING' }
     return 'OK'
+}
+
+function Test-AbsentForSure {
+    # A path is absent only when its parent ANSWERS without it, or the parent
+    # itself does not exist (a browser that is not installed). A parent that
+    # refuses to list is not an answer.
+    param([string]$Path)
+    $parent = [IO.Path]::GetDirectoryName($Path); $leaf = [IO.Path]::GetFileName($Path)
+    if (-not $parent -or -not $leaf) { return $false }
+    try { $names = @([IO.Directory]::GetFileSystemEntries($parent)) }
+    catch [System.IO.DirectoryNotFoundException] { return $true }
+    catch { return $false }
+    foreach ($n in $names) { if ([IO.Path]::GetFileName($n) -eq $leaf) { return $false } }
+    return $true
+}
+
+# A registry key's state, asked with -ErrorAction Stop (2026-11-25, I4a):
+# absent only on ItemNotFoundException; any other failure is unread. Test-Path
+# answered false for both, so a key this account could not open read as an
+# empty location and printed [OK].
+function Get-KeyState {
+    param([string]$Path)
+    try { $null = Get-Item -LiteralPath $Path -ErrorAction Stop; return @{ State = 'present'; Why = '' } }
+    catch [System.Management.Automation.ItemNotFoundException] { return @{ State = 'absent'; Why = '' } }
+    catch { return @{ State = 'unread'; Why = (([string]$_.Exception.Message) -replace '\s+', ' ').Trim() } }
+}
+
+# PURE. A key Windows always has (Netsh, Print\Monitors, W32Time\TimeProviders)
+# that is absent or unread is a gap, never an empty [OK]. Returns '' when the
+# key is present and the caller goes on to read it.
+function Get-AlwaysKeyGap {
+    param($KeyState, [string]$Label, [string]$Path)
+    if ($KeyState.State -eq 'present') { return '' }
+    if ($KeyState.State -eq 'absent') { return ('[WARNING] ' + $Label + ' check NOT performed -- ' + $Path + ' was not found, and it exists on every Windows; a missing key is not an empty one.') }
+    return ('[WARNING] ' + $Label + ' check NOT performed -- ' + $Path + ' could not be read (' + $KeyState.Why + ').')
 }
 
 function Write-Marker {
@@ -1065,6 +1106,19 @@ if ($SelfTest) {
     $s = Get-BitsSummaryLines -JobCount 3 -Flagged 1
     T 'a notify/destination finding withholds it too' ((@($s) -join ' | ') -notmatch '\[OK\]') (@($s) -join ' | ')
 
+    # ---- keys Windows always has (2026-11-25, I4a) -----------------------
+    T 'a present always-there key: no gap, the caller reads it' ((Get-AlwaysKeyGap @{ State = 'present' } 'Port-monitor' 'X') -eq '') ''
+    $g = Get-AlwaysKeyGap @{ State = 'absent' } 'Port-monitor' 'HKLM:\SYSTEM\x\Monitors'
+    T 'an always-there key that is absent is a gap, never "All 0 registered" [OK] (Test-Path read false as empty)' ($g -match '^\[WARNING\] Port-monitor check NOT performed -- .*exists on every Windows') $g
+    $g = Get-AlwaysKeyGap @{ State = 'unread'; Why = 'denied' } 'Netsh helper' 'K'
+    T 'an always-there key that could not be read is a gap naming the error' ($g -match '^\[WARNING\] Netsh helper check NOT performed -- K could not be read \(denied\)') $g
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ('dz_pe_' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    try {
+        New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+        T 'Get-KeyState: an item that is there is present' ((Get-KeyState $tmp).State -eq 'present') (Get-KeyState $tmp).State
+        T 'Get-KeyState: an item that is not there is absent (ItemNotFoundException), not unread' ((Get-KeyState (Join-Path $tmp 'nope')).State -eq 'absent') (Get-KeyState (Join-Path $tmp 'nope')).State
+    } finally { Remove-Item -LiteralPath $tmp -Recurse -Force -EA SilentlyContinue }
+
     if ($script:stFails) {
         Write-Output "[FAIL] $($script:stFails) persistence_extra BITS self-test expectation(s) unmet"
         exit 1
@@ -1079,14 +1133,18 @@ $sys32 = Join-Path $env:SystemRoot 'System32'
 '--- [T1546.007] Netsh helper DLLs (loaded every time netsh.exe runs) ---'
 $netshSev = 'OK'
 $netshGap = 'OK'
-$netshKey = 'HKLM:\SOFTWARE\Microsoft\Netsh'
+$netshKey = if ($CiNetshKey) { $CiNetshKey } else { 'HKLM:\SOFTWARE\Microsoft\Netsh' }
 $nsProps = $null
 $nsOk = $true
-try {
-    if (Test-Path $netshKey) { $nsProps = Get-ItemProperty -Path $netshKey -EA Stop }
-} catch { $nsOk = $false }
-if (-not $nsOk) {
-    '[WARNING] Netsh helper key could not be read -- check NOT performed.'
+$nsGapLine = Get-AlwaysKeyGap (Get-KeyState $netshKey) 'Netsh helper' $netshKey
+if (-not $nsGapLine) {
+    try { $nsProps = Get-ItemProperty -LiteralPath $netshKey -EA Stop } catch { $nsOk = $false }
+}
+if ($nsGapLine) {
+    $nsGapLine
+    $netshGap = 'WARNING'
+} elseif (-not $nsOk) {
+    '[WARNING] Netsh helper check NOT performed -- the Netsh key could not be read.'
     $netshGap = 'WARNING'
 } elseif (-not $nsProps) {
     '[OK] No netsh helper DLLs registered.'
@@ -1195,12 +1253,13 @@ if ($ppGap -ne 'OK') { Write-Marker -Name 'printproc_gap' -Sev $ppGap }
 '--- [T1547.010] Print port monitors (loaded by the SYSTEM print spooler) ---'
 $pmSev = 'OK'
 $pmGap = 'OK'
-$monRoot = 'HKLM:\SYSTEM\CurrentControlSet\Control\Print\Monitors'
+$monRoot = if ($CiMonitorRoot) { $CiMonitorRoot } else { 'HKLM:\SYSTEM\CurrentControlSet\Control\Print\Monitors' }
 $pmCount = 0
 $pmUnread = 0   # entries whose value could not be read -- must not be covered by an all-clear
 $pmOk = $true
+$pmGapLine = Get-AlwaysKeyGap (Get-KeyState $monRoot) 'Port-monitor' $monRoot
 try {
-    if (Test-Path $monRoot) {
+    if (-not $pmGapLine) {
         foreach ($mon in (Get-ChildItem -LiteralPath $monRoot -EA Stop)) {
             # -LiteralPath, NOT -Path: the subkey name is
             # attacker-controlled and -Path treats it as a WILDCARD. A
@@ -1224,7 +1283,10 @@ try {
         }
     }
 } catch { $pmOk = $false }
-if (-not $pmOk) {
+if ($pmGapLine) {
+    $pmGapLine
+    $pmGap = Get-MaxSev $pmGap 'WARNING'
+} elseif (-not $pmOk) {
     '[WARNING] Print monitors key could not be read -- port-monitor check NOT performed.'
     $pmGap = Get-MaxSev $pmGap 'WARNING'
 } elseif ($pmSev -eq 'OK') {
@@ -1387,20 +1449,32 @@ $profSev = 'OK'
 $profGap = 'OK'
 $docs = ''
 try { $docs = [Environment]::GetFolderPath('MyDocuments') } catch {}
+# Every host's profile name (the console, the ISE, VS Code), in every place a
+# profile is loaded from: this PowerShell's own folder, PowerShell 7's, and
+# both Documents folders. The ISE and VS Code names and PowerShell 7's folder
+# were not read before (2026-11-25).
+$profNames = @('profile.ps1', 'Microsoft.PowerShell_profile.ps1', 'Microsoft.PowerShellISE_profile.ps1', 'Microsoft.VSCode_profile.ps1')
+$profDirs = @()
+if ($PSHOME) { $profDirs += $PSHOME }
+if ($env:ProgramFiles) { $profDirs += (Join-Path $env:ProgramFiles 'PowerShell\7') }
+if ($docs) { foreach ($d in @('WindowsPowerShell', 'PowerShell')) { $profDirs += (Join-Path $docs $d) } }
 $profilePaths = @()
-if ($PSHOME) {
-    $profilePaths += (Join-Path $PSHOME 'profile.ps1')
-    $profilePaths += (Join-Path $PSHOME 'Microsoft.PowerShell_profile.ps1')
-}
-if ($docs) {
-    foreach ($d in @('WindowsPowerShell', 'PowerShell')) {
-        $profilePaths += (Join-Path $docs "$d\profile.ps1")
-        $profilePaths += (Join-Path $docs "$d\Microsoft.PowerShell_profile.ps1")
-    }
-}
+foreach ($pd in @($profDirs | Select-Object -Unique)) { foreach ($pn in $profNames) { $profilePaths += (Join-Path $pd $pn) } }
+if ($CiProfilePaths.Count) { $profilePaths = @($CiProfilePaths) }
 $found = 0
 foreach ($pp in $profilePaths) {
-    if (-not (Test-Path -LiteralPath $pp -PathType Leaf)) { continue }
+    # Absent only when the folder answers without it: Test-Path read a folder
+    # this account may not open as "no profile" (2026-11-25, I4a).
+    $isFile = $false
+    try { $isFile = -not (Get-Item -LiteralPath $pp -Force -ErrorAction Stop).PSIsContainer } catch {
+        if (-not (Test-AbsentForSure $pp)) {
+            $found++
+            "[WARNING] PowerShell profile check NOT performed in full -- $pp could not be checked ($((([string]$_.Exception.Message) -replace '\s+', ' ').Trim())), so a download cradle in it would go unseen (T1546.013)."
+            $profGap = 'WARNING'
+        }
+        continue
+    }
+    if (-not $isFile) { continue }
     $found++
     $body = ''
     $readErr = ''
@@ -1440,12 +1514,13 @@ if ($profGap -ne 'OK') { Write-Marker -Name 'psprofile_gap' -Sev $profGap }
 '--- [T1547.003] W32Time time providers (loaded by the time service as SYSTEM) ---'
 $tpSev = 'OK'
 $tpGap = 'OK'
-$tpRoot = 'HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\TimeProviders'
+$tpRoot = if ($CiTimeProvRoot) { $CiTimeProvRoot } else { 'HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\TimeProviders' }
 $tpCount = 0
 $tpUnread = 0   # entries whose value could not be read -- must not be covered by an all-clear
 $tpOk = $true
+$tpGapLine = Get-AlwaysKeyGap (Get-KeyState $tpRoot) 'Time-provider' $tpRoot
 try {
-    if (Test-Path $tpRoot) {
+    if (-not $tpGapLine) {
         foreach ($tp in (Get-ChildItem -LiteralPath $tpRoot -EA Stop)) {
             # -LiteralPath, NOT -Path: the subkey name is
             # attacker-controlled and -Path treats it as a WILDCARD. A
@@ -1469,7 +1544,10 @@ try {
         }
     }
 } catch { $tpOk = $false }
-if (-not $tpOk) {
+if ($tpGapLine) {
+    $tpGapLine
+    $tpGap = Get-MaxSev $tpGap 'WARNING'
+} elseif (-not $tpOk) {
     '[WARNING] W32Time TimeProviders key could not be read -- check NOT performed.'
     $tpGap = Get-MaxSev $tpGap 'WARNING'
 } elseif ($tpSev -eq 'OK') {
