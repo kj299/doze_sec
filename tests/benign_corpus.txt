@@ -188,14 +188,14 @@ class     = QUIET
 maxsev    = OK
 proof     = ci:I4b on 5.1: BootExecute and Active Setup
 signature = ^\[[A-Z]+\] Active Setup '[^']*': (C:\\Windows\\|C:\\Program Files( \(x86\))?\\(Windows Mail|Microsoft\\Edge|Google\\Chrome)\\)
-note      = Windows keeps a dozen Active Setup StubPaths of its own (ie4uinit -UserConfig, iesetup.dll IEHardenUser/IEHardenAdmin through rundll32, mscories.dll, unregmp2 /FirstLogon, themeui.dll through regsvr32, Windows Mail), and Edge and Chrome register setup.exe / chrmstp.exe --configure-user-settings. Each is graded on the file it runs (the DLL for a rundll32/regsvr32 line) and is [OK] when that file is validly signed outside a staging path. The self-test pins each verbatim; the CI step grades the runner's real set. Verify: reg query "HKLM\SOFTWARE\Microsoft\Active Setup\Installed Components" /s /v StubPath
+note      = Windows keeps a dozen Active Setup StubPaths of its own (ie4uinit -UserConfig, cmd.exe /D /C start ie4uinit.exe -ClearIconCache -- graded on ie4uinit, the only cmd shape that is, iesetup.dll IEHardenUser/IEHardenAdmin through rundll32, mscories.dll, unregmp2 /FirstLogon, themeui.dll through regsvr32, Windows Mail), and Edge and Chrome register setup.exe / chrmstp.exe --configure-user-settings. Each is graded on the file it runs (the DLL for a rundll32/regsvr32 line) and is [OK] when that file is validly signed outside a staging path. The self-test pins each verbatim; the CI step grades the runner's real set. Verify: reg query "HKLM\SOFTWARE\Microsoft\Active Setup\Installed Components" /s /v StubPath
 
 [activesetup-stale-entry]
 class     = QUIET
 maxsev    = INFO
 proof     = ci:I4b on 5.1: BootExecute and Active Setup
 signature = Active Setup '.*' names .*, which is not on disk
-note      = Uninstallers routinely leave their Active Setup key behind; the StubPath then names a file that no longer exists, Windows' attempt at sign-in fails, and nothing runs. INFO with the command shown, never an all-clear. Verify: Test-Path on the named file.
+note      = Uninstallers routinely leave their Active Setup key behind; the StubPath then names a file that no longer exists, Windows' attempt at sign-in fails, and nothing runs. INFO with the command shown, never an all-clear -- and only under Windows or Program Files, where nobody but an administrator could put the file back. A missing target anywhere else, or one named without a folder, is a WARNING. Verify: Test-Path on the named file.
 
 [bits-long-lived-updater]
 class     = QUIET

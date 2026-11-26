@@ -3169,7 +3169,7 @@ if exist "%TEMP%\dz_bootexec_gap.txt" (
     rem A gap is its own row: the tool could not perform (part of) this check.
     set "_GAPSEV="
     set /p _GAPSEV=<"%TEMP%\dz_bootexec_gap.txt"
-    call :dz_finding !_GAPSEV! 5 T1547.001 "BootExecute check NOT performed - Session Manager key unreadable"
+    call :dz_finding !_GAPSEV! 5 T1547.001 "BootExecute check NOT performed - Session Manager key missing or unreadable"
     del "%TEMP%\dz_bootexec_gap.txt" 2>nul
 )
 if exist "%TEMP%\dz_activesetup.txt" (
@@ -3182,7 +3182,7 @@ if exist "%TEMP%\dz_activesetup_gap.txt" (
     rem A gap is its own row: the tool could not perform (part of) this check.
     set "_GAPSEV="
     set /p _GAPSEV=<"%TEMP%\dz_activesetup_gap.txt"
-    call :dz_finding !_GAPSEV! 5 T1547.014 "Active Setup check NOT performed - Installed Components key unreadable"
+    call :dz_finding !_GAPSEV! 5 T1547.014 "Active Setup check NOT performed - an Installed Components key or component could not be read"
     del "%TEMP%\dz_activesetup_gap.txt" 2>nul
 )
 
