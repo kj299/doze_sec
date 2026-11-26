@@ -3138,12 +3138,61 @@ if not "!WINLOGON_STATE:~0,9!"=="userinit=" if exist "%SCRIPT_DIR%tools\reg_poli
 )
 
 echo.>> "%REPORT%"
-echo --- BootExecute (SAFE: autocheck autochk * only) --->> "%REPORT%"
+echo --- BootExecute / Active Setup Evaluation --->> "%REPORT%"
+echo  Command: powershell -File tools\boot_activesetup_check.ps1>> "%REPORT%"
+echo  Grades the native programs Session Manager runs before Windows starts>> "%REPORT%"
+echo  ^(BootExecute and its siblings, T1547.001^) and the StubPath commands Active>> "%REPORT%"
+echo  Setup runs at each user's next sign-in ^(T1547.014^). The raw values follow.>> "%REPORT%"
+del "%TEMP%\dz_bootexec.txt" 2>nul
+del "%TEMP%\dz_bootexec_gap.txt" 2>nul
+del "%TEMP%\dz_activesetup.txt" 2>nul
+del "%TEMP%\dz_activesetup_gap.txt" 2>nul
+del "%TEMP%\dz_bootas_done.txt" 2>nul
+if exist "%SCRIPT_DIR%tools\boot_activesetup_check.ps1" (
+    "%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\boot_activesetup_check.ps1">> "%REPORT%" 2>&1
+) else (
+    echo [WARNING] tools\boot_activesetup_check.ps1 not found -- BootExecute and Active Setup evaluation NOT performed.>> "%REPORT%"
+    call :dz_finding WARNING 5 T1547.001 "BootExecute and Active Setup evaluation NOT performed - tool missing"
+)
+if not exist "%TEMP%\dz_bootas_done.txt" if exist "%SCRIPT_DIR%tools\boot_activesetup_check.ps1" (
+    echo [WARNING] BootExecute and Active Setup evaluation produced no verdict -- NOT performed: tools\boot_activesetup_check.ps1 did not run to its end.>> "%REPORT%"
+    call :dz_finding WARNING 5 T1547.001 "BootExecute and Active Setup evaluation produced no verdict - NOT performed"
+)
+del "%TEMP%\dz_bootas_done.txt" 2>nul
+if exist "%TEMP%\dz_bootexec.txt" (
+    set "_BSEV="
+    set /p _BSEV=<"%TEMP%\dz_bootexec.txt"
+    call :dz_finding !_BSEV! 5 T1547.001 "Non-stock BootExecute entry - a program runs before Windows starts, as SYSTEM"
+    del "%TEMP%\dz_bootexec.txt" 2>nul
+)
+if exist "%TEMP%\dz_bootexec_gap.txt" (
+    rem A gap is its own row: the tool could not perform (part of) this check.
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_bootexec_gap.txt"
+    call :dz_finding !_GAPSEV! 5 T1547.001 "BootExecute check NOT performed - Session Manager key unreadable"
+    del "%TEMP%\dz_bootexec_gap.txt" 2>nul
+)
+if exist "%TEMP%\dz_activesetup.txt" (
+    set "_ASSEV="
+    set /p _ASSEV=<"%TEMP%\dz_activesetup.txt"
+    call :dz_finding !_ASSEV! 5 T1547.014 "Suspicious Active Setup StubPath - runs at every user's next sign-in"
+    del "%TEMP%\dz_activesetup.txt" 2>nul
+)
+if exist "%TEMP%\dz_activesetup_gap.txt" (
+    rem A gap is its own row: the tool could not perform (part of) this check.
+    set "_GAPSEV="
+    set /p _GAPSEV=<"%TEMP%\dz_activesetup_gap.txt"
+    call :dz_finding !_GAPSEV! 5 T1547.014 "Active Setup check NOT performed - Installed Components key unreadable"
+    del "%TEMP%\dz_activesetup_gap.txt" 2>nul
+)
+
+echo.>> "%REPORT%"
+echo --- BootExecute, raw ^(graded above^) --->> "%REPORT%"
 echo  Command: reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager" /v BootExecute>> "%REPORT%"
 reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager" /v BootExecute>> "%REPORT%" 2>&1
 
 echo.>> "%REPORT%"
-echo --- Active Setup StubPath --->> "%REPORT%"
+echo --- Active Setup StubPath, raw ^(graded above^) --->> "%REPORT%"
 echo  Command: reg query "HKLM\SOFTWARE\Microsoft\Active Setup\Installed Components" /s ^| findstr /i /c:"StubPath">> "%REPORT%"
 reg query "HKLM\SOFTWARE\Microsoft\Active Setup\Installed Components" /s | findstr /i /c:"StubPath">> "%REPORT%" 2>&1
 echo.>> "%REPORT%"

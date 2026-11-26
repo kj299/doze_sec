@@ -1,4 +1,4 @@
-# Last verified by doze_sec: 2026-11-16 10:54:55 sha256:E83C9BD2FA8959B7
+# Last verified by doze_sec: 2026-11-26 21:00:37 sha256:1454FD363ED97837
 # SENTINEL-X CTI -- TTP Manifest (MITRE ATT&CK v14+)
 # Updated: 2026-03-29
 # Source: MDDR 2024-2025, CISA KEV, Mandiant M-Trends 2025, CrowdStrike Threat Report 2025
@@ -118,6 +118,7 @@ T1547.003|Persistence|Time Providers|-|Sec 5 persistence_extra
 T1547.004|Persistence|Winlogon Helper DLL|-|Sec 5 Winlogon Userinit/Shell
 T1547.010|Persistence|Port Monitors|-|Sec 5 persistence_extra
 T1547.012|Persistence|Print Processors|-|Sec 5 persistence_extra
+T1547.014|Persistence|Active Setup|-|Sec 5 boot_activesetup_check
 T1548|Priv Esc|Abuse Elevation Control Mechanism|-|Sec 13 UAC
 T1550.001|Lateral Movement|Application Access Token|-|Sec 12 token theft context
 T1550.002|Lateral Movement|Pass the Hash|-|Sec 12 NTLM/WDigest

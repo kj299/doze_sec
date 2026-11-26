@@ -170,6 +170,33 @@ note      = Unsigned DLLs in ordinary third-party processes are common and are c
 #
 # DO NOT re-add it on the catalog theory. That theory is measured and dead.
 
+[bootexecute-autochk]
+class     = QUIET
+maxsev    = OK
+proof     = ci:I4b on 5.1: BootExecute and Active Setup
+signature = BootExecute: autocheck autochk
+note      = 'autocheck autochk *' is the BootExecute value every Windows carries: Session Manager runs Windows' own boot-time disk check (Sysinternals, Inside Native Applications). chkntfs rewrites its arguments -- /x writes 'autochk /k:C *', /c schedules a volume -- so switches, '*' and \??\<volume> arguments on autochk are Windows' own too. The self-test pins each form verbatim; the CI step reads the runner's real value. Verify: reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager" /v BootExecute
+
+[bootexecute-av-boot-scanner]
+class     = ADVISE
+proof     = ci:I4b on 5.1: BootExecute and Active Setup
+signature = BootExecute entry .* signed by
+note      = Antivirus products with a boot-time scan (Avast and AVG's aswBoot.exe is the common one) register a native program in BootExecute beside autochk. The WARNING names the signer so this can be told apart from persistence: if the signer is the antivirus you installed, it is that product. Anything else -- or an unsigned image, which is CRITICAL -- is a program that runs before Windows starts, as SYSTEM. Verify: Get-AuthenticodeSignature on the named image, and check the product is installed (Settings > Apps).
+
+[activesetup-windows-and-browsers]
+class     = QUIET
+maxsev    = OK
+proof     = ci:I4b on 5.1: BootExecute and Active Setup
+signature = ^\[[A-Z]+\] Active Setup '[^']*': (C:\\Windows\\|C:\\Program Files( \(x86\))?\\(Windows Mail|Microsoft\\Edge|Google\\Chrome)\\)
+note      = Windows keeps a dozen Active Setup StubPaths of its own (ie4uinit -UserConfig, iesetup.dll IEHardenUser/IEHardenAdmin through rundll32, mscories.dll, unregmp2 /FirstLogon, themeui.dll through regsvr32, Windows Mail), and Edge and Chrome register setup.exe / chrmstp.exe --configure-user-settings. Each is graded on the file it runs (the DLL for a rundll32/regsvr32 line) and is [OK] when that file is validly signed outside a staging path. The self-test pins each verbatim; the CI step grades the runner's real set. Verify: reg query "HKLM\SOFTWARE\Microsoft\Active Setup\Installed Components" /s /v StubPath
+
+[activesetup-stale-entry]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:I4b on 5.1: BootExecute and Active Setup
+signature = Active Setup '.*' names .*, which is not on disk
+note      = Uninstallers routinely leave their Active Setup key behind; the StubPath then names a file that no longer exists, Windows' attempt at sign-in fails, and nothing runs. INFO with the command shown, never an all-clear. Verify: Test-Path on the named file.
+
 [bits-long-lived-updater]
 class     = QUIET
 maxsev    = INFO

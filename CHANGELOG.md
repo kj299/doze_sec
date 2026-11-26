@@ -6,6 +6,14 @@ are a separate, machine-specific record of changes each audit made.
 
 ## Unreleased
 
+### BootExecute and Active Setup are graded (Section 5)
+- Section 5 printed BootExecute under the heading "SAFE: autocheck autochk * only" and dumped every Active Setup StubPath, but compared neither with anything. Neither could raise a row, so Section 5 read CLEAN whatever they held.
+- **Now:** `tools/boot_activesetup_check.ps1` grades both:
+  - **BootExecute and its sibling values** (T1547.001): Windows' own `autocheck autochk *`, and the forms chkntfs writes, are `[OK]`. Any other entry is graded on the native program it runs before Windows starts, as SYSTEM. An unsigned or staged image is CRITICAL. A signed non-Microsoft image (an antivirus boot-time scan) or one not on disk is a WARNING that names it. A Microsoft-signed System32 image is INFO.
+  - **Active Setup StubPaths** (T1547.014, new to the audit): each is graded on the file it runs, the DLL for a rundll32/regsvr32 line. Attack-shaped content or a staged target is CRITICAL. A script host, a script or an unsigned target is a WARNING. Windows', Edge's and Chrome's own entries stay `[OK]`.
+  - A key or component that could not be read is a raised gap, never an all-clear. A done marker backs it with a "produced no verdict" row.
+- The raw values still follow the verdict, as context.
+
 ### Persistence locations no longer read as empty when they could not be read (Section 5)
 - Several checks decided "nothing there" with `Test-Path`, which answers false for a path or key this account may not open. All of these now ask with `-ErrorAction Stop`, and the failures are raised:
   - **PowerShell profiles:** a denied profile folder read "[OK] No PowerShell profile scripts present". The ISE and VS Code host profiles, and PowerShell 7's own profile folder, were never read; they are now.
