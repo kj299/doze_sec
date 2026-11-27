@@ -38,7 +38,13 @@ try {
   Write-Host $o
   foreach ($n in 'bootexec', 'bootexec_gap', 'activesetup', 'activesetup_gap') { if (Has $n) { throw "the runner's own run raised $n ($(Sev $n)) -- a benign Windows entry graded as a finding, or a read that failed" } }
   if (-not (Has 'bootas_done')) { throw 'the runner run wrote no done marker' }
-  if ($o -notmatch "(?m)^\[OK\] BootExecute: autocheck autochk \*") { throw "the runner's stock 'autocheck autochk *' was not read as the stock entry" }
+  # Any stock autochk form (the runner's own is 'autocheck autochk /q /v *'),
+  # and the all-clear having graded at least one entry -- never an exact value.
+  if ($o -notmatch "(?m)^\[OK\] BootExecute: autocheck autochk\b[^\r\n]*\(Windows' boot-time disk check, the stock entry\)\r?$" -or
+      $o -notmatch "(?m)^\[OK\] BootExecute and its sibling values hold only Windows' own entries \([1-9]\d* graded\)\.") {
+    Write-Host (($o -split "`r?`n" | Where-Object { $_ -match 'BootExecute' }) -join "`n")
+    throw "the runner's BootExecute was not read as Windows' own autochk entry"
+  }
   if ($o -notmatch '(?m)^\[OK\] Active Setup: ([1-9]\d*) StubPath command\(s\) graded, none suspicious\.') { throw "the runner's Active Setup StubPaths were not graded (none read: the check looked at nothing)" }
 
   # ---- planted Session Manager stand-in ----
