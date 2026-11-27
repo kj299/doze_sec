@@ -60,7 +60,10 @@
 #   OK       a validly signed target outside staging paths, listed. Windows'
 #            own `cmd.exe /D /C start <System32 program>` entry (the
 #            ie4uinit -ClearIconCache one) is graded on the program it starts;
-#            any other cmd line stays a script host.
+#            any other cmd line stays a script host. A StubPath that names no
+#            program, only arguments (Windows' own Themes Setup '/UserInstall'
+#            and Desktop Update 'U'), is INFO unless a file by that name is
+#            where CreateProcess would look -- then a WARNING naming it.
 #   The native Installed Components key is read through the 64-bit registry
 #   view, so a 32-bit PowerShell cannot read the Wow6432Node copy twice.
 #
@@ -364,14 +367,50 @@ function Get-BootReport {
 # line, the program otherwise. Kind: dllhost|scripthost|script|program|none.
 # $Exists is the file probe Get-BinPath uses for an unquoted path with spaces.
 function Get-StubTarget {
-    param([string]$Stub, [scriptblock]$Exists = $null, [string]$SystemRoot = $env:SystemRoot)
+    param([string]$Stub, [scriptblock]$Exists = $null, [string]$SystemRoot = $env:SystemRoot,
+          [scriptblock]$Which = $null, [string]$SystemDrive = $env:SystemDrive)
     $out = @{ Program = ''; Target = ''; Kind = 'none'; Relative = $false; Extra = ''; Via = '' }
     if (-not $Stub) { return $out }
     $sys32 = Join-WinPath $SystemRoot 'System32'
-    $bin = Get-BinPath -Raw $Stub -Exists $Exists
-    $prog = Resolve-BinPath $bin
-    if (-not $prog) { return $out }
-    if ($prog -notmatch '^[A-Za-z]:\\' -and $prog -notmatch '^\\\\') { $prog = Join-WinPath $sys32 $prog; $out.Relative = $true }
+    if ($null -eq $Exists) { $Exists = { param([string]$p) Test-Path -LiteralPath $p -PathType Leaf } }
+    if ($null -eq $Which) { $Which = { param([string]$n) $c = @(Get-Command -Name $n -CommandType Application -ErrorAction SilentlyContinue); if ($c.Count) { [string]$c[0].Source } } }
+    if (-not $SystemDrive) { $SystemDrive = $SystemRoot.Substring(0, 2) }
+    # ARGUMENT-ONLY StubPaths (measured on the CI runner, 2026-11-26): Windows'
+    # own Themes Setup {2C7339CF-2B09-4501-B3F3-F3508C9228ED} holds
+    # '/UserInstall' and Windows Desktop Update
+    # {89820200-ECBD-11cf-8B85-00AA005B4340} holds 'U' -- no program at all.
+    # CreateProcess runs nothing for them unless a file by that name is where
+    # it looks: W.exe on the search path for a bare word, <drive>\X.exe for a
+    # '/X' (rooted at the current drive). So the verdict is about whether such
+    # a file EXISTS. A bare word Windows finds under its own folder (a
+    # program named without '.exe', e.g. 'rundll32') is graded as that
+    # program.
+    $first = ((([string]$Stub).Trim() -split '\s+')[0]).Trim('"')
+    $bin = ''
+    $prog = ''
+    if ($first -match '^/' -or ($first -notmatch '[\\:]' -and $first -notmatch '\.[A-Za-z0-9]{1,4}$')) {
+        $cand = ''; $hit = ''
+        if ($first -match '^/') {
+            $cand = $SystemDrive.TrimEnd('\') + '\' + $first.TrimStart('/') + '.exe'
+            $ok = $false; try { $ok = [bool](& $Exists $cand) } catch {}
+            if ($ok) { $hit = $cand }
+        } else {
+            $cand = $first + '.exe'
+            try { $hit = [string](& $Which $cand) } catch { $hit = '' }
+        }
+        if ($hit -and $first -notmatch '^/' -and $hit.StartsWith($SystemRoot.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
+            $bin = $first; $prog = $hit
+        } else {
+            $out.Kind = 'argonly'; $out.Target = $hit; $out.Extra = $cand
+            return $out
+        }
+    }
+    if (-not $bin) {
+        $bin = Get-BinPath -Raw $Stub -Exists $Exists
+        $prog = Resolve-BinPath $bin
+        if (-not $prog) { return $out }
+        if ($prog -notmatch '^[A-Za-z]:\\' -and $prog -notmatch '^\\\\') { $prog = Join-WinPath $sys32 $prog; $out.Relative = $true }
+    }
     $out.Program = $prog
     $leaf = (Get-WinLeaf $prog).ToLowerInvariant()
     if ($script:DllHosts -contains $leaf) {
@@ -431,6 +470,10 @@ function Get-StubVerdict {
     $sx = $s
     try { $sx = [Environment]::ExpandEnvironmentVariables($s) } catch {}
     if ($sx -match $script:StagingRx) { return @{ Sev = 'CRITICAL'; Line = "[CRITICAL] $label StubPath hands a file in a staging path to $(Get-WinLeaf $Target.Program) at every user's next sign-in: $s (T1547.014)" } }
+    if ($Target.Kind -eq 'argonly') {
+        if ($t) { return @{ Sev = 'WARNING'; Line = "[WARNING] $label StubPath names no program, only arguments ($s), and Windows would find $t for it: that file runs at every user's next sign-in -- read what it is (T1547.014)." } }
+        return @{ Sev = 'OK'; Line = "[INFO] $label StubPath names no program, only arguments ($s) -- Windows' attempt finds nothing to run (no $($Target.Extra))." }
+    }
     if ($Target.Kind -eq 'scripthost') { return @{ Sev = 'WARNING'; Line = "[WARNING] $label StubPath runs a script host at every user's next sign-in: $s -- read what it runs (T1547.014)." } }
     if ($Target.Kind -eq 'script') { return @{ Sev = 'WARNING'; Line = "[WARNING] $label StubPath runs a script file at every user's next sign-in: $s -- read what it runs (T1547.014)." } }
     if ($Target.Kind -eq 'dllhost' -and $Target.Extra) { return @{ Sev = 'WARNING'; Line = "[WARNING] $label StubPath hands $(Get-WinLeaf $Target.Program) another file or path to open ($($Target.Extra)) at every user's next sign-in: $s -- the signed DLL says nothing about it (T1547.014)." } }
@@ -449,7 +492,7 @@ function Get-StubVerdict {
 # ok|nokey|unreadable; Error; Unread = @(names); Entries = @( @{ Key; Name;
 # Stub; IsInstalled } ) } ).
 function Get-ActiveSetupReport {
-    param([object[]]$Roots, [scriptblock]$Probe, [scriptblock]$Exists = $null, [string]$SystemRoot = $env:SystemRoot)
+    param([object[]]$Roots, [scriptblock]$Probe, [scriptblock]$Exists = $null, [string]$SystemRoot = $env:SystemRoot, [scriptblock]$Which = $null)
     $lines = New-Object System.Collections.Generic.List[string]
     $sev = 'OK'; $gap = 'OK'; $n = 0
     $hits = New-Object System.Collections.Generic.List[object]
@@ -470,7 +513,7 @@ function Get-ActiveSetupReport {
         foreach ($e in @($r.Entries)) {
             if (-not ([string]$e.Stub).Trim()) { continue }
             $n++
-            $tg = Get-StubTarget -Stub $e.Stub -Exists $Exists -SystemRoot $SystemRoot
+            $tg = Get-StubTarget -Stub $e.Stub -Exists $Exists -SystemRoot $SystemRoot -Which $Which
             $facts = @{ State = 'signed' }
             if ($tg.Target -and $tg.Target -notmatch $script:StagingRx -and ($tg.Kind -eq 'program' -or $tg.Kind -eq 'dllhost')) { $facts = & $Probe $tg.Target }
             $comp = if ($e.Name) { "$($e.Key) ($($e.Name))" } else { [string]$e.Key }
@@ -513,6 +556,9 @@ if ($SelfTest) {
         return $ms
     }
     $noFile = { param([string]$p) $false }
+    # The search path as Windows has it: System32 holds the stock programs a
+    # bare word can name; nothing else is there.
+    $sysWhich = { param([string]$n) if (@('rundll32.exe', 'regsvr32.exe', 'cmd.exe') -contains $n.ToLowerInvariant()) { 'C:\Windows\System32\' + $n } }
 
     # ---- BootExecute: Windows' own entries (benign twins, verbatim) ----
     foreach ($e in @('autocheck autochk *', 'Autocheck Autochk *', 'autocheck autochk /q /v *', 'autocheck autochk /k:C *',
@@ -562,12 +608,12 @@ if ($SelfTest) {
         @('"C:\Program Files\Google\Chrome\Application\131.0.6778.86\Installer\chrmstp.exe" --configure-user-settings --verbose-logging --system-level', 'chrmstp.exe'),
         @('C:\Windows\system32\cmd.exe /D /C start C:\Windows\system32\ie4uinit.exe -ClearIconCache', 'ie4uinit.exe'))
     foreach ($bn in $benign) {
-        $tg = Get-StubTarget -Stub $bn[0] -Exists $noFile -SystemRoot $SR
+        $tg = Get-StubTarget -Stub $bn[0] -Exists $noFile -SystemRoot $SR -Which $sysWhich
         $v = Get-StubVerdict -Component 'c' -Stub $bn[0] -IsInstalled '1' -Target $tg -Facts (& $probe $tg.Target)
         T "Active Setup '$($bn[0])' is graded on $($bn[1]) and reads [OK]" ($v.Sev -eq 'OK' -and $v.Line -like '`[OK`]*' -and (Get-WinLeaf $tg.Target) -eq $bn[1]) ("$($tg.Kind) $($tg.Target) :: $($v.Line)")
     }
     function StubCase { param([string]$Stub, [string]$Inst = '1')
-        $tg = Get-StubTarget -Stub $Stub -Exists $noFile -SystemRoot $SR
+        $tg = Get-StubTarget -Stub $Stub -Exists $noFile -SystemRoot $SR -Which $sysWhich
         $f = @{ State = 'signed'; CN = 'x'; Microsoft = $false }
         if ($tg.Target -and $tg.Target -notmatch $script:StagingRx -and ($tg.Kind -eq 'program' -or $tg.Kind -eq 'dllhost')) { $f = & $probe $tg.Target }
         return (Get-StubVerdict -Component 'dz' -Stub $Stub -IsInstalled $Inst -Target $tg -Facts $f)
@@ -619,6 +665,21 @@ if ($SelfTest) {
     $v = StubCase 'C:\Users\Public\update.exe' 'String:0'
     T 'a non-DWORD IsInstalled of 0 is graded as installed (here CRITICAL), never read as switched off' ($v.Sev -eq 'CRITICAL') $v.Line
     T 'a \SystemRoot\ native path resolves under the Windows folder' ((Get-NativeImagePath 'autocheck \SystemRoot\System32\evilnat.exe' -SystemRoot 'C:\Windows') -eq 'C:\Windows\System32\evilnat.exe') (Get-NativeImagePath 'autocheck \SystemRoot\System32\evilnat.exe' -SystemRoot 'C:\Windows')
+
+    # ---- measured on the runner: argument-only StubPaths (benign twins, verbatim) ----
+    foreach ($ao in @('/UserInstall', 'U')) {
+        $tg = Get-StubTarget -Stub $ao -Exists $noFile -SystemRoot $SR -Which $sysWhich -SystemDrive 'C:'
+        $v = Get-StubVerdict -Component 'c' -Stub $ao -IsInstalled '1' -Target $tg -Facts $null
+        T "the runner's argument-only StubPath '$ao' (Themes Setup / Windows Desktop Update) is INFO, not raised" ($v.Sev -eq 'OK' -and $v.Line -match '^\[INFO\] .*names no program, only arguments') $v.Line
+    }
+    $tg = Get-StubTarget -Stub 'U' -Exists $noFile -SystemRoot $SR -Which { param([string]$n) if ($n -eq 'U.exe') { 'C:\Users\me\AppData\Local\Programs\Tool\U.exe' } } -SystemDrive 'C:'
+    $v = Get-StubVerdict -Component 'c' -Stub 'U' -IsInstalled '1' -Target $tg -Facts $null
+    T "the malign twin: a U.exe on the search path shadows the 'U' StubPath -- a WARNING naming it" ($v.Sev -eq 'WARNING' -and $v.Line -match 'would find C:\\Users\\me\\AppData\\Local\\Programs\\Tool\\U\.exe') $v.Line
+    $tg = Get-StubTarget -Stub '/UserInstall' -Exists { param([string]$p) $p -eq 'C:\UserInstall.exe' } -SystemRoot $SR -Which $sysWhich -SystemDrive 'C:'
+    $v = Get-StubVerdict -Component 'c' -Stub '/UserInstall' -IsInstalled '1' -Target $tg -Facts $null
+    T "the malign twin: a C:\UserInstall.exe shadows the '/UserInstall' StubPath -- a WARNING naming it" ($v.Sev -eq 'WARNING' -and $v.Line -match 'would find C:\\UserInstall\.exe') $v.Line
+    $tg = Get-StubTarget -Stub 'rundll32 C:\Windows\System32\shell32.dll,Control_RunDLL' -Exists $noFile -SystemRoot $SR -Which $sysWhich -SystemDrive 'C:'
+    T 'a program named without .exe that Windows finds in its own folder is graded as that program (rundll32 -> the DLL)' ($tg.Kind -eq 'dllhost' -and (Get-WinLeaf $tg.Target) -eq 'shell32.dll') ("$($tg.Kind) $($tg.Target)")
 
     $roots = @(
         @{ Root = 'R1'; Required = $true; State = 'ok'; Unread = @('{BAD}'); Entries = @(@{ Key = '{A}'; Name = 'Windows Mail'; Stub = '"C:\Program Files\Windows Mail\WinMail.exe" OCInstallUserConfigOE'; IsInstalled = '1' }, @{ Key = '{B}'; Name = ''; Stub = ''; IsInstalled = '1' }) },
