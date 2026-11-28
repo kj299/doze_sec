@@ -1101,6 +1101,14 @@ jobs:
           for f in $called; do [ -s ".github/ci/$f" ] || { echo ".github/ci/$f is missing or empty -- its step would run nothing"; exit 1; }; done
           for f in .github/ci/*.ps1; do echo "$called" | grep -qxF "$(basename "$f")" || { echo "$f is called by no step in windows-smoke.yml"; exit 1; }; done
           n=$(echo "$called" | wc -l); [ "$n" -ge 30 ] || { echo "only $n step(s) call a .github/ci script; 30 are expected"; exit 1; }
+          # .github/ci/lib/ holds helpers that step bodies dot-source (they
+          # are not bodies, so no step calls them). Each must be used by at
+          # least one body: a helper nothing loads is dead code that still
+          # reads as a tested convention.
+          for f in .github/ci/lib/*.ps1; do
+            [ -e "$f" ] || continue
+            grep -lF ". .\\.github\\ci\\lib\\$(basename "$f")" .github/ci/*.ps1 >/dev/null || { echo "$f is dot-sourced by no step body in .github/ci/"; exit 1; }
+          done
           # cmd reads a bare < or > in an echo as a file redirection, quoted or
           # not by PowerShell's single quotes: 'Expected: <Windows>\system32...'
           # in a tile's help text made the whole line vanish from the dashboard

@@ -32,6 +32,7 @@ CORE|T1547|credential provider persistence
 CORE|T1547.001|Run key / Startup folder autorun
 CORE|T1547.003|time provider
 CORE|T1547.004|Winlogon Notify
+CORE|T1547.014|Active Setup StubPath naming a file in C:\Users\Public that does not exist (nothing runs)
 CORE|T1556.002|LSA notification / password-filter DLL
 CORE|T1556.008|rogue network provider (NPPSPY)
 CORE|T1562.001|BYOVD / unsigned kernel driver

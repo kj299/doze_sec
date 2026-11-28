@@ -8,11 +8,19 @@ are a separate, machine-specific record of changes each audit made.
 
 ### BootExecute and Active Setup are graded (Section 5)
 - Section 5 printed BootExecute under the heading "SAFE: autocheck autochk * only" and dumped every Active Setup StubPath, but compared neither with anything. Neither could raise a row, so Section 5 read CLEAN whatever they held.
-- **Now:** `tools/boot_activesetup_check.ps1` grades both:
-  - **BootExecute and its sibling values** (T1547.001): Windows' own `autocheck autochk *`, and the forms chkntfs writes, are `[OK]`. Any other entry is graded on the native program it runs before Windows starts, as SYSTEM. An unsigned or staged image is CRITICAL. A signed non-Microsoft image (an antivirus boot-time scan) or one not on disk is a WARNING that names it. A Microsoft-signed System32 image is INFO.
-  - **Active Setup StubPaths** (T1547.014, new to the audit): each is graded on the file it runs, the DLL for a rundll32/regsvr32 line. Attack-shaped content, a Windows launcher handed another program (url.dll FileProtocolHandler, shell32 ShellExec_RunDLL, msiexec from a URL) or a staging path anywhere in the line is CRITICAL. A script host, a script, a DLL host handed a second file, an unsigned target, or a missing target that a file dropped later would bring back to life is a WARNING. The Windows, Edge and Chrome entries pinned in the self-test read `[OK]`; whether every stock entry does is measured on the CI runner, and on a field run.
+- **Now:** `tools/boot_activesetup_check.ps1` grades both.
+  - **BootExecute and its sibling values** (T1547.001): Windows' own `autocheck autochk *`, and the forms chkntfs writes, are `[OK]`. Any other entry is graded on the native program it runs before Windows starts, as SYSTEM. An unsigned or staged image is CRITICAL. A signed image that is not Microsoft's or not in System32 (an antivirus boot-time scan), or one not on disk, is a WARNING that names it. A Microsoft-signed System32 image is INFO.
+  - **Active Setup StubPaths** (T1547.014, new to the audit). The rule: what runs at each sign-in must trace to validly signed files, and a signature on a host program says nothing about what the host is handed.
+    - The program is found the way Windows finds it, whatever its extension.
+    - CRITICAL: attack-shaped content, or a staging folder anywhere in the line.
+    - WARNING: an unsigned program; a script host or script; a Microsoft program handed anything that is not a validly signed file (an unsigned file, a URL, a network path, another host); a Windows tool with no known Active Setup use (`reg.exe`, `ssh.exe` ...); a Microsoft-signed program run from outside Windows and Program Files; a missing program where a file placed later would run.
+    - `cmd /C start X` is graded as X, never excused.
+    - `[OK]` lines print the raw command.
+  - **The audit never opens a path that is not a plain file on a local fixed drive.** A network path, a mapped or removable drive, a device name or a stream is named as a WARNING instead. Opening one would connect the audit to a server the entry's author chose.
   - A key or component that could not be read is a raised gap, never an all-clear. A done marker backs it with a "produced no verdict" row.
 - Windows' own Themes Setup and Windows Desktop Update entries store a StubPath with no program at all (`/UserInstall`, `U`; measured on the CI runner). They read `[INFO]`, unless a file by that name sits where Windows would look for it; that is a WARNING naming the file.
+- **Reworked 2026-11-28, after the first version had merged (#317).** A retrospective ran the first version's own functions on 17 hostile lines, and 11 read `[OK]` or `[INFO]`: `cmd /D /C start rundll32.exe <payload>`, a Microsoft-signed program told to run another, and an unquoted path to an unsigned file with no `.exe` name. Those lines, and the others found while rewriting (over 70 hostile lines in all), are now pinned in the self-test as must-raise, on a pretend disk that answers "absent" for any file it was not given.
+- The detection harness plants an Active Setup entry, so both bats are tested end to end for T1547.014. There is no BootExecute plant: it would run at the next boot.
 - The raw values still follow the verdict, as context.
 
 ### Persistence locations no longer read as empty when they could not be read (Section 5)

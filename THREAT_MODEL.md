@@ -721,23 +721,47 @@ Found during the v7.1 coverage review; tracked for future work:
 - ~~Section 5 printed BootExecute under the heading "SAFE: autocheck autochk *
   only" and dumped every Active Setup StubPath, and compared neither with
   anything, so neither could raise a row; the Active Setup coverage claimed
-  in the Persistence row above did not exist.~~ **Closed (2026-11-26):**
-  Section 5 runs `tools/boot_activesetup_check.ps1`. BootExecute and its
-  siblings (`BootExecuteNoPnpSync`, `SetupExecute`, `PlatformExecute`,
-  T1547.001): autochk with only switches, `*` and `\??\<volume>` arguments is
-  Windows' own; any other entry is graded on the native image it runs
-  (CRITICAL unsigned or staged, WARNING signed non-Microsoft or not on disk,
-  INFO Microsoft-signed in System32). Active Setup (T1547.014): each StubPath
-  is graded on the file it runs -- the DLL for a rundll32/regsvr32 line --
-  CRITICAL for attack-shaped content (including a Windows launcher such as
-  url.dll FileProtocolHandler handed another program) or a staging path
-  anywhere in the line; WARNING for a script host, a script, a DLL host
-  handed a second file, an unsigned target, or a missing one that a file
-  dropped later would bring back to life; INFO for a stale entry under
-  Windows or Program Files, or one switched off. An unreadable key or
-  component is a raised gap. Not covered: per-user
-  (HKCU) Installed Components, which hold version stamps rather than commands;
-  an autochk.exe that was itself replaced is outside this check.
+  in the Persistence row above did not exist.~~ **Closed (2026-11-26,
+  reworked 2026-11-28):** Section 5 runs `tools/boot_activesetup_check.ps1`.
+  BootExecute and its siblings (`BootExecuteNoPnpSync`, `SetupExecute`,
+  `PlatformExecute`, T1547.001): autochk with only switches, `*` and
+  `\??\<volume>` arguments is Windows' own; any other entry is graded on the
+  native image it runs (CRITICAL unsigned or staged; WARNING signed but not
+  Microsoft's or not in System32, or not on disk; INFO Microsoft-signed in
+  System32). Active Setup (T1547.014): what runs at each sign-in must trace
+  to validly signed files. The program is found the way CreateProcess finds
+  it; CRITICAL for attack-shaped content or a staging path anywhere in the
+  line; WARNING for an unsigned program, a script host or script, a Microsoft
+  program handed anything but a validly signed file, a Windows tool with no
+  known Active Setup use, a relocated Microsoft binary, or a missing program
+  that a file dropped later would bring to life; `cmd /C start X` is graded
+  as X. An unreadable key or component is a raised gap. The check never
+  opens a path that is not a plain file on a local fixed drive. **Limits:**
+  per-user (HKCU) Installed Components are not read (they hold version
+  stamps, not commands); a bare program name is looked up on the auditing
+  account's search path, so another account's own PATH folders are not seen;
+  "under Windows or Program Files" is judged by name, not by reading folder
+  permissions; a validly signed program of another vendor is `[OK]` wherever
+  it sits unless it is handed unsigned code or told to run a host -- a
+  signed-but-abusable third-party tool is not recognised as such; "signed by
+  Microsoft" is read from the certificate's name on a chain Windows accepts;
+  an autochk.exe that was itself replaced is outside this check; the stock
+  Windows 10/11 desktop entries are known from experience, the Windows Server
+  ones were measured on the CI runner.
+- **OPEN (measured 2026-11-28): Run keys, Startup shortcuts, scheduled-task
+  actions and service command lines are graded on narrow signals.** They
+  look for attack-shaped content and a handful of staging folders; shortcuts
+  and services also check the signature of the FIRST program only, and Run
+  values check no signature at all. A script host, rundll32 or msiexec handed
+  a script, DLL or installer from any other folder is not flagged on a first
+  run: 9 of 10 such Run values, 8 of 10 Startup shortcuts and 9 of 10 task
+  actions read clean when each check's own functions were run on them (among
+  them an unsigned program in `C:\ProgramData` started from a Run key).
+  `baseline_diff` flags such entries only when they are new since a baseline.
+  Several of these checks also sign-check whatever path an entry names
+  without first requiring it to be local. Planned: share the Active Setup
+  rule above with all four, after measuring what ordinary machines carry
+  (`docs/design/backlog.md`).
 - ~~The logon/unlock screen (`LogonUI`/`Winlogon`) path was under-covered:
   Winlogon Notify packages, malicious Credential Providers, and rogue Network
   Provider DLLs (NPPSPY) all run at logon/unlock and can harvest credentials,

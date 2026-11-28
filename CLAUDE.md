@@ -551,7 +551,7 @@ module imports), so a helper several tools need is copied into each.
 `Get-WhenLine`, `Write-WhenCaveat`, the harness's `Remove-HostsMarkerLines`
 (in `tests\`: the cold cleanup must run standalone), `Expand-CmdEscapes`
 (`tests\section18_gaps.ps1` renders staged blocks with `lint_remediation`'s
-copy) and eleven more (sixteen in all; the lint's manifest is the list) byte-identical (comments included); `pending_reboot_check`'s copy had already lost a line when it was
+copy) and the others in the lint's manifest (the manifest is the list; no count is kept here) byte-identical (comments included); `pending_reboot_check`'s copy had already lost a line when it was
 added. When a helper is copied into a second script, add its name to the lint's
 manifest. With two copies there is no majority, so a drifted pair names both.
 
@@ -1067,6 +1067,67 @@ installs `dz_selftest_flag_svc`; cleanup removes the service but cannot remove
 the Event 7045 record of installing it, so every later audit on that machine
 reported five "suspicious service installations". Harness names are excluded
 and the exclusion is declared with a count — never silently.
+
+### A signature on a host says nothing about what it is handed (REQUIRED)
+
+The first Active Setup check (PR #317) read `[OK] ... (signed by Microsoft
+Windows)` for `cmd /D /C start rundll32.exe <payload>`, for pcalua, forfiles,
+WMIC and conhost told to run another program, for `msiexec /i <local file>`,
+and `[INFO] stale ... nothing runs` for an unquoted path to an existing file
+with no `.exe` name: **11 of 17 hostile lines**, measured by running its own
+functions two days after it was reported ready. A retrospective found it; no
+gate had.
+
+- **Grade what runs AND what that is handed.** "The program is validly
+  signed" clears the program. A host (rundll32, regsvr32, msiexec, a script
+  host, any Windows tool) runs what it is told: every file it is handed must
+  itself be validly signed, and a URL, a network path or another host's name
+  is a finding. A Windows tool with no known use in that location is named
+  whatever its arguments -- `ssh -R` needs no file to do harm.
+- **An exception for a benign shape is attack surface.** The
+  `cmd /D /C start <System32 program>` exception was written for a Windows
+  entry a reviewer recalled from memory, and it let every host through.
+  There is no exception now: `cmd /C start X` is graded as X. When a benign
+  shape needs handling, grade it by the same rules, and test it wrapped
+  around EVERY host class, not only around the benign program.
+- **A benign verdict needs positive evidence.** "Not on disk, so stale" was
+  decided from a path the check had cut at the first space. Find the program
+  the way Windows does (`Get-CreateProcessTries`, a pinned copy), and let
+  `[INFO]` and `[OK]` be reachable only from evidence; every `else` is the
+  cautious grade.
+- **Never open a path the data chose unless it is a plain file on a local
+  fixed drive.** A StubPath of `\\host\share\x.exe` would have made the
+  elevated audit connect to that host and offer it the auditor's
+  credentials, and broken `-readonly`'s "no network connections".
+  `Get-FileFacts` is that tool's one door to the disk; its self-test records
+  every path opened and requires none to be remote, mapped, removable, a
+  device name or a stream. **The older checks that sign-check a path taken
+  from a Run value, a shortcut or a task action have NOT been swept for
+  this** -- it is listed in `docs/design/backlog.md`; do not call it done
+  from this paragraph.
+- **A test double defaults to the hard answer.** The first self-test's file
+  probe answered "Microsoft-signed" for any file it did not know, so every
+  path nobody had thought about read clean. A pretend disk answers "absent"
+  unless a file is listed -- the "never default a grade to `OK`" rule,
+  applied to the fixture.
+- **Review the final tree.** The review ran on the first draft. The fixes
+  made in answer to it -- about 110 lines of new judgement, two new
+  exceptions -- were read by nobody else, and held the misses. A fix that
+  changes a judgement is new code: it gets its own review before the push.
+- **Twins from memory are hypotheses.** Two Windows rounds went to claims
+  about the runner nobody had measured (its Active Setup entries, its
+  autochk form). `[OK]` lines now print the raw command, so a log carries
+  measured values. **A CI step reports every unmet expectation**
+  (`.github/ci/lib/expect.ps1`): the second failure of #317 was already printed
+  in the first run's log, two lines below the assertion that stopped it.
+- **A PR's first line is its merge state, and "ready" is said once.** Two
+  PRs of that series were merged while their Windows run was red or still
+  going, and main went red both times. #317 itself was reported ready, then
+  found wrong, then merged anyway with `DO NOT MERGE` at the top of its
+  description: a banner written after "ready" has been said does not unsay
+  it. A PR body opens with `STATUS: DO NOT MERGE -- <why>` until it can say
+  `READY: 34/34 green at <sha>`, and nothing calls a PR ready before the
+  review of its final tree is back.
 
 ## Real-Windows CI (`.github/workflows/windows-smoke.yml`)
 
