@@ -2823,6 +2823,12 @@ jobs:
           & .\.github\ci\i4_persistence_states.ps1
           exit $LASTEXITCODE
 
+      - name: "I4b on 5.1: BootExecute and Active Setup -- the runner's own entries read clean, planted ones are raised, a denied component or missing Session Manager key is a raised gap"
+        shell: powershell
+        run: |
+          & .\.github\ci\i4b_boot_activesetup_states.ps1
+          exit $LASTEXITCODE
+
       - name: "I3 on 5.1: browser extensions -- a corrupt profile, a denied User Data folder or a denied policy key is a raised gap, never no extensions"
         shell: powershell
         run: |

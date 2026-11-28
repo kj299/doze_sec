@@ -13,9 +13,9 @@ user a safe, reviewable path to fix it. The protection chain it supports:
    Secure Boot, BitLocker, SmartScreen. doze_sec *audits that these are on
    and untampered* (Sections 8, 9, 13) rather than duplicating them.
 2. **Detection** is doze_sec's core job: 14 pre-flight checks + 18 audit
-   sections + a CTI-driven IOC sweep (Section 18) covering 93 MITRE ATT&CK
+   sections + a CTI-driven IOC sweep (Section 18) covering 94 MITRE ATT&CK
    techniques and 281 indicators across 10 IOC categories. (The manifest maps
-   108 techniques; the 17-technique difference is documented-but-not-yet-
+   109 techniques; the 15-technique difference is documented-but-not-yet-
    detected, and `attack_matrix.ps1` lists it on every run so the gap between
    what is described and what is implemented stays visible.)
 3. **Response** is user-gated by design: a severity-sorted report (text +
@@ -718,6 +718,26 @@ Found during the v7.1 coverage review; tracked for future work:
   CRITICAL. Two `required` harness cases plant each vector, plus a
   false-positive guard asserting a benign signed Startup shortcut is not
   flagged.
+- ~~Section 5 printed BootExecute under the heading "SAFE: autocheck autochk *
+  only" and dumped every Active Setup StubPath, and compared neither with
+  anything, so neither could raise a row; the Active Setup coverage claimed
+  in the Persistence row above did not exist.~~ **Closed (2026-11-26):**
+  Section 5 runs `tools/boot_activesetup_check.ps1`. BootExecute and its
+  siblings (`BootExecuteNoPnpSync`, `SetupExecute`, `PlatformExecute`,
+  T1547.001): autochk with only switches, `*` and `\??\<volume>` arguments is
+  Windows' own; any other entry is graded on the native image it runs
+  (CRITICAL unsigned or staged, WARNING signed non-Microsoft or not on disk,
+  INFO Microsoft-signed in System32). Active Setup (T1547.014): each StubPath
+  is graded on the file it runs -- the DLL for a rundll32/regsvr32 line --
+  CRITICAL for attack-shaped content (including a Windows launcher such as
+  url.dll FileProtocolHandler handed another program) or a staging path
+  anywhere in the line; WARNING for a script host, a script, a DLL host
+  handed a second file, an unsigned target, or a missing one that a file
+  dropped later would bring back to life; INFO for a stale entry under
+  Windows or Program Files, or one switched off. An unreadable key or
+  component is a raised gap. Not covered: per-user
+  (HKCU) Installed Components, which hold version stamps rather than commands;
+  an autochk.exe that was itself replaced is outside this check.
 - ~~The logon/unlock screen (`LogonUI`/`Winlogon`) path was under-covered:
   Winlogon Notify packages, malicious Credential Providers, and rogue Network
   Provider DLLs (NPPSPY) all run at logon/unlock and can harvest credentials,

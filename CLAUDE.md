@@ -551,7 +551,7 @@ module imports), so a helper several tools need is copied into each.
 `Get-WhenLine`, `Write-WhenCaveat`, the harness's `Remove-HostsMarkerLines`
 (in `tests\`: the cold cleanup must run standalone), `Expand-CmdEscapes`
 (`tests\section18_gaps.ps1` renders staged blocks with `lint_remediation`'s
-copy) and seven more (twelve in all; the lint's manifest is the list) byte-identical (comments included); `pending_reboot_check`'s copy had already lost a line when it was
+copy) and eleven more (sixteen in all; the lint's manifest is the list) byte-identical (comments included); `pending_reboot_check`'s copy had already lost a line when it was
 added. When a helper is copied into a second script, add its name to the lint's
 manifest. With two copies there is no majority, so a drifted pair names both.
 
