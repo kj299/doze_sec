@@ -174,6 +174,10 @@ Remove-RegKey ("HKCU:\Software\Classes\CLSID\{0}" -f $comGuid) 'COM CLSID hijack
 Remove-RegKey ("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\{0}" -f $cpGuid) 'Rogue credential provider'
 Remove-RegKey ("HKLM:\SOFTWARE\Classes\CLSID\{0}" -f $cpGuid) 'Rogue credential provider CLSID'
 Remove-RegKey ("HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\TimeProviders\{0}" -f $MARK) 'W32Time time provider'
+# The HKLM entry is the plant. The HKCU twin exists only if someone signed in
+# while it was planted: Windows then records that it ran the component.
+Remove-RegKey ("HKLM:\SOFTWARE\Microsoft\Active Setup\Installed Components\{{{0}}}" -f $MARK) 'Active Setup component'
+Remove-RegKey ("HKCU:\Software\Microsoft\Active Setup\Installed Components\{{{0}}}" -f $MARK) 'Active Setup component (this account''s record of having run it)'
 Remove-RegKey ("HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\Notify\{0}" -f $MARK) 'Winlogon Notify package'
 Remove-RegKey 'HKLM:\SYSTEM\CurrentControlSet\Services\dz_selftest_np' 'Rogue network provider service'
 

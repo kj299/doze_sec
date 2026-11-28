@@ -958,5 +958,55 @@ Top findings were spot-checked in code before being listed here.
 | I1 | DONE 2026-11-25: masquerade_check's skips are raised gaps (a counted deferral where a standard-user token explains them) with a done marker; Defender core and exclusions have no-verdict backstops; SecurityCenter2 unreadable and PSv2 undetermined are raised gaps; the six missing tools raise rows (and a lint fails on any new `[INFO] ... not found`); `:dz_section_clean` never reads an absent ledger with findings counted as CLEAN. Was: checks whose death or failure raises nothing. `masquerade_check`: all six `[SKIPPED]` exits write no marker, so a missing process tree loses the CRITICAL "LSASS copy running" with Section 4 CLEAN; the inline snapshot fallback writes no tree. Defender core and exclusions: no "produced no verdict" backstop. `edr_presence`: SecurityCenter2 unreadable is an unraised `[SKIPPED]`. `psv2_check`: UNKNOWN raises nothing. Six missing tools print `[INFO] ... skipped` (`cross_api_check`, `log_gap_check`, `audit_policy_check`, `boot_chain_check`, `cbs_integrity_check`, `browser_extensions`). `:dz_section_clean`: a ledger findstr cannot open reads CLEAN for every section. | open |
 | I2 | DONE 2026-11-25: the seven Security-log listings go through `event_scan_check -Check SecurityList` (fields by XML name; a refused log a gap or a deferral); firewall rules through `tools\firewall_rules_list.ps1` (by property, on both tokens); the TCP views, the Administrators and Remote Desktop Users members (by SID) and the OS summary through `tools\system_listing.ps1`. Was: English labels of localized output. Seven Security-log listings (4672, 4625, 4624, 4698/4702, 4769, 4776, 4648) are `wevtutil /f:text` piped through `findstr` on English labels: empty on a non-English Windows and on a refused log, with no row. Inbound/outbound ALLOW firewall rules (`netsh` "Rule Name"), the ESTABLISHED/LISTENING netstat views, `net localgroup administrators` / "Remote Desktop Users" (no SID-based admin-membership verdict exists in Sections 1-10), `systeminfo` labels. | open |
 | I3 | DONE 2026-11-25: reads with `-ErrorAction Stop`, absent only when the parent answers without it (`Test-AbsentForSure`), an unreadable profile, file or policy key a raised gap (`dz_browserext_gap`), a done-marker backstop in both bats, Brave's force-install key read. Was: `browser_extensions` (Section 15): `$ErrorActionPreference='SilentlyContinue'` script-wide, `Test-Path` decides "not installed", silenced profile listing, no gap or done marker -- a force-installed extension behind a denied key or profile reads "no extensions". | open |
-| I4 | DONE. I4a 2026-11-25 (PS profiles incl. ISE/VS Code/PS7, netsh helpers, port monitors, time providers, Startup folder, AppCertDlls, IFEO Debugger values: absence asked with -EA Stop, failures raised). I4b 2026-11-26: BootExecute (and siblings) and Active Setup StubPaths graded by `boot_activesetup_check`; unreadable keys raised as gaps. Was: Persistence reads that decide absence by `Test-Path`: PowerShell profiles (`persistence_extra`, denied parent folder; ISE/VS Code/PS7 profile names missing), Startup folder (`startup_eval`), netsh helpers / port monitors / time providers / AppCertDlls ("All 0 registered" is never an OK on keys every Windows has), IFEO `Debugger` value read silenced. BootExecute and Active Setup are dumped, never graded. | done |
+| I4 | DONE. I4a 2026-11-25 (PS profiles incl. ISE/VS Code/PS7, netsh helpers, port monitors, time providers, Startup folder, AppCertDlls, IFEO Debugger values: absence asked with -EA Stop, failures raised). I4b 2026-11-26, reworked twice 2026-11-28 (the first version read `[OK]` for 11 of 17 hostile lines; the review of the rework's final tree found eleven more classes): BootExecute (and siblings) and Active Setup StubPaths graded by `boot_activesetup_check`, default-deny -- `[OK]` only for a line on a table of what Windows, Edge and Chrome keep, `[INFO]` for other signed lines, everything else named; unreadable keys raised as gaps; no path that is not a plain local file is opened, proven from the tool's own syntax tree. Was: Persistence reads that decide absence by `Test-Path`: PowerShell profiles (`persistence_extra`, denied parent folder; ISE/VS Code/PS7 profile names missing), Startup folder (`startup_eval`), netsh helpers / port monitors / time providers / AppCertDlls ("All 0 registered" is never an OK on keys every Windows has), IFEO `Debugger` value read silenced. BootExecute and Active Setup are dumped, never graded. | done |
 | I5 | Lower: HOSTS `DataBasePath` never read (a repointed hosts file is graded as the decoy); 18b/18c drop an invalid IOC regex silently; BitLocker reports every error as "edition unavailable"; ADFS/AADC registry fallback; Downloads/AppData `dir` listings; smartctl never requires a positive result; `smart_health`/`disk_info` silent failures; `audit_policy_check` reports a failed read as "DISABLED"; two dashboard tiles that can vanish; OS-type check when CIM and wmic both fail. | open |
+
+## Stored command lines: one judgement (opened 2026-11-28 by the retrospective on #310-#317)
+
+The Active Setup check was reworked to grade what a stored command line runs
+AND what that is handed (`tools/boot_activesetup_check.ps1`). A census then
+ran every other grader's own functions on ten hostile lines (a script host,
+rundll32, msiexec and a plain unsigned program, with payloads in
+`C:\ProgramData`, plus one in `C:\Users\Public`). **None of the rows below is
+fixed.** Do not call this done from this table: re-run the ten lines.
+
+| Grader | What it looks at | Hostile lines NOT flagged |
+|---|---|---|
+| Run / RunOnce (`persistence_eval` `Get-AutorunVerdict`) | content list, hidden-window combination, three staging folders; no signature check at all | 9 of 10 (all but the `\Users\Public\` one), including an unsigned program in `C:\ProgramData` |
+| Startup shortcuts (`startup_eval`) | content list on target+arguments; staging and signature on the TARGET only | 8 of 10: `[OK] (shortcut -> Microsoft-signed)` for every host, including `powershell.exe -File C:\Users\Public\x.ps1` |
+| Scheduled-task actions (`scheduled_tasks_full -Mode Suspicious`) | four staging folders, and `\AppData\` gated by signature | 9 of 10 |
+| Service ImagePath (`service_signature_check`) | signature and staging folder of the binary; arguments never read | every Windows host with arguments is "clean" |
+| New or changed entries (`baseline_diff`) | the fullest rule (a host name plus a suspicious folder) -- but only for entries new since a baseline | n/a on a first run |
+
+Also open, same sweep:
+- **Paths the data chose are opened.** `startup_eval` (`Get-FileVerdict`),
+  `persistence_eval` (`Get-AutorunBinary`), `baseline_diff` (`Get-SignerInfo`)
+  and others call `Test-Path` / `Get-AuthenticodeSignature` on whatever path
+  an entry names. A network path there makes the audit connect to it. Each
+  needs the "plain file on a local fixed drive" door (`Get-FileFacts`).
+- **The lists have drifted.** The attack-shaped content list exists in five
+  tools and two lack `mshtml,runhtmlapplication`; the staging-folder pattern
+  exists in at least twelve places with at least six different contents.
+- **`ThreatLists/ioc_lolbins.txt` is matched only against RUNNING processes**
+  (Section 18g), never against stored command lines.
+- **The Active Setup table holds recalled desktop lines.** WinMail, the
+  regsvr32 pair, `-ClearIconCache` and `iedkcs32.dll,BrandIEActiveSetup SIGNUP`
+  are marked RECALLED in `tools/boot_activesetup_check.ps1`. Measure a real
+  Windows 10 and a Windows 11 desktop (an owner's report is enough: the
+  `[OK]` and `[INFO]` lines print the raw command) and correct the table.
+  The poqexec form in SetupExecute is recalled too.
+- **`echo "$out" | grep -q` in `lint.yml`.** Over 64 KB of output it ends in
+  SIGPIPE when grep matches early, and under `pipefail` a present case reads
+  "case gone" and a present `[FAIL]` reads as none, at random. Only the
+  BootExecute / Active Setup step is that large today (it greps a file). A
+  lint should refuse the shape before another self-test grows into it.
+- **A signed remote-access tool pointed at a server by name** is `[INFO]` in
+  Active Setup (an IP address, `user@host` or `host:port` is a WARNING; a
+  bare DNS name is not recognised). `rmm_check` knows such tools by name;
+  the stored-command-line judgement should use it.
+
+Plan: measure what ordinary machines carry first (the CI runner through the
+`runner-facts` job; existing field reports), then share one pinned judgement.
+False alarms are the risk here: unsigned vendor tools and enterprise logon
+scripts are real. Severities are to be proposed with the measured sets, not
+before.

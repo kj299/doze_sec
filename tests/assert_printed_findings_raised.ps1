@@ -249,6 +249,22 @@ $script:Contracts = @(
        Signature = '^\s*\[WARNING\] IOC sweep NOT performed'
        Section   = '18'
        Technique = 'IOCSWEEP' }
+    # BootExecute and Active Setup (tools\boot_activesetup_check.ps1, marker
+    # idiom). The harness plants an Active Setup entry, so that block of both
+    # bats is exercised end to end. BootExecute cannot be planted (it would
+    # run at the next boot); its contract fires only on a real find.
+    @{ Name      = 'Active Setup StubPath raised (staging path, attack-shaped content, unsigned, or work handed on)'
+       Signature = '^\s*\[(CRITICAL|WARNING)\] Active Setup ''[^'']*'' (StubPath|runs|names) '
+       Section   = '5'
+       Technique = 'T1547.014' }
+    @{ Name      = 'Active Setup check not performed (a key or component could not be read)'
+       Signature = '^\s*\[WARNING\] Active Setup check NOT performed'
+       Section   = '5'
+       Technique = 'T1547.014' }
+    @{ Name      = 'A program in BootExecute or a sibling value, or that check not performed'
+       Signature = '^\s*\[(CRITICAL|WARNING)\] (BootExecute|BootExecuteNoPnpSync|SetupExecute|PlatformExecute) (entry |check NOT performed)'
+       Section   = '5'
+       Technique = 'T1547.001' }
 )
 
 function Get-UnraisedContracts {

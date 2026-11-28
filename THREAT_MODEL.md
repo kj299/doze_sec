@@ -721,23 +721,59 @@ Found during the v7.1 coverage review; tracked for future work:
 - ~~Section 5 printed BootExecute under the heading "SAFE: autocheck autochk *
   only" and dumped every Active Setup StubPath, and compared neither with
   anything, so neither could raise a row; the Active Setup coverage claimed
-  in the Persistence row above did not exist.~~ **Closed (2026-11-26):**
-  Section 5 runs `tools/boot_activesetup_check.ps1`. BootExecute and its
+  in the Persistence row above did not exist.~~ **Closed (2026-11-26,
+  reworked twice 2026-11-28):** Section 5 runs
+  `tools/boot_activesetup_check.ps1`, default-deny. BootExecute and its
   siblings (`BootExecuteNoPnpSync`, `SetupExecute`, `PlatformExecute`,
   T1547.001): autochk with only switches, `*` and `\??\<volume>` arguments is
-  Windows' own; any other entry is graded on the native image it runs
-  (CRITICAL unsigned or staged, WARNING signed non-Microsoft or not on disk,
-  INFO Microsoft-signed in System32). Active Setup (T1547.014): each StubPath
-  is graded on the file it runs -- the DLL for a rundll32/regsvr32 line --
-  CRITICAL for attack-shaped content (including a Windows launcher such as
-  url.dll FileProtocolHandler handed another program) or a staging path
-  anywhere in the line; WARNING for a script host, a script, a DLL host
-  handed a second file, an unsigned target, or a missing one that a file
-  dropped later would bring back to life; INFO for a stale entry under
-  Windows or Program Files, or one switched off. An unreadable key or
-  component is a raised gap. Not covered: per-user
-  (HKCU) Installed Components, which hold version stamps rather than commands;
-  an autochk.exe that was itself replaced is outside this check.
+  the only `[OK]`; any other entry is raised on the native image it runs
+  (CRITICAL unsigned or staged; WARNING for any signed image, Microsoft's own
+  included, and for one not on disk). Active Setup (T1547.014): `[OK]` only
+  for a line Windows, Edge or Chrome is known to keep (a table: a known
+  program at its own location with its known arguments); `[INFO]` for any
+  other validly signed line from an administrator-only folder that carries
+  nothing able to hold a payload; CRITICAL for attack-shaped content or a
+  staging path in the line, in the program's real path or in a file it is
+  handed; WARNING for everything else -- an unsigned program, a script host,
+  interpreter or script, a Microsoft program outside the table or under
+  another name, text after a rundll32 entry point, a URL, network path,
+  address or host handed on, a signed file in a user-writable folder, a
+  missing program that a file dropped later would bring to life. The program
+  is found the way CreateProcess finds it (every reading of an unquoted
+  line), and paths are judged as Windows normalises them. An unreadable key
+  or component is a raised gap. The check never opens a path that is not a
+  plain file on a local fixed drive, and does not follow a link.
+  **Limits:** per-user (HKCU) Installed Components are not read (they hold
+  version stamps, not commands); a bare program name is looked up on the
+  auditing account's search path, so another account's own PATH folders and
+  the folder Windows starts the command in are not seen; "administrator-only
+  folder" is judged by name, not by reading folder permissions; what a signed
+  DLL's entry point or a signed program does with plain switches is not
+  known (`rundll32 user32.dll,LockWorkStation` is `[INFO]`); another vendor's
+  validly signed program under Program Files is `[INFO]` unless it is handed
+  something recognisable as code, an address or a host, so a signed
+  remote-access tool pointed at a server by NAME is listed, not raised; the
+  package an msiexec product code names is not traced; "signed by Microsoft"
+  is read from the certificate's name on a chain Windows accepts, and the
+  name Microsoft built a file with is compared only in System32 and SysWOW64;
+  an autochk.exe that was itself replaced is outside this check; the stock
+  Windows 10/11 desktop entries are recalled, the Windows Server ones were
+  measured on the CI runner -- a desktop entry the table does not hold reads
+  `[INFO]` or WARNING until it is measured and added.
+- **OPEN (measured 2026-11-28): Run keys, Startup shortcuts, scheduled-task
+  actions and service command lines are graded on narrow signals.** They
+  look for attack-shaped content and a handful of staging folders; shortcuts
+  and services also check the signature of the FIRST program only, and Run
+  values check no signature at all. A script host, rundll32 or msiexec handed
+  a script, DLL or installer from any other folder is not flagged on a first
+  run: 9 of 10 such Run values, 8 of 10 Startup shortcuts and 9 of 10 task
+  actions read clean when each check's own functions were run on them (among
+  them an unsigned program in `C:\ProgramData` started from a Run key).
+  `baseline_diff` flags such entries only when they are new since a baseline.
+  Several of these checks also sign-check whatever path an entry names
+  without first requiring it to be local. Planned: share the Active Setup
+  rule above with all four, after measuring what ordinary machines carry
+  (`docs/design/backlog.md`).
 - ~~The logon/unlock screen (`LogonUI`/`Winlogon`) path was under-covered:
   Winlogon Notify packages, malicious Credential Providers, and rogue Network
   Provider DLLs (NPPSPY) all run at logon/unlock and can harvest credentials,
