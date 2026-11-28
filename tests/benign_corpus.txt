@@ -175,40 +175,73 @@ class     = QUIET
 maxsev    = OK
 proof     = ci:I4b on 5.1: BootExecute and Active Setup
 signature = BootExecute: autocheck autochk
-note      = 'autocheck autochk *' is the BootExecute value every Windows carries: Session Manager runs Windows' own boot-time disk check (Sysinternals, Inside Native Applications). chkntfs rewrites its arguments -- /x writes 'autochk /k:C *', /c schedules a volume -- so switches, '*' and \??\<volume> arguments on autochk are Windows' own too. The self-test pins each form verbatim; the CI step reads the runner's real value. Verify: reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager" /v BootExecute
+note      = 'autocheck autochk *' is the BootExecute value every Windows carries: Session Manager runs Windows' own boot-time disk check (Sysinternals, Inside Native Applications). chkntfs rewrites its arguments -- /x writes 'autochk /k:C *', /c schedules a volume -- so switches, '*' and \??\<volume> arguments on autochk are Windows' own too. It is the ONLY entry that reads [OK]. The self-test pins each form verbatim; the CI step reads the runner's real value ('autocheck autochk /q /v *', measured 2026-11-26). Verify: reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager" /v BootExecute
 
 [bootexecute-av-boot-scanner]
 class     = ADVISE
 proof     = ci:I4b on 5.1: BootExecute and Active Setup
-signature = BootExecute entry .* signed by
+signature = (BootExecute|BootExecuteNoPnpSync|SetupExecute|PlatformExecute) entry .* -- signed by .*\. Antivirus boot-time scanners register here
 note      = Antivirus products with a boot-time scan (Avast and AVG's aswBoot.exe is the common one) register a native program in BootExecute beside autochk. The WARNING names the signer so this can be told apart from persistence: if the signer is the antivirus you installed, it is that product. Anything else -- or an unsigned image, which is CRITICAL -- is a program that runs before Windows starts, as SYSTEM. Verify: Get-AuthenticodeSignature on the named image, and check the product is installed (Settings > Apps).
+
+[bootexecute-servicing-pending]
+class     = ADVISE
+proof     = ci:I4b on 5.1: BootExecute and Active Setup
+signature = (BootExecute|BootExecuteNoPnpSync|SetupExecute|PlatformExecute) entry .* signed by Microsoft[^.]*, but it is not the disk check
+note      = While an update waits for a restart, Windows servicing can leave its own program in SetupExecute ('C:\Windows\System32\poqexec.exe /display_progress \SystemRoot\WinSxS\pending.xml' is the form recalled from servicing troubleshooting; NOT yet measured on a machine in that state). The tool raises it all the same: a Microsoft-signed native program does what it is told (autofmt formats a volume at boot), so the signature clears nothing, and the first two versions of this check read every such entry as [INFO]. What to do: restart, then run the audit again. If the entry is gone, it was the update. If it is still there after a restart, treat it as a finding and read the whole entry. Verify: reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager" /v SetupExecute
 
 [activesetup-windows-and-browsers]
 class     = QUIET
 maxsev    = OK
 proof     = ci:I4b on 5.1: BootExecute and Active Setup
 signature = ^\[[A-Z]+\] Active Setup '[^']*': (C:\\Windows\\|C:\\Program Files( \(x86\))?\\(Windows Mail|Microsoft\\Edge|Google\\Chrome)\\)
-note      = Windows keeps Active Setup StubPaths of its own (ie4uinit -UserConfig, iesetup.dll IEHardenUser/IEHardenAdmin and mscories.dll through rundll32, unregmp2 /FirstLogon, themeui.dll and shell32.dll through regsvr32, Windows Mail), and Edge and Chrome register setup.exe / chrmstp.exe --configure-user-settings. Each is [OK] only because every file it runs AND every file it is handed is validly signed; the line ends with the raw command. `cmd.exe /D /C start ie4uinit.exe -ClearIconCache`, which Windows 10 and 11 are reported to carry, gets no exception: `cmd /C start X` is graded as X. MEASURED on the CI runner (Windows Server, 2026-11-26/27): the iesetup, unregmp2, ie4uinit, mscories, Chrome and Edge entries. NOT yet measured: the Windows 10/11 desktop set. Verify: reg query "HKLM\SOFTWARE\Microsoft\Active Setup\Installed Components" /s /v StubPath
+note      = [OK] is printed for exactly the lines Windows, Edge and Chrome are known to keep, by a table in the tool: ie4uinit (-UserConfig, -ClearIconCache, -BaseSettings, -UserIconConfig), unregmp2 (/FirstLogon, /ShowWMP), rundll32 with iesetup.dll,IEHardenAdmin / IEHardenUser, mscories.dll,Install or iedkcs32.dll,BrandIEActiveSetup SIGNUP, regsvr32 with themeui.dll or shell32.dll, Edge's Installer\setup.exe and Chrome's Installer\chrmstp.exe --configure-user-settings, Windows Mail's WinMail.exe, and `cmd.exe /D /C start <full path>\ie4uinit.exe -ClearIconCache`, graded as ie4uinit. Each only at its own location, validly signed, under the name Microsoft built it with, and the line ends with the raw command. MEASURED on the CI runner (Windows Server, 2026-11-28): the iesetup, unregmp2, ie4uinit, mscories, Chrome and Edge entries. RECALLED from Windows 10/11 desktops, not yet measured: WinMail, the regsvr32 pair, ClearIconCache and iedkcs32 -- if a real one differs it reads [INFO] or WARNING, never [OK] for something else. Verify: reg query "HKLM\SOFTWARE\Microsoft\Active Setup\Installed Components" /s /v StubPath
+
+[activesetup-signed-not-on-record]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:I4b on 5.1: BootExecute and Active Setup
+signature = Active Setup '.*' runs .* -- validly signed, but not a line this check has on record
+note      = A known setup program with a switch the table does not hold, or rundll32 / regsvr32 / msiexec with another validly signed file from an administrator-only folder and nothing after it that could carry a payload. Validly signed all the way down, so it is not raised; not a line Windows, Edge or Chrome is known to keep, so it is not called [OK] either. It is listed with what it loads and who signed that. This is where a real Windows 10/11 desktop entry the table does not know yet will show: tell us the line and it can be measured and added. Verify: read the command on the line; Get-AuthenticodeSignature on the file it names.
+
+[activesetup-other-vendor]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:I4b on 5.1: BootExecute and Active Setup
+signature = Active Setup '.*' runs .* \(signed by .*\), another vendor's program
+note      = Other software registers Active Setup too (browsers built on Chromium, Citrix, Adobe and others). A validly signed program under Program Files that is handed nothing recognisable as code, a network path, an address or another host is listed with its signer -- [INFO], never [OK]: the signature says who made the program, not what it does. If the signer is not software you installed, look at it. The same program in a folder a standard user can write to is a WARNING (see activesetup-signed-user-writable). Verify: Settings > Apps for the vendor named; Get-AuthenticodeSignature on the file.
+
+[activesetup-msiexec-product-code]
+class     = QUIET
+maxsev    = INFO
+proof     = ci:I4b on 5.1: BootExecute and Active Setup
+signature = Active Setup '.*' has msiexec\.exe repair or install a package by its product code
+note      = `msiexec /fu{product code}` is how packaged software repairs its per-user settings at each sign-in; managed PCs carry many. msiexec.exe itself is validly signed, but the tool does not trace the product code to the installed package, so the line is [INFO] that says so, never [OK]. Verify: the product code in Settings > Apps, or reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{code}".
 
 [activesetup-argument-only]
 class     = QUIET
 maxsev    = INFO
 proof     = ci:I4b on 5.1: BootExecute and Active Setup
 signature = Active Setup '.*' StubPath names no program, only arguments \(.*\) -- nothing by that name
-note      = MEASURED on the CI runner 2026-11-26: Windows' own Themes Setup {2C7339CF-2B09-4501-B3F3-F3508C9228ED} stores StubPath '/UserInstall' and Windows Desktop Update {89820200-ECBD-11cf-8B85-00AA005B4340} stores 'U' -- arguments with no program. The first draft read them as "a program named without its folder" and raised a WARNING on a clean machine. Windows runs nothing for them unless a file by that name is where it looks (U.exe on the search path, \UserInstall.exe at the drive root); the tool looks there and raises a WARNING naming the file when one is found, even a validly signed one. It looks from THIS account: another account's own PATH folders are not visible, and the line says so. Verify: reg query "HKLM\SOFTWARE\Microsoft\Active Setup\Installed Components\{2C7339CF-2B09-4501-B3F3-F3508C9228ED}" /v StubPath
+note      = MEASURED on the CI runner 2026-11-26: Windows' own Themes Setup {2C7339CF-2B09-4501-B3F3-F3508C9228ED} stores StubPath '/UserInstall' and Windows Desktop Update {89820200-ECBD-11cf-8B85-00AA005B4340} stores 'U' -- arguments with no program. The first draft read them as "a program named without its folder" and raised a WARNING on a clean machine; the second read ANY bare word that resolved to nothing this way, which is also what an entry waiting for its file looks like (`updater /s`). Now only these two EXACT texts are Windows' own. Windows runs nothing for them unless a file by that name is where it looks (U.exe on the search path, \UserInstall.exe at the drive root); the tool looks there and raises a WARNING naming the file when one is found, even a validly signed one. It looks from THIS account: another account's own PATH folders are not visible, and the line says so. Verify: reg query "HKLM\SOFTWARE\Microsoft\Active Setup\Installed Components\{2C7339CF-2B09-4501-B3F3-F3508C9228ED}" /v StubPath
 
 [activesetup-stale-entry]
 class     = QUIET
 maxsev    = INFO
 proof     = ci:I4b on 5.1: BootExecute and Active Setup
 signature = Active Setup '.*' names .*, which is not on disk -- a stale entry
-note      = Uninstallers routinely leave their Active Setup key behind; the StubPath then names a file that no longer exists, Windows' attempt at sign-in fails, and nothing runs. INFO with the command shown, never an all-clear -- and only when EVERY place Windows would try is under the Windows folder, Program Files or the root of the system drive, where nobody but an administrator could put the file back (judged by name; the folder's permissions are not read). A missing target anywhere else, or one named without a folder, is a WARNING: a file placed there later would run. Verify: Test-Path on the named file.
+note      = Uninstallers routinely leave their Active Setup key behind; the StubPath then names a file that no longer exists, Windows' attempt at sign-in fails, and nothing runs. INFO with the command shown, never an all-clear -- and only when EVERY reading of the line Windows would try (it tries each space-separated prefix in turn) is absent and under the Windows folder, Program Files or the root of the system drive, where nobody but an administrator could put the file back (judged by name; the folder's permissions are not read). A missing target anywhere else, one named without a folder or by a relative path, or a line with a reading the tool may not open (a stream, a device) is a WARNING: a file placed there later would run. Verify: Test-Path on the named file.
 
 [activesetup-enterprise-setup]
 class     = ADVISE
 proof     = ci:I4b on 5.1: BootExecute and Active Setup
-signature = Active Setup '.*' StubPath runs (a script host|a script file|\S+, a Windows tool this check knows no Active Setup use for)
-note      = Managed PCs use Active Setup for per-user setup: a cmd, PowerShell or VBScript line, or reg.exe / xcopy / robocopy copying settings into each profile. The tool cannot read what a script does, and a Windows tool is not what it is told to do, so each such entry is a WARNING that shows the whole command. On a PC your organisation manages, ask IT whether the entry is theirs; on a home PC nothing legitimate does this. Verify: read the command on the line, and for a script open the file it names.
+signature = Active Setup '.*' StubPath runs (a script host|a script file|.*, a Microsoft program this check knows no Active Setup use for)
+note      = Managed PCs use Active Setup for per-user setup: a cmd, PowerShell or VBScript line, or reg.exe / xcopy / robocopy copying settings into each profile. The tool cannot read what a script does, and a Microsoft program is not what it is told to do, so each such entry is a WARNING that shows the whole command. On a PC your organisation manages, ask IT whether the entry is theirs; on a home PC nothing legitimate does this. Verify: read the command on the line, and for a script open the file it names.
+
+[activesetup-signed-user-writable]
+class     = ADVISE
+proof     = ci:I4b on 5.1: BootExecute and Active Setup
+signature = Active Setup '.*' StubPath (runs .* from a folder a standard user may be able to write to|hands .* in a folder a standard user may be able to write to)
+note      = A validly signed program or DLL that Active Setup runs for EVERY user from a folder a standard user can write to -- C:\ProgramData, a second drive, anywhere outside the Windows and Program Files folders of the system drive (judged by name; the folder's permissions are not read). Some software does install there, so this can be benign. It is raised because anyone who can write there can replace the file, or place another beside it for it to load, and a signed program loading a planted DLL is a common way to run code under a trusted name. If the signer on the line is software you installed, and the folder is that software's own, it is that software. Verify: the signer named on the line against Settings > Apps; icacls on the folder to see who may write to it.
 
 [bits-long-lived-updater]
 class     = QUIET
